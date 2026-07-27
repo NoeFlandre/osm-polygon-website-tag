@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+pip-wheel-metadata/
+
+# Unit test / coverage reports
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OSM / data artifacts (kept out of git; real data lives on the Seagate drive)
+data/
+*.pbf
+*.osm
+*.osm.pbf
+*.parquet
+*.geojson
+*.geojsonl
+
+# uv
+uv.lock.local
