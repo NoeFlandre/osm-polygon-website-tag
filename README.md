@@ -36,16 +36,18 @@ brew install uv
 # 2. Sync dependencies into an isolated .venv
 uv sync --group dev
 
-# 3. Run the test suite
-uv run pytest
+# 3. Install Just once, then synchronize and install Git hooks
+brew install just
+just sync
+just install-hooks
 
-# 4. Lint, format, and type-check
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check src tests
+# 4. Run the complete local/CI quality suite
+just check
 ```
 
-All commands run inside the project `.venv`; nothing is installed globally.
+Just is only a command runner: Python and every Python tool still execute
+inside the uv-locked project `.venv`. The equivalent individual commands are
+documented in [`docs/setup.md`](docs/setup.md).
 
 ## CLI
 
@@ -98,6 +100,11 @@ uv run osm-polygon-website-tag publish \
 The CLI never accepts an HF token as a flag; tokens are read from
 `HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the local Hugging Face
 credential store via `hf auth login`.
+
+The installed CLI is built with Typer. Rich provides terminal-aware
+human-facing output, while JSON on stdout remains plain and scriptable.
+Interactive `run-all` progress uses tqdm; redirected stderr retains stable
+line-oriented progress logs.
 
 ## Project layout
 

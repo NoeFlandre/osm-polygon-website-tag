@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
-from osm_polygon_website_tag.application.cli import _build_parser, main
+from osm_polygon_website_tag.application import cli
+from osm_polygon_website_tag.application.cli import app, main
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
@@ -110,6 +111,36 @@ def test_cli_help_exits_2() -> None:
     assert rc == 2
 
 
+def test_cli_exposes_explicit_typer_app() -> None:
+    assert hasattr(cli, "app")
+
+
+def test_typer_help_lists_every_public_command() -> None:
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    for command in (
+        "init",
+        "extract",
+        "analyze-results",
+        "build-card",
+        "verify-results",
+        "finalize-run",
+        "publish-plan",
+        "publish",
+        "create-repo",
+        "card-stats",
+        "run-all",
+    ):
+        assert command in result.stdout
+
+
+def test_application_progress_adapter_module_exists() -> None:
+    assert importlib.util.find_spec("osm_polygon_website_tag.application.progress") is not None
+
+
 def test_cli_init_records_exact_expected_sources(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()
@@ -142,7 +173,7 @@ def test_cli_init_records_exact_expected_sources(tmp_path: Path) -> None:
     ]
 
 
-def test_cli_init_rejects_output_inside_source_root(tmp_path: Path) -> None:
+def test_cli_init_rejects_output_inside_source_root(tmp_path: Path, capsys) -> None:
     source_root = tmp_path / "source"
     source_root.mkdir()
     source = source_root / "monaco-latest.osm.pbf"
@@ -164,14 +195,12 @@ def test_cli_init_rejects_output_inside_source_root(tmp_path: Path) -> None:
 
     assert rc == 2
     assert not (source_root / "runs").exists()
+    assert capsys.readouterr().err.startswith("error: ")
 
 
 def test_cli_rejects_hf_token_arguments() -> None:
-    parser = _build_parser()
-    with pytest.raises(SystemExit):
-        parser.parse_args(["publish", "--run-dir", "/tmp/run", "--hf-token", "secret"])
-    with pytest.raises(SystemExit):
-        parser.parse_args(["create-repo", "--repo-id", "owner/name", "--hf-token", "secret"])
+    assert main(["publish", "--run-dir", "/tmp/run", "--hf-token", "secret"]) == 2
+    assert main(["create-repo", "--repo-id", "owner/name", "--hf-token", "secret"]) == 2
 
 
 def test_cli_extract_preserves_real_counts(make_pbf, tmp_path: Path) -> None:

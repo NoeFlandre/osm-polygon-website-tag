@@ -8,6 +8,7 @@ Step-by-step guide to get the project running from a fresh clone.
 | ---------- | -------- | ------------------------------------------------------ |
 | Python     | 3.12     | Managed by `uv` from `.python-version`; do not install manually. |
 | `uv`       | >= 0.5   | `brew install uv`                                      |
+| `just`     | >= 1.50  | `brew install just`                                    |
 | `git`      | any      | For cloning and pushing.                               |
 | `hf` (HF CLI) | latest | `brew install hf` (optional, only for dataset uploads) |
 | Hugging Face account | - | Required for dataset pushes; create a token at https://huggingface.co/settings/tokens |
@@ -23,26 +24,32 @@ git clone https://github.com/NoeFlandre/osm-polygon-website-tag.git
 cd osm-polygon-website-tag
 
 # 2. Install dependencies (creates .venv automatically)
-uv sync --group dev
+just sync
 
 # 3. Create your optional local configuration
 cp .env.example .env
 
 # 4. Sanity-check the install
-uv run pytest
-uv run ruff check .
-uv run ty check src tests
+just install-hooks
+just check
 ```
 
 ## Day-to-day commands
 
 | Action                          | Command                              |
 | ------------------------------- | ------------------------------------ |
-| Run tests                       | `uv run pytest`                      |
+| Run every CI quality gate       | `just check`                         |
+| Synchronize the locked environment | `just sync`                       |
+| Run tests                       | `just test`                          |
 | Run tests with coverage         | `uv run pytest --cov`                |
-| Lint                            | `uv run ruff check .`                |
-| Auto-format                     | `uv run ruff format .`               |
-| Type-check                      | `uv run ty check src tests`          |
+| Lint                            | `just lint`                          |
+| Auto-format                     | `just format`                        |
+| Verify formatting               | `just format-check`                  |
+| Type-check                      | `just typecheck`                     |
+| Build distributions             | `just build`                         |
+| Run every pre-commit hook       | `just pre-commit`                    |
+| Run the pre-push test hook      | `just pre-push`                      |
+| Install commit and push hooks   | `just install-hooks`                 |
 | Add a runtime dependency        | edit `pyproject.toml`, then `uv sync` |
 | Add a dev dependency            | edit `pyproject.toml`, then `uv sync` |
 | Update all deps                 | `uv sync --upgrade`                  |
@@ -73,3 +80,7 @@ See [`docs/data-and-remotes.md`](data-and-remotes.md) for the full flow.
   suppression; never disable unresolved-import checking repository-wide.
 - **`pytest` cannot import `osm_polygon_website_tag`** — run `uv sync` again.
   The src/ layout means the package only becomes importable after install.
+- **`just` is missing** — install it with `brew install just`. Just delegates
+  all Python work to uv and never replaces the locked environment.
+- **A Git hook fails** — run the named Just recipe directly, fix the reported
+  issue, and retry. Do not bypass hooks with `--no-verify`.

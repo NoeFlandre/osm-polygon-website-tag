@@ -1,17 +1,15 @@
-"""Command-line interface for osm-polygon-website-tag.
-
-Each subcommand maps to a single library function. The CLI never
-rebuilds state from scratch -- it loads existing run state, calls the
-library function, and reports the result.
-"""
+"""Typed command-line interface for the resumable dataset pipeline."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from pathlib import Path
+from typing import Annotated, Any
 
+import typer
+from rich.console import Console
+
+from osm_polygon_website_tag.application.progress import ProgressReporter
 from osm_polygon_website_tag.application.workflow import run_all
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -42,122 +40,64 @@ from osm_polygon_website_tag.runtime.run_state import (
 )
 from osm_polygon_website_tag.runtime.safety import assert_path_safe_against, normalize_path
 
+app = typer.Typer(
+    name="osm-polygon-website-tag",
+    help="Analyze and publish OSM polygons carrying website tags.",
+    no_args_is_help=True,
+    rich_markup_mode=None,
+)
+_error_console = Console(stderr=True, markup=False, highlight=False)
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-    if not hasattr(args, "func"):
-        parser.print_help()
-        return 2
-    try:
-        return args.func(args) or 0
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
+RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
+RepoId = Annotated[str, typer.Option("--repo-id", help="Hugging Face dataset repository.")]
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="osm-polygon-website-tag")
-    sub = p.add_subparsers(dest="subcommand")
-
-    init = sub.add_parser("init", help="Initialise a new run directory.")
-    init.add_argument("--output-root", type=Path, required=True)
-    init.add_argument("--run-id")
-    init.add_argument("--source-root", type=Path, required=True)
-    init.add_argument(
-        "--expected-source",
-        type=Path,
-        action="append",
-        required=True,
-        help="Expected source PBF path; repeat once per source.",
-    )
-    init.set_defaults(func=_cmd_init)
-
-    extract = sub.add_parser("extract", help="Extract one .osm.pbf file.")
-    extract.add_argument("pbf_path", type=Path)
-    extract.add_argument("--run-dir", type=Path, required=True)
-    extract.set_defaults(func=_cmd_extract)
-
-    analyze = sub.add_parser("analyze-results", help="Run the analyzer.")
-    analyze.add_argument("--run-dir", type=Path, required=True)
-    analyze.set_defaults(func=_cmd_analyze)
-
-    card = sub.add_parser("build-card", help="Build the README card.")
-    card.add_argument("--run-dir", type=Path, required=True)
-    card.set_defaults(func=_cmd_card)
-
-    verify = sub.add_parser("verify-results", help="Verify the run.")
-    verify.add_argument("--run-dir", type=Path, required=True)
-    verify.set_defaults(func=_cmd_verify)
-
-    finalize = sub.add_parser("finalize-run", help="Finalize the run.")
-    finalize.add_argument("--run-dir", type=Path, required=True)
-    finalize.set_defaults(func=_cmd_finalize)
-
-    plan = sub.add_parser("publish-plan", help="List the publish plan.")
-    plan.add_argument("--run-dir", type=Path, required=True)
-    plan.add_argument("--repo-id", default=DEFAULT_HF_DATASET)
-    plan.set_defaults(func=_cmd_publish_plan)
-
-    pub = sub.add_parser("publish", help="Publish (or dry-run) to HF.")
-    pub.add_argument("--run-dir", type=Path, required=True)
-    pub.add_argument("--repo-id", default=DEFAULT_HF_DATASET)
-    pub.add_argument("--apply", action="store_true", help="Actually upload (default: dry-run).")
-    pub.set_defaults(func=_cmd_publish)
-
-    cr = sub.add_parser("create-repo", help="Create the HF repo.")
-    cr.add_argument("--repo-id", required=True)
-    cr.add_argument("--exist-ok", action="store_true")
-    cr.set_defaults(func=_cmd_create_repo)
-
-    stats = sub.add_parser("card-stats", help="Recompute and print card stats.")
-    stats.add_argument("--run-dir", type=Path, required=True)
-    stats.set_defaults(func=_cmd_card_stats)
-
-    run = sub.add_parser("run-all", help="Run or resume the complete PBF inventory.")
-    run.add_argument("--source-root", type=Path, required=True)
-    run.add_argument("--output-root", type=Path, required=True)
-    run.add_argument("--run-id", required=True)
-    run.add_argument("--repo-id", default=DEFAULT_HF_DATASET)
-    run.add_argument(
-        "--apply", action="store_true", help="Upload after each PBF and at completion."
-    )
-    run.add_argument(
-        "--ensure-repo",
-        action="store_true",
-        help="Create the HF dataset repo if needed (only with --apply).",
-    )
-    run.set_defaults(func=_cmd_run_all)
-
-    return p
+def _json(payload: Any, *, sort_keys: bool = False) -> None:
+    typer.echo(json.dumps(payload, default=str, indent=2, sort_keys=sort_keys))
 
 
-def _cmd_init(args: argparse.Namespace) -> int:
-    source_root = normalize_path(args.source_root)
-    output_root = assert_path_safe_against(args.output_root, source_root)
-    sources = [normalize_path(source) for source in args.expected_source]
+@app.command("init")
+def init_command(
+    output_root: Annotated[Path, typer.Option("--output-root")],
+    source_root: Annotated[Path, typer.Option("--source-root")],
+    expected_source: Annotated[
+        list[Path],
+        typer.Option(
+            "--expected-source",
+            help="Expected source PBF path; repeat once per source.",
+        ),
+    ],
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+) -> int:
+    """Initialise a new run directory."""
+    normalized_source_root = normalize_path(source_root)
+    normalized_output_root = assert_path_safe_against(output_root, normalized_source_root)
+    sources = [normalize_path(source) for source in expected_source]
     for source in sources:
-        if not source.is_relative_to(source_root):
+        if not source.is_relative_to(normalized_source_root):
             raise ValueError(f"expected source is outside source root: {source}")
-    fingerprints = [snapshot_source_fingerprint(source) for source in args.expected_source]
+    fingerprints = [snapshot_source_fingerprint(source) for source in expected_source]
     run_dir, _ = initialise_run(
-        output_root,
-        run_id=args.run_id,
+        normalized_output_root,
+        run_id=run_id,
         expected_sources=fingerprints,
     )
     state = load_run(run_dir)
-    upsert_run_metadata(state, {"source_root": str(source_root)})
-    print(str(run_dir))
+    upsert_run_metadata(state, {"source_root": str(normalized_source_root)})
+    typer.echo(str(run_dir))
     return 0
 
 
-def _cmd_extract(args: argparse.Namespace) -> int:
-    run_dir = Path(args.run_dir)
+@app.command("extract")
+def extract_command(
+    pbf_path: Annotated[Path, typer.Argument(help="Source .osm.pbf file.")],
+    run_dir: RunDir,
+) -> int:
+    """Extract one source PBF."""
     state_path = run_dir / "manifests" / "run.json"
     if not state_path.is_file():
         raise ValueError("extract requires a run created by the init command")
     state = load_run(run_dir)
-    pbf_path = Path(args.pbf_path)
     fingerprint = snapshot_source_fingerprint(pbf_path)
     expected = expected_source_inventory(run_dir)
     if {
@@ -177,105 +117,159 @@ def _cmd_extract(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_analyze(args: argparse.Namespace) -> int:
-    state = load_run(args.run_dir)
+@app.command("analyze-results")
+def analyze_command(run_dir: RunDir) -> int:
+    """Run the analyzer."""
+    state = load_run(run_dir)
     if state.metadata.get("status") != STATUS_ENRICHED:
         raise ValueError("analyze-results requires enriched state; use run-all for enrichment")
-    summary = analyze_results(args.run_dir)
+    summary = analyze_results(run_dir)
     transition_status(state, STATUS_ANALYZED)
-    print(json.dumps(summary.__dict__, default=str, indent=2))
+    _json(summary.__dict__)
     return 0
 
 
-def _cmd_card(args: argparse.Namespace) -> int:
-    state = load_run(args.run_dir)
+@app.command("build-card")
+def card_command(run_dir: RunDir) -> int:
+    """Build the artifact-derived dataset card."""
+    state = load_run(run_dir)
     if state.metadata.get("status") != STATUS_ANALYZED:
         raise ValueError("build-card requires analyzed state")
-    path = build_card(args.run_dir)
+    path = build_card(run_dir)
     transition_status(state, STATUS_CARD_BUILT)
-    print(str(path))
+    typer.echo(str(path))
     return 0
 
 
-def _cmd_verify(args: argparse.Namespace) -> int:
-    report = verify_results(args.run_dir)
-    print(json.dumps({"ok": report.ok, "errors": report.errors}, indent=2))
-    return 0 if report.ok else 1
+@app.command("verify-results")
+def verify_command(run_dir: RunDir) -> int:
+    """Verify a run without mutating it."""
+    report = verify_results(run_dir)
+    _json({"ok": report.ok, "errors": report.errors})
+    if not report.ok:
+        raise typer.Exit(code=1)
+    return 0
 
 
-def _cmd_finalize(args: argparse.Namespace) -> int:
-    report = finalize_run(args.run_dir)
-    print(json.dumps({"ok": report.ok, "digest": report.receipt.get("manifest_digest")}, indent=2))
-    return 0 if report.ok else 1
+@app.command("finalize-run")
+def finalize_command(run_dir: RunDir) -> int:
+    """Finalize a verified run."""
+    report = finalize_run(run_dir)
+    _json({"ok": report.ok, "digest": report.receipt.get("manifest_digest")})
+    if not report.ok:
+        raise typer.Exit(code=1)
+    return 0
 
 
-def _cmd_publish_plan(args: argparse.Namespace) -> int:
-    plan = build_publish_plan(args.run_dir, repo_id=args.repo_id)
-    print(
-        json.dumps(
-            {
-                "repo_id": plan.repo_id,
-                "artifact_count": len(plan.artifact_paths),
-                "readme": str(plan.readme_path) if plan.readme_path else None,
-            },
-            indent=2,
-        )
+@app.command("publish-plan")
+def publish_plan_command(
+    run_dir: RunDir,
+    repo_id: RepoId = DEFAULT_HF_DATASET,
+) -> int:
+    """List the publication plan."""
+    plan = build_publish_plan(run_dir, repo_id=repo_id)
+    _json(
+        {
+            "repo_id": plan.repo_id,
+            "artifact_count": len(plan.artifact_paths),
+            "readme": str(plan.readme_path) if plan.readme_path else None,
+        }
     )
     return 0
 
 
-def _cmd_publish(args: argparse.Namespace) -> int:
-    plan = publish_to_hf(
-        args.run_dir,
-        repo_id=args.repo_id,
-        dry_run=not args.apply,
-    )
-    print(
-        json.dumps(
-            {
-                "dry_run": not args.apply,
-                "artifact_count": len(plan.artifact_paths),
-            },
-            indent=2,
-        )
-    )
+@app.command("publish")
+def publish_command(
+    run_dir: RunDir,
+    repo_id: RepoId = DEFAULT_HF_DATASET,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Actually upload (default: dry-run)."),
+    ] = False,
+) -> int:
+    """Publish or dry-run a complete dataset."""
+    plan = publish_to_hf(run_dir, repo_id=repo_id, dry_run=not apply)
+    _json({"dry_run": not apply, "artifact_count": len(plan.artifact_paths)})
     return 0
 
 
-def _cmd_create_repo(args: argparse.Namespace) -> int:
-    repo = create_repo(repo_id=args.repo_id, exist_ok=args.exist_ok)
-    print(repo)
+@app.command("create-repo")
+def create_repo_command(
+    repo_id: Annotated[str, typer.Option("--repo-id")],
+    exist_ok: Annotated[bool, typer.Option("--exist-ok")] = False,
+) -> int:
+    """Create the Hugging Face dataset repository."""
+    repo = create_repo(repo_id=repo_id, exist_ok=exist_ok)
+    typer.echo(repo)
     return 0
 
 
-def _cmd_card_stats(args: argparse.Namespace) -> int:
-    stats = compute_card_stats(args.run_dir)
-    print(json.dumps(stats.__dict__, default=str, indent=2))
+@app.command("card-stats")
+def card_stats_command(run_dir: RunDir) -> int:
+    """Recompute and print dataset-card statistics."""
+    stats = compute_card_stats(run_dir)
+    _json(stats.__dict__)
     return 0
 
 
-def _cmd_run_all(args: argparse.Namespace) -> int:
-    if args.ensure_repo and not args.apply:
+@app.command("run-all")
+def run_all_command(
+    source_root: Annotated[Path, typer.Option("--source-root")],
+    output_root: Annotated[Path, typer.Option("--output-root")],
+    run_id: Annotated[str, typer.Option("--run-id")],
+    repo_id: RepoId = DEFAULT_HF_DATASET,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Upload after each PBF and at completion."),
+    ] = False,
+    ensure_repo: Annotated[
+        bool,
+        typer.Option(
+            "--ensure-repo",
+            help="Create the HF dataset repo if needed (only with --apply).",
+        ),
+    ] = False,
+) -> int:
+    """Run or resume the complete PBF inventory."""
+    if ensure_repo and not apply:
         raise ValueError("--ensure-repo requires --apply")
-    result = run_all(
-        source_root=args.source_root,
-        output_root=args.output_root,
-        run_id=args.run_id,
-        repo_id=args.repo_id,
-        apply=args.apply,
-        ensure_repo=args.ensure_repo,
-        progress=lambda message: print(message, file=sys.stderr, flush=True),
-    )
-    payload = {
-        **result.__dict__,
-        "run_dir": str(result.run_dir),
-    }
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    progress = ProgressReporter()
+    try:
+        result = run_all(
+            source_root=source_root,
+            output_root=output_root,
+            run_id=run_id,
+            repo_id=repo_id,
+            apply=apply,
+            ensure_repo=ensure_repo,
+            progress=progress,
+        )
+    except BaseException:
+        progress.close(completed=False)
+        raise
+    progress.close(completed=result.complete)
+    _json({**result.__dict__, "run_dir": str(result.run_dir)}, sort_keys=True)
     return 0
 
 
-_ = compute_card_stats  # imported for command dispatch
+def main(argv: list[str] | None = None) -> int:
+    """Run the Typer app while preserving the historical integer API."""
+    try:
+        app(
+            args=argv,
+            prog_name="osm-polygon-website-tag",
+            standalone_mode=True,
+        )
+    except SystemExit as exc:
+        return int(exc.code or 0)
+    except ValueError as exc:
+        _error_console.print(f"error: {exc}")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+__all__ = ["app", "main"]

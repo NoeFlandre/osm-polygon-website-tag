@@ -24,7 +24,8 @@ If you are an automated agent, read this file end-to-end before making changes.
 - Python is managed exclusively by `uv`. Never invoke `pip` directly.
 - The project uses a `src/` layout; tests import the installed package
   (`osm_polygon_website_tag`), not relative paths from `src/`.
-- Run all commands through `uv run <tool>` so the locked `.venv` is used.
+- Use the root Just recipes as the canonical command interface. Recipes invoke
+  Python tools through `uv run --locked`, so the locked `.venv` is always used.
 - Code lives on the Mac. Generated runs live in the dedicated Seagate data
   directory. Production PBFs are immutable read-only inputs supplied
   explicitly by `--source-root`; never use that source tree as an output
@@ -35,13 +36,14 @@ If you are an automated agent, read this file end-to-end before making changes.
 Before declaring work done, an agent MUST run and pass:
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check src tests
-uv run pytest
+just check
+just pre-commit
+just pre-push
 ```
 
-If a check is intentionally skipped, call it out explicitly in the final report.
+The underlying gates remain Ruff lint/format, ty, pytest, and `uv build`.
+GitHub Actions runs the same `just check` recipe. If a check is intentionally
+skipped, call it out explicitly in the final report.
 
 ## Style
 
