@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 import pyarrow.parquet as pq
 
-from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
+from osm_polygon_website_tag.application.inventory import (
+    discover_sources,
+    source_bundle_is_complete,
+    source_inventory_matches_expected,
+)
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
 )
-from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -34,7 +36,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_EXTRACTED,
     STATUS_EXTRACTING,
     STATUS_INITIALIZED,
-    SourceFingerprint,
     expected_source_inventory,
     hash_shard,
     initialise_run,
@@ -58,21 +59,6 @@ class WorkflowResult:
     uploaded_count: int
     complete: bool
     dry_run: bool
-
-
-def discover_sources(source_root: Path | str) -> list[Path]:
-    """Return every PBF below ``source_root`` in deterministic order."""
-    root = normalize_path(source_root)
-    if not root.is_dir():
-        raise ValueError(f"source root is not a directory: {root}")
-    sources = sorted(root.rglob("*.osm.pbf"), key=lambda path: path.relative_to(root).as_posix())
-    if not sources:
-        raise ValueError(f"no .osm.pbf files found below source root: {root}")
-    names = [source.name for source in sources]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate source filenames are unsupported: {duplicates}")
-    return sources
 
 
 def run_all(
@@ -102,8 +88,7 @@ def run_all(
         if state.metadata.get("source_root") != str(source_root_path):
             raise ValueError("existing run source_root does not match this command")
         expected = expected_source_inventory(run_dir)
-        actual = [asdict(fingerprint) for fingerprint in fingerprints]
-        if expected != sorted(actual, key=lambda item: item["filename"]):
+        if not source_inventory_matches_expected(expected, fingerprints):
             raise ValueError("source inventory changed since this run was initialized")
     else:
         run_dir, state = initialise_run(
@@ -143,7 +128,7 @@ def run_all(
             zip(sources, fingerprints, strict=True),
             start=1,
         ):
-            if _source_bundle_is_complete(run_dir, state.sources.get(source.name), fingerprint):
+            if source_bundle_is_complete(run_dir, state.sources.get(source.name), fingerprint):
                 skipped_count += 1
                 _progress(progress, f"[{index}/{len(sources)}] Resuming: {source.name} is complete")
             else:
@@ -168,7 +153,7 @@ def run_all(
         uploaded = _load_upload_checkpoint(run_dir)
         for index, source in enumerate(sources, start=1):
             fingerprint = fingerprints[index - 1]
-            if not _source_bundle_is_complete(
+            if not source_bundle_is_complete(
                 run_dir,
                 state.sources.get(source.name),
                 fingerprint,
@@ -247,50 +232,6 @@ def run_all(
         complete=status == STATUS_COMPLETE,
         dry_run=not apply,
     )
-
-
-def _source_bundle_is_complete(
-    run_dir: Path,
-    manifest: dict[str, Any] | None,
-    fingerprint: SourceFingerprint,
-) -> bool:
-    if manifest is None:
-        return False
-    if any(manifest.get(key) != value for key, value in asdict(fingerprint).items()):
-        return False
-    stem = fingerprint.short_id()
-    paths_and_contracts = (
-        (
-            run_dir / "polygons" / f"{stem}.parquet",
-            (POLYGON_PUBLIC_SCHEMA_V1_1, POLYGON_PUBLIC_SCHEMA),
-            "public_row_count",
-            "public_shard_sha256",
-        ),
-        (
-            run_dir / "analysis_observations" / f"{stem}.parquet",
-            COMPARISON_OBSERVATION_SCHEMA,
-            "observation_row_count",
-            "observation_shard_sha256",
-        ),
-        (
-            run_dir / "rejections" / f"{stem}.parquet",
-            REJECTION_SCHEMA,
-            "rejection_count",
-            "rejection_shard_sha256",
-        ),
-    )
-    for path, schema_contract, count_key, hash_key in paths_and_contracts:
-        if not path.is_file():
-            return False
-        parquet = pq.ParquetFile(path)
-        schemas = schema_contract if isinstance(schema_contract, tuple) else (schema_contract,)
-        if not any(parquet.schema_arrow.equals(schema, check_metadata=True) for schema in schemas):
-            return False
-        if parquet.metadata.num_rows != manifest.get(count_key):
-            return False
-        if hash_shard(path) != manifest.get(hash_key):
-            return False
-    return True
 
 
 def _progress(callback: Callable[[str], None] | None, message: str) -> None:

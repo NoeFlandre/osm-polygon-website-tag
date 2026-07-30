@@ -9,6 +9,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from osm_polygon_website_tag.application.inventory import (
+    discover_sources as inventory_discover_sources,
+)
 from osm_polygon_website_tag.application.workflow import (
     _upload_public_shard,
     discover_sources,
@@ -44,6 +47,10 @@ _WEBSITE_OSM = """<?xml version="1.0" encoding="UTF-8"?>
   </way>
 </osm>
 """
+
+
+def test_workflow_preserves_discover_sources_compatibility_import() -> None:
+    assert discover_sources is inventory_discover_sources
 
 
 def _sources(make_pbf, tmp_path: Path) -> Path:
