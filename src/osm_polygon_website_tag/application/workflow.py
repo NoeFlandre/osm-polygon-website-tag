@@ -18,10 +18,12 @@ from osm_polygon_website_tag.application.inventory import (
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_2,
 )
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
+from osm_polygon_website_tag.pipeline.public_schema_migration import migrate_public_shard
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.publishing.publish import _upload_folder, create_repo, publish_to_hf
 from osm_polygon_website_tag.reporting.card import build_card
@@ -268,6 +270,17 @@ def _process_source(
         raise ValueError(f"source bundle is incomplete after extraction: {source.name}")
 
     shard = _public_shard_path(run_dir, source)
+    migration_changed = False
+    if pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA_V1_2, check_metadata=True):
+        migration = migrate_public_shard(shard)
+        migration_changed = migration.changed
+        _progress(progress, f"[{index}/{total}] Migrating {source.name} to public schema v1.3")
+        update_public_shard_metadata(
+            state,
+            filename=source.name,
+            row_count=migration.row_count,
+            shard_sha256=migration.shard_sha256,
+        )
     needs_enrichment = _shard_needs_enrichment(shard)
     if needs_enrichment:
         _progress(progress, f"[{index}/{total}] Enriching {source.name}")
@@ -286,7 +299,7 @@ def _process_source(
         _progress(progress, f"[{index}/{total}] Resuming: {source.name} text is complete")
 
     uploaded_now = False
-    if needs_enrichment or apply:
+    if migration_changed or needs_enrichment or apply:
         uploaded_now = _maybe_publish_enriched_shard(
             run_dir=run_dir,
             source=source,

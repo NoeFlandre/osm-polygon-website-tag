@@ -77,6 +77,11 @@ extract-all workflow: they are enriched and uploaded without rereading their
 PBFs. Legacy shards are likewise enriched without rereading PBFs; failed URLs
 retry.
 
+Public schema v1.2 shards are migrated locally to v1.3 by column projection.
+The migration preserves extracted text and row order, performs no PBF or
+network work, and causes only the changed shard plus recomputed card to upload.
+An acknowledged v1.3 shard is skipped on the next resume.
+
 ```bash
 # One-time
 hf auth login                                  # paste a write token from

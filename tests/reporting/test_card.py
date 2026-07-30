@@ -115,6 +115,9 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     assert "`website` OR `contact:website`" in content
     assert "| `polygon_id` |" in content
     assert "| `contact_website` |" in content
+    assert "| `preferred_website` |" not in content
+    assert "| `wikidata` |" not in content
+    assert "| `area_km2` |" not in content
 
 
 def test_build_card_embeds_eight_cell_table(tmp_path: Path) -> None:

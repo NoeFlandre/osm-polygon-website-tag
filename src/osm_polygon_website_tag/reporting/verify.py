@@ -268,9 +268,6 @@ def _verify_row_invariants(root: Path, errors: list[str]) -> None:
                    OR has_contact_website IS DISTINCT FROM
                      (contact_website IS NOT NULL AND trim(contact_website) <> '')
                    OR NOT has_any_website
-                   OR preferred_website_source NOT IN ('website', 'contact:website')
-                   OR preferred_website IS DISTINCT FROM
-                     CASE WHEN has_website THEN website ELSE contact_website END
                    OR osm_type NOT IN ('way', 'relation')
                    OR NOT isfinite(lat) OR NOT isfinite(lon)
                    OR NOT isfinite(area_m2) OR area_m2 < 0""",

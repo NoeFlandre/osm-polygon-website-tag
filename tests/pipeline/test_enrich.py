@@ -97,7 +97,7 @@ def test_legacy_shard_migrates_both_tags_without_pbf_access(tmp_path: Path) -> N
 
     row = pq.read_table(shard).to_pylist()[0]
     assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
-    assert row["schema_version"] == "v1.2"
+    assert row["schema_version"] == "v1.3"
     assert row["website_text"] == "text from https://example.org"
     assert row["contact_website_text"] == "text from https://contact.example.org"
     assert row["website_word_count"] == 3

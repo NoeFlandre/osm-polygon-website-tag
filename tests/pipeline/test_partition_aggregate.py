@@ -39,7 +39,7 @@ def _row(
         "wikidata": wikidata,
         "wikidata_class": wikidata_class,
         "name": None,
-        "tags": "{}",
+        "tags": json.dumps({"wikidata": wikidata} if wikidata else {}),
         "tag_keys": "[]",
         "tag_count": 0,
         "osm_primary_tag": osm_primary_tag,

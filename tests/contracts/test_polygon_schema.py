@@ -15,8 +15,8 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 
 
-def test_schema_version_is_v1_2() -> None:
-    assert SCHEMA_VERSION == "v1.2"
+def test_schema_version_is_v1_3() -> None:
+    assert SCHEMA_VERSION == "v1.3"
 
 
 def test_polygon_public_schema_is_arrow_schema() -> None:
@@ -41,11 +41,6 @@ def test_polygon_public_schema_required_columns() -> None:
         "contact_website_class",
         "website_hostname",
         "contact_website_hostname",
-        "preferred_website",
-        "preferred_website_source",
-        "wikidata",
-        "wikidata_qid",
-        "wikidata_class",
         "name",
         "tags",
         "tag_keys",
@@ -58,7 +53,6 @@ def test_polygon_public_schema_required_columns() -> None:
         "lon",
         "bbox",
         "area_m2",
-        "area_km2",
         "area_bucket",
         "schema_version",
         "website_text",
@@ -71,6 +65,14 @@ def test_polygon_public_schema_required_columns() -> None:
     names = polygon_column_names(POLYGON_PUBLIC_SCHEMA)
     for col in required:
         assert col in names, f"missing column {col} in {names}"
+    assert {
+        "preferred_website",
+        "preferred_website_source",
+        "wikidata",
+        "wikidata_qid",
+        "wikidata_class",
+        "area_km2",
+    }.isdisjoint(names)
 
 
 def test_polygon_public_schema_extracted_at_replaced_by_schema_version() -> None:
@@ -85,9 +87,6 @@ def test_polygon_public_schema_nullable_columns() -> None:
     """Nullability is part of the contract."""
     by_name = {f.name: f for f in POLYGON_PUBLIC_SCHEMA}
     nullable = {
-        "wikidata",
-        "wikidata_qid",
-        "wikidata_class",
         "name",
         "website",
         "contact_website",
@@ -100,11 +99,8 @@ def test_polygon_public_schema_nullable_columns() -> None:
         assert by_name[col].nullable is True, f"{col} must be nullable"
 
 
-def test_polygon_public_schema_preferred_website_not_nullable() -> None:
-    """preferred_website and its source are always present in public rows."""
+def test_polygon_public_schema_website_flags_not_nullable() -> None:
     by_name = {f.name: f for f in POLYGON_PUBLIC_SCHEMA}
-    assert by_name["preferred_website"].nullable is False
-    assert by_name["preferred_website_source"].nullable is False
     assert by_name["has_any_website"].nullable is False
     assert by_name["has_website"].nullable is False
     assert by_name["has_contact_website"].nullable is False
@@ -141,7 +137,6 @@ def test_polygon_public_schema_dtypes() -> None:
     assert pa.types.is_float64(by_name["lat"].type)
     assert pa.types.is_float64(by_name["lon"].type)
     assert pa.types.is_float64(by_name["area_m2"].type)
-    assert pa.types.is_float64(by_name["area_km2"].type)
 
 
 def test_column_doc_returns_string_per_column() -> None:
@@ -175,11 +170,6 @@ def _valid_row() -> dict[str, object]:
         "contact_website_class": None,
         "website_hostname": "example.com",
         "contact_website_hostname": None,
-        "preferred_website": "https://example.com",
-        "preferred_website_source": "website",
-        "wikidata": None,
-        "wikidata_qid": None,
-        "wikidata_class": None,
         "tags": "{}",
         "tag_keys": "[]",
         "tag_count": 0,
@@ -191,7 +181,6 @@ def _valid_row() -> dict[str, object]:
         "lon": 0.0,
         "bbox": "[0.0,0.0,0.0,0.0]",
         "area_m2": 0.0,
-        "area_km2": 0.0,
         "area_bucket": "<10m2",
         "schema_version": SCHEMA_VERSION,
     }
@@ -211,18 +200,15 @@ def test_validate_public_row_accepts_contact_website_only() -> None:
     row["contact_website_class"] = "absolute_url"
     row["website_hostname"] = None
     row["contact_website_hostname"] = "contact.example"
-    row["preferred_website"] = "https://contact.example"
-    row["preferred_website_source"] = "contact:website"
     validate_public_row(row)
 
 
-def test_validate_public_row_accepts_both_website_keys_prefers_website() -> None:
+def test_validate_public_row_accepts_both_website_keys() -> None:
     row = _valid_row()
     row["contact_website"] = "https://contact.example"
     row["has_contact_website"] = True
     row["contact_website_class"] = "absolute_url"
     row["contact_website_hostname"] = "contact.example"
-    # preferred remains website when both present
     validate_public_row(row)
 
 
@@ -233,17 +219,6 @@ def test_validate_public_row_rejects_neither_website_key() -> None:
     row["has_website"] = False
     row["has_contact_website"] = False
     row["has_any_website"] = False
-    row["preferred_website"] = ""
-    row["preferred_website_source"] = "website"
-    with pytest.raises(PublicRowInvariantError):
-        validate_public_row(row)
-
-
-def test_validate_public_row_rejects_mismatched_preferred_source() -> None:
-    row = _valid_row()
-    row["preferred_website_source"] = "contact:website"
-    row["preferred_website"] = "https://contact.example"
-    # website is the actual chosen key here; mismatch rejected.
     with pytest.raises(PublicRowInvariantError):
         validate_public_row(row)
 
@@ -251,19 +226,5 @@ def test_validate_public_row_rejects_mismatched_preferred_source() -> None:
 def test_validate_public_row_rejects_has_flag_mismatch() -> None:
     row = _valid_row()
     row["has_website"] = False  # but website is present
-    with pytest.raises(PublicRowInvariantError):
-        validate_public_row(row)
-
-
-def test_validate_public_row_rejects_empty_preferred() -> None:
-    row = _valid_row()
-    row["preferred_website"] = ""
-    with pytest.raises(PublicRowInvariantError):
-        validate_public_row(row)
-
-
-def test_validate_public_row_rejects_unknown_source() -> None:
-    row = _valid_row()
-    row["preferred_website_source"] = "url"
     with pytest.raises(PublicRowInvariantError):
         validate_public_row(row)

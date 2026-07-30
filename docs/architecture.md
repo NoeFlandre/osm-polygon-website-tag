@@ -32,7 +32,7 @@ documents its boundary.
    produce one public, comparison, and rejection Parquet per source.
 3. Before the next PBF is opened, website-text enrichment safely downloads both website tag values,
    extracts full main text with Trafilatura, and transactionally migrates each
-   polygon shard to schema v1.2. A run-owned SQLite cache reuses successes and
+   polygon shard to the current public schema. A run-owned SQLite cache reuses successes and
    retries failures on a later invocation.
 4. After every enriched PBF, the cumulative card is recomputed from current
    Parquets and uploaded with that shard; the acknowledgement is persisted
@@ -99,8 +99,15 @@ an assembled closed way or supported polygon relation with a non-empty
 
 The public schema is versioned in `contracts/polygon_schema.py`; the generated card
 renders its column names, Arrow types, nullability, and documentation.
-Schema v1.2 stores full Trafilatura text and exact Unicode `\w+` word counts
+Schema v1.3 stores full Trafilatura text and exact Unicode `\w+` word counts
 independently for `website` and `contact:website`.
+
+The v1.3 public projection removes `preferred_website`,
+`preferred_website_source`, `wikidata`, `wikidata_qid`, `wikidata_class`, and
+`area_km2`. The comparison schema retains Wikidata for overlap analysis and
+`tags` retains every original tag. Existing v1.2 shards are projected in
+bounded batches, atomically promoted, and reuploaded through their changed
+content hash without PBF reads or website fetches.
 
 ## Boundedness and transactions
 

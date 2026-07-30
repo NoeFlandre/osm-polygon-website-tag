@@ -22,7 +22,7 @@ The public dataset contains one Parquet shard per source PBF, in a
 run-owned directory. Each row corresponds to one OSM object whose
 `website` or `contact:website` tag is non-empty and whose geometry was successfully
 assembled by libosmium (closed way or multipolygon/boundary relation).
-The schema is versioned (`v1.2`) and documented column-by-column in
+The schema is versioned (`v1.3`) and documented column-by-column in
 `osm_polygon_website_tag.polygon_schema`. The full text of the dataset
 card is regenerated from the shards by `osm-polygon-website-tag
 build-card`.
@@ -82,6 +82,13 @@ opened. Old runs that already extracted several PBFs reuse every verified local
 bundle and begin with enrichment/upload; they do not reread those PBFs. The card
 reports exact word totals for both website tags. Full extracted text is never
 truncated.
+
+Schema v1.3 removes the redundant public columns `preferred_website`,
+`preferred_website_source`, `wikidata`, `wikidata_qid`, `wikidata_class`, and
+`area_km2`. Wikidata comparison fields remain in the analysis observations, and
+all original OSM tags remain available in `tags`. Existing v1.2 shards are
+projected atomically and reuploaded by content hash without reopening PBFs or
+refetching website text.
 
 The low-level phase commands are intended for development and recovery. Website
 enrichment is deliberately orchestrated by `run-all`, which owns its persistent

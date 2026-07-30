@@ -212,9 +212,9 @@ def test_extract_preserves_original_trimmed_values(
     extract_pbf(synthetic_source_simple, run_dir)
     table = pq.read_table(run_dir / "polygons" / "monaco-latest.parquet")
     assert table["website"][0].as_py() == "https://example.com"
-    assert table["wikidata"][0].as_py() == "Q42"
-    assert table["wikidata_qid"][0].as_py() == "Q42"
     assert table["name"][0].as_py() == "Building A"
+    observations = pq.read_table(run_dir / "analysis_observations" / "monaco-latest.parquet")
+    assert observations["wikidata"][0].as_py() == "Q42"
 
 
 def test_extract_writes_to_run_owned_dir(synthetic_source_simple: Path, tmp_path: Path) -> None:
@@ -252,8 +252,6 @@ def test_extract_includes_contact_website_only_polygon(make_pbf, tmp_path: Path)
     assert table["has_website"][0].as_py() is False
     assert table["has_contact_website"][0].as_py() is True
     assert table["has_any_website"][0].as_py() is True
-    assert table["preferred_website"][0].as_py() == "https://contact.example"
-    assert table["preferred_website_source"][0].as_py() == "contact:website"
 
 
 def test_extract_includes_both_website_keys_preserving_both(make_pbf, tmp_path: Path) -> None:
@@ -283,8 +281,6 @@ def test_extract_includes_both_website_keys_preserving_both(make_pbf, tmp_path: 
     assert table["contact_website"][0].as_py() == "https://contact.example"
     assert table["has_website"][0].as_py() is True
     assert table["has_contact_website"][0].as_py() is True
-    assert table["preferred_website"][0].as_py() == "https://primary.example"
-    assert table["preferred_website_source"][0].as_py() == "website"
 
 
 def test_extract_whitespace_only_website_with_valid_contact(make_pbf, tmp_path: Path) -> None:
@@ -559,7 +555,7 @@ def test_extract_trims_website_and_wikidata_whitespace(make_pbf, tmp_path: Path)
     extract_pbf(src, run_dir)
     table = pq.read_table(run_dir / "polygons" / "monaco-latest.parquet")
     assert table["website"][0].as_py() == "https://example.com"
-    assert table["wikidata"][0].as_py() == "Q42"
+    assert json.loads(table["tags"][0].as_py())["wikidata"] == " Q42 "
 
 
 def test_extract_includes_tag_keys_and_tags_as_sorted_json(make_pbf, tmp_path: Path) -> None:
@@ -650,7 +646,7 @@ def test_extract_emits_schema_version(make_pbf, tmp_path: Path) -> None:
     run_dir.mkdir()
     extract_pbf(src, run_dir)
     table = pq.read_table(run_dir / "polygons" / "monaco-latest.parquet")
-    assert table["schema_version"][0].as_py() == "v1.2"
+    assert table["schema_version"][0].as_py() == "v1.3"
 
 
 def test_extract_emits_comparison_observation_for_qualifying_object(
@@ -723,7 +719,5 @@ def test_extract_malformed_wikidata_retained_with_null_qid(make_pbf, tmp_path: P
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     extract_pbf(src, run_dir)
-    table = pq.read_table(run_dir / "polygons" / "monaco-latest.parquet")
-    # The full original trimmed value is retained; the QID slot is null.
+    table = pq.read_table(run_dir / "analysis_observations" / "monaco-latest.parquet")
     assert table["wikidata"][0].as_py() == "http://www.wikidata.org/wiki/Q42"
-    assert table["wikidata_qid"][0].as_py() is None

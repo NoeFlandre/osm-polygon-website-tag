@@ -86,8 +86,6 @@ from osm_polygon_website_tag.domain.tags import (
     has_website,
     has_wikidata,
     normalize_value,
-    preferred_website,
-    preferred_website_source,
 )
 from osm_polygon_website_tag.domain.website import (
     classify_contact_website,
@@ -95,7 +93,6 @@ from osm_polygon_website_tag.domain.website import (
     extract_contact_hostname,
     extract_hostname,
 )
-from osm_polygon_website_tag.domain.wikidata import classify_wikidata, extract_qid
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INCOMPLETE,
     RunState,
@@ -192,33 +189,23 @@ def _public_record(
     lon: float,
     bbox: list[float],
     area_m2: float,
-    area_km2: float,
     area_bucket: str,
 ) -> dict[str, object]:
     website_raw = normalize_value(tags_dict.get(WEBSITE_KEY, "")) or None
     contact_raw = normalize_value(tags_dict.get(CONTACT_WEBSITE_KEY, "")) or None
-    wikidata_raw = normalize_value(tags_dict.get(WIKIDATA_KEY, "")) or None
     name_raw = normalize_value(tags_dict.get("name", "")) or None
     has_ws = website_raw is not None
     has_cw = contact_raw is not None
     has_aw = has_ws or has_cw
-    preferred = preferred_website(tags_dict)
-    preferred_src = preferred_website_source(tags_dict)
     website_class = classify_website(website_raw).value if website_raw else None
     contact_class = classify_contact_website(contact_raw).value if contact_raw else None
     website_hostname = extract_hostname(website_raw) if website_raw else None
     contact_hostname = extract_contact_hostname(contact_raw) if contact_raw else None
 
-    wikidata_class = classify_wikidata(wikidata_raw).value if wikidata_raw else None
-    wikidata_qid = extract_qid(wikidata_raw) if wikidata_raw else None
-
     tag_keys_sorted = sorted(tags_dict.keys())
     tags_json = json.dumps(tags_dict, sort_keys=True, separators=(",", ":"))
     tag_keys_json = json.dumps(tag_keys_sorted, separators=(",", ":"))
     bbox_json = json.dumps(bbox, separators=(",", ":"))
-
-    assert preferred is not None
-    assert preferred_src is not None
 
     record: dict[str, object] = {
         "polygon_id": polygon_id,
@@ -238,11 +225,6 @@ def _public_record(
         "contact_website_class": contact_class,
         "website_hostname": website_hostname,
         "contact_website_hostname": contact_hostname,
-        "preferred_website": preferred,
-        "preferred_website_source": preferred_src,
-        "wikidata": wikidata_raw,
-        "wikidata_qid": wikidata_qid,
-        "wikidata_class": wikidata_class,
         "tags": tags_json,
         "tag_keys": tag_keys_json,
         "tag_count": len(tags_dict),
@@ -254,7 +236,6 @@ def _public_record(
         "lon": lon,
         "bbox": bbox_json,
         "area_m2": area_m2,
-        "area_km2": area_km2,
         "area_bucket": area_bucket,
         "schema_version": SCHEMA_VERSION,
     }
@@ -499,7 +480,6 @@ class _ExtractionHandler(osmium.SimpleHandler):
                     lon=geom.lon,
                     bbox=geom.bbox,
                     area_m2=geom.area_m2,
-                    area_km2=geom.area_km2,
                     area_bucket=geom.area_bucket,
                 )
             except PublicRowInvariantError as inv:

@@ -136,11 +136,6 @@ def register_public_parquets(
               CAST(NULL AS VARCHAR) AS contact_website_class,
               CAST(NULL AS VARCHAR) AS website_hostname,
               CAST(NULL AS VARCHAR) AS contact_website_hostname,
-              CAST(NULL AS VARCHAR) AS preferred_website,
-              CAST(NULL AS VARCHAR) AS preferred_website_source,
-              CAST(NULL AS VARCHAR) AS wikidata,
-              CAST(NULL AS VARCHAR) AS wikidata_qid,
-              CAST(NULL AS VARCHAR) AS wikidata_class,
               CAST(NULL AS VARCHAR) AS tags,
               CAST(NULL AS VARCHAR) AS tag_keys,
               CAST(NULL AS INTEGER) AS tag_count,
@@ -152,9 +147,14 @@ def register_public_parquets(
               CAST(NULL AS DOUBLE) AS lon,
               CAST(NULL AS VARCHAR) AS bbox,
               CAST(NULL AS DOUBLE) AS area_m2,
-              CAST(NULL AS DOUBLE) AS area_km2,
               CAST(NULL AS VARCHAR) AS area_bucket,
-              CAST(NULL AS VARCHAR) AS schema_version
+              CAST(NULL AS VARCHAR) AS schema_version,
+              CAST(NULL AS VARCHAR) AS website_text,
+              CAST(NULL AS BIGINT) AS website_word_count,
+              CAST(NULL AS VARCHAR) AS website_text_status,
+              CAST(NULL AS VARCHAR) AS contact_website_text,
+              CAST(NULL AS BIGINT) AS contact_website_word_count,
+              CAST(NULL AS VARCHAR) AS contact_website_text_status
             WHERE FALSE
             """
         )

@@ -1,6 +1,6 @@
 """Public polygon schema and column documentation.
 
-Schema version: ``v1.2``.
+Schema version: ``v1.3``.
 
 The schema is the contract for every Parquet file in the published
 ``polygons/`` directory. Every published row must satisfy the row-level
@@ -22,15 +22,8 @@ before the row is written to the public shard. Violations raise
 Nullability
 -----------
 
-Because every public row carries at least one website key, the
-derived convenience fields are non-null:
-
-* ``preferred_website`` -- non-null.
-* ``preferred_website_source`` -- non-null; exactly ``"website"`` or
-  ``"contact:website"``.
-
-The individual website values, classes, hostnames, Wikidata value,
-and name remain nullable.
+The individual website values, classes, hostnames, and name remain
+nullable. Every public row carries at least one non-empty website value.
 
 Schema versioning
 -----------------
@@ -46,7 +39,7 @@ import pyarrow as pa
 
 from osm_polygon_website_tag.contracts.text_schema import TEXT_FIELDS
 
-SCHEMA_VERSION = "v1.2"
+SCHEMA_VERSION = "v1.3"
 
 
 PUBLIC_ROW_INVARIANT_ERROR = "PublicRowInvariantError"
@@ -99,7 +92,22 @@ POLYGON_PUBLIC_SCHEMA_V1_1: pa.Schema = pa.schema(
     ]
 )
 
-POLYGON_PUBLIC_SCHEMA: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_1, *TEXT_FIELDS])
+POLYGON_PUBLIC_SCHEMA_V1_2: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_1, *TEXT_FIELDS])
+
+_REMOVED_V1_3_FIELDS = frozenset(
+    {
+        "preferred_website",
+        "preferred_website_source",
+        "wikidata",
+        "wikidata_qid",
+        "wikidata_class",
+        "area_km2",
+    }
+)
+
+POLYGON_PUBLIC_SCHEMA: pa.Schema = pa.schema(
+    field for field in POLYGON_PUBLIC_SCHEMA_V1_2 if field.name not in _REMOVED_V1_3_FIELDS
+)
 
 
 _COLUMN_DOCS: dict[str, str] = {
@@ -159,29 +167,6 @@ _COLUMN_DOCS: dict[str, str] = {
         "Lowercased hostname extracted from ``contact_website``, or "
         "``None`` when the value is not parseable."
     ),
-    "preferred_website": (
-        "Convenience field derived from the two website keys. Equals "
-        "the trimmed ``website`` value when present, else the trimmed "
-        "``contact:website`` value. Always non-null in public rows."
-    ),
-    "preferred_website_source": (
-        "Tag key chosen by the ``preferred_website`` rule. Always "
-        'exactly ``"website"`` or ``"contact:website"`` in public rows.'
-    ),
-    "wikidata": (
-        "Trimmed original ``wikidata`` tag value. ``None`` when the tag "
-        "is absent. Malformed-but-non-empty values are retained verbatim."
-    ),
-    "wikidata_qid": (
-        'Canonical single QID (e.g. ``"Q42"``) when the trimmed '
-        "``wikidata`` value parses to exactly one canonical QID; "
-        "``None`` otherwise (multiple, malformed, or absent)."
-    ),
-    "wikidata_class": (
-        "Discrete classification of the wikidata value: "
-        "``canonical_qid``, ``multiple``, ``malformed``. ``None`` when the "
-        "tag is absent."
-    ),
     "tags": (
         "Deterministic JSON object containing every tag of the source OSM "
         "object, with keys sorted. ``{}`` when the object carries no tags."
@@ -232,7 +217,6 @@ _COLUMN_DOCS: dict[str, str] = {
         "via ``pyproj.Geod``. Outer-ring area minus the absolute area of "
         "every inner ring. Always finite and non-negative."
     ),
-    "area_km2": ("Polygon area in square kilometres. Always finite and non-negative."),
     "area_bucket": (
         'Coarse area bucket. One of ``"<10m2"``, ``"10-100m2"``, '
         '``"100m2-1km2"``, ``"1-10km2"``, ``"10-100km2"``, '
@@ -286,9 +270,6 @@ def column_documentation() -> dict[str, str]:
     return dict(_COLUMN_DOCS)
 
 
-_PREFERRED_SOURCES = ("website", "contact:website")
-
-
 def validate_public_row(row: dict[str, object]) -> None:
     """Validate that ``row`` satisfies the public-shard invariants.
 
@@ -299,10 +280,6 @@ def validate_public_row(row: dict[str, object]) -> None:
     * ``has_any_website`` is ``True``.
     * ``website`` is non-null and non-empty OR ``contact_website`` is
       non-null and non-empty.
-    * ``preferred_website`` is non-null and non-empty.
-    * ``preferred_website_source`` is exactly ``"website"`` or
-      ``"contact:website"``.
-    * ``preferred_website`` equals the chosen original tag value.
     * ``has_website`` matches the presence of a non-empty ``website``.
     * ``has_contact_website`` matches the presence of a non-empty
       ``contact_website``.
@@ -327,29 +304,11 @@ def validate_public_row(row: dict[str, object]) -> None:
             "has_contact_website is true but contact_website value is null/empty"
         )
 
-    preferred = row.get("preferred_website")
-    if not (isinstance(preferred, str) and preferred):
-        raise PublicRowInvariantError("preferred_website must be non-empty")
-    source = row.get("preferred_website_source")
-    if source not in _PREFERRED_SOURCES:
-        raise PublicRowInvariantError(
-            f"preferred_website_source must be one of {_PREFERRED_SOURCES}; got {source!r}"
-        )
-    if source == "website":
-        if preferred != website:
-            raise PublicRowInvariantError(
-                "preferred_website must equal website when source is 'website'"
-            )
-    else:
-        if preferred != contact:
-            raise PublicRowInvariantError(
-                "preferred_website must equal contact_website when source is 'contact:website'"
-            )
-
 
 __all__ = [
     "POLYGON_PUBLIC_SCHEMA",
     "POLYGON_PUBLIC_SCHEMA_V1_1",
+    "POLYGON_PUBLIC_SCHEMA_V1_2",
     "PUBLIC_ROW_INVARIANT_ERROR",
     "SCHEMA_VERSION",
     "PublicRowInvariantError",

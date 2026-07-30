@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_2,
     SCHEMA_VERSION,
 )
 from osm_polygon_website_tag.contracts.text_schema import TEXT_COLUMN_NAMES, initial_text_fields
@@ -53,6 +54,7 @@ def enrich_polygon_shard(
     source_schema = parquet.schema_arrow
     if not (
         source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True)
+        or source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_2, check_metadata=True)
         or source_schema.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
     ):
         cache.close()
@@ -61,7 +63,7 @@ def enrich_polygon_shard(
     staged = shard.with_name(f".{shard.name}.enriching")
     staged.unlink(missing_ok=True)
     sink = BatchParquetSink(staged, POLYGON_PUBLIC_SCHEMA, batch_rows=batch_rows)
-    changed = source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True)
+    changed = not source_schema.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
     try:
         for batch in parquet.iter_batches(batch_size=batch_rows):
             for original in batch.to_pylist():

@@ -17,10 +17,13 @@ The exact overlap buckets are:
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 
 import pyarrow as pa
+
+from osm_polygon_website_tag.domain.wikidata import classify_wikidata
 
 
 @dataclass
@@ -55,13 +58,12 @@ def aggregate_shard(table: pa.Table) -> ShardAggregate:
     agg = ShardAggregate()
 
     website = table["website"].to_pylist()
-    wikidata = table["wikidata"].to_pylist()
+    tags = table["tags"].to_pylist()
     polygon_ids = table["polygon_id"].to_pylist()
     source_pbf = table["source_pbf"].to_pylist()
     osm_type = table["osm_type"].to_pylist()
     primary = table["osm_primary_tag"].to_pylist()
     website_class = table["website_class"].to_pylist()
-    wikidata_class = table["wikidata_class"].to_pylist()
     region = table["region"].to_pylist()
     area_bucket = table["area_bucket"].to_pylist()
     hostname = table["website_hostname"].to_pylist()
@@ -71,7 +73,8 @@ def aggregate_shard(table: pa.Table) -> ShardAggregate:
         pid = polygon_ids[i]
         ids.append(pid)
         ws = website[i]
-        wd = wikidata[i]
+        raw_tags = json.loads(tags[i])
+        wd = raw_tags.get("wikidata")
         has_ws = _nonempty(ws)
         has_wd = _nonempty(wd)
         if has_ws:
@@ -94,9 +97,10 @@ def aggregate_shard(table: pa.Table) -> ShardAggregate:
         agg.per_website_class_counts[website_class[i]] = (
             agg.per_website_class_counts.get(website_class[i], 0) + 1
         )
-        if wikidata_class[i] is not None:
-            agg.per_wikidata_class_counts[wikidata_class[i]] = (
-                agg.per_wikidata_class_counts.get(wikidata_class[i], 0) + 1
+        if has_wd:
+            wikidata_class = classify_wikidata(wd).value
+            agg.per_wikidata_class_counts[wikidata_class] = (
+                agg.per_wikidata_class_counts.get(wikidata_class, 0) + 1
             )
         agg.per_region_counts[region[i]] = agg.per_region_counts.get(region[i], 0) + 1
         agg.per_area_bucket_counts[area_bucket[i]] = (

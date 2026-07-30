@@ -13,6 +13,7 @@ from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSER
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_2,
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.runtime.run_state import SourceFingerprint, hash_shard
@@ -57,7 +58,11 @@ def source_bundle_is_complete(
     paths_and_contracts = (
         (
             run_dir / "polygons" / f"{stem}.parquet",
-            (POLYGON_PUBLIC_SCHEMA_V1_1, POLYGON_PUBLIC_SCHEMA),
+            (
+                POLYGON_PUBLIC_SCHEMA_V1_1,
+                POLYGON_PUBLIC_SCHEMA_V1_2,
+                POLYGON_PUBLIC_SCHEMA,
+            ),
             "public_row_count",
             "public_shard_sha256",
         ),

@@ -20,6 +20,7 @@ from osm_polygon_website_tag.application.workflow import (
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_2,
 )
 from osm_polygon_website_tag.contracts.text_schema import count_words
 from osm_polygon_website_tag.runtime.run_state import (
@@ -358,8 +359,20 @@ def test_complete_legacy_run_migrates_without_reextracting_pbf(
     root = _sources(make_pbf, tmp_path)
     first = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
     shard = first.run_dir / "polygons" / "a-latest.parquet"
-    current = pq.read_table(shard)
-    legacy = current.select(POLYGON_PUBLIC_SCHEMA_V1_1.names).cast(POLYGON_PUBLIC_SCHEMA_V1_1)
+    rows = pq.read_table(shard).to_pylist()
+    for row in rows:
+        row.update(
+            {
+                "preferred_website": row["website"] or row["contact_website"],
+                "preferred_website_source": ("website" if row["website"] else "contact:website"),
+                "wikidata": None,
+                "wikidata_qid": None,
+                "wikidata_class": None,
+                "area_km2": row["area_m2"] / 1_000_000,
+                "schema_version": "v1.1",
+            }
+        )
+    legacy = pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_1)
     pq.write_table(legacy, shard)
     state = load_run(first.run_dir)
     update_public_shard_metadata(
@@ -378,6 +391,78 @@ def test_complete_legacy_run_migrates_without_reextracting_pbf(
     assert resumed.extracted_count == 0
     assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
     assert load_run(first.run_dir).metadata["status"] == STATUS_COMPLETE
+
+
+def test_complete_v1_2_run_projects_and_reuploads_without_source_or_web_work(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    uploads: list[str] = []
+    monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
+    monkeypatch.setattr(
+        workflow,
+        "_upload_public_shard",
+        lambda _run, source, _repo: uploads.append(source.name),
+    )
+    monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
+    first = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+    assert uploads == ["a-latest.osm.pbf", "b-latest.osm.pbf"]
+    uploads.clear()
+    shard = first.run_dir / "polygons" / "a-latest.parquet"
+    rows = pq.read_table(shard).to_pylist()
+    for row in rows:
+        row.update(
+            {
+                "preferred_website": row["website"] or row["contact_website"],
+                "preferred_website_source": ("website" if row["website"] else "contact:website"),
+                "wikidata": None,
+                "wikidata_qid": None,
+                "wikidata_class": None,
+                "area_km2": row["area_m2"] / 1_000_000,
+                "schema_version": "v1.2",
+            }
+        )
+    pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_2), shard)
+    state = load_run(first.run_dir)
+    update_public_shard_metadata(
+        state,
+        filename="a-latest.osm.pbf",
+        row_count=len(rows),
+        shard_sha256=hash_shard(shard),
+    )
+    checkpoint_path = first.run_dir / "manifests" / "uploaded_polygons.json"
+    checkpoint = json.loads(checkpoint_path.read_text())
+    checkpoint["a-latest.osm.pbf"]["polygon_sha256"] = hash_shard(shard)
+    checkpoint_path.write_text(json.dumps(checkpoint))
+    monkeypatch.setattr(
+        workflow,
+        "extract_pbf",
+        lambda *_args, **_kwargs: pytest.fail("v1.2 migration must not read PBF"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "enrich_polygon_shard",
+        lambda *_args, **_kwargs: pytest.fail("v1.2 migration must not refetch websites"),
+    )
+    resumed = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+
+    assert resumed.extracted_count == 0
+    assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
+    assert uploads == ["a-latest.osm.pbf"]
 
 
 def test_incremental_upload_includes_shard_and_recomputed_card(
