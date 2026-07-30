@@ -4,6 +4,25 @@ The code lives locally. Production PBFs are immutable read-only inputs under
 an explicitly supplied source root; run artifacts are written to a separate
 local output root.
 
+## Package boundaries
+
+The source and test trees are organized by responsibility:
+
+- `contracts`: exact Arrow schemas and frozen text contracts;
+- `domain`: deterministic OSM classification and geometry rules;
+- `storage`: bounded, transactional local persistence;
+- `web`: safe HTTP retrieval, Trafilatura extraction, and URL caching;
+- `runtime`: configuration, paths, safety, and run lifecycle;
+- `pipeline`: extraction, enrichment, and analysis stages;
+- `reporting`: artifact-derived cards, verification, and finalization;
+- `publishing`: Hugging Face credential and upload adapters;
+- `application`: workflow composition and CLI dispatch.
+
+Dependencies flow toward lower-level packages. `application` is the only
+composition layer and no lower package imports it. The executable architecture
+tests enforce allowed package edges, reject cycles, and ensure every package
+documents its boundary.
+
 ## Pipeline
 
 1. `init` records the exact source inventory using filename, byte size, and
@@ -76,7 +95,7 @@ source PBF has exactly one shard, including schema-valid empty shards. A row is
 an assembled closed way or supported polygon relation with a non-empty
 `website` or `contact:website` tag. Wikidata is optional and comparison-only.
 
-The public schema is versioned in `polygon_schema.py`; the generated card
+The public schema is versioned in `contracts/polygon_schema.py`; the generated card
 renders its column names, Arrow types, nullability, and documentation.
 Schema v1.2 stores full Trafilatura text and exact Unicode `\w+` word counts
 independently for `website` and `contact:website`.

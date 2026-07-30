@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import osmium
+import osmium.osm
 import pytest
 
 

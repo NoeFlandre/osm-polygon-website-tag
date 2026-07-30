@@ -9,7 +9,7 @@ If you are an automated agent, read this file end-to-end before making changes.
    for features that are not yet needed. When in doubt, leave it out.
 2. **Modular.** Each module has one clear purpose and a small public surface.
    Prefer pure functions over classes unless stateful behaviour is required.
-3. **Typed.** All new code must pass `uv run mypy src` under strict mode. Add
+3. **Typed.** All new code must pass `uv run ty check src tests`. Add
    type hints to every signature (parameters and return).
 4. **Tested.** New behaviour ships with a pytest test. Keep tests fast and
    hermetic; no real network calls, no real disk writes outside `tmp_path`.
@@ -37,7 +37,7 @@ Before declaring work done, an agent MUST run and pass:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src
+uv run ty check src tests
 uv run pytest
 ```
 
@@ -59,12 +59,14 @@ If a check is intentionally skipped, call it out explicitly in the final report.
 3. Mention it in `README.md` only if a human user needs to install something
    extra system-wide.
 
-## Adding a new top-level module
+## Adding a module
 
-1. Create `src/osm_polygon_website_tag/<name>.py`.
-2. Add at least one test in `tests/test_<name>.py`.
-3. Update `docs/architecture.md` with the new module's responsibility and
-   how it depends on existing modules.
+1. Place it in the subpackage whose documented responsibility it serves.
+2. Add tests in the mirrored test directory.
+3. Respect the dependency boundaries enforced by
+   `tests/architecture/test_boundaries.py`.
+4. Update that subpackage's README when its responsibility or entry points
+   change.
 
 ## Secrets
 

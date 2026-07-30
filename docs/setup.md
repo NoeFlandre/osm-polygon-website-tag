@@ -31,7 +31,7 @@ cp .env.example .env
 # 4. Sanity-check the install
 uv run pytest
 uv run ruff check .
-uv run mypy src
+uv run ty check src tests
 ```
 
 ## Day-to-day commands
@@ -42,7 +42,7 @@ uv run mypy src
 | Run tests with coverage         | `uv run pytest --cov`                |
 | Lint                            | `uv run ruff check .`                |
 | Auto-format                     | `uv run ruff format .`               |
-| Type-check                      | `uv run mypy src`                    |
+| Type-check                      | `uv run ty check src tests`          |
 | Add a runtime dependency        | edit `pyproject.toml`, then `uv sync` |
 | Add a dev dependency            | edit `pyproject.toml`, then `uv sync` |
 | Update all deps                 | `uv sync --upgrade`                  |
@@ -68,9 +68,8 @@ See [`docs/data-and-remotes.md`](data-and-remotes.md) for the full flow.
 
 - **`uv sync` fails to find Python 3.12** — install it once via
   `uv python install 3.12`. `uv` will manage it from there.
-- **`mypy` complains about a third-party package** — it is almost certainly
-  untyped. Add it to `[[tool.mypy.overrides]]` in `pyproject.toml` with
-  `ignore_missing_imports = true`, but only after confirming the package
-  has no type stubs.
+- **`ty` reports a third-party typing problem** — confirm the package's type
+  information first. Prefer a narrow code correction or diagnostic-specific
+  suppression; never disable unresolved-import checking repository-wide.
 - **`pytest` cannot import `osm_polygon_website_tag`** — run `uv sync` again.
   The src/ layout means the package only becomes importable after install.

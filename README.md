@@ -42,7 +42,7 @@ uv run pytest
 # 4. Lint, format, and type-check
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy src
+uv run ty check src tests
 ```
 
 All commands run inside the project `.venv`; nothing is installed globally.
@@ -113,36 +113,17 @@ credential store via `hf auth login`.
 │   └── data-and-remotes.md # Where data lives and how it gets to HF
 ├── scripts/                # Operational scripts (HF upload, data prep)
 ├── src/osm_polygon_website_tag/
-│   ├── __init__.py
-│   ├── config.py           # Typed settings (env + .env)
-│   ├── paths.py            # Local data path resolution
-│   ├── safety.py           # Fail-closed path safety checks
-│   ├── atomic.py           # Atomic file writes (Path.replace)
-│   ├── tags.py             # Tag normalization and presence rules
-│   ├── website.py          # Website value classification + hostname
-│   ├── web_fetch.py        # Bounded SSRF-safe HTTP downloader
-│   ├── text_extract.py     # Trafilatura main-text adapter
-│   ├── text_cache.py       # Persistent URL result/retry cache
-│   ├── text_schema.py      # Text columns, statuses, word-count contract
-│   ├── enrich.py           # Atomic bounded per-shard enrichment
-│   ├── wikidata.py         # Wikidata value classification + QID
-│   ├── categories.py       # Primary category selection
-│   ├── polygon_schema.py   # Versioned public polygon schema
-│   ├── region.py           # Region detection from PBF filenames
-│   ├── geometry.py         # libosmium Area -> GeoJSON / centroid / area
-│   ├── extraction.py       # Per-PBF extraction (libosmium + atomic shard)
-│   ├── run_state.py        # Run-owned directory + manifests
-│   ├── partition_aggregate.py  # Per-shard exact-overlap counts
-│   ├── analyze.py          # Merge per-shard aggregates -> analysis/*.parquet
-│   ├── card_stats.py       # Re-derive card facts from finalized shards
-│   ├── card.py             # Render README.md and dataset.yaml (ODbL 1.0)
-│   ├── verify.py           # Parity checks; fail closed
-│   ├── hf_token.py         # HF token resolution (env / local store)
-│   ├── publish.py          # Publication plan + huggingface_hub upload
-│   ├── workflow.py         # Resumable full-inventory orchestration
-│   ├── cli.py              # Phase-oriented command interface
+│   ├── contracts/          # Exact Arrow and text contracts
+│   ├── domain/             # OSM classification and geometry rules
+│   ├── storage/            # Bounded and transactional local I/O
+│   ├── web/                # Safe fetch, Trafilatura, and URL cache
+│   ├── runtime/            # Configuration, paths, safety, run lifecycle
+│   ├── pipeline/           # Extraction, enrichment, and analysis stages
+│   ├── reporting/          # Cards, verification, and finalization
+│   ├── publishing/         # Hugging Face credentials and upload
+│   ├── application/        # Workflow composition and CLI
 │   └── py.typed            # PEP 561 type-distribution marker
-└── tests/                  # Hermetic synthetic pytest suite
+└── tests/                  # Mirrored hermetic pytest suite + architecture checks
 ```
 
 ## Where data lives
