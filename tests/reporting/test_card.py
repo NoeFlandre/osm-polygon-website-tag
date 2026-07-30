@@ -99,6 +99,7 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     content = path.read_text()
     assert content.startswith("---")
     assert "license: odbl" in content
+    assert "license_name:" not in content
     assert "size_categories:\n  - n<1K" in content
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content

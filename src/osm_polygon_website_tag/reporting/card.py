@@ -55,7 +55,6 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
     lines = [
         "---",
         "license: odbl",
-        "license_name: Open Database License v1.0 (ODbL)",
         "task_categories:",
         "  - geographic-information-retrieval",
         "tags:",
