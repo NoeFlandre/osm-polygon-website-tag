@@ -13,16 +13,13 @@ def test_settings_defaults() -> None:
     settings = config.Settings()
     assert settings.github_repo == config.DEFAULT_GITHUB_REPO
     assert settings.hf_dataset_repo == config.DEFAULT_HF_DATASET
-    assert settings.hf_token == ""
     assert settings.osm_poly_data_dir == ""
 
 
 def test_settings_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HF_DATASET_REPO", "someone/else")
-    monkeypatch.setenv("HF_TOKEN", "secret")
     settings = config.Settings()
     assert settings.hf_dataset_repo == "someone/else"
-    assert settings.hf_token == "secret"
 
 
 def test_resolved_data_root_returns_string(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

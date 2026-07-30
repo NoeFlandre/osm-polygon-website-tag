@@ -1,8 +1,8 @@
-"""Local data path resolution.
+"""Generated-data path resolution.
 
-The codebase lives on the local filesystem, but the working dataset is large
-and lives on an external drive (``/Volumes/Seagate M3/projects/osm-polygon-website-tag``).
-This module centralises that location so nothing else in the codebase hard-codes it.
+Code lives on the Mac; generated run artifacts live on the Seagate data
+volume. Immutable PBF sources are supplied explicitly to the CLI and are
+never represented as an output data root here.
 
 Override with the ``OSM_POLY_DATA_DIR`` environment variable (see ``.env.example``).
 """
@@ -12,9 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# External drive used as the default data root. Kept as a string (not Path) so a
-# missing drive at import time does not raise; resolution happens lazily.
-_DEFAULT_DATA_DIR = "/Volumes/Seagate M3/projects/osm-polygon-website-tag"
+DEFAULT_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag-data")
 
 # Sub-directory layout under the data root. Add constants here as we grow
 # instead of inlining path joins across the codebase.
@@ -24,22 +22,16 @@ EXPORTS_DIRNAME = "exports"
 
 
 def data_root() -> Path:
-    """Return the local data root, creating it if missing.
+    """Return the generated-data root, creating it if missing.
 
     Order of resolution:
       1. ``OSM_POLY_DATA_DIR`` environment variable (if set and non-empty).
-      2. ``/Volumes/Seagate M3/projects/osm-polygon-website-tag`` (external drive).
-      3. ``./data`` relative to the current working directory (fallback for dev).
+      2. The dedicated Seagate generated-data directory.
 
     The directory is created on first call so callers can treat it as always-present.
     """
     configured = os.environ.get("OSM_POLY_DATA_DIR", "").strip()
-    if configured:
-        root = Path(configured).expanduser()
-    elif Path(_DEFAULT_DATA_DIR).exists():
-        root = Path(_DEFAULT_DATA_DIR)
-    else:
-        root = Path.cwd() / "data"
+    root = Path(configured).expanduser() if configured else DEFAULT_DATA_ROOT
 
     root.mkdir(parents=True, exist_ok=True)
     return root

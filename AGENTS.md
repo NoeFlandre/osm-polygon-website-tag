@@ -16,6 +16,8 @@ If you are an automated agent, read this file end-to-end before making changes.
 5. **Documented.** Anything a future agent or human would not immediately
    understand from reading the code must live in this file, `docs/`, or a
    docstring.
+6. **Untrusted URLs.** OSM website values must pass `web_fetch.py`; never
+   bypass its scheme, redirect, DNS/IP, timeout, or response-size checks.
 
 ## Environment
 
@@ -23,9 +25,10 @@ If you are an automated agent, read this file end-to-end before making changes.
 - The project uses a `src/` layout; tests import the installed package
   (`osm_polygon_website_tag`), not relative paths from `src/`.
 - Run all commands through `uv run <tool>` so the locked `.venv` is used.
-- The local data root lives on an external drive by default
-  (`/Volumes/Seagate M3/projects/osm-polygon-website-tag`). Never hard-code it
-  outside `osm_polygon_website_tag/paths.py`.
+- Code lives on the Mac. Generated runs live in the dedicated Seagate data
+  directory. Production PBFs are immutable read-only inputs supplied
+  explicitly by `--source-root`; never use that source tree as an output
+  location.
 
 ## Quality gates
 

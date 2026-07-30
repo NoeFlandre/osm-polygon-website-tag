@@ -34,9 +34,6 @@ class Settings(BaseSettings):
     github_repo: str = Field(default=DEFAULT_GITHUB_REPO, description="GitHub repo URL.")
     hf_dataset_repo: str = Field(default=DEFAULT_HF_DATASET, description="HF dataset slug.")
 
-    # Credentials (never logged; only consumed when actually pushing data).
-    hf_token: str = Field(default="", description="Hugging Face write token.")
-
     def resolved_data_root(self) -> str:
         """Absolute path to the local data root, after resolution."""
         return str(data_root())

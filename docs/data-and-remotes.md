@@ -2,20 +2,43 @@
 
 Where data lives on disk, and how it gets to Hugging Face.
 
-## Local data root
+## Run-artifact root
 
-The default data root is `/Volumes/Seagate M3/projects/osm-polygon-website-tag`,
-an external Seagate M3 drive. Override with `OSM_POLY_DATA_DIR`.
+Code stays on the MacBook. Generated artifacts live on the Seagate under
+`/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`; override it with
+`OSM_POLY_DATA_DIR`. Production commands use an explicit `--output-root`.
 
-Under the root, three sub-directories are managed by `osm_polygon_website_tag.paths`:
+## Immutable PBF sources
 
-| Sub-directory | Owner                                  | Contents                              |
-| ------------- | -------------------------------------- | ------------------------------------- |
-| `raw/`        | `paths.raw_dir()`                      | Immutable OSM extracts (PBF, Overpass JSON dumps). Never modified after write. |
-| `processed/`  | `paths.processed_dir()`                | Cleaned, normalized intermediate artifacts. |
-| `exports/`    | `paths.exports_dir()`                  | Final artifacts ready for HF upload. |
+Production PBFs live at:
 
-Nothing in `data/` is committed to git (see `.gitignore`).
+```
+/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw
+```
+
+The pipeline **never writes** to this directory. The safety module
+(`osm_polygon_website_tag.safety`) refuses any output path that is equal
+to or contained by the required `--source-root`. PBFs are read-only
+inputs: the pipeline never hashes, copies, moves, renames, or modifies them.
+
+## Output root
+
+The pipeline accepts an explicit `--output-root` outside the source root.
+Each run owns this layout:
+
+```
+<output-root>/<run-id>/
+  polygons/<source-stem>.parquet
+  analysis_observations/<source-stem>.parquet
+  rejections/<source-stem>.parquet
+  analysis/*.parquet
+  manifests/
+  README.md
+  dataset.yaml
+```
+
+Run-owned staging is excluded from the completion receipt and publication.
+Publication uses only receipt-bound paths.
 
 ## GitHub remote
 
@@ -39,26 +62,45 @@ git push origin main
 https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag
 ```
 
-Use the `hf` CLI (not the Python SDK) for uploads, per the project's chosen tooling:
+Use the `publish` subcommand, which is **dry-run by default** and
+verifies the local run before any upload.
+
+The resumable production command is documented in the root README. With
+`run-all --apply`, each polygon shard is safely enriched from both website
+tags, the cumulative card is recomputed from Parquets, and the shard plus card
+are uploaded together; a local acknowledgement is then written atomically. The final
+analysis, card, manifests, and completion receipt are uploaded only after the
+entire inventory verifies. Stopping with `Ctrl-C` and repeating the same
+command resumes without reprocessing exact completed bundles or successful
+URLs. Legacy shards are enriched without rereading PBFs; failed URLs retry.
 
 ```bash
 # One-time
-brew install hf
-hf auth login                                # paste a write token from
-                                             # https://huggingface.co/settings/tokens
+hf auth login                                  # paste a write token from
+                                               # https://huggingface.co/settings/tokens
 
-# After artifacts are produced in $OSM_POLY_DATA_DIR/exports
-hf upload NoeFlandre/osm-polygon-website-tag . --repo-type=dataset \
-    $OSM_POLY_DATA_DIR/exports
+# After artifacts are produced in <output-root>/<run_id>
+uv run osm-polygon-website-tag verify-results \
+  --run-dir '<output-root>/<run_id>'
+
+uv run osm-polygon-website-tag publish \
+  --run-dir '<output-root>/<run_id>'            # dry-run
+
+uv run osm-polygon-website-tag publish \
+  --run-dir '<output-root>/<run_id>' \
+  --apply                                      # real upload, approval-gated
 ```
 
-A convenience wrapper lives at `scripts/upload_to_hf.sh` and reads the
-destination from the same environment variables documented in `.env.example`.
+The CLI never accepts an HF token as a flag. The token is read from
+`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the local Hugging Face
+credential store via `hf auth login`. `publish` re-runs
+`verify-results` before any upload; a partial or tampered run is
+rejected before any HTTP traffic is initiated.
 
 ## Why split code and data
 
 - **Code in git, data on disk** keeps the repo cloneable and lightweight.
 - The external drive provides the storage needed for planet-scale OSM data,
   which would otherwise bloat history.
-- Treating `raw/` as immutable mirrors the way OSM providers serve data: any
-  transformation produces a new artifact under `processed/` or `exports/`.
+- Treating `raw/` as immutable mirrors the way OSM providers serve data:
+  every extraction produces a new run-owned directory.

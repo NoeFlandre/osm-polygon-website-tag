@@ -19,9 +19,19 @@ classifiers = [
 ]
 
 dependencies = [
+    "duckdb>=1.0.0",
+    "huggingface-hub>=1.25.1",
+    "osmium>=4.3.1",
+    "pyarrow>=25.0.0",
     "pydantic>=2.6,<3",
     "pydantic-settings>=2.2,<3",
+    "pyproj>=3.6.0",
+    "shapely>=2.0.0",
+    "trafilatura>=2.1,<3",
 ]
+
+[project.scripts]
+osm-polygon-website-tag = "osm_polygon_website_tag.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/NoeFlandre/osm-polygon-website-tag"
@@ -67,10 +77,13 @@ select = [
 ]
 ignore = [
     "S101",  # asserts allowed in tests
+    "E501",  # line length handled by formatter; some long dict literals are clearer on one line
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106"]
+"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018"]
+"src/osm_polygon_website_tag/run_manifest.py" = ["S603", "S607"]
+"src/osm_polygon_website_tag/cli.py" = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -92,6 +105,30 @@ packages = ["osm_polygon_website_tag"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["osmium", "osmium.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["duckdb", "duckdb.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["shapely", "shapely.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["huggingface_hub", "huggingface_hub.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["trafilatura", "trafilatura.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "8"

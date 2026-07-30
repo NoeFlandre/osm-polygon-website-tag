@@ -28,21 +28,9 @@ def test_subdirs_are_created(isolated_data_dir: Path) -> None:
     assert paths.exports_dir().is_dir()
 
 
-def test_default_data_dir_does_not_raise_when_missing(
+def test_default_data_dir_is_dedicated_seagate_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If neither env nor external drive exists, fall back to ./data without crashing."""
     monkeypatch.delenv("OSM_POLY_DATA_DIR", raising=False)
-    monkeypatch.chdir(tmp_path)
-
-    # The external drive may or may not exist on the dev machine; we just want to
-    # confirm that *if* it does not, resolution falls back cleanly.
-    original_exists = Path.exists
-
-    def fake_exists(self: Path) -> bool:
-        if str(self) == paths._DEFAULT_DATA_DIR:  # intentional private-attr probe
-            return False
-        return original_exists(self)
-
-    monkeypatch.setattr(Path, "exists", fake_exists)
-    assert paths.data_root() == tmp_path / "data"
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path)
+    assert paths.data_root() == tmp_path

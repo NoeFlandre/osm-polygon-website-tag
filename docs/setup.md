@@ -12,6 +12,9 @@ Step-by-step guide to get the project running from a fresh clone.
 | `hf` (HF CLI) | latest | `brew install hf` (optional, only for dataset uploads) |
 | Hugging Face account | - | Required for dataset pushes; create a token at https://huggingface.co/settings/tokens |
 
+Trafilatura and its Python dependencies are installed from `uv.lock`; do not
+install them globally with `pip`.
+
 ## First-time setup
 
 ```bash
@@ -22,9 +25,8 @@ cd osm-polygon-website-tag
 # 2. Install dependencies (creates .venv automatically)
 uv sync --group dev
 
-# 3. Create your local .env from the template
+# 3. Create your optional local configuration
 cp .env.example .env
-# Then edit .env and fill in HF_TOKEN if you plan to push to the dataset.
 
 # 4. Sanity-check the install
 uv run pytest
@@ -48,15 +50,15 @@ uv run mypy src
 
 ## Working with the external data drive
 
-The default data root is `/Volumes/Seagate M3/projects/osm-polygon-website-tag`.
+The immutable production source root is
+`/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw`.
 Three things to know:
 
-1. The directory is **not** inside the git repo. It is created on first access
-   by `osm_polygon_website_tag.paths.data_root()`.
-2. If the external drive is not mounted, `paths.data_root()` transparently
-   falls back to `./data` (relative to the current working directory). This is
-   useful for CI or a quick smoke test, but real OSM extracts will not fit.
-3. Override the location by exporting `OSM_POLY_DATA_DIR=/some/other/path`.
+1. The PBF source root is supplied explicitly and remains read-only.
+2. Run artifacts live under
+   `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`.
+3. Override only the artifact location with
+   `OSM_POLY_DATA_DIR=/some/local/output/path`.
 
 ## Pushing data to Hugging Face
 
