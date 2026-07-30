@@ -17,6 +17,7 @@ mutable run state.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
@@ -55,8 +56,6 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
     lines = [
         "---",
         "license: odbl",
-        "task_categories:",
-        "  - geographic-information-retrieval",
         "tags:",
         "  - openstreetmap",
         "  - osm",
@@ -113,142 +112,139 @@ def _size_category(row_count: int) -> str:
 
 
 def _render_markdown(stats: CardStats) -> str:
-    """Render the body of the README card."""
-    parts: list[str] = []
-    parts.append("# OSM Polygon Website Tag Dataset")
-    parts.append("")
-    parts.append(
-        "Per-polygon website and Wikidata tags extracted from "
-        "OpenStreetMap PBF extracts. This card is auto-generated from "
-        "the run artifacts; every number below is reproducible from "
-        "the Parquet files in this repository."
+    """Render a concise public-facing card from artifact-derived statistics."""
+    complete = (
+        stats.expected_sources_count > 0
+        and stats.enriched_sources_count == stats.expected_sources_count
     )
-    parts.append("")
-
-    parts.append("## Inclusion rule")
-    parts.append("")
-    parts.append(
-        "A public row is an assembled closed OSM way or supported polygon "
-        "relation with a non-empty `website` OR `contact:website` tag. "
-        "`wikidata` is retained for comparison but is not an inclusion requirement."
-    )
-    parts.append("")
-
-    parts.append("## Polygon columns")
-    parts.append("")
-    parts.append("| Column | Arrow type | Nullable | Description |")
-    parts.append("| --- | --- | --- | --- |")
+    combined_words = stats.website_total_words + stats.contact_website_total_words
+    parts = [
+        "# OSM Polygon Website Dataset",
+        "",
+        (
+            "OpenStreetMap closed ways and polygon relations carrying a non-empty "
+            "`website` OR `contact:website` tag, with full main-page text extracted "
+            "using Trafilatura. Every statistic below is regenerated from the "
+            "published Parquet artifacts."
+        ),
+        "",
+        "## Snapshot",
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Dataset status | {'Complete' if complete else 'In progress'} |",
+        f"| Source PBFs | {stats.sources_count:,} / {stats.expected_sources_count:,} |",
+        f"| Public polygons | {stats.public_row_count:,} |",
+        f"| Canonical polygons | {stats.canonical_count:,} |",
+        f"| Comparison observations | {stats.observation_count:,} |",
+        f"| Duplicate observations | {stats.duplicate_count:,} |",
+        f"| Conflicting snapshots | {stats.conflicting_snapshot_count:,} |",
+        f"| Geometry rejections | {stats.rejection_count:,} |",
+        "",
+        "## Website text",
+        "",
+        "| Tag | URLs | Successful | Empty | Failed | Words |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        (
+            f"| `website` | {stats.website_urls_present:,} | "
+            f"{stats.website_text_success_count:,} | {stats.website_text_empty_count:,} | "
+            f"{stats.website_text_failure_count:,} | {stats.website_total_words:,} |"
+        ),
+        (
+            f"| `contact:website` | {stats.contact_website_urls_present:,} | "
+            f"{stats.contact_website_text_success_count:,} | "
+            f"{stats.contact_website_text_empty_count:,} | "
+            f"{stats.contact_website_text_failure_count:,} | "
+            f"{stats.contact_website_total_words:,} |"
+        ),
+        "",
+        f"Polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
+        f"Combined extracted words: **{combined_words:,}**",
+        "",
+        _render_hostnames(
+            "website",
+            stats.top_hostnames_website,
+            hostname_key="website_hostname",
+        ),
+        "",
+        _render_hostnames(
+            "contact:website",
+            stats.top_hostnames_contact_website,
+            hostname_key="contact_website_hostname",
+        ),
+        "",
+        "## Dataset contents",
+        "",
+        "- `polygons/*.parquet`: the public polygon split, one shard per source PBF.",
+        "- `analysis/*.parquet`: detailed overlap, provenance, hostname, duplicate, "
+        "conflict, and per-source statistics.",
+        "- `manifests/`: source inventory, upload checkpoints, and completion receipt.",
+        "",
+        "## Public polygon schema",
+        "",
+        "| Column | Type | Nullable | Description |",
+        "| --- | --- | :---: | --- |",
+    ]
     for field in POLYGON_PUBLIC_SCHEMA:
         description = " ".join(column_doc(field.name).split()).replace("|", "\\|")
         parts.append(
             f"| `{field.name}` | `{field.type}` | "
             f"{'yes' if field.nullable else 'no'} | {description} |"
         )
-    parts.append("")
-
-    parts.append("## Summary")
-    parts.append("")
-    parts.append(f"- Source PBFs processed: {stats.sources_count}")
-    parts.append(
-        f"- Enriched source PBFs: {stats.enriched_sources_count} / {stats.expected_sources_count}"
-    )
-    parts.append(f"- Public polygon rows: {stats.public_row_count}")
-    parts.append(f"- Comparison observations (pre-dedup): {stats.observation_count}")
-    parts.append(f"- Canonical polygons (post-dedup): {stats.canonical_count}")
-    parts.append(f"- Duplicate observations: {stats.duplicate_count}")
-    parts.append(f"- Conflicting snapshots: {stats.conflicting_snapshot_count}")
-    parts.append(f"- Rejections: {stats.rejection_count}")
-    parts.append("")
-
-    parts.append("## Website text enrichment")
-    parts.append("")
-    parts.append(
-        "Full main text is extracted independently from both `website` and "
-        "`contact:website` using Trafilatura. Text is not truncated. Word counts "
-        "are the number of Python Unicode `\\w+` matches in the stored text."
-    )
-    parts.append("")
-    parts.append(f"- Website URLs present: {stats.website_urls_present}")
-    parts.append(f"- Website successful extractions: {stats.website_text_success_count}")
-    parts.append(f"- Website empty extractions: {stats.website_text_empty_count}")
-    parts.append(f"- Website failed extractions: {stats.website_text_failure_count}")
-    parts.append(f"- Website extracted words: {stats.website_total_words}")
-    parts.append(f"- Contact website URLs present: {stats.contact_website_urls_present}")
-    parts.append(
-        f"- Contact website successful extractions: {stats.contact_website_text_success_count}"
-    )
-    parts.append(f"- Contact website empty extractions: {stats.contact_website_text_empty_count}")
-    parts.append(
-        f"- Contact website failed extractions: {stats.contact_website_text_failure_count}"
-    )
-    parts.append(f"- Contact website extracted words: {stats.contact_website_total_words}")
-    parts.append(f"- Polygons with at least one extracted text: {stats.polygons_with_any_text}")
-    parts.append("")
-    parts.append(
-        "Statuses are `absent`, `pending`, `success`, `empty`, `invalid_url`, "
-        "`unsafe_url`, `fetch_error`, or `extract_error`. Failed values are retried "
-        "on a later pipeline invocation."
-    )
-    parts.append("")
-
-    parts.append("## Eight-cell provenance cube")
-    parts.append("")
-    parts.append("| Cell | observation | canonical |")
-    parts.append("| --- | ---: | ---: |")
-    for cell, _ in sorted(stats.eight_cell_observation.items()):
-        obs = stats.eight_cell_observation.get(cell, 0)
-        can = stats.eight_cell_canonical.get(cell, 0)
-        parts.append(f"| `{cell}` | {obs} | {can} |")
-    parts.append("")
-
-    parts.append("## Top hostnames (website)")
-    parts.append("")
-    if stats.top_hostnames_website:
-        parts.append("| Hostname | Count |")
-        parts.append("| --- | ---: |")
-        for r in stats.top_hostnames_website[:25]:
-            parts.append(f"| `{r['website_hostname']}` | {r['row_count']} |")
-    else:
-        parts.append("_No website hostnames observed._")
-    parts.append("")
-
-    parts.append("## Top hostnames (contact:website)")
-    parts.append("")
-    if stats.top_hostnames_contact_website:
-        parts.append("| Hostname | Count |")
-        parts.append("| --- | ---: |")
-        for r in stats.top_hostnames_contact_website[:25]:
-            parts.append(f"| `{r['contact_website_hostname']}` | {r['row_count']} |")
-    else:
-        parts.append("_No contact:website hostnames observed._")
-    parts.append("")
-
-    parts.append("## Per-source coverage")
-    parts.append("")
-    if stats.per_source_counts:
-        parts.append("| Source PBF | Public rows |")
-        parts.append("| --- | ---: |")
-        for r in stats.per_source_counts:
-            parts.append(f"| `{r['source_pbf']}` | {r['row_count']} |")
-    else:
-        parts.append("_No public rows._")
-    parts.append("")
-
-    parts.append("## Provenance")
-    parts.append("")
-    parts.append(
-        "Each public polygon row is derived deterministically from a source PBF "
-        "whose filename, byte size, and modification time were recorded before "
-        "processing. `manifests/completion_receipt.json` binds every "
-        "published artifact by relative path, byte size, and SHA-256."
-    )
-    parts.append("")
-    parts.append(
-        "© OpenStreetMap contributors. OpenStreetMap data is available under "
-        "the [Open Database License (ODbL) 1.0]"
-        "(https://opendatacommons.org/licenses/odbl/1-0/); see the "
-        "[OpenStreetMap copyright and attribution page]"
-        "(https://www.openstreetmap.org/copyright). Regional PBF extracts are "
-        "provided by [Geofabrik](https://download.geofabrik.de/)."
+    parts.extend(
+        [
+            "",
+            "## Methodology and quality",
+            "",
+            (
+                "Geometry is assembled with libosmium. Full main text is extracted "
+                "independently for both website tags with Trafilatura and is not "
+                "truncated. Word counts are Python Unicode `\\w+` matches."
+            ),
+            "",
+            (
+                "Text statuses are `absent`, `pending`, `success`, `empty`, "
+                "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
+                "Failed values retry on later resumptions; successful values are cached."
+            ),
+            "",
+            "## Provenance and license",
+            "",
+            (
+                "Source filename, byte size, and nanosecond modification time are "
+                "recorded before processing. The completion receipt binds finalized "
+                "artifacts by relative path, byte size, and SHA-256."
+            ),
+            "",
+            (
+                "© OpenStreetMap contributors. OpenStreetMap data is available under "
+                "the [Open Database License (ODbL) 1.0]"
+                "(https://opendatacommons.org/licenses/odbl/1-0/); see the "
+                "[OpenStreetMap copyright and attribution page]"
+                "(https://www.openstreetmap.org/copyright). Regional PBF extracts are "
+                "provided by [Geofabrik](https://download.geofabrik.de/)."
+            ),
+        ]
     )
     return "\n".join(parts) + "\n"
+
+
+def _render_hostnames(
+    label: str,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    hostname_key: str,
+) -> str:
+    """Render at most ten artifact-derived hostnames."""
+    lines = [f"### Top `{label}` hostnames", ""]
+    if not rows:
+        lines.append("_No hostnames observed._")
+        return "\n".join(lines)
+    lines.extend(["| Hostname | Polygons |", "| --- | ---: |"])
+    for row in rows[:10]:
+        hostname = row[hostname_key]
+        row_count = row["row_count"]
+        if not isinstance(hostname, str) or not isinstance(row_count, int):
+            raise ValueError("invalid hostname analysis row")
+        lines.append(f"| `{hostname}` | {row_count:,} |")
+    return "\n".join(lines)

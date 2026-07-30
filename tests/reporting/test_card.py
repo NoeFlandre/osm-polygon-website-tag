@@ -100,6 +100,8 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert content.startswith("---")
     assert "license: odbl" in content
     assert "license_name:" not in content
+    assert "task_categories:" not in content
+    assert "task_categories:" not in (run_dir / "dataset.yaml").read_text()
     assert "size_categories:\n  - n<1K" in content
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
@@ -110,8 +112,8 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     path = build_card(run_dir)
     content = path.read_text()
-    assert "Public polygon rows: 1" in content
-    assert "Source PBFs processed: 1" in content
+    assert "| Public polygons | 1 |" in content
+    assert "| Source PBFs | 1 / 1 |" in content
     assert "`website` OR `contact:website`" in content
     assert "| `polygon_id` |" in content
     assert "| `contact_website` |" in content
@@ -120,13 +122,14 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     assert "| `area_km2` |" not in content
 
 
-def test_build_card_embeds_eight_cell_table(tmp_path: Path) -> None:
+def test_build_card_links_detailed_analysis_instead_of_embedding_it(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     analyze_results(run_dir)
     path = build_card(run_dir)
     content = path.read_text()
-    assert "Eight-cell provenance cube" in content
-    assert "cell_000_w0_c0_d0" in content
+    assert "Eight-cell provenance cube" not in content
+    assert "Per-source coverage" not in content
+    assert "`analysis/*.parquet`" in content
 
 
 def test_card_stats_populates_canonical_count_from_analysis(tmp_path: Path) -> None:
@@ -259,7 +262,26 @@ def test_incremental_card_renders_progress_and_text_statistics(tmp_path: Path) -
     content = build_card(run_dir).read_text()
 
     assert "dataset_status: in_progress" in content
-    assert "Enriched source PBFs: 1 / 2" in content
-    assert "Website extracted words: 3" in content
+    assert "| Source PBFs | 1 / 2 |" in content
+    assert "| `website` | 1 | 1 | 0 | 0 | 3 |" in content
+    assert "Combined extracted words: **3**" in content
     assert "Trafilatura" in content
     assert "Unicode `\\w+`" in content
+
+
+def test_hostname_renderer_caps_public_table_at_ten_rows() -> None:
+    from osm_polygon_website_tag.reporting.card import _render_hostnames
+
+    rows = [
+        {"website_hostname": f"host-{index}.example", "row_count": 20 - index}
+        for index in range(11)
+    ]
+
+    rendered = _render_hostnames(
+        "website",
+        rows,
+        hostname_key="website_hostname",
+    )
+
+    assert "host-9.example" in rendered
+    assert "host-10.example" not in rendered

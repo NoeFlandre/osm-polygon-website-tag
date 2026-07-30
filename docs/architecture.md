@@ -102,6 +102,12 @@ renders its column names, Arrow types, nullability, and documentation.
 Schema v1.3 stores full Trafilatura text and exact Unicode `\w+` word counts
 independently for `website` and `contact:website`.
 
+Card rendering is a pure presentation layer over `CardStats`. Its compact
+snapshot and website-text tables, combined word total, and top-ten hostname
+tables are regenerated from Parquets on every incremental upload. Detailed
+analysis stays in `analysis/*.parquet`; optional Hugging Face task metadata is
+omitted because no official task category accurately describes the dataset.
+
 The v1.3 public projection removes `preferred_website`,
 `preferred_website_source`, `wikidata`, `wikidata_qid`, `wikidata_class`, and
 `area_km2`. The comparison schema retains Wikidata for overlap analysis and

@@ -83,6 +83,13 @@ bundle and begin with enrichment/upload; they do not reread those PBFs. The card
 reports exact word totals for both website tags. Full extracted text is never
 truncated.
 
+The generated Hugging Face card is intentionally concise: it presents current
+progress, polygon and text-extraction totals, combined word count, top
+hostnames, public schema, methodology, and attribution. Detailed overlap and
+per-source results remain in `analysis/*.parquet`. The optional
+`task_categories` metadata is omitted because this geographic source dataset
+does not map to an official Hugging Face machine-learning task.
+
 Schema v1.3 removes the redundant public columns `preferred_website`,
 `preferred_website_source`, `wikidata`, `wikidata_qid`, `wikidata_class`, and
 `area_km2`. Wikidata comparison fields remain in the analysis observations, and
