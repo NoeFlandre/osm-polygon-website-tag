@@ -8,9 +8,16 @@ from pathlib import Path
 import pytest
 
 from osm_polygon_website_tag.runtime.run_state import (
+    STATUS_ANALYZED,
+    STATUS_CARD_BUILT,
     STATUS_COMPLETE,
+    STATUS_ENRICHED,
+    STATUS_ENRICHING,
+    STATUS_EXTRACTED,
+    STATUS_EXTRACTING,
     STATUS_INCOMPLETE,
     STATUS_INITIALIZED,
+    STATUS_VERIFIED,
     SourceFingerprint,
     expected_source_inventory,
     initialise_run,
@@ -18,6 +25,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     record_processed_source,
     snapshot_source_fingerprint,
     source_inventory_matches,
+    source_is_unchanged,
     transition_status,
     upsert_run_metadata,
 )
@@ -55,6 +63,9 @@ def test_initialise_run_writes_expected_sources_when_provided(tmp_path: Path) ->
         {"filename": "a-latest.osm.pbf", "size_bytes": 10, "mtime_ns": 12345},
         {"filename": "b-latest.osm.pbf", "size_bytes": 20, "mtime_ns": 67890},
     ]
+    inventory_path = tmp_path / "r" / "manifests" / "expected_sources.json"
+    inventory_text = inventory_path.read_text()
+    assert inventory_text == json.dumps(inv, indent=2, sort_keys=True) + "\n"
 
 
 def test_initialise_run_omits_source_sha256(tmp_path: Path) -> None:
@@ -66,7 +77,7 @@ def test_initialise_run_omits_source_sha256(tmp_path: Path) -> None:
 
 
 def test_load_run_round_trips_metadata(tmp_path: Path) -> None:
-    run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
     upsert_run_metadata(state, {"python": "3.12"})
     reloaded = load_run(run_dir)
     assert reloaded.metadata["python"] == "3.12"
@@ -96,7 +107,7 @@ def test_source_fingerprint_changes_with_size(tmp_path: Path) -> None:
 
 
 def test_record_processed_source_appends(tmp_path: Path) -> None:
-    run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
     p = tmp_path / "monaco-latest.osm.pbf"
     p.write_bytes(b"data")
     fp = snapshot_source_fingerprint(p)
@@ -110,7 +121,7 @@ def test_record_processed_source_appends(tmp_path: Path) -> None:
 
 
 def test_record_processed_source_dedupes_by_filename(tmp_path: Path) -> None:
-    run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
     p = tmp_path / "monaco-latest.osm.pbf"
     p.write_bytes(b"data")
     fp = snapshot_source_fingerprint(p)
@@ -122,8 +133,53 @@ def test_record_processed_source_dedupes_by_filename(tmp_path: Path) -> None:
     assert data[0]["public_row_count"] == 11
 
 
+def test_processed_sources_manifest_is_deterministic(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
+    fp_b = SourceFingerprint(filename="b-latest.osm.pbf", size_bytes=8, mtime_ns=7)
+    fp_a = SourceFingerprint(filename="a-latest.osm.pbf", size_bytes=2, mtime_ns=1)
+    record_processed_source(
+        state,
+        fp_b,
+        public_row_count=9,
+        observation_row_count=10,
+        rejection_count=11,
+    )
+    record_processed_source(
+        state,
+        fp_a,
+        public_row_count=3,
+        observation_row_count=4,
+        rejection_count=5,
+    )
+
+    sources_path = run_dir / "manifests" / "sources.json"
+    expected = [
+        {
+            "filename": "a-latest.osm.pbf",
+            "mtime_ns": 1,
+            "observation_row_count": 4,
+            "public_row_count": 3,
+            "rejection_count": 5,
+            "size_bytes": 2,
+            "status": "extracted",
+        },
+        {
+            "filename": "b-latest.osm.pbf",
+            "mtime_ns": 7,
+            "observation_row_count": 10,
+            "public_row_count": 9,
+            "rejection_count": 11,
+            "size_bytes": 8,
+            "status": "extracted",
+        },
+    ]
+    sources_text = sources_path.read_text()
+    assert json.loads(sources_text) == expected
+    assert sources_text == json.dumps(expected, indent=2, sort_keys=True) + "\n"
+
+
 def test_run_metadata_persists_start_and_end(tmp_path: Path) -> None:
-    run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
     upsert_run_metadata(state, {"started_at": "2024-01-01T00:00:00Z"})
     upsert_run_metadata(state, {"ended_at": "2024-01-01T00:01:00Z"})
     reloaded = load_run(run_dir)
@@ -132,28 +188,28 @@ def test_run_metadata_persists_start_and_end(tmp_path: Path) -> None:
 
 
 def test_upsert_run_metadata_rejects_status_change(tmp_path: Path) -> None:
-    run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]  # noqa: RUF059
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
     with pytest.raises(ValueError, match="transition_status"):
         upsert_run_metadata(state, {"status": STATUS_COMPLETE})
 
 
 def test_run_state_layout_does_not_create_unrequested_dirs(tmp_path: Path) -> None:
     parent_files = set(tmp_path.iterdir())
-    initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    initialise_run(tmp_path, run_id="abc")
     new_entries = set(tmp_path.iterdir()) - parent_files
     assert len(new_entries) == 1
     assert new_entries.pop().name == "abc"
 
 
 def test_run_metadata_keys_are_sorted(tmp_path: Path) -> None:
-    run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
     upsert_run_metadata(state, {"z": 1, "a": 2, "m": 3})
     run_json = (run_dir / "manifests" / "run.json").read_text()
     assert run_json.index('"a"') < run_json.index('"m"') < run_json.index('"z"')
 
 
 def test_run_state_detects_source_mutation_via_size(tmp_path: Path) -> None:
-    _run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
     p = tmp_path / "monaco-latest.osm.pbf"
     p.write_bytes(b"data")
     fp = snapshot_source_fingerprint(p)
@@ -161,14 +217,7 @@ def test_run_state_detects_source_mutation_via_size(tmp_path: Path) -> None:
     p.write_bytes(b"different")
     new_fp = snapshot_source_fingerprint(p)
     assert new_fp != fp
-    assert source_inventory_matches_via_size_mtime(_run_dir, new_fp) is False
-
-
-def source_inventory_matches_via_size_mtime(run_dir: Path, fp: SourceFingerprint) -> bool:
-    """Wrap to keep the production symbol isolated from the test helper."""
-    return __import__(
-        "osm_polygon_website_tag.runtime.run_state", fromlist=["source_is_unchanged"]
-    ).source_is_unchanged(load_run(run_dir), fp)
+    assert source_is_unchanged(load_run(run_dir), new_fp) is False
 
 
 def test_source_fingerprint_is_hashable(tmp_path: Path) -> None:
@@ -185,21 +234,12 @@ def test_load_run_missing_dir_raises(tmp_path: Path) -> None:
 
 
 def test_run_state_initial_status_is_initialized(tmp_path: Path) -> None:
-    _run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
     assert state.metadata["status"] == STATUS_INITIALIZED
 
 
 def test_transition_status_advances_through_pipeline(tmp_path: Path) -> None:
-    _run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
-    from osm_polygon_website_tag.runtime.run_state import (
-        STATUS_ANALYZED,
-        STATUS_CARD_BUILT,
-        STATUS_ENRICHED,
-        STATUS_ENRICHING,
-        STATUS_EXTRACTED,
-        STATUS_EXTRACTING,
-        STATUS_VERIFIED,
-    )
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
 
     transition_status(state, STATUS_EXTRACTING)
     transition_status(state, STATUS_EXTRACTED)
@@ -214,16 +254,6 @@ def test_transition_status_advances_through_pipeline(tmp_path: Path) -> None:
 
 
 def test_complete_run_can_reopen_only_for_schema_enrichment(tmp_path: Path) -> None:
-    from osm_polygon_website_tag.runtime.run_state import (
-        STATUS_ANALYZED,
-        STATUS_CARD_BUILT,
-        STATUS_ENRICHED,
-        STATUS_ENRICHING,
-        STATUS_EXTRACTED,
-        STATUS_EXTRACTING,
-        STATUS_VERIFIED,
-    )
-
     _run_dir, state = initialise_run(tmp_path, run_id="migration")
     for status in (
         STATUS_EXTRACTING,
@@ -245,16 +275,14 @@ def test_complete_run_can_reopen_only_for_schema_enrichment(tmp_path: Path) -> N
 
 
 def test_transition_status_rejects_illegal_step(tmp_path: Path) -> None:
-    _run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
-    from osm_polygon_website_tag.runtime.run_state import STATUS_COMPLETE
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
 
     with pytest.raises(ValueError, match="illegal"):
         transition_status(state, STATUS_COMPLETE)
 
 
 def test_transition_to_incomplete_from_any_state(tmp_path: Path) -> None:
-    _run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
-    from osm_polygon_website_tag.runtime.run_state import STATUS_EXTRACTING
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
 
     transition_status(state, STATUS_EXTRACTING)
     transition_status(state, STATUS_INCOMPLETE)
@@ -262,16 +290,7 @@ def test_transition_to_incomplete_from_any_state(tmp_path: Path) -> None:
 
 
 def test_complete_state_rejects_generic_incomplete_transition(tmp_path: Path) -> None:
-    _run_dir, state = initialise_run(tmp_path, run_id="abc")  # type: ignore[arg-type]
-    from osm_polygon_website_tag.runtime.run_state import (
-        STATUS_ANALYZED,
-        STATUS_CARD_BUILT,
-        STATUS_ENRICHED,
-        STATUS_ENRICHING,
-        STATUS_EXTRACTED,
-        STATUS_EXTRACTING,
-        STATUS_VERIFIED,
-    )
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
 
     transition_status(state, STATUS_EXTRACTING)
     transition_status(state, STATUS_EXTRACTED)

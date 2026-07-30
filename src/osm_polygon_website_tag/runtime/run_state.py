@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +133,22 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
     Path(tmp).replace(path)
 
 
+def _source_fingerprint_payload(fp: SourceFingerprint) -> dict[str, int | str]:
+    return {
+        "filename": fp.filename,
+        "size_bytes": fp.size_bytes,
+        "mtime_ns": fp.mtime_ns,
+    }
+
+
+def _write_sources_manifest(state: RunState) -> None:
+    entries = sorted(
+        state.sources.values(),
+        key=lambda entry: str(entry["filename"]),
+    )
+    _atomic_write_json(state.run_dir / "manifests" / "sources.json", entries)
+
+
 def snapshot_source_fingerprint(pbf_path: Path) -> SourceFingerprint:
     """Capture filename, size, and mtime of ``pbf_path``.
 
@@ -178,10 +194,7 @@ def initialise_run(
     _atomic_write_json(run_dir / "manifests" / "sources.json", [])
     if expected_sources is not None:
         entries = sorted(
-            (
-                {"filename": fp.filename, "size_bytes": fp.size_bytes, "mtime_ns": fp.mtime_ns}
-                for fp in expected_sources
-            ),
+            (_source_fingerprint_payload(fp) for fp in expected_sources),
             key=lambda e: str(e["filename"]),
         )
         _atomic_write_json(run_dir / "manifests" / "expected_sources.json", entries)
@@ -258,7 +271,7 @@ def record_processed_source(
     Counts are mandatory; shard SHA-256 hashes are for the *output*
     shards, never for the source PBF itself.
     """
-    entry = asdict(fp)
+    entry: dict[str, Any] = _source_fingerprint_payload(fp)
     entry["public_row_count"] = public_row_count
     entry["observation_row_count"] = observation_row_count
     entry["rejection_count"] = rejection_count
@@ -274,8 +287,7 @@ def record_processed_source(
     if rejection_shard_sha256 is not None:
         entry["rejection_shard_sha256"] = rejection_shard_sha256
     state.sources[fp.filename] = entry
-    sources_sorted = sorted(state.sources.values(), key=lambda e: e["filename"])
-    _atomic_write_json(state.run_dir / "manifests" / "sources.json", sources_sorted)
+    _write_sources_manifest(state)
 
 
 def hash_shard(shard_path: Path) -> str:
@@ -302,8 +314,7 @@ def update_public_shard_metadata(
         raise ValueError(f"source is not processed: {filename}")
     entry["public_row_count"] = row_count
     entry["public_shard_sha256"] = shard_sha256
-    sources_sorted = sorted(state.sources.values(), key=lambda item: item["filename"])
-    _atomic_write_json(state.run_dir / "manifests" / "sources.json", sources_sorted)
+    _write_sources_manifest(state)
 
 
 def source_is_unchanged(state: RunState, fp: SourceFingerprint) -> bool:
