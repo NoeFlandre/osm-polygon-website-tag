@@ -55,9 +55,10 @@ The CLI is phase-oriented. Only `extract` opens a PBF, and every source
 must first be recorded in the immutable expected-source inventory.
 Publication is opt-in and dry-runs by default.
 
-For the reviewed production workflow, one command discovers every PBF,
-records the exact inventory, resumes completed shards, uploads each verified
-polygon shard, then builds and publishes the receipt-bound analysis and card:
+For the reviewed production workflow, one command discovers every PBF and
+records the exact inventory. It then extracts, enriches, recomputes the card,
+uploads, and checkpoints one PBF before moving to the next. After the inventory
+finishes, it builds and publishes the receipt-bound analysis and final card:
 
 ```bash
 uv run osm-polygon-website-tag run-all \
@@ -76,8 +77,11 @@ their PBF; only failed URLs retry on a later invocation. Source inventory drift
 or local shard mutation fails closed.
 
 After each PBF is enriched, its Parquet plus a freshly artifact-derived
-`README.md` and `dataset.yaml` are uploaded together. The card reports exact
-word totals for both website tags. Full extracted text is never truncated.
+`README.md` and `dataset.yaml` are uploaded together before the next PBF is
+opened. Old runs that already extracted several PBFs reuse every verified local
+bundle and begin with enrichment/upload; they do not reread those PBFs. The card
+reports exact word totals for both website tags. Full extracted text is never
+truncated.
 
 The low-level phase commands are intended for development and recovery. Website
 enrichment is deliberately orchestrated by `run-all`, which owns its persistent

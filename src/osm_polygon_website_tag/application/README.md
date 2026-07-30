@@ -6,8 +6,8 @@ separate from workflow side effects.
 - Modules:
   - `inventory`: discovers source PBFs and verifies persisted source and shard
     inventories. It performs no writes.
-  - `workflow`: owns resumable orchestration, state transitions, and calls into
-    extraction, enrichment, reporting, and publication.
+  - `workflow`: owns resumable per-source extraction, enrichment, upload
+    transactions, run-level state transitions, reporting, and final publication.
   - `progress`: adapts workflow messages to stable logs or interactive tqdm
     progress without leaking terminal concerns into the pipeline.
   - `cli`: exposes the typed Typer application, uses Rich for human-facing

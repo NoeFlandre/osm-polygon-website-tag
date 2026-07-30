@@ -36,6 +36,8 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_EXTRACTED,
     STATUS_EXTRACTING,
     STATUS_INITIALIZED,
+    RunState,
+    SourceFingerprint,
     expected_source_inventory,
     hash_shard,
     initialise_run,
@@ -61,6 +63,13 @@ class WorkflowResult:
     dry_run: bool
 
 
+@dataclass(frozen=True)
+class _SourceTransactionResult:
+    extracted: bool
+    reused: bool
+    uploaded: bool
+
+
 def run_all(
     *,
     source_root: Path | str,
@@ -71,10 +80,11 @@ def run_all(
     ensure_repo: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> WorkflowResult:
-    """Extract, checkpoint, analyze, finalize, and optionally publish all PBFs.
+    """Process each PBF through upload, then analyze and finalize the full run.
 
     Re-running the same command with the same ``run_id`` resumes from exact
-    source and shard fingerprints. ``KeyboardInterrupt`` is deliberately not
+    source, shard, enrichment, and upload checkpoints. Old extracting runs
+    reuse every verified bundle. ``KeyboardInterrupt`` is deliberately not
     caught, so Ctrl-C returns control immediately without terminalizing the run.
     """
     source_root_path = normalize_path(source_root)
@@ -121,6 +131,7 @@ def run_all(
     skipped_count = 0
     uploaded_count = 0
     invocation_id = uuid4().hex
+    uploaded = _load_upload_checkpoint(run_dir)
     if status in {STATUS_INITIALIZED, STATUS_EXTRACTING}:
         if status == STATUS_INITIALIZED:
             transition_status(state, STATUS_EXTRACTING)
@@ -128,15 +139,29 @@ def run_all(
             zip(sources, fingerprints, strict=True),
             start=1,
         ):
-            if source_bundle_is_complete(run_dir, state.sources.get(source.name), fingerprint):
-                skipped_count += 1
-                _progress(progress, f"[{index}/{len(sources)}] Resuming: {source.name} is complete")
-            else:
-                _progress(progress, f"[{index}/{len(sources)}] Extracting {source.name}")
-                extract_pbf(source, run_dir, run_state=state)
-                extracted_count += 1
+            result = _process_source(
+                source=source,
+                fingerprint=fingerprint,
+                run_dir=run_dir,
+                state=state,
+                uploaded=uploaded,
+                repo_id=repo_id,
+                apply=apply,
+                progress=progress,
+                index=index,
+                total=len(sources),
+                invocation_id=invocation_id,
+                allow_extraction=True,
+            )
+            extracted_count += int(result.extracted)
+            skipped_count += int(result.reused)
+            uploaded_count += int(result.uploaded)
         transition_status(state, STATUS_EXTRACTED)
         status = STATUS_EXTRACTED
+        transition_status(state, STATUS_ENRICHING)
+        status = STATUS_ENRICHING
+        transition_status(state, STATUS_ENRICHED)
+        status = STATUS_ENRICHED
 
     migration_statuses = {
         STATUS_ANALYZED,
@@ -150,56 +175,25 @@ def run_all(
         status = STATUS_ENRICHING
 
     if status == STATUS_ENRICHING:
-        uploaded = _load_upload_checkpoint(run_dir)
-        for index, source in enumerate(sources, start=1):
-            fingerprint = fingerprints[index - 1]
-            if not source_bundle_is_complete(
-                run_dir,
-                state.sources.get(source.name),
-                fingerprint,
-            ):
-                raise ValueError(f"cannot enrich incomplete source bundle: {source.name}")
-            shard = _public_shard_path(run_dir, source)
-            if not _shard_needs_enrichment(shard):
-                _progress(
-                    progress,
-                    f"[{index}/{len(sources)}] Resuming: {source.name} text is complete",
-                )
-                if apply and _maybe_publish_enriched_shard(
-                    run_dir=run_dir,
-                    source=source,
-                    uploaded=uploaded,
-                    repo_id=repo_id,
-                    apply=apply,
-                    progress=progress,
-                    index=index,
-                    total=len(sources),
-                ):
-                    uploaded_count += 1
-                continue
-            _progress(progress, f"[{index}/{len(sources)}] Enriching {source.name}")
-            result = enrich_polygon_shard(
-                shard,
-                cache_path=run_dir / "cache" / "website_text.sqlite3",
-                invocation_id=invocation_id,
-            )
-            update_public_shard_metadata(
-                state,
-                filename=source.name,
-                row_count=result.row_count,
-                shard_sha256=result.shard_sha256,
-            )
-            if _maybe_publish_enriched_shard(
-                run_dir=run_dir,
+        for index, (source, fingerprint) in enumerate(
+            zip(sources, fingerprints, strict=True),
+            start=1,
+        ):
+            result = _process_source(
                 source=source,
+                fingerprint=fingerprint,
+                run_dir=run_dir,
+                state=state,
                 uploaded=uploaded,
                 repo_id=repo_id,
                 apply=apply,
                 progress=progress,
                 index=index,
                 total=len(sources),
-            ):
-                uploaded_count += 1
+                invocation_id=invocation_id,
+                allow_extraction=False,
+            )
+            uploaded_count += int(result.uploaded)
         transition_status(state, STATUS_ENRICHED)
         status = STATUS_ENRICHED
 
@@ -231,6 +225,82 @@ def run_all(
         uploaded_count=uploaded_count,
         complete=status == STATUS_COMPLETE,
         dry_run=not apply,
+    )
+
+
+def _process_source(
+    *,
+    source: Path,
+    fingerprint: SourceFingerprint,
+    run_dir: Path,
+    state: RunState,
+    uploaded: dict[str, object],
+    repo_id: str,
+    apply: bool,
+    progress: Callable[[str], None] | None,
+    index: int,
+    total: int,
+    invocation_id: str,
+    allow_extraction: bool,
+) -> _SourceTransactionResult:
+    bundle_complete = source_bundle_is_complete(
+        run_dir,
+        state.sources.get(source.name),
+        fingerprint,
+    )
+    extracted = False
+    reused = False
+    if not bundle_complete:
+        if not allow_extraction:
+            raise ValueError(f"cannot enrich incomplete source bundle: {source.name}")
+        _progress(progress, f"[{index}/{total}] Extracting {source.name}")
+        extract_pbf(source, run_dir, run_state=state)
+        extracted = True
+    elif allow_extraction:
+        reused = True
+        _progress(progress, f"[{index}/{total}] Resuming: {source.name} is complete")
+
+    if not source_bundle_is_complete(
+        run_dir,
+        state.sources.get(source.name),
+        fingerprint,
+    ):
+        raise ValueError(f"source bundle is incomplete after extraction: {source.name}")
+
+    shard = _public_shard_path(run_dir, source)
+    needs_enrichment = _shard_needs_enrichment(shard)
+    if needs_enrichment:
+        _progress(progress, f"[{index}/{total}] Enriching {source.name}")
+        enrichment = enrich_polygon_shard(
+            shard,
+            cache_path=run_dir / "cache" / "website_text.sqlite3",
+            invocation_id=invocation_id,
+        )
+        update_public_shard_metadata(
+            state,
+            filename=source.name,
+            row_count=enrichment.row_count,
+            shard_sha256=enrichment.shard_sha256,
+        )
+    else:
+        _progress(progress, f"[{index}/{total}] Resuming: {source.name} text is complete")
+
+    uploaded_now = False
+    if needs_enrichment or apply:
+        uploaded_now = _maybe_publish_enriched_shard(
+            run_dir=run_dir,
+            source=source,
+            uploaded=uploaded,
+            repo_id=repo_id,
+            apply=apply,
+            progress=progress,
+            index=index,
+            total=total,
+        )
+    return _SourceTransactionResult(
+        extracted=extracted,
+        reused=reused,
+        uploaded=uploaded_now,
     )
 
 

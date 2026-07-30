@@ -30,12 +30,13 @@ documents its boundary.
 2. `extract` processes one inventoried PBF. libosmium assembles closed ways
    and polygon relations; bounded Arrow sinks and a SQLite candidate ledger
    produce one public, comparison, and rejection Parquet per source.
-3. Website-text enrichment safely downloads both website tag values,
+3. Before the next PBF is opened, website-text enrichment safely downloads both website tag values,
    extracts full main text with Trafilatura, and transactionally migrates each
    polygon shard to schema v1.2. A run-owned SQLite cache reuses successes and
    retries failures on a later invocation.
 4. After every enriched PBF, the cumulative card is recomputed from current
-   Parquets and uploaded with that shard.
+   Parquets and uploaded with that shard; the acknowledgement is persisted
+   before the next source transaction begins.
 5. `analyze-results` uses DuckDB external memory and run-owned spill space.
    Large results go directly to staged Parquets and the complete analysis
    bundle is promoted transactionally.
@@ -49,9 +50,10 @@ documents its boundary.
 
 `run-all` composes these phases for the full recursively discovered inventory.
 It validates the same source fingerprints on every restart, skips exact
-completed extraction bundles, migrates legacy shards without reopening PBFs,
-checkpoints successful URL text and per-PBF enriched uploads, and performs the
-receipt-bound full upload only after final verification.
+completed extraction bundles (including bundles produced by old extract-all
+runs), migrates legacy shards without reopening PBFs, checkpoints successful
+URL text and per-PBF enriched uploads, and performs the receipt-bound full
+upload only after final verification.
 `KeyboardInterrupt` leaves the run in the resumable `extracting` state.
 
 ## Run layout

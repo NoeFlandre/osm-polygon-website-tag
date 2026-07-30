@@ -24,11 +24,14 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.contracts.text_schema import count_words
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
-    STATUS_ENRICHING,
     STATUS_EXTRACTING,
     hash_shard,
+    initialise_run,
     load_run,
+    snapshot_source_fingerprint,
+    transition_status,
     update_public_shard_metadata,
+    upsert_run_metadata,
 )
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
@@ -194,6 +197,147 @@ def test_run_all_apply_uploads_each_shard_then_complete_run(
     assert result.uploaded_count == 2
 
 
+def test_run_all_completes_each_source_before_extracting_the_next(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    events: list[str] = []
+    original_extract = workflow.extract_pbf
+    original_enrich = workflow.enrich_polygon_shard
+
+    def track_extract(source, *args, **kwargs):
+        events.append(f"extract:{Path(source).name}")
+        return original_extract(source, *args, **kwargs)
+
+    def track_enrich(shard, *args, **kwargs):
+        events.append(f"enrich:{Path(shard).name}")
+        return original_enrich(shard, *args, **kwargs)
+
+    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
+    monkeypatch.setattr(workflow, "enrich_polygon_shard", track_enrich)
+    monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
+    monkeypatch.setattr(
+        workflow,
+        "_upload_public_shard",
+        lambda _run, source, _repo: events.append(f"upload:{source.name}"),
+    )
+    monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
+
+    run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+
+    assert events == [
+        "extract:a-latest.osm.pbf",
+        "enrich:a-latest.parquet",
+        "upload:a-latest.osm.pbf",
+        "extract:b-latest.osm.pbf",
+        "upload:b-latest.osm.pbf",
+    ]
+
+
+def test_old_extracting_run_reuses_completed_source_before_continuing(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    sources = discover_sources(root)
+    fingerprints = [snapshot_source_fingerprint(source) for source in sources]
+    output_root = tmp_path / "runs"
+    run_dir, state = initialise_run(
+        output_root,
+        run_id="production",
+        expected_sources=fingerprints,
+    )
+    upsert_run_metadata(state, {"source_root": str(root.resolve())})
+    transition_status(state, STATUS_EXTRACTING)
+    workflow.extract_pbf(sources[0], run_dir, run_state=state)
+
+    extracted_on_resume: list[str] = []
+    original_extract = workflow.extract_pbf
+
+    def track_extract(source, *args, **kwargs):
+        extracted_on_resume.append(Path(source).name)
+        return original_extract(source, *args, **kwargs)
+
+    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
+    monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
+    monkeypatch.setattr(workflow, "_upload_public_shard", lambda *_args: None)
+    monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
+
+    result = run_all(
+        source_root=root,
+        output_root=output_root,
+        run_id="production",
+        apply=True,
+    )
+
+    assert extracted_on_resume == ["b-latest.osm.pbf"]
+    assert result.skipped_count == 1
+    assert result.extracted_count == 1
+    assert result.uploaded_count == 2
+
+
+def test_resume_after_interruption_before_enrichment_does_not_reextract(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    original_enrich = workflow.enrich_polygon_shard
+    interrupted = False
+
+    def interrupt_first_enrichment(*args, **kwargs):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        return original_enrich(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "enrich_polygon_shard", interrupt_first_enrichment)
+    with pytest.raises(KeyboardInterrupt):
+        run_all(
+            source_root=root,
+            output_root=tmp_path / "runs",
+            run_id="production",
+        )
+
+    run_dir = tmp_path / "runs" / "production"
+    assert load_run(run_dir).metadata["status"] == STATUS_EXTRACTING
+    assert (run_dir / "polygons" / "a-latest.parquet").is_file()
+
+    extracted_on_resume: list[str] = []
+    original_extract = workflow.extract_pbf
+
+    def track_extract(source, *args, **kwargs):
+        extracted_on_resume.append(Path(source).name)
+        return original_extract(source, *args, **kwargs)
+
+    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
+    result = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+    )
+
+    assert extracted_on_resume == ["b-latest.osm.pbf"]
+    assert result.skipped_count == 1
+    assert result.extracted_count == 1
+    assert result.complete is True
+
+
 def test_run_all_refuses_changed_source_inventory(make_pbf, tmp_path: Path) -> None:
     root = _sources(make_pbf, tmp_path)
     result = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
@@ -299,15 +443,14 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resume from STATUS_ENRICHING after a mid-loop KeyboardInterrupt.
+    """Resume an interleaved extraction after a mid-upload KeyboardInterrupt.
 
     This characterization test directly exercises the per-shard upload
     checkpoint branch by interrupting the second incremental upload
     and then resuming with ``apply=True``. It protects:
 
     * checkpoint persistence only after a successful upload,
-    * resumption from ``STATUS_ENRICHING`` (no transition to ENRICHED
-      when interrupted),
+    * resumption from ``STATUS_EXTRACTING`` while the inventory is incomplete,
     * skipping the already-acknowledged first shard on resume,
     * retrying the interrupted second shard on resume,
     * ``uploaded_count`` counting only the upload performed during
@@ -351,9 +494,9 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
 
     run_dir = tmp_path / "runs" / "production"
 
-    # Resumable status: the loop was interrupted before the ENRICHED
-    # transition could run.
-    assert load_run(run_dir).metadata["status"] == STATUS_ENRICHING
+    # The inventory-level extraction state remains active until every
+    # per-source transaction has succeeded.
+    assert load_run(run_dir).metadata["status"] == STATUS_EXTRACTING
 
     # Checkpoint persisted only for the first, successful upload.
     checkpoint_path = run_dir / "manifests" / "uploaded_polygons.json"

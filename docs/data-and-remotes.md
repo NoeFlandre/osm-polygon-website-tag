@@ -68,11 +68,14 @@ verifies the local run before any upload.
 The resumable production command is documented in the root README. With
 `run-all --apply`, each polygon shard is safely enriched from both website
 tags, the cumulative card is recomputed from Parquets, and the shard plus card
-are uploaded together; a local acknowledgement is then written atomically. The final
-analysis, card, manifests, and completion receipt are uploaded only after the
-entire inventory verifies. Stopping with `Ctrl-C` and repeating the same
-command resumes without reprocessing exact completed bundles or successful
-URLs. Legacy shards are enriched without rereading PBFs; failed URLs retry.
+are uploaded together; a local acknowledgement is then written atomically
+before the next PBF begins. The final analysis, card, manifests, and completion
+receipt are uploaded only after the entire inventory verifies. Stopping with
+`Ctrl-C` and repeating the same command resumes without reprocessing exact
+completed bundles or successful URLs. This includes bundles created by the old
+extract-all workflow: they are enriched and uploaded without rereading their
+PBFs. Legacy shards are likewise enriched without rereading PBFs; failed URLs
+retry.
 
 ```bash
 # One-time
