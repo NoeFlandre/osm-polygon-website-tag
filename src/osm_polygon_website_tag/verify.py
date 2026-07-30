@@ -30,15 +30,44 @@ class VerificationReport:
     checked_shards: list[str] = field(default_factory=list)
 
 
-_SHARD_CONTRACTS: tuple[tuple[str, str, str, pa.Schema], ...] = (
-    ("public", "polygons", "public_row_count", POLYGON_PUBLIC_SCHEMA),
-    (
-        "comparison",
-        "analysis_observations",
-        "observation_row_count",
-        COMPARISON_OBSERVATION_SCHEMA,
+@dataclass(frozen=True)
+class _ShardContract:
+    """Complete verification contract for one per-source shard.
+
+    Binds the user-facing verification label to its directory, its
+    manifest row-count key, its manifest SHA-256 key, and the exact
+    Arrow schema the shard must match.
+    """
+
+    kind: str
+    directory: str
+    count_key: str
+    hash_key: str
+    schema: pa.Schema
+
+
+_SHARD_CONTRACTS: tuple[_ShardContract, ...] = (
+    _ShardContract(
+        kind="public",
+        directory="polygons",
+        count_key="public_row_count",
+        hash_key="public_shard_sha256",
+        schema=POLYGON_PUBLIC_SCHEMA,
     ),
-    ("rejection", "rejections", "rejection_count", REJECTION_SCHEMA),
+    _ShardContract(
+        kind="comparison",
+        directory="analysis_observations",
+        count_key="observation_row_count",
+        hash_key="observation_shard_sha256",
+        schema=COMPARISON_OBSERVATION_SCHEMA,
+    ),
+    _ShardContract(
+        kind="rejection",
+        directory="rejections",
+        count_key="rejection_count",
+        hash_key="rejection_shard_sha256",
+        schema=REJECTION_SCHEMA,
+    ),
 )
 
 
@@ -60,7 +89,12 @@ def verify_results(run_dir: Path | str) -> VerificationReport:
             continue
         stem = filename.removesuffix(".osm.pbf")
         declared.add(stem)
-        for kind, directory, count_key, schema in _SHARD_CONTRACTS:
+        for contract in _SHARD_CONTRACTS:
+            kind = contract.kind
+            directory = contract.directory
+            count_key = contract.count_key
+            hash_key = contract.hash_key
+            schema = contract.schema
             path = root / directory / f"{stem}.parquet"
             checked.append(f"{kind}:{stem}")
             if not path.is_file():
@@ -83,9 +117,6 @@ def verify_results(run_dir: Path | str) -> VerificationReport:
                     f"{kind} row count mismatch for {filename}: "
                     f"manifest={expected_count}, parquet={actual_count}"
                 )
-            hash_key = f"{kind}_shard_sha256"
-            if kind == "comparison":
-                hash_key = "observation_shard_sha256"
             expected_hash = entry.get(hash_key)
             if not isinstance(expected_hash, str) or len(expected_hash) != 64:
                 errors.append(f"missing {kind} shard hash for {filename}")
@@ -97,7 +128,9 @@ def verify_results(run_dir: Path | str) -> VerificationReport:
                         f"{actual_hash} != {expected_hash}"
                     )
 
-    for kind, directory, _count_key, _schema in _SHARD_CONTRACTS:
+    for contract in _SHARD_CONTRACTS:
+        kind = contract.kind
+        directory = contract.directory
         shard_dir = root / directory
         if not shard_dir.is_dir():
             errors.append(f"missing shard directory: {shard_dir}")

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from osm_polygon_website_tag.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.polygon_schema import POLYGON_PUBLIC_SCHEMA
@@ -206,16 +207,27 @@ def test_verify_results_rejects_modified_shard(tmp_path: Path) -> None:
     assert any("mismatch" in e or "count" in e or "modified" in e for e in report.errors)
 
 
-def test_verify_rejects_modified_zero_row_observation_shard(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("kind", "directory"),
+    [
+        ("public", "polygons"),
+        ("comparison", "analysis_observations"),
+        ("rejection", "rejections"),
+    ],
+)
+def test_verify_rejects_modified_shard_hash(tmp_path: Path, *, kind: str, directory: str) -> None:
     run_dir, _ = _setup_minimal_run(tmp_path)
-    shard = run_dir / "analysis_observations" / "monaco-latest.parquet"
+    shard = run_dir / directory / "monaco-latest.parquet"
     table = pq.read_table(shard)
+    # Rewrite with different compression: bytes change, schema and rows do not.
     pq.write_table(table, shard, compression="gzip")
 
     report = verify_results(run_dir)
 
     assert report.ok is False
-    assert any("comparison" in error and "hash" in error for error in report.errors)
+    assert any(kind in error and "shard hash mismatch" in error for error in report.errors), (
+        f"expected '{kind}' and 'shard hash mismatch' in errors, got: {report.errors}"
+    )
 
 
 def test_verify_results_rejects_missing_shard(tmp_path: Path) -> None:
