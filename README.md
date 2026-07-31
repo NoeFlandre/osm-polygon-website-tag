@@ -3,6 +3,9 @@
 A repository for analysing OpenStreetMap (OSM) polygons that carry a
 `website` or `contact:website` tag.
 
+Read the [project documentation](https://noeflandre.github.io/osm-polygon-website-tag/)
+for setup, architecture, and data-publication guidance.
+
 The project streams polygons (closed ways and assembled multipolygon
 relations) from local PBF files, classifies their `website` and
 `wikidata` tags, extracts full main text independently from both

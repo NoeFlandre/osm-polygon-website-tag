@@ -50,10 +50,20 @@ just check
 | Run every pre-commit hook       | `just pre-commit`                    |
 | Run the pre-push test hook      | `just pre-push`                      |
 | Install commit and push hooks   | `just install-hooks`                 |
+| Build the documentation site    | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
 | Add a runtime dependency        | edit `pyproject.toml`, then `uv sync` |
 | Add a dev dependency            | edit `pyproject.toml`, then `uv sync` |
 | Update all deps                 | `uv sync --upgrade`                  |
 | Open a REPL with the package    | `uv run python`                      |
+
+## Documentation site
+
+The public site is built from this `docs/` directory with MkDocs Material.
+The `main` branch workflow builds with strict link and configuration checks
+and deploys the generated site to
+[GitHub Pages](https://noeflandre.github.io/osm-polygon-website-tag/).
+Internal planning notes under `docs/superpowers/` are deliberately excluded
+from the public site.
 
 ## Working with the external data drive
 

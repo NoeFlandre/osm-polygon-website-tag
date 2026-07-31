@@ -1,0 +1,32 @@
+site_name: OSM Polygon Website Tag
+site_description: A reproducible pipeline for OSM polygons with website tags.
+site_url: https://noeflandre.github.io/osm-polygon-website-tag/
+repo_name: NoeFlandre/osm-polygon-website-tag
+repo_url: https://github.com/NoeFlandre/osm-polygon-website-tag
+edit_uri: edit/main/docs/
+
+exclude_docs: |
+  .DS_Store
+  superpowers/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Getting started: setup.md
+  - Architecture: architecture.md
+  - Data and remotes: data-and-remotes.md
