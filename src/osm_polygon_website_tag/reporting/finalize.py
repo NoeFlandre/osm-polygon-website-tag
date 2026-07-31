@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
 from osm_polygon_website_tag.runtime.run_state import (
+    OPERATIONAL_MANIFEST_NAMES,
     STATUS_CARD_BUILT,
     STATUS_COMPLETE,
     STATUS_VERIFIED,
@@ -59,12 +61,15 @@ def _publishable_paths(root: Path) -> list[Path]:
         "manifests",
     ):
         for path in sorted((root / directory).glob("*")):
-            if path.is_file() and path.name != "completion_receipt.json":
+            if path.is_file() and path.name not in OPERATIONAL_MANIFEST_NAMES:
                 paths.append(path)
     for name in ("README.md", "dataset.yaml", "failures.jsonl"):
         path = root / name
         if path.is_file():
             paths.append(path)
+    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
+    if map_path.is_file():
+        paths.append(map_path)
     return sorted(paths, key=lambda path: path.relative_to(root).as_posix())
 
 
@@ -86,11 +91,18 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         "sources_count": len(sources),
         "artifacts": artifacts,
     }
+    if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file():
+        receipt["card_contract_version"] = 1
     destination = root / "manifests" / "completion_receipt.json"
     temporary = destination.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     temporary.replace(destination)
     return receipt
+
+
+def replace_receipt_atomic(run_dir: Path | str) -> dict[str, Any]:
+    """Write a current content-only receipt after a refresh-specific verification."""
+    return _write_completion_receipt(Path(run_dir))
 
 
 def _hash_file(path: Path) -> str:

@@ -33,6 +33,7 @@ Each run owns this layout:
   rejections/<source-stem>.parquet
   analysis/*.parquet
   manifests/
+  assets/geographic_polygon_density.png
   README.md
   dataset.yaml
 ```
@@ -67,8 +68,8 @@ verifies the local run before any upload.
 
 The resumable production command is documented in the root README. With
 `run-all --apply`, each polygon shard is safely enriched from both website
-tags, the cumulative card is recomputed from Parquets, and the shard plus card
-are uploaded together; a local acknowledgement is then written atomically
+tags, the cumulative card and logarithmic H3 density map are recomputed from
+Parquets, and the changed shard plus card bundle are uploaded together; a local acknowledgement is then written atomically
 before the next PBF begins. The final analysis, card, manifests, and completion
 receipt are uploaded only after the entire inventory verifies. Stopping with
 `Ctrl-C` and repeating the same command resumes without reprocessing exact
@@ -81,6 +82,15 @@ Public schema v1.2 shards are migrated locally to v1.3 by column projection.
 The migration preserves extracted text and row order, performs no PBF or
 network work, and causes only the changed shard plus recomputed card to upload.
 An acknowledged v1.3 shard is skipped on the next resume.
+
+For a run created before the map contract, either repeat `run-all` or run the
+local-only migration below. It rebuilds the map, README, YAML, and receipt from
+existing Parquets and performs no PBF reads, website fetches, or remote calls:
+
+```bash
+uv run osm-polygon-website-tag refresh-card \
+  --run-dir '<output-root>/<run_id>'
+```
 
 ```bash
 # One-time

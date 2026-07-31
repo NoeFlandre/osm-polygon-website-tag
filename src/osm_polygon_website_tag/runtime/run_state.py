@@ -64,6 +64,8 @@ STATUS_VERIFIED = "verified"
 STATUS_COMPLETE = "complete"
 STATUS_INCOMPLETE = "incomplete"
 
+OPERATIONAL_MANIFEST_NAMES = frozenset({"uploaded_polygons.json", "completion_receipt.json"})
+
 
 STATUS_VALUES: tuple[str, ...] = (
     STATUS_INITIALIZED,
@@ -127,10 +129,16 @@ class RunState:
     sources: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-def _atomic_write_json(path: Path, payload: Any) -> None:
+def atomic_write_json(path: Path, payload: Any) -> None:
+    """Write JSON through a same-directory temporary file and replace."""
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     Path(tmp).replace(path)
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    """Internal compatibility alias for run-state writers."""
+    atomic_write_json(path, payload)
 
 
 def _source_fingerprint_payload(fp: SourceFingerprint) -> dict[str, int | str]:
@@ -376,6 +384,7 @@ __all__ = [
     "STATUS_VERIFIED",
     "RunState",
     "SourceFingerprint",
+    "atomic_write_json",
     "default_run_id",
     "expected_source_inventory",
     "hash_shard",

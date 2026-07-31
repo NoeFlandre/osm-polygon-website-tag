@@ -127,6 +127,7 @@ def test_typer_help_lists_every_public_command() -> None:
         "analyze-results",
         "build-card",
         "verify-results",
+        "refresh-card",
         "finalize-run",
         "publish-plan",
         "publish",

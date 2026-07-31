@@ -34,9 +34,12 @@ documents its boundary.
    extracts full main text with Trafilatura, and transactionally migrates each
    polygon shard to the current public schema. A run-owned SQLite cache reuses successes and
    retries failures on a later invocation.
-4. After every enriched PBF, the cumulative card is recomputed from current
-   Parquets and uploaded with that shard; the acknowledgement is persisted
-   before the next source transaction begins.
+4. After every enriched PBF, the cumulative H3 resolution-3 polygon-density
+   summary is computed once from all local public `lat`/`lon` values. The
+   deterministic logarithmic `assets/geographic_polygon_density.png`, README,
+   and YAML are promoted together and uploaded with the changed shard. An
+   atomic schema-v2 acknowledgement is persisted before the next source
+   transaction begins.
 5. `analyze-results` uses DuckDB external memory and run-owned spill space.
    Large results go directly to staged Parquets and the complete analysis
    bundle is promoted transactionally.
@@ -55,6 +58,9 @@ runs), migrates legacy shards without reopening PBFs, checkpoints successful
 URL text and per-PBF enriched uploads, and performs the receipt-bound full
 upload only after final verification.
 `KeyboardInterrupt` leaves the run in the resumable `extracting` state.
+If a completed run predates the H3 card contract, the next `run-all` invocation
+refreshes only its local card/map/receipt bundle before any remote action; the
+`refresh-card` command exposes the same migration explicitly.
 
 ## Run layout
 
@@ -86,6 +92,8 @@ upload only after final verification.
     sources.json
     uploaded_polygons.json
     completion_receipt.json
+  assets/
+    geographic_polygon_density.png
   README.md
   dataset.yaml
 ```
@@ -107,6 +115,11 @@ snapshot and website-text tables, combined word total, and top-ten hostname
 tables are regenerated from Parquets on every incremental upload. Detailed
 analysis stays in `analysis/*.parquet`; optional Hugging Face task metadata is
 omitted because no official task category accurately describes the dataset.
+The geographic map counts every public polygon centroid exactly once in H3
+resolution 3 and uses a logarithmic absolute-count color scale without a
+network-fetched basemap. The map, README, and YAML are receipt-bound only after
+final run-level verification; the per-PBF upload checkpoint remains operational
+state.
 
 The v1.3 public projection removes `preferred_website`,
 `preferred_website_source`, `wikidata`, `wikidata_qid`, `wikidata_class`, and

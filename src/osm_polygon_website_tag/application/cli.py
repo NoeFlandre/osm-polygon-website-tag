@@ -21,6 +21,7 @@ from osm_polygon_website_tag.publishing.publish import (
 from osm_polygon_website_tag.reporting.card import build_card
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.finalize import finalize_run
+from osm_polygon_website_tag.reporting.repair import refresh_card_run
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 from osm_polygon_website_tag.runtime.run_state import (
@@ -146,6 +147,16 @@ def verify_command(run_dir: RunDir) -> int:
     """Verify a run without mutating it."""
     report = verify_results(run_dir)
     _json({"ok": report.ok, "errors": report.errors})
+    if not report.ok:
+        raise typer.Exit(code=1)
+    return 0
+
+
+@app.command("refresh-card")
+def refresh_card_command(run_dir: RunDir) -> int:
+    """Rebuild the local H3 map/card and migrate its completion receipt."""
+    report = refresh_card_run(run_dir)
+    _json({"ok": report.ok, "errors": report.verification.errors})
     if not report.ok:
         raise typer.Exit(code=1)
     return 0

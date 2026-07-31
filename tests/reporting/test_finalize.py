@@ -146,6 +146,8 @@ def test_finalize_run_writes_receipt(tmp_path: Path) -> None:
     assert "README.md" in paths
     assert "analysis/cells_global.parquet" in paths
     assert "polygons/monaco-latest.parquet" in paths
+    assert receipt["card_contract_version"] == 1
+    assert "assets/geographic_polygon_density.png" in paths
 
 
 def test_finalize_run_transitions_to_complete(tmp_path: Path) -> None:

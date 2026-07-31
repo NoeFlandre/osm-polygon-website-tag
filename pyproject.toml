@@ -20,7 +20,9 @@ classifiers = [
 
 dependencies = [
     "duckdb>=1.0.0",
+    "h3>=4,<5",
     "huggingface-hub>=1.25.1",
+    "matplotlib>=3.8,<4",
     "osmium>=4.3.1",
     "pyarrow>=25.0.0",
     "pydantic>=2.6,<3",

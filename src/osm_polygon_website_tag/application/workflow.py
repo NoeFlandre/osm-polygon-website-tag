@@ -25,9 +25,15 @@ from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.pipeline.public_schema_migration import migrate_public_shard
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
+from osm_polygon_website_tag.publishing.incremental import (
+    incremental_publish_changed_shard,
+    persist_successful_upload,
+)
 from osm_polygon_website_tag.publishing.publish import _upload_folder, create_repo, publish_to_hf
 from osm_polygon_website_tag.reporting.card import build_card
 from osm_polygon_website_tag.reporting.finalize import finalize_run
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.repair import refresh_card_run
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
@@ -41,7 +47,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     RunState,
     SourceFingerprint,
     expected_source_inventory,
-    hash_shard,
     initialise_run,
     load_run,
     snapshot_source_fingerprint,
@@ -123,6 +128,14 @@ def run_all(
     }:
         raise ValueError(f"run cannot be resumed from terminal status {status!r}")
 
+    if status == STATUS_COMPLETE and _card_refresh_needed(run_dir):
+        _progress(progress, "Refreshing the legacy dataset card and H3 density map")
+        refreshed = refresh_card_run(run_dir)
+        if not refreshed.ok:
+            raise ValueError(f"legacy card refresh failed: {refreshed.verification.errors}")
+        state = load_run(run_dir)
+        status = state.metadata.get("status")
+
     if apply and not resolve_hf_token():
         raise ValueError("run-all --apply requires Hugging Face environment/local credentials")
     if apply and ensure_repo:
@@ -133,7 +146,6 @@ def run_all(
     skipped_count = 0
     uploaded_count = 0
     invocation_id = uuid4().hex
-    uploaded = _load_upload_checkpoint(run_dir)
     if status in {STATUS_INITIALIZED, STATUS_EXTRACTING}:
         if status == STATUS_INITIALIZED:
             transition_status(state, STATUS_EXTRACTING)
@@ -146,7 +158,6 @@ def run_all(
                 fingerprint=fingerprint,
                 run_dir=run_dir,
                 state=state,
-                uploaded=uploaded,
                 repo_id=repo_id,
                 apply=apply,
                 progress=progress,
@@ -186,7 +197,6 @@ def run_all(
                 fingerprint=fingerprint,
                 run_dir=run_dir,
                 state=state,
-                uploaded=uploaded,
                 repo_id=repo_id,
                 apply=apply,
                 progress=progress,
@@ -236,7 +246,6 @@ def _process_source(
     fingerprint: SourceFingerprint,
     run_dir: Path,
     state: RunState,
-    uploaded: dict[str, object],
     repo_id: str,
     apply: bool,
     progress: Callable[[str], None] | None,
@@ -303,12 +312,12 @@ def _process_source(
         uploaded_now = _maybe_publish_enriched_shard(
             run_dir=run_dir,
             source=source,
-            uploaded=uploaded,
             repo_id=repo_id,
             apply=apply,
             progress=progress,
             index=index,
             total=total,
+            allow_bundle_only=not reused,
         )
     return _SourceTransactionResult(
         extracted=extracted,
@@ -322,21 +331,28 @@ def _progress(callback: Callable[[str], None] | None, message: str) -> None:
         callback(message)
 
 
-def _public_shard_hash(run_dir: Path, source: Path) -> str:
-    return hash_shard(_public_shard_path(run_dir, source))
-
-
 def _public_shard_path(run_dir: Path, source: Path) -> Path:
     return run_dir / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
 
 
 def _upload_public_shard(run_dir: Path, source: Path, repo_id: str) -> None:
-    shard = _public_shard_path(run_dir, source)
-    _upload_folder(
+    map_path = run_dir / "assets" / "geographic_polygon_density.png"
+    if not map_path.is_file():
+        shard = _public_shard_path(run_dir, source)
+        _upload_folder(
+            run_dir,
+            repo_id=repo_id,
+            repo_kind="dataset",
+            artifact_paths=[shard, run_dir / "README.md", run_dir / "dataset.yaml"],
+        )
+        return
+    incremental_publish_changed_shard(
         run_dir,
+        source,
         repo_id=repo_id,
         repo_kind="dataset",
-        artifact_paths=[shard, run_dir / "README.md", run_dir / "dataset.yaml"],
+        dry_run=False,
+        uploader=_upload_folder,
     )
 
 
@@ -344,12 +360,12 @@ def _maybe_publish_enriched_shard(
     *,
     run_dir: Path,
     source: Path,
-    uploaded: dict[str, object],
     repo_id: str,
     apply: bool,
     progress: Callable[[str], None] | None,
     index: int,
     total: int,
+    allow_bundle_only: bool = True,
 ) -> bool:
     """Build the card, compute the checkpoint, and conditionally upload.
 
@@ -360,49 +376,32 @@ def _maybe_publish_enriched_shard(
     updates ``uploaded_count`` from this return value.
     """
     build_card(run_dir)
-    checkpoint = _upload_checkpoint_entry(run_dir, source)
-    prior = uploaded.get(source.name)
+    preview = incremental_publish_changed_shard(run_dir, source, dry_run=True)
     if not apply:
         return False
-    if isinstance(prior, dict) and prior.get("polygon_sha256") == checkpoint["polygon_sha256"]:
+    if not preview.shard_changed and not allow_bundle_only:
+        return False
+    if not preview.upload_paths:
         return False
     _progress(
         progress,
         f"[{index}/{total}] Uploading enriched shard and recomputed card",
     )
     _upload_public_shard(run_dir, source, repo_id)
-    uploaded[source.name] = checkpoint
-    _write_upload_checkpoint(run_dir, uploaded)
-    return True
+    persist_successful_upload(run_dir, source)
+    return bool(preview.upload_paths)
 
 
-def _checkpoint_path(run_dir: Path) -> Path:
-    return run_dir / "manifests" / "uploaded_polygons.json"
-
-
-def _load_upload_checkpoint(run_dir: Path) -> dict[str, object]:
-    path = _checkpoint_path(run_dir)
-    if not path.is_file():
-        return {}
-    value = json.loads(path.read_text())
-    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
-        raise ValueError("invalid uploaded polygon checkpoint")
-    return value
-
-
-def _write_upload_checkpoint(run_dir: Path, uploaded: dict[str, object]) -> None:
-    path = _checkpoint_path(run_dir)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(uploaded, indent=2, sort_keys=True) + "\n")
-    temporary.replace(path)
-
-
-def _upload_checkpoint_entry(run_dir: Path, source: Path) -> dict[str, str]:
-    return {
-        "polygon_sha256": _public_shard_hash(run_dir, source),
-        "readme_sha256": hash_shard(run_dir / "README.md"),
-        "dataset_yaml_sha256": hash_shard(run_dir / "dataset.yaml"),
-    }
+def _card_refresh_needed(run_dir: Path) -> bool:
+    """Return whether a completed run lacks the current card contract."""
+    if not (run_dir / POLYGON_DENSITY_ASSET_REL_PATH).is_file():
+        return True
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    return not isinstance(receipt, dict) or receipt.get("card_contract_version") != 1
 
 
 def _run_needs_enrichment(run_dir: Path) -> bool:

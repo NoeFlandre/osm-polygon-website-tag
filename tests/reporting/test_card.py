@@ -108,6 +108,19 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "https://download.geofabrik.de/" in content
 
 
+def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+
+    build_card(run_dir)
+
+    map_path = run_dir / "assets" / "geographic_polygon_density.png"
+    card = (run_dir / "README.md").read_text()
+    assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert "## Geographic distribution" in card
+    assert "assets/geographic_polygon_density.png" in card
+    assert "H3 resolution 3" in card
+
+
 def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     path = build_card(run_dir)

@@ -16,14 +16,20 @@ level, passing ``dry_run=False`` is required for real publication.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
-from osm_polygon_website_tag.runtime.run_state import STATUS_COMPLETE, load_run
+from osm_polygon_website_tag.runtime.run_state import (
+    OPERATIONAL_MANIFEST_NAMES,
+    STATUS_COMPLETE,
+    load_run,
+)
 
 
 @dataclass
@@ -51,8 +57,6 @@ def build_publish_plan(
     plan = PublishPlan(repo_id=repo_id, repo_kind=repo_kind)
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     if receipt_path.is_file():
-        import json
-
         receipt = json.loads(receipt_path.read_text())
         plan.artifact_paths = [run_dir / entry["path"] for entry in receipt.get("artifacts", [])]
         plan.artifact_paths.append(receipt_path)
@@ -64,14 +68,18 @@ def build_publish_plan(
         if not d.exists():
             continue
         for p in sorted(d.rglob("*")):
-            if p.is_file():
-                if sub == "staging":
-                    plan.staging_paths.append(p)
-                else:
-                    plan.artifact_paths.append(p)
-    readme = run_dir / "README.md"
-    if readme.exists():
-        plan.readme_path = readme
+            if p.is_file() and p.name not in OPERATIONAL_MANIFEST_NAMES:
+                plan.artifact_paths.append(p)
+    for name in ("README.md", "dataset.yaml", "failures.jsonl"):
+        path = run_dir / name
+        if path.is_file():
+            plan.artifact_paths.append(path)
+            if name == "README.md":
+                plan.readme_path = path
+    map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
+    if map_path.is_file():
+        plan.artifact_paths.append(map_path)
+    plan.artifact_paths.sort(key=lambda path: path.relative_to(run_dir).as_posix())
     return plan
 
 

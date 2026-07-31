@@ -133,6 +133,37 @@ def test_run_all_dry_run_completes_without_remote_calls(
     assert load_run(result.run_dir).metadata["status"] == STATUS_COMPLETE
 
 
+def test_run_all_refreshes_legacy_complete_card_without_reprocessing_sources(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed pre-map run is upgraded locally on the next resume."""
+    root = _sources(make_pbf, tmp_path)
+    first = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
+    map_path = first.run_dir / "assets" / "geographic_polygon_density.png"
+    map_path.unlink()
+    receipt_path = first.run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt.pop("card_contract_version", None)
+    receipt_path.write_text(json.dumps(receipt))
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.application.workflow.extract_pbf",
+        lambda *_args, **_kwargs: pytest.fail("legacy card refresh must not read PBFs"),
+    )
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.application.workflow.enrich_polygon_shard",
+        lambda *_args, **_kwargs: pytest.fail("legacy card refresh must not fetch websites"),
+    )
+
+    resumed = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
+
+    assert resumed.extracted_count == 0
+    assert map_path.is_file()
+    assert json.loads(receipt_path.read_text())["card_contract_version"] == 1
+
+
 def test_run_all_resumes_after_ctrl_c(
     make_pbf,
     tmp_path: Path,
@@ -441,7 +472,7 @@ def test_complete_v1_2_run_projects_and_reuploads_without_source_or_web_work(
     )
     checkpoint_path = first.run_dir / "manifests" / "uploaded_polygons.json"
     checkpoint = json.loads(checkpoint_path.read_text())
-    checkpoint["a-latest.osm.pbf"]["polygon_sha256"] = hash_shard(shard)
+    checkpoint["sources"]["a-latest.osm.pbf"]["polygon_sha256"] = hash_shard(shard)
     checkpoint_path.write_text(json.dumps(checkpoint))
     monkeypatch.setattr(
         workflow,
@@ -485,6 +516,31 @@ def test_incremental_upload_includes_shard_and_recomputed_card(
     _upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
 
     assert captured == [shard, run_dir / "README.md", run_dir / "dataset.yaml"]
+
+
+def test_incremental_upload_includes_recomputed_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "run"
+    shard = run_dir / "polygons" / "source.parquet"
+    shard.parent.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA), shard)
+    (run_dir / "README.md").write_text("card")
+    (run_dir / "dataset.yaml").write_text("metadata")
+    map_path = run_dir / "assets" / "geographic_polygon_density.png"
+    map_path.parent.mkdir()
+    map_path.write_bytes(b"map")
+    captured: list[Path] = []
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.application.workflow._upload_folder",
+        lambda _run, **kwargs: captured.extend(kwargs["artifact_paths"]),
+    )
+
+    _upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
+
+    assert captured == [shard, run_dir / "README.md", run_dir / "dataset.yaml", map_path]
 
 
 def test_resume_enriches_only_shards_with_retryable_text(
@@ -587,7 +643,8 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     checkpoint_path = run_dir / "manifests" / "uploaded_polygons.json"
     assert checkpoint_path.is_file()
     checkpoint = json.loads(checkpoint_path.read_text())
-    assert set(checkpoint.keys()) == {"a-latest.osm.pbf"}
+    assert set(checkpoint) == {"schema_version", "global_bundle", "sources"}
+    assert set(checkpoint["sources"]) == {"a-latest.osm.pbf"}
 
     # No final publication during the interrupted invocation.
     assert final_uploads == []
@@ -611,10 +668,13 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     # already-acknowledged first source is unchanged (byte-identical
     # checkpoint file except for the addition of the second entry).
     final_checkpoint = json.loads(checkpoint_path.read_text())
-    assert set(final_checkpoint.keys()) == {"a-latest.osm.pbf", "b-latest.osm.pbf"}
+    assert set(final_checkpoint["sources"]) == {"a-latest.osm.pbf", "b-latest.osm.pbf"}
     # The first source's entry survived intact.
     parsed_pre_resume = json.loads(pre_resume_checkpoint)
-    assert final_checkpoint["a-latest.osm.pbf"] == parsed_pre_resume["a-latest.osm.pbf"]
+    assert (
+        final_checkpoint["sources"]["a-latest.osm.pbf"]
+        == parsed_pre_resume["sources"]["a-latest.osm.pbf"]
+    )
 
     # Final publication happened exactly once, only after successful
     # completion.

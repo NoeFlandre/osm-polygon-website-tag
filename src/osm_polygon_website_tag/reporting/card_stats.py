@@ -18,6 +18,11 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.reporting.geographic.aggregation import (
+    compute_polygon_density_summary,
+)
+from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
+
 
 @dataclass
 class CardStats:
@@ -50,9 +55,16 @@ class CardStats:
     contact_website_text_failure_count: int = 0
     contact_website_total_words: int = 0
     polygons_with_any_text: int = 0
+    polygon_density_h3_resolution: int = 3
+    occupied_h3_cell_count: int = 0
+    polygon_density_row_count: int = 0
 
 
-def compute_card_stats(run_dir: Path | str) -> CardStats:
+def compute_card_stats(
+    run_dir: Path | str,
+    *,
+    summary: PolygonDensitySummary | None = None,
+) -> CardStats:
     """Recompute every README card statistic from ``run_dir``.
 
     Reads:
@@ -68,6 +80,10 @@ def compute_card_stats(run_dir: Path | str) -> CardStats:
     """
     run_dir = Path(run_dir)
     stats = CardStats()
+    density = summary or compute_polygon_density_summary(run_dir)
+    stats.polygon_density_h3_resolution = density.h3_resolution
+    stats.occupied_h3_cell_count = density.occupied_cell_count
+    stats.polygon_density_row_count = density.polygon_row_count
 
     polygons_dir = run_dir / "polygons"
     obs_dir = run_dir / "analysis_observations"

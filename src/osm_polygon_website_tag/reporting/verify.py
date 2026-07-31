@@ -19,6 +19,8 @@ from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, count_w
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
 from osm_polygon_website_tag.reporting.card import _render_markdown, _render_yaml_front_matter
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
 
 
 @dataclass
@@ -73,7 +75,15 @@ _SHARD_CONTRACTS: tuple[_ShardContract, ...] = (
 
 def verify_results(run_dir: Path | str) -> VerificationReport:
     """Verify exact schemas, counts, hashes, inventory, and row invariants."""
-    root = Path(run_dir)
+    return _verify_results(Path(run_dir), include_receipt=True)
+
+
+def verify_results_modern(run_dir: Path | str) -> VerificationReport:
+    """Verify a newly built card while an older completion receipt is stale."""
+    return _verify_results(Path(run_dir), include_receipt=False)
+
+
+def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
     errors: list[str] = []
     checked: list[str] = []
     metadata = _read_json_object(root / "manifests" / "run.json", errors)
@@ -147,7 +157,7 @@ def verify_results(run_dir: Path | str) -> VerificationReport:
     _verify_text_invariants(root, status, errors)
     if status in {"card_built", "verified", "complete"}:
         _verify_analysis_and_card(root, errors)
-    if status == "complete":
+    if status == "complete" and include_receipt:
         _verify_receipt(root, errors)
     return VerificationReport(not errors, errors, checked)
 
@@ -352,6 +362,14 @@ def _verify_analysis_and_card(root: Path, errors: list[str]) -> None:
             errors.append("README.md does not match artifact-derived statistics")
     except Exception as exc:
         errors.append(f"card statistic verification failed: {exc}")
+    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
+    if not map_path.is_file():
+        errors.append(f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}")
+    elif map_path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+        errors.append("map artifact is not a valid PNG")
+    readme_path = root / "README.md"
+    if readme_path.is_file() and POLYGON_DENSITY_ASSET_REL_PATH not in readme_path.read_text():
+        errors.append(f"README does not reference {POLYGON_DENSITY_ASSET_REL_PATH}")
 
 
 def _verify_analysis_arithmetic(root: Path, errors: list[str]) -> None:
@@ -390,6 +408,15 @@ def _verify_receipt(root: Path, errors: list[str]) -> None:
     if not isinstance(artifacts, list):
         errors.append("completion receipt has no artifact list")
         return
+    contract_version = receipt.get("card_contract_version")
+    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
+    if contract_version != 1:
+        if map_path.is_file():
+            errors.append("receipt missing card_contract_version while map exists")
+        else:
+            errors.append("receipt missing card_contract_version for current publication")
+    elif not map_path.is_file():
+        errors.append(f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}")
     seen: set[str] = set()
     canonical_entries: list[dict[str, Any]] = []
     for entry in artifacts:
@@ -408,6 +435,8 @@ def _verify_receipt(root: Path, errors: list[str]) -> None:
             errors.append(f"duplicate completion receipt path: {relative}")
             continue
         seen.add(relative)
+        if contract_version == 1 and Path(relative).name in OPERATIONAL_MANIFEST_NAMES:
+            errors.append(f"current receipt contains operational artifact: {relative}")
         artifact = root / relative
         if not artifact.is_file():
             errors.append(f"missing receipt-bound artifact: {relative}")
@@ -439,11 +468,14 @@ def _current_publishable_relative_paths(root: Path) -> set[str]:
         "manifests",
     ):
         for path in (root / directory).glob("*"):
-            if path.is_file() and path.name != "completion_receipt.json":
+            if path.is_file() and path.name not in OPERATIONAL_MANIFEST_NAMES:
                 result.add(path.relative_to(root).as_posix())
     for name in ("README.md", "dataset.yaml", "failures.jsonl"):
         if (root / name).is_file():
             result.add(name)
+    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
+    if map_path.is_file():
+        result.add(POLYGON_DENSITY_ASSET_REL_PATH)
     return result
 
 

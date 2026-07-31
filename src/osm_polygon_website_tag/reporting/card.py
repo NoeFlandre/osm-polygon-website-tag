@@ -22,6 +22,9 @@ from pathlib import Path
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
+from osm_polygon_website_tag.reporting.geographic.aggregation import compute_polygon_density_summary
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 
@@ -33,7 +36,8 @@ def build_card(run_dir: Path | str) -> Path:
     bytes.
     """
     run_dir = Path(run_dir)
-    stats = compute_card_stats(run_dir)
+    summary = compute_polygon_density_summary(run_dir)
+    stats = compute_card_stats(run_dir, summary=summary)
     body = _render_markdown(stats)
     front_matter = _render_yaml_front_matter(stats)
     readme = front_matter + "\n" + body
@@ -41,9 +45,23 @@ def build_card(run_dir: Path | str) -> Path:
     yaml_path = run_dir / "dataset.yaml"
     staged_readme = run_dir / ".README.md.building"
     staged_yaml = run_dir / ".dataset.yaml.building"
-    staged_readme.write_text(readme)
-    staged_yaml.write_text(front_matter)
-    atomic_promote_bundle([(staged_readme, path), (staged_yaml, yaml_path)])
+    staged_map = run_dir / ".assets" / "geographic_polygon_density.png.building"
+    staged_map.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        build_polygon_density_map(run_dir, summary=summary, output_path=staged_map)
+        staged_readme.write_text(readme, encoding="utf-8")
+        staged_yaml.write_text(front_matter, encoding="utf-8")
+        atomic_promote_bundle(
+            [
+                (staged_map, run_dir / POLYGON_DENSITY_ASSET_REL_PATH),
+                (staged_readme, path),
+                (staged_yaml, yaml_path),
+            ]
+        )
+    finally:
+        staged_map.unlink(missing_ok=True)
+        staged_readme.unlink(missing_ok=True)
+        staged_yaml.unlink(missing_ok=True)
     return path
 
 
@@ -89,6 +107,9 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         f"website_total_words: {stats.website_total_words}",
         f"contact_website_text_success_count: {stats.contact_website_text_success_count}",
         f"contact_website_total_words: {stats.contact_website_total_words}",
+        f"polygon_density_h3_resolution: {stats.polygon_density_h3_resolution}",
+        f"polygon_density_row_count: {stats.polygon_density_row_count}",
+        f"occupied_h3_cell_count: {stats.occupied_h3_cell_count}",
         "---",
     ]
     return "\n".join(lines)
@@ -160,6 +181,16 @@ def _render_markdown(stats: CardStats) -> str:
         "",
         f"Polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
         f"Combined extracted words: **{combined_words:,}**",
+        "",
+        "## Geographic distribution",
+        "",
+        (
+            f"![H3 polygon density]({POLYGON_DENSITY_ASSET_REL_PATH})\n\n"
+            f"H3 resolution {stats.polygon_density_h3_resolution} contains "
+            f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
+            f"**{stats.polygon_density_row_count:,}** polygon centroids. "
+            "The color scale is logarithmic, counts are absolute, and no basemap is rendered."
+        ),
         "",
         _render_hostnames(
             "website",
