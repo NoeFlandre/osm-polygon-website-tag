@@ -189,7 +189,8 @@ def _render_markdown(stats: CardStats) -> str:
             f"H3 resolution {stats.polygon_density_h3_resolution} contains "
             f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
             f"**{stats.polygon_density_row_count:,}** polygon centroids. "
-            "The color scale is logarithmic, counts are absolute, and no basemap is rendered."
+            "The color scale is logarithmic, counts are absolute, and a Natural Earth "
+            "1:110m land backdrop provides geographic context."
         ),
         "",
         _render_hostnames(
@@ -245,6 +246,11 @@ def _render_markdown(stats: CardStats) -> str:
                 "Source filename, byte size, and nanosecond modification time are "
                 "recorded before processing. The completion receipt binds finalized "
                 "artifacts by relative path, byte size, and SHA-256."
+            ),
+            "",
+            (
+                "The map backdrop uses Natural Earth 1:110m Admin-0 country geography, "
+                "distributed in the source tree under its public-domain terms."
             ),
             "",
             (

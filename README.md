@@ -95,8 +95,8 @@ does not map to an official Hugging Face machine-learning task.
 
 The card map is stored locally at
 `assets/geographic_polygon_density.png` and counts public polygon centroids
-once per H3 cell. It is rendered headlessly and atomically without a basemap or
-network access. A completed run created before this map contract is upgraded
+once per H3 cell. It is rendered headlessly and atomically with the bundled
+Natural Earth 1:110m land backdrop, without network access. A completed run created before this map contract is upgraded
 on resume without reopening PBFs; the same local-only migration is available as:
 
 ```bash

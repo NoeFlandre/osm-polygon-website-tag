@@ -322,6 +322,21 @@ def update_public_shard_metadata(
         raise ValueError(f"source is not processed: {filename}")
     entry["public_row_count"] = row_count
     entry["public_shard_sha256"] = shard_sha256
+    entry.pop("enrichment_pending", None)
+    _write_sources_manifest(state)
+
+
+def update_source_enrichment_status(
+    state: RunState,
+    *,
+    filename: str,
+    pending: bool,
+) -> None:
+    """Persist whether a source shard still has retryable text work."""
+    entry = state.sources.get(filename)
+    if entry is None:
+        raise ValueError(f"source is not processed: {filename}")
+    entry["enrichment_pending"] = pending
     _write_sources_manifest(state)
 
 
@@ -396,5 +411,6 @@ __all__ = [
     "source_is_unchanged",
     "transition_status",
     "update_public_shard_metadata",
+    "update_source_enrichment_status",
     "upsert_run_metadata",
 ]

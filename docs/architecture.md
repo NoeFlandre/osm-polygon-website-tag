@@ -117,7 +117,7 @@ analysis stays in `analysis/*.parquet`; optional Hugging Face task metadata is
 omitted because no official task category accurately describes the dataset.
 The geographic map counts every public polygon centroid exactly once in H3
 resolution 3 and uses a logarithmic absolute-count color scale without a
-network-fetched basemap. The map, README, and YAML are receipt-bound only after
+bundled Natural Earth 1:110m land backdrop and no network fetch. The map, README, and YAML are receipt-bound only after
 final run-level verification; the per-PBF upload checkpoint remains operational
 state.
 

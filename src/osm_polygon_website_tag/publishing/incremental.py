@@ -29,7 +29,9 @@ def _checkpoint_path(run_dir: Path) -> Path:
     return run_dir / "manifests" / "uploaded_polygons.json"
 
 
-def _load_checkpoint(run_dir: Path) -> dict[str, Any]:
+def load_upload_checkpoint(run_dir: Path | str) -> dict[str, Any]:
+    """Load the resumable per-source upload checkpoint."""
+    run_dir = Path(run_dir)
     path = _checkpoint_path(run_dir)
     if not path.is_file():
         return {"schema_version": "v2", "global_bundle": {}, "sources": {}}
@@ -91,7 +93,7 @@ def incremental_publish_changed_shard(
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"missing incremental artifact: {path}")
 
-    checkpoint = _load_checkpoint(root)
+    checkpoint = load_upload_checkpoint(root)
     sources = checkpoint["sources"]
     global_bundle = checkpoint["global_bundle"]
     current_bundle = _bundle_state(root)
@@ -135,7 +137,7 @@ def incremental_publish_changed_shard(
 def persist_successful_upload(run_dir: Path | str, source: Path) -> None:
     """Persist the v2 checkpoint after an externally wrapped upload succeeds."""
     root = Path(run_dir)
-    checkpoint = _load_checkpoint(root)
+    checkpoint = load_upload_checkpoint(root)
     shard = root / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
     checkpoint["sources"][source.name] = {"polygon_sha256": hash_shard(shard)}
     checkpoint["global_bundle"] = _bundle_state(root)
@@ -146,5 +148,6 @@ def persist_successful_upload(run_dir: Path | str, source: Path) -> None:
 __all__ = [
     "IncrementalPublishPlan",
     "incremental_publish_changed_shard",
+    "load_upload_checkpoint",
     "persist_successful_upload",
 ]

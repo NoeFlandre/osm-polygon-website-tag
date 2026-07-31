@@ -13,6 +13,10 @@ matplotlib.use("Agg")
 from matplotlib import colors, patches
 from matplotlib import pyplot as plt
 
+from osm_polygon_website_tag.reporting.geographic.basemap import (
+    BUNDLED_LAND_PATH,
+    draw_landmasses,
+)
 from osm_polygon_website_tag.reporting.geographic.h3_geometry import cell_boundary_rings
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 
@@ -52,6 +56,7 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
         axis.set_title("OSM polygon density by H3 cell (log scale)")
         axis.grid(True, color="white", linewidth=0.3, alpha=0.5)
         axis.set_aspect("equal", adjustable="box")
+        draw_landmasses(axis, BUNDLED_LAND_PATH)
         if summary.cells:
             maximum = max(count for _cell, count in summary.cells)
             norm = colors.LogNorm(vmin=0.5, vmax=max(1.0, float(maximum)))
@@ -77,7 +82,7 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
         caption = (
             f"H3 resolution {summary.h3_resolution}; {summary.occupied_cell_count:,} occupied "
             f"cells across {summary.polygon_row_count:,} polygon centroids; logarithmic scale. "
-            "No basemap is rendered."
+            "Natural Earth 1:110m land backdrop."
         )
         fig.text(0.5, 0.01, caption, ha="center", fontsize=8)
         atomic_save_png(fig, output_path)

@@ -57,6 +57,19 @@ def test_workflow_preserves_discover_sources_compatibility_import() -> None:
     assert discover_sources is inventory_discover_sources
 
 
+def test_prioritize_sources_puts_unprocessed_sources_first() -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    sources = [Path("alsace-latest.osm.pbf"), Path("new-region.osm.pbf")]
+
+    ordered = workflow.prioritize_sources(sources, {"alsace-latest.osm.pbf"})
+
+    assert [source.name for source in ordered] == [
+        "new-region.osm.pbf",
+        "alsace-latest.osm.pbf",
+    ]
+
+
 def _sources(make_pbf, tmp_path: Path) -> Path:
     first = make_pbf(_WEBSITE_OSM, name="a-latest.osm.pbf")
     second = make_pbf(_EMPTY_OSM, name="b-latest.osm.pbf")
@@ -653,6 +666,16 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     pre_resume_checkpoint = checkpoint_path.read_text()
 
     # Resume the same run.
+    from osm_polygon_website_tag.application import workflow
+
+    resumed_source_calls: list[str] = []
+    original_publish = workflow._maybe_publish_enriched_shard
+
+    def track_resume_publish(**kwargs):
+        resumed_source_calls.append(Path(kwargs["source"]).name)
+        return original_publish(**kwargs)
+
+    monkeypatch.setattr(workflow, "_maybe_publish_enriched_shard", track_resume_publish)
     resumed = run_all(
         source_root=root,
         output_root=tmp_path / "runs",
@@ -661,6 +684,7 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     )
 
     # Only the second shard is uploaded during this invocation.
+    assert resumed_source_calls == ["b-latest.osm.pbf"]
     assert shard_uploads == ["a-latest.osm.pbf", "b-latest.osm.pbf", "b-latest.osm.pbf"]
     assert resumed.uploaded_count == 1
 

@@ -27,6 +27,7 @@ from osm_polygon_website_tag.pipeline.public_schema_migration import migrate_pub
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.publishing.incremental import (
     incremental_publish_changed_shard,
+    load_upload_checkpoint,
     persist_successful_upload,
 )
 from osm_polygon_website_tag.publishing.publish import _upload_folder, create_repo, publish_to_hf
@@ -52,6 +53,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     snapshot_source_fingerprint,
     transition_status,
     update_public_shard_metadata,
+    update_source_enrichment_status,
     upsert_run_metadata,
 )
 from osm_polygon_website_tag.runtime.safety import assert_path_safe_against, normalize_path
@@ -75,6 +77,17 @@ class _SourceTransactionResult:
     extracted: bool
     reused: bool
     uploaded: bool
+
+
+def prioritize_sources(sources: list[Path], processed_names: set[str]) -> list[Path]:
+    """Put sources without any local extraction bundle ahead of retries."""
+    return sorted(
+        sources,
+        key=lambda source: (
+            source.name in processed_names,
+            source.as_posix(),
+        ),
+    )
 
 
 def run_all(
@@ -146,11 +159,14 @@ def run_all(
     skipped_count = 0
     uploaded_count = 0
     invocation_id = uuid4().hex
+    ordered_sources = prioritize_sources(sources, set(state.sources))
+    fingerprints_by_name = {fingerprint.filename: fingerprint for fingerprint in fingerprints}
+    upload_checkpoint = load_upload_checkpoint(run_dir)
     if status in {STATUS_INITIALIZED, STATUS_EXTRACTING}:
         if status == STATUS_INITIALIZED:
             transition_status(state, STATUS_EXTRACTING)
         for index, (source, fingerprint) in enumerate(
-            zip(sources, fingerprints, strict=True),
+            ((source, fingerprints_by_name[source.name]) for source in ordered_sources),
             start=1,
         ):
             result = _process_source(
@@ -165,6 +181,7 @@ def run_all(
                 total=len(sources),
                 invocation_id=invocation_id,
                 allow_extraction=True,
+                upload_checkpoint=upload_checkpoint,
             )
             extracted_count += int(result.extracted)
             skipped_count += int(result.reused)
@@ -189,7 +206,7 @@ def run_all(
 
     if status == STATUS_ENRICHING:
         for index, (source, fingerprint) in enumerate(
-            zip(sources, fingerprints, strict=True),
+            ((source, fingerprints_by_name[source.name]) for source in ordered_sources),
             start=1,
         ):
             result = _process_source(
@@ -204,6 +221,7 @@ def run_all(
                 total=len(sources),
                 invocation_id=invocation_id,
                 allow_extraction=False,
+                upload_checkpoint=upload_checkpoint,
             )
             uploaded_count += int(result.uploaded)
         transition_status(state, STATUS_ENRICHED)
@@ -253,6 +271,7 @@ def _process_source(
     total: int,
     invocation_id: str,
     allow_extraction: bool,
+    upload_checkpoint: dict[str, object],
 ) -> _SourceTransactionResult:
     bundle_complete = source_bundle_is_complete(
         run_dir,
@@ -279,6 +298,7 @@ def _process_source(
         raise ValueError(f"source bundle is incomplete after extraction: {source.name}")
 
     shard = _public_shard_path(run_dir, source)
+    manifest_entry = state.sources[source.name]
     migration_changed = False
     if pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA_V1_2, check_metadata=True):
         migration = migrate_public_shard(shard)
@@ -290,7 +310,12 @@ def _process_source(
             row_count=migration.row_count,
             shard_sha256=migration.shard_sha256,
         )
-    needs_enrichment = _shard_needs_enrichment(shard)
+    marker = manifest_entry.get("enrichment_pending")
+    needs_enrichment = (
+        _shard_needs_enrichment(shard)
+        if migration_changed or not isinstance(marker, bool)
+        else marker
+    )
     if needs_enrichment:
         _progress(progress, f"[{index}/{total}] Enriching {source.name}")
         enrichment = enrich_polygon_shard(
@@ -304,8 +329,23 @@ def _process_source(
             row_count=enrichment.row_count,
             shard_sha256=enrichment.shard_sha256,
         )
+        needs_enrichment = _shard_needs_enrichment(shard)
     else:
         _progress(progress, f"[{index}/{total}] Resuming: {source.name} text is complete")
+    update_source_enrichment_status(
+        state,
+        filename=source.name,
+        pending=needs_enrichment,
+    )
+
+    if (
+        apply
+        and not migration_changed
+        and not needs_enrichment
+        and _source_upload_is_current(manifest_entry, source.name, upload_checkpoint)
+    ):
+        _progress(progress, f"[{index}/{total}] Resuming: {source.name} is already uploaded")
+        return _SourceTransactionResult(extracted=extracted, reused=reused, uploaded=False)
 
     uploaded_now = False
     if migration_changed or needs_enrichment or apply:
@@ -329,6 +369,20 @@ def _process_source(
 def _progress(callback: Callable[[str], None] | None, message: str) -> None:
     if callback is not None:
         callback(message)
+
+
+def _source_upload_is_current(
+    manifest_entry: dict[str, object],
+    filename: str,
+    checkpoint: dict[str, object],
+) -> bool:
+    sources = checkpoint.get("sources")
+    if not isinstance(sources, dict):
+        return False
+    uploaded = sources.get(filename)
+    return isinstance(uploaded, dict) and uploaded.get("polygon_sha256") == manifest_entry.get(
+        "public_shard_sha256"
+    )
 
 
 def _public_shard_path(run_dir: Path, source: Path) -> Path:
@@ -429,4 +483,4 @@ def _shard_needs_enrichment(shard: Path) -> bool:
     return False
 
 
-__all__ = ["WorkflowResult", "discover_sources", "run_all"]
+__all__ = ["WorkflowResult", "discover_sources", "prioritize_sources", "run_all"]
