@@ -64,8 +64,6 @@ and deploys the generated site to
 [GitHub Pages](https://noeflandre.github.io/osm-polygon-website-tag/).
 For a new repository, set **Settings → Pages → Build and deployment → Source**
 to **GitHub Actions** once before the first deployment.
-Internal planning notes under `docs/superpowers/` are deliberately excluded
-from the public site.
 
 ## Working with the external data drive
 

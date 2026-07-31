@@ -32,6 +32,9 @@ env/
 *.swp
 .DS_Store
 
+# Local agent planning notes (never publish)
+docs/superpowers/
+
 # Environment / secrets
 .env
 .env.*
