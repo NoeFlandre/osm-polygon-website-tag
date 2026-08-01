@@ -106,6 +106,8 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
     assert "https://download.geofabrik.de/" in content
+    assert "assets/hero.png" in content
+    assert content.index("assets/hero.png") < content.index("# OSM Polygon Website Dataset") + 200
 
 
 def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> None:

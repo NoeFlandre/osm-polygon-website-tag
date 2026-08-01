@@ -1,5 +1,7 @@
 # osm-polygon-website-tag
 
+![osm-polygon-website-tag hero banner](assets/hero.png)
+
 A repository for analysing OpenStreetMap (OSM) polygons that carry a
 `website` or `contact:website` tag.
 

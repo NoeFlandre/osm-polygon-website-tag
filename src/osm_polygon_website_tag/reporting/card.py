@@ -23,7 +23,10 @@ from pathlib import Path
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import compute_polygon_density_summary
-from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geographic.layout import (
+    HERO_ASSET_REL_PATH,
+    POLYGON_DENSITY_ASSET_REL_PATH,
+)
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
@@ -150,6 +153,8 @@ def _render_markdown(stats: CardStats) -> str:
     combined_words = stats.website_total_words + stats.contact_website_total_words
     parts = [
         "# OSM Polygon Website Dataset",
+        "",
+        f"![osm-polygon-website-tag hero banner]({HERO_ASSET_REL_PATH})",
         "",
         (
             "OpenStreetMap closed ways and polygon relations carrying a non-empty "
