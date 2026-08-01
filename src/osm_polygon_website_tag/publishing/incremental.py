@@ -61,6 +61,63 @@ def load_upload_checkpoint(run_dir: Path | str) -> dict[str, Any]:
     return {"schema_version": "v2", "global_bundle": {}, "sources": sources}
 
 
+def reconcile_upload_checkpoint(
+    run_dir: Path | str,
+    *,
+    repo_id: str,
+    token: str,
+) -> dict[str, Any]:
+    """Reconcile the local upload checkpoint with exact remote shard hashes.
+
+    An interrupted large-folder upload can commit a remote shard before the
+    local checkpoint is persisted. The remote repository is therefore the
+    source of truth for the set of already published polygon shards.
+    """
+    root = Path(run_dir)
+    remote = remote_polygon_shard_hashes(repo_id=repo_id, token=token)
+    local_paths = {f"{path.stem}.osm.pbf": path for path in (root / "polygons").glob("*.parquet")}
+    sources: dict[str, dict[str, str]] = {}
+    for filename, remote_sha256 in remote.items():
+        local_path = local_paths.get(filename)
+        if local_path is not None and hash_shard(local_path) == remote_sha256:
+            sources[filename] = {"polygon_sha256": remote_sha256}
+    checkpoint = load_upload_checkpoint(root)
+    checkpoint["sources"] = sources
+    atomic_write_json(_checkpoint_path(root), checkpoint)
+    return checkpoint
+
+
+def remote_polygon_shard_hashes(*, repo_id: str, token: str) -> dict[str, str]:
+    """Return remote polygon source filenames mapped to their SHA-256 hashes."""
+    from huggingface_hub import HfApi
+    from huggingface_hub.utils import EntryNotFoundError
+
+    if not token:
+        raise ValueError("remote shard reconciliation requires a Hugging Face token")
+    hashes: dict[str, str] = {}
+    api = HfApi(token=token)
+    try:
+        items = api.list_repo_tree(
+            repo_id,
+            path_in_repo="polygons",
+            recursive=False,
+            expand=True,
+            repo_type="dataset",
+        )
+        for item in items:
+            path = getattr(item, "path", None)
+            if not isinstance(path, str) or not path.endswith(".parquet"):
+                continue
+            lfs = getattr(item, "lfs", None)
+            sha256 = getattr(lfs, "sha256", None)
+            if not isinstance(sha256, str) or len(sha256) != 64:
+                raise ValueError(f"remote polygon shard has no SHA-256 metadata: {path}")
+            hashes[f"{Path(path).stem}.osm.pbf"] = sha256
+    except EntryNotFoundError:
+        return {}
+    return hashes
+
+
 def _bundle_state(run_dir: Path) -> dict[str, str | int]:
     map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
     if not map_path.is_file():
@@ -150,4 +207,6 @@ __all__ = [
     "incremental_publish_changed_shard",
     "load_upload_checkpoint",
     "persist_successful_upload",
+    "reconcile_upload_checkpoint",
+    "remote_polygon_shard_hashes",
 ]

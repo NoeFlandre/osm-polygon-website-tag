@@ -12,6 +12,7 @@ use from the card builder.
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,7 @@ def compute_card_stats(
     run_dir: Path | str,
     *,
     summary: PolygonDensitySummary | None = None,
+    source_names: Collection[str] | None = None,
 ) -> CardStats:
     """Recompute every README card statistic from ``run_dir``.
 
@@ -80,7 +82,7 @@ def compute_card_stats(
     """
     run_dir = Path(run_dir)
     stats = CardStats()
-    density = summary or compute_polygon_density_summary(run_dir)
+    density = summary or compute_polygon_density_summary(run_dir, source_names=source_names)
     stats.polygon_density_h3_resolution = density.h3_resolution
     stats.occupied_h3_cell_count = density.occupied_cell_count
     stats.polygon_density_row_count = density.polygon_row_count
@@ -93,10 +95,12 @@ def compute_card_stats(
         if not d.exists():
             raise FileNotFoundError(f"missing {d}")
 
-    public_shards = sorted(polygons_dir.glob("*.parquet"))
-    stats.public_row_count = _count_parquets(polygons_dir)
-    stats.observation_count = _count_parquets(obs_dir)
-    stats.rejection_count = _count_parquets(rej_dir)
+    public_shards = _selected_parquets(polygons_dir, source_names)
+    observation_shards = _selected_parquets(obs_dir, source_names)
+    rejection_shards = _selected_parquets(rej_dir, source_names)
+    stats.public_row_count = _count_parquets(public_shards)
+    stats.observation_count = _count_parquets(observation_shards)
+    stats.rejection_count = _count_parquets(rejection_shards)
     stats.sources_count = len(public_shards)
     expected_path = run_dir / "manifests" / "expected_sources.json"
     if expected_path.is_file():
@@ -114,7 +118,7 @@ def compute_card_stats(
             }
         )
 
-    if analysis_dir.exists():
+    if source_names is None and analysis_dir.exists():
         dup_path = analysis_dir / "duplicate_observations.parquet"
         if dup_path.exists():
             stats.duplicate_count = int(pq.ParquetFile(dup_path).metadata.num_rows)
@@ -149,8 +153,16 @@ def compute_card_stats(
     return stats
 
 
-def _count_parquets(directory: Path) -> int:
-    return sum(int(pq.ParquetFile(path).metadata.num_rows) for path in directory.glob("*.parquet"))
+def _selected_parquets(directory: Path, source_names: Collection[str] | None) -> list[Path]:
+    paths = sorted(directory.glob("*.parquet"))
+    if source_names is None:
+        return paths
+    stems = {name.removesuffix(".osm.pbf") for name in source_names}
+    return [path for path in paths if path.stem in stems]
+
+
+def _count_parquets(paths: Collection[Path]) -> int:
+    return sum(int(pq.ParquetFile(path).metadata.num_rows) for path in paths)
 
 
 def _add_text_stats(stats: CardStats, shard: Path) -> None:

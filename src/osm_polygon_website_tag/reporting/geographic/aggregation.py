@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
 from osm_polygon_website_tag.reporting.geographic.h3_geometry import assign_h3_cell
@@ -17,11 +18,12 @@ def compute_polygon_density_summary(
     run_dir: Path | str,
     *,
     h3_resolution: int = DEFAULT_H3_RESOLUTION,
+    source_names: Collection[str] | None = None,
 ) -> PolygonDensitySummary:
-    """Aggregate every public polygon centroid into deterministic H3 counts."""
+    """Aggregate selected public polygon centroids into deterministic H3 counts."""
     counts: dict[str, int] = {}
     row_count = 0
-    for path, row_index, lat, lon in iter_lat_lon_runs(run_dir):
+    for path, row_index, lat, lon in iter_lat_lon_runs(run_dir, source_names=source_names):
         try:
             cell = assign_h3_cell(lat, lon, resolution=h3_resolution)
         except GeographicMapError as exc:

@@ -245,6 +245,29 @@ def test_card_stats_derives_text_and_word_totals_from_polygon_parquet(tmp_path: 
     assert stats.polygons_with_any_text == 1
 
 
+def test_card_stats_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    second = _public_row(polygon_id="p2", source_pbf="france-latest.osm.pbf")
+    pq.write_table(
+        pa.Table.from_pylist([second], schema=POLYGON_PUBLIC_SCHEMA),
+        run_dir / "polygons" / "france-latest.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist([], schema=COMPARISON_OBSERVATION_SCHEMA),
+        run_dir / "analysis_observations" / "france-latest.parquet",
+    )
+    pq.write_table(
+        pa.Table.from_pylist([], schema=REJECTION_SCHEMA),
+        run_dir / "rejections" / "france-latest.parquet",
+    )
+
+    stats = compute_card_stats(run_dir, source_names={"monaco-latest.osm.pbf"})
+
+    assert stats.sources_count == 1
+    assert stats.public_row_count == 1
+    assert stats.observation_count == 0
+
+
 def test_incremental_card_renders_progress_and_text_statistics(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     (run_dir / "manifests" / "expected_sources.json").write_text(

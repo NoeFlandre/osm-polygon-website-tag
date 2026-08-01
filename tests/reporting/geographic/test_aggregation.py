@@ -41,6 +41,20 @@ def test_summary_counts_rows_and_sorts_h3_cells(tmp_path: Path) -> None:
     assert summary.h3_resolution == 3
 
 
+def test_summary_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    _write_coords(polygons / "uploaded.parquet", [(48.85, 2.35)])
+    _write_coords(polygons / "local-only.parquet", [(40.7, -74.0), (40.71, -74.01)])
+
+    summary = compute_polygon_density_summary(
+        tmp_path,
+        source_names={"uploaded.osm.pbf"},
+    )
+
+    assert summary.polygon_row_count == 1
+
+
 @pytest.mark.parametrize("lat, lon", [(91.0, 0.0), (0.0, 181.0), (float("nan"), 0.0)])
 def test_summary_rejects_invalid_coordinates(tmp_path: Path, lat: float, lon: float) -> None:
     polygons = tmp_path / "polygons"

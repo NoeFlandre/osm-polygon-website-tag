@@ -53,6 +53,17 @@ _WEBSITE_OSM = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+@pytest.fixture(autouse=True)
+def _offline_remote_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep workflow tests local; remote reconciliation has dedicated unit tests."""
+    from osm_polygon_website_tag.publishing.incremental import load_upload_checkpoint
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.application.workflow.reconcile_upload_checkpoint",
+        lambda run_dir, **_kwargs: load_upload_checkpoint(run_dir),
+    )
+
+
 def test_workflow_preserves_discover_sources_compatibility_import() -> None:
     assert discover_sources is inventory_discover_sources
 

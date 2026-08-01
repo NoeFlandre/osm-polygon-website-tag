@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
@@ -22,10 +23,15 @@ def build_polygon_density_map(
     summary: PolygonDensitySummary | None = None,
     output_path: Path | None = None,
     h3_resolution: int = DEFAULT_H3_RESOLUTION,
+    source_names: Collection[str] | None = None,
 ) -> PolygonDensityRenderResult:
     """Aggregate and render the map, reusing a supplied summary when present."""
     root = Path(run_dir)
-    resolved_summary = summary or compute_polygon_density_summary(root, h3_resolution=h3_resolution)
+    resolved_summary = summary or compute_polygon_density_summary(
+        root,
+        h3_resolution=h3_resolution,
+        source_names=source_names,
+    )
     destination = output_path or root / POLYGON_DENSITY_ASSET_REL_PATH
     caption = render_polygon_density(resolved_summary, destination)
     return PolygonDensityRenderResult(

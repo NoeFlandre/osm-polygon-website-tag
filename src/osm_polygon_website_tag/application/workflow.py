@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pyarrow.parquet as pq
@@ -29,6 +30,7 @@ from osm_polygon_website_tag.publishing.incremental import (
     incremental_publish_changed_shard,
     load_upload_checkpoint,
     persist_successful_upload,
+    reconcile_upload_checkpoint,
 )
 from osm_polygon_website_tag.publishing.publish import _upload_folder, create_repo, publish_to_hf
 from osm_polygon_website_tag.reporting.card import build_card
@@ -149,7 +151,8 @@ def run_all(
         state = load_run(run_dir)
         status = state.metadata.get("status")
 
-    if apply and not resolve_hf_token():
+    hf_token = resolve_hf_token() if apply else None
+    if apply and not hf_token:
         raise ValueError("run-all --apply requires Hugging Face environment/local credentials")
     if apply and ensure_repo:
         _progress(progress, f"Ensuring Hugging Face dataset repository {repo_id}")
@@ -162,6 +165,12 @@ def run_all(
     ordered_sources = prioritize_sources(sources, set(state.sources))
     fingerprints_by_name = {fingerprint.filename: fingerprint for fingerprint in fingerprints}
     upload_checkpoint = load_upload_checkpoint(run_dir)
+    if apply:
+        upload_checkpoint = reconcile_upload_checkpoint(
+            run_dir,
+            repo_id=repo_id,
+            token=cast(str, hf_token),
+        )
     if status in {STATUS_INITIALIZED, STATUS_EXTRACTING}:
         if status == STATUS_INITIALIZED:
             transition_status(state, STATUS_EXTRACTING)
@@ -349,6 +358,14 @@ def _process_source(
 
     uploaded_now = False
     if migration_changed or needs_enrichment or apply:
+        published_source_names = None
+        if apply:
+            checkpoint_sources = upload_checkpoint.get("sources", {})
+            if isinstance(checkpoint_sources, dict):
+                published_source_names = {str(name) for name in checkpoint_sources}
+            else:
+                published_source_names = set()
+            published_source_names.add(source.name)
         uploaded_now = _maybe_publish_enriched_shard(
             run_dir=run_dir,
             source=source,
@@ -358,7 +375,13 @@ def _process_source(
             index=index,
             total=total,
             allow_bundle_only=not reused,
+            published_source_names=published_source_names,
         )
+    if uploaded_now:
+        checkpoint_sources = cast(dict[str, object], upload_checkpoint.setdefault("sources", {}))
+        checkpoint_sources[source.name] = {
+            "polygon_sha256": str(manifest_entry["public_shard_sha256"]),
+        }
     return _SourceTransactionResult(
         extracted=extracted,
         reused=reused,
@@ -420,6 +443,7 @@ def _maybe_publish_enriched_shard(
     index: int,
     total: int,
     allow_bundle_only: bool = True,
+    published_source_names: set[str] | None = None,
 ) -> bool:
     """Build the card, compute the checkpoint, and conditionally upload.
 
@@ -429,7 +453,7 @@ def _maybe_publish_enriched_shard(
     ``True`` iff a new incremental upload was performed; the caller
     updates ``uploaded_count`` from this return value.
     """
-    build_card(run_dir)
+    build_card(run_dir, source_names=published_source_names)
     preview = incremental_publish_changed_shard(run_dir, source, dry_run=True)
     if not apply:
         return False

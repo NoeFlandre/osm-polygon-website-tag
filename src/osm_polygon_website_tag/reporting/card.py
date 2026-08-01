@@ -17,7 +17,7 @@ mutable run state.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
@@ -28,7 +28,11 @@ from osm_polygon_website_tag.reporting.geographic.polygon_density import build_p
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 
-def build_card(run_dir: Path | str) -> Path:
+def build_card(
+    run_dir: Path | str,
+    *,
+    source_names: Collection[str] | None = None,
+) -> Path:
     """Build (or rebuild) the README card for ``run_dir``.
 
     Returns the path to ``README.md``. The function is idempotent:
@@ -36,8 +40,8 @@ def build_card(run_dir: Path | str) -> Path:
     bytes.
     """
     run_dir = Path(run_dir)
-    summary = compute_polygon_density_summary(run_dir)
-    stats = compute_card_stats(run_dir, summary=summary)
+    summary = compute_polygon_density_summary(run_dir, source_names=source_names)
+    stats = compute_card_stats(run_dir, summary=summary, source_names=source_names)
     body = _render_markdown(stats)
     front_matter = _render_yaml_front_matter(stats)
     readme = front_matter + "\n" + body
@@ -48,7 +52,12 @@ def build_card(run_dir: Path | str) -> Path:
     staged_map = run_dir / ".assets" / "geographic_polygon_density.png.building"
     staged_map.parent.mkdir(parents=True, exist_ok=True)
     try:
-        build_polygon_density_map(run_dir, summary=summary, output_path=staged_map)
+        build_polygon_density_map(
+            run_dir,
+            summary=summary,
+            output_path=staged_map,
+            source_names=source_names,
+        )
         staged_readme.write_text(readme, encoding="utf-8")
         staged_yaml.write_text(front_matter, encoding="utf-8")
         atomic_promote_bundle(
@@ -146,7 +155,7 @@ def _render_markdown(stats: CardStats) -> str:
             "OpenStreetMap closed ways and polygon relations carrying a non-empty "
             "`website` OR `contact:website` tag, with full main-page text extracted "
             "using Trafilatura. Every statistic below is regenerated from the "
-            "published Parquet artifacts."
+            "current upload-acknowledged Parquet artifacts."
         ),
         "",
         "## Snapshot",

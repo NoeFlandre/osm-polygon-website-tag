@@ -7,7 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from osm_polygon_website_tag.publishing.incremental import incremental_publish_changed_shard
+from osm_polygon_website_tag.publishing.incremental import (
+    incremental_publish_changed_shard,
+    reconcile_upload_checkpoint,
+)
+from osm_polygon_website_tag.runtime.run_state import hash_shard
 
 
 def _run(tmp_path: Path) -> tuple[Path, Path]:
@@ -130,3 +134,37 @@ def test_incremental_rejects_malformed_checkpoint(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
         incremental_publish_changed_shard(run_dir, Path("a.osm.pbf"))
+
+
+def test_reconcile_checkpoint_uses_remote_shards_and_hashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, shard = _run(tmp_path)
+    checkpoint_path = run_dir / "manifests" / "uploaded_polygons.json"
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "v2",
+                "global_bundle": {},
+                "sources": {"stale.osm.pbf": {"polygon_sha256": "0" * 64}},
+            }
+        )
+    )
+    remote_sha = hash_shard(shard)
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.publishing.incremental.remote_polygon_shard_hashes",
+        lambda **_kwargs: {
+            "a.osm.pbf": remote_sha,
+            "missing.osm.pbf": "1" * 64,
+        },
+    )
+
+    checkpoint = reconcile_upload_checkpoint(
+        run_dir,
+        repo_id="owner/dataset",
+        token="token",
+    )
+
+    assert checkpoint["sources"] == {"a.osm.pbf": {"polygon_sha256": remote_sha}}
