@@ -6,6 +6,7 @@ import datetime as dt
 import sqlite3
 from dataclasses import dataclass, replace
 from pathlib import Path
+from uuid import uuid4
 
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES
 
@@ -33,6 +34,17 @@ class TextCache:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self._db = sqlite3.connect(path)
+        try:
+            self._create_schema()
+        except sqlite3.DatabaseError as error:
+            self._db.close()
+            if not _is_corruption_error(error):
+                raise
+            _quarantine_corrupt_database(path)
+            self._db = sqlite3.connect(path)
+            self._create_schema()
+
+    def _create_schema(self) -> None:
         self._db.execute(
             """CREATE TABLE IF NOT EXISTS website_text (
                 url TEXT PRIMARY KEY,
@@ -122,6 +134,23 @@ class TextCache:
 
     def close(self) -> None:
         self._db.close()
+
+
+def _is_corruption_error(error: sqlite3.DatabaseError) -> bool:
+    """Return whether SQLite identified an unreadable database image."""
+    message = str(error).lower()
+    return "malformed" in message or "not a database" in message
+
+
+def _quarantine_corrupt_database(path: Path) -> Path:
+    """Move a corrupt cache and its SQLite sidecars out of the active path."""
+    token = f"{dt.datetime.now(tz=dt.UTC):%Y%m%dT%H%M%S%fZ}-{uuid4().hex}"
+    quarantine = path.with_name(f"{path.name}.corrupt-{token}")
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        candidate = Path(f"{path}{suffix}")
+        if candidate.exists():
+            candidate.replace(Path(f"{quarantine}{suffix}"))
+    return quarantine
 
 
 __all__ = ["CachedText", "TextCache"]

@@ -77,7 +77,9 @@ completed bundles or successful URLs. Sources without any local extraction
 bundle are prioritized before retries of previously processed sources. This includes bundles created by the old
 extract-all workflow: they are enriched and uploaded without rereading their
 PBFs. Legacy shards are likewise enriched without rereading PBFs; failed URLs
-retry.
+retry. If the run-owned URL cache is damaged, the pipeline quarantines the
+unreadable SQLite files and rebuilds an empty cache; completed Parquet text is
+kept, while only unresolved URLs are retried.
 
 In apply mode, startup reconciles the local upload checkpoint with the exact
 SHA-256 hashes of polygon Parquets currently on Hugging Face. Progress cards and

@@ -79,3 +79,15 @@ def test_full_text_is_persisted_without_truncation(tmp_path: Path) -> None:
     assert value.text == full
     assert value.word_count == 1_000_000
     cache.close()
+
+
+def test_corrupt_database_is_quarantined_and_recreated(tmp_path: Path) -> None:
+    path = tmp_path / "text.sqlite3"
+    path.write_bytes(b"not a valid sqlite database")
+
+    cache = TextCache(path)
+    cache.record(_result(), invocation_id="run-1")
+
+    assert cache.get_reusable("https://example.org", invocation_id="run-2") is not None
+    assert len(list(tmp_path.glob("text.sqlite3.corrupt-*"))) == 1
+    cache.close()
