@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+import threading
+import time
 from pathlib import Path
 
 from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
@@ -90,4 +93,26 @@ def test_corrupt_database_is_quarantined_and_recreated(tmp_path: Path) -> None:
 
     assert cache.get_reusable("https://example.org", invocation_id="run-2") is not None
     assert len(list(tmp_path.glob("text.sqlite3.corrupt-*"))) == 1
+    cache.close()
+
+
+def test_record_retries_after_a_transient_writer_lock(tmp_path: Path) -> None:
+    path = tmp_path / "text.sqlite3"
+    cache = TextCache(path)
+    cache._db.execute("PRAGMA busy_timeout=1")
+    holder = sqlite3.connect(path, check_same_thread=False)
+    holder.execute("BEGIN")
+    holder.execute("SELECT count(*) FROM website_text").fetchone()
+
+    def release() -> None:
+        time.sleep(0.15)
+        holder.commit()
+        holder.close()
+
+    thread = threading.Thread(target=release)
+    thread.start()
+    cache.record(_result(), invocation_id="run-1")
+    thread.join()
+
+    assert cache.get_reusable("https://example.org", invocation_id="run-2") is not None
     cache.close()

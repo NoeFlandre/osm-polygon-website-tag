@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import datetime as dt
 import sqlite3
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES
+
+_CACHE_BUSY_TIMEOUT_SECONDS = 30.0
+_LOCK_RETRY_COUNT = 5
+_LOCK_RETRY_DELAY_SECONDS = 0.1
 
 
 @dataclass(frozen=True)
@@ -33,7 +39,7 @@ class TextCache:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        self._db = sqlite3.connect(path)
+        self._db = sqlite3.connect(path, timeout=_CACHE_BUSY_TIMEOUT_SECONDS)
         try:
             self._create_schema()
         except sqlite3.DatabaseError as error:
@@ -41,12 +47,13 @@ class TextCache:
             if not _is_corruption_error(error):
                 raise
             _quarantine_corrupt_database(path)
-            self._db = sqlite3.connect(path)
+            self._db = sqlite3.connect(path, timeout=_CACHE_BUSY_TIMEOUT_SECONDS)
             self._create_schema()
 
     def _create_schema(self) -> None:
-        self._db.execute(
-            """CREATE TABLE IF NOT EXISTS website_text (
+        _retry_locked(
+            lambda: self._db.execute(
+                """CREATE TABLE IF NOT EXISTS website_text (
                 url TEXT PRIMARY KEY,
                 status TEXT NOT NULL,
                 text TEXT,
@@ -57,9 +64,10 @@ class TextCache:
                 last_attempt_at TEXT NOT NULL,
                 trafilatura_version TEXT,
                 invocation_id TEXT NOT NULL
-            )"""
+                )"""
+            )
         )
-        self._db.commit()
+        _retry_locked(self._db.commit)
 
     def get_reusable(self, url: str, *, invocation_id: str) -> CachedText | None:
         """Return a success or a result already attempted in this invocation."""
@@ -81,8 +89,9 @@ class TextCache:
             last_attempt_at=dt.datetime.now(tz=dt.UTC).isoformat(),
             invocation_id=invocation_id,
         )
-        self._db.execute(
-            """INSERT INTO website_text VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        _retry_locked(
+            lambda: self._db.execute(
+                """INSERT INTO website_text VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(url) DO UPDATE SET
                  status=excluded.status,
                  text=excluded.text,
@@ -93,30 +102,33 @@ class TextCache:
                  last_attempt_at=excluded.last_attempt_at,
                  trafilatura_version=excluded.trafilatura_version,
                  invocation_id=excluded.invocation_id""",
-            (
-                stored.url,
-                stored.status,
-                stored.text,
-                stored.word_count,
-                stored.final_url,
-                stored.message,
-                stored.attempt_count,
-                stored.last_attempt_at,
-                stored.trafilatura_version,
-                stored.invocation_id,
+                (
+                    stored.url,
+                    stored.status,
+                    stored.text,
+                    stored.word_count,
+                    stored.final_url,
+                    stored.message,
+                    stored.attempt_count,
+                    stored.last_attempt_at,
+                    stored.trafilatura_version,
+                    stored.invocation_id,
+                ),
             ),
         )
-        self._db.commit()
+        _retry_locked(self._db.commit)
         return stored
 
     def _get(self, url: str) -> CachedText | None:
-        row = self._db.execute(
-            """SELECT url, status, text, word_count, final_url, message,
+        row = _retry_locked(
+            lambda: self._db.execute(
+                """SELECT url, status, text, word_count, final_url, message,
                       attempt_count, last_attempt_at, trafilatura_version,
                       invocation_id
-               FROM website_text WHERE url=?""",
-            (url,),
-        ).fetchone()
+                   FROM website_text WHERE url=?""",
+                (url,),
+            ).fetchone()
+        )
         if row is None:
             return None
         return CachedText(
@@ -134,6 +146,24 @@ class TextCache:
 
     def close(self) -> None:
         self._db.close()
+
+
+def _retry_locked[ResultT](operation: Callable[[], ResultT]) -> ResultT:
+    """Retry a short-lived SQLite writer lock with bounded exponential backoff."""
+    for attempt in range(_LOCK_RETRY_COUNT + 1):
+        try:
+            return operation()
+        except sqlite3.OperationalError as error:
+            if not _is_locked_error(error) or attempt == _LOCK_RETRY_COUNT:
+                raise
+            time.sleep(_LOCK_RETRY_DELAY_SECONDS * (2**attempt))
+    raise AssertionError("unreachable")
+
+
+def _is_locked_error(error: sqlite3.OperationalError) -> bool:
+    """Return whether SQLite rejected an operation because another writer is active."""
+    message = str(error).lower()
+    return "database is locked" in message or "database table is locked" in message
 
 
 def _is_corruption_error(error: sqlite3.DatabaseError) -> bool:

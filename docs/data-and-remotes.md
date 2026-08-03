@@ -79,7 +79,9 @@ extract-all workflow: they are enriched and uploaded without rereading their
 PBFs. Legacy shards are likewise enriched without rereading PBFs; failed URLs
 retry. If the run-owned URL cache is damaged, the pipeline quarantines the
 unreadable SQLite files and rebuilds an empty cache; completed Parquet text is
-kept, while only unresolved URLs are retried.
+kept, while only unresolved URLs are retried. Short-lived SQLite writer locks
+are retried with bounded backoff so a concurrent read or writer does not abort
+the source transaction.
 
 In apply mode, startup reconciles the local upload checkpoint with the exact
 SHA-256 hashes of polygon Parquets currently on Hugging Face. Progress cards and
