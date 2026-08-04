@@ -90,6 +90,12 @@ bundle and begin with enrichment/upload; they do not reread those PBFs. The card
 reports exact word totals for both website tags. Full extracted text is never
 truncated.
 
+The default `run-all` settings use four bounded geometry workers, at most 32
+in-flight area payloads, and eight bounded URL workers. They can be tuned for a
+machine with `--area-workers`, `--max-in-flight-areas`, and `--fetch-workers`
+(safe caps are enforced); PBF processing remains sequential and output order is
+unchanged.
+
 The generated Hugging Face card is intentionally concise: it presents current
 progress, polygon and text-extraction totals, combined word count, top
 hostnames, public schema, methodology, and attribution. Detailed overlap and

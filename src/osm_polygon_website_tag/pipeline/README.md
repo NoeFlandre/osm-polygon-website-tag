@@ -9,16 +9,28 @@ Implements bounded data-processing stages.
   `migrate_public_shard`, `analyze_results`.
 - Excludes: full-run orchestration, card rendering, and remote publication.
 
+## Extraction
+
+`extract_pbf` keeps libosmium callbacks, the candidate ledger, and Parquet
+sinks on the caller thread. Each qualifying area is copied to a serialized
+GeoJSON payload and processed by a bounded FIFO pool for geometry metrics and
+row construction. The default is four area workers with at most 32 in-flight
+payloads; safe caps are 16 workers and 256 in-flight payloads. Results are
+emitted in callback order, so worker-count changes preserve row order, schemas,
+rejections, and shard hashes. PBFs themselves remain sequential in
+`application.workflow`.
+
 ## Enrichment
 
 `enrich_polygon_shard` processes one bounded Arrow batch at a time. Cache
 lookups and SQLite writes stay on the caller thread, while distinct cache
-misses use a bounded pool of eight I/O workers for network retrieval and text
-extraction. Results are recorded and applied in deterministic URL and input-row
-order; duplicate normalized URLs are fetched once per batch. Cache commits are
-batched and flushed at each completed batch. Completed batches are written as
-source-bound atomic checkpoint parts, so an interruption preserves the shard
-prefix and retries only the unresolved suffix on resume.
+misses use a bounded pool of eight I/O workers by default for network retrieval
+and text extraction. `fetch_workers` can be configured per invocation up to a
+safe cap of 32. Results are recorded and applied in deterministic URL and
+input-row order; duplicate normalized URLs are fetched once per batch. Cache
+commits are batched and flushed at each completed batch. Completed batches are
+written as source-bound atomic checkpoint parts, so an interruption preserves
+the shard prefix and retries only the unresolved suffix on resume.
 
 ## Record builders
 

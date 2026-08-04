@@ -11,6 +11,8 @@ Public surface
   geometry, centroid, bbox, and area.
 * :func:`geometry_from_area` -- build a :class:`PolygonGeometry` from an
   osmium ``Area``.
+* :func:`geometry_from_geojson` -- build the same result from serialized
+  GeoJSON, allowing extraction workers to avoid sharing live osmium objects.
 * :func:`compute_polygon_area_m2` -- geodesic area on WGS84 for a
   closed ``[lon, lat]`` ring using ``pyproj.Geod``.
 * :class:`GeometryRejection` -- raised when a geometry cannot be
@@ -242,10 +244,8 @@ def _compute_centroid_lonlat(shapely_geom: Polygon | MultiPolygon) -> tuple[floa
     return float(centroid_ll.x), float(centroid_ll.y)
 
 
-def geometry_from_area(area: osmium.osm.Area) -> PolygonGeometry:
-    """Build a :class:`PolygonGeometry` from an osmium ``Area``."""
-    factory = osmium.geom.GeoJSONFactory()
-    raw_geojson: Any = factory.create_multipolygon(area)
+def geometry_from_geojson(raw_geojson: str) -> PolygonGeometry:
+    """Build a :class:`PolygonGeometry` from serialized GeoJSON."""
     parsed = json.loads(raw_geojson)
 
     if parsed.get("type") == "Polygon":
@@ -310,6 +310,13 @@ def geometry_from_area(area: osmium.osm.Area) -> PolygonGeometry:
     )
 
 
+def geometry_from_area(area: osmium.osm.Area) -> PolygonGeometry:
+    """Build a :class:`PolygonGeometry` from an osmium ``Area``."""
+    factory = osmium.geom.GeoJSONFactory()
+    raw_geojson: Any = factory.create_multipolygon(area)
+    return geometry_from_geojson(raw_geojson)
+
+
 def compute_polygon_area_m2(ring: list[list[float]]) -> float:
     """Return the geodesic area (m^2) of a single closed ``[lon, lat]`` ring.
 
@@ -348,4 +355,5 @@ __all__ = [
     "PolygonGeometry",
     "compute_polygon_area_m2",
     "geometry_from_area",
+    "geometry_from_geojson",
 ]

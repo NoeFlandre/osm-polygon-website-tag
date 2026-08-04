@@ -138,6 +138,17 @@ def test_typer_help_lists_every_public_command() -> None:
         assert command in result.stdout
 
 
+def test_run_all_help_lists_bounded_worker_options() -> None:
+    from typer.testing import CliRunner
+
+    result = CliRunner().invoke(app, ["run-all", "--help"])
+
+    assert result.exit_code == 0
+    assert "--area-workers" in result.stdout
+    assert "--max-in-flight-areas" in result.stdout
+    assert "--fetch-workers" in result.stdout
+
+
 def test_application_progress_adapter_module_exists() -> None:
     assert importlib.util.find_spec("osm_polygon_website_tag.application.progress") is not None
 

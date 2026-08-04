@@ -101,6 +101,9 @@ def run_all(
     apply: bool = False,
     ensure_repo: bool = False,
     progress: Callable[[str], None] | None = None,
+    area_workers: int | None = None,
+    max_in_flight_areas: int | None = None,
+    fetch_workers: int | None = None,
 ) -> WorkflowResult:
     """Process each PBF through upload, then analyze and finalize the full run.
 
@@ -108,6 +111,8 @@ def run_all(
     source, shard, enrichment, and upload checkpoints. Old extracting runs
     reuse every verified bundle. ``KeyboardInterrupt`` is deliberately not
     caught, so Ctrl-C returns control immediately without terminalizing the run.
+    Optional worker settings are forwarded to the extraction and enrichment
+    stages; ``None`` delegates to their bounded defaults.
     """
     source_root_path = normalize_path(source_root)
     output_root_path = assert_path_safe_against(output_root, source_root_path)
@@ -191,6 +196,9 @@ def run_all(
                 invocation_id=invocation_id,
                 allow_extraction=True,
                 upload_checkpoint=upload_checkpoint,
+                area_workers=area_workers,
+                max_in_flight_areas=max_in_flight_areas,
+                fetch_workers=fetch_workers,
             )
             extracted_count += int(result.extracted)
             skipped_count += int(result.reused)
@@ -231,6 +239,9 @@ def run_all(
                 invocation_id=invocation_id,
                 allow_extraction=False,
                 upload_checkpoint=upload_checkpoint,
+                area_workers=area_workers,
+                max_in_flight_areas=max_in_flight_areas,
+                fetch_workers=fetch_workers,
             )
             uploaded_count += int(result.uploaded)
         transition_status(state, STATUS_ENRICHED)
@@ -281,6 +292,9 @@ def _process_source(
     invocation_id: str,
     allow_extraction: bool,
     upload_checkpoint: dict[str, object],
+    area_workers: int | None,
+    max_in_flight_areas: int | None,
+    fetch_workers: int | None,
 ) -> _SourceTransactionResult:
     bundle_complete = source_bundle_is_complete(
         run_dir,
@@ -293,7 +307,27 @@ def _process_source(
         if not allow_extraction:
             raise ValueError(f"cannot enrich incomplete source bundle: {source.name}")
         _progress(progress, f"[{index}/{total}] Extracting {source.name}")
-        extract_pbf(source, run_dir, run_state=state)
+        if area_workers is None and max_in_flight_areas is None:
+            extract_pbf(source, run_dir, run_state=state)
+        elif area_workers is None and max_in_flight_areas is not None:
+            extract_pbf(
+                source,
+                run_dir,
+                run_state=state,
+                max_in_flight_areas=max_in_flight_areas,
+            )
+        elif area_workers is not None and max_in_flight_areas is None:
+            extract_pbf(source, run_dir, run_state=state, area_workers=area_workers)
+        else:
+            assert area_workers is not None
+            assert max_in_flight_areas is not None
+            extract_pbf(
+                source,
+                run_dir,
+                run_state=state,
+                area_workers=area_workers,
+                max_in_flight_areas=max_in_flight_areas,
+            )
         extracted = True
     elif allow_extraction:
         reused = True
@@ -327,11 +361,19 @@ def _process_source(
     )
     if needs_enrichment:
         _progress(progress, f"[{index}/{total}] Enriching {source.name}")
-        enrichment = enrich_polygon_shard(
-            shard,
-            cache_path=run_dir / "cache" / "website_text.sqlite3",
-            invocation_id=invocation_id,
-        )
+        if fetch_workers is None:
+            enrichment = enrich_polygon_shard(
+                shard,
+                cache_path=run_dir / "cache" / "website_text.sqlite3",
+                invocation_id=invocation_id,
+            )
+        else:
+            enrichment = enrich_polygon_shard(
+                shard,
+                cache_path=run_dir / "cache" / "website_text.sqlite3",
+                invocation_id=invocation_id,
+                fetch_workers=fetch_workers,
+            )
         update_public_shard_metadata(
             state,
             filename=source.name,

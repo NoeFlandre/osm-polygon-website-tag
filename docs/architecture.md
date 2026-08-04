@@ -29,13 +29,18 @@ documents its boundary.
    nanosecond mtime. It rejects an output root inside the source root.
 2. `extract` processes one inventoried PBF. libosmium assembles closed ways
    and polygon relations; bounded Arrow sinks and a SQLite candidate ledger
-   produce one public, comparison, and rejection Parquet per source.
+   produce one public, comparison, and rejection Parquet per source. Pure
+   geometry and row construction run in a bounded FIFO worker pool over copied
+   GeoJSON payloads (four workers and 32 in-flight areas by default), while
+   libosmium, SQLite, and Parquet remain callback-thread-owned. Results are
+   emitted in source order, and PBFs remain sequential across the inventory.
 3. Before the next PBF is opened, website-text enrichment safely downloads both website tag values,
    extracts full main text with Trafilatura, and transactionally migrates each
    polygon shard to the current public schema. A run-owned SQLite cache reuses successes and
    retries failures on a later invocation. Distinct cache misses in each bounded
-   Arrow batch use a small I/O worker pool; cache access and row application stay
-   single-threaded and input-ordered. Cache commits and source-bound Parquet
+   Arrow batch use a bounded I/O worker pool (eight workers by default, with a
+   safe cap of 32); cache access and row application stay single-threaded and
+   input-ordered. Cache commits and source-bound Parquet
    checkpoint parts are flushed at each completed batch, so a `KeyboardInterrupt`
    preserves the enriched prefix and resumes from the first incomplete batch.
 4. After every enriched PBF, the cumulative H3 resolution-3 polygon-density
@@ -135,14 +140,20 @@ content hash without PBF reads or website fetches.
 ## Boundedness and transactions
 
 - Extraction keeps at most the configured row batch in each Python sink.
+- Extraction also keeps at most the configured in-flight area payloads (32 by
+  default, capped at 256). A bounded thread pool performs only pure geometry
+  and record construction; FIFO draining preserves the sequential output
+  contract and no live libosmium object or SQLite connection crosses a worker
+  boundary. `area_workers` defaults to four and is capped at 16.
 - Candidate and area-seen reconciliation lives in a per-PBF SQLite scratch
   file. It batches mutations behind a bounded commit interval and flushes on
   close; it is deleted after successful extraction and is not a resume
   checkpoint. Reads share the writer connection and see uncommitted rows, so
   reconciliation semantics are unchanged.
 - Enrichment overlaps network fetch/extraction for at most eight distinct URLs
-  per batch. The SQLite text cache is never shared with worker threads, and
-  results are recorded and applied in deterministic URL/row order.
+  per batch by default (`fetch_workers`, capped at 32). The SQLite text cache
+  is never shared with worker threads, and results are recorded and applied in
+  deterministic URL/row order.
 - Text-cache mutations commit in bounded batches and flush at every completed
   enrichment batch. Atomic, source-hash-bound Parquet parts retain completed
   prefixes across interruption; parts are assembled and removed only after the

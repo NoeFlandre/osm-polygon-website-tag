@@ -15,7 +15,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
 )
-from osm_polygon_website_tag.pipeline.enrich import DEFAULT_FETCH_WORKERS, enrich_polygon_shard
+from osm_polygon_website_tag.pipeline.enrich import (
+    DEFAULT_FETCH_WORKERS,
+    MAX_FETCH_WORKERS,
+    enrich_polygon_shard,
+)
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
 
@@ -170,6 +174,52 @@ def test_unique_urls_are_fetched_concurrently_in_stable_row_order(tmp_path: Path
     assert [row["website_text"] for row in output] == [
         f"text from https://example.org/{index}" for index in range(16)
     ]
+
+
+def test_fetch_workers_is_configurable_and_bounded(tmp_path: Path) -> None:
+    shard = tmp_path / "run" / "polygons" / "source.parquet"
+    rows = [
+        _legacy_row(
+            polygon_id=f"source:way/{index}", website=f"https://example.org/{index}", contact=None
+        )
+        for index in range(8)
+    ]
+    _write_legacy(shard, rows)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def fetch(url: str) -> FetchResult:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        return FetchResult("ok", url, final_url=url, body=f"text from {url}".encode())
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=tmp_path / "run" / "cache" / "text.sqlite3",
+        invocation_id="one",
+        fetcher=fetch,
+        extractor=_extract,
+        fetch_workers=2,
+    )
+
+    assert peak >= 2
+    assert peak <= 2
+
+
+def test_fetch_workers_rejects_values_outside_safe_bound(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=f"between 1 and {MAX_FETCH_WORKERS}"):
+        enrich_polygon_shard(
+            tmp_path / "missing.parquet",
+            cache_path=tmp_path / "cache.sqlite3",
+            invocation_id="one",
+            fetch_workers=MAX_FETCH_WORKERS + 1,
+        )
 
 
 def test_interrupted_enrichment_keeps_completed_batches_for_resume(

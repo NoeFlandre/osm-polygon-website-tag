@@ -12,7 +12,12 @@ from rich.console import Console
 from osm_polygon_website_tag.application.progress import ProgressReporter
 from osm_polygon_website_tag.application.workflow import run_all
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
-from osm_polygon_website_tag.pipeline.extraction import extract_pbf
+from osm_polygon_website_tag.pipeline.enrich import DEFAULT_FETCH_WORKERS
+from osm_polygon_website_tag.pipeline.extraction import (
+    DEFAULT_AREA_WORKERS,
+    DEFAULT_MAX_IN_FLIGHT_AREAS,
+    extract_pbf,
+)
 from osm_polygon_website_tag.publishing.publish import (
     build_publish_plan,
     create_repo,
@@ -93,6 +98,17 @@ def init_command(
 def extract_command(
     pbf_path: Annotated[Path, typer.Argument(help="Source .osm.pbf file.")],
     run_dir: RunDir,
+    area_workers: Annotated[
+        int,
+        typer.Option("--area-workers", help="Bounded geometry workers for this PBF."),
+    ] = DEFAULT_AREA_WORKERS,
+    max_in_flight_areas: Annotated[
+        int,
+        typer.Option(
+            "--max-in-flight-areas",
+            help="Maximum queued area payloads for this PBF.",
+        ),
+    ] = DEFAULT_MAX_IN_FLIGHT_AREAS,
 ) -> int:
     """Extract one source PBF."""
     state_path = run_dir / "manifests" / "run.json"
@@ -112,7 +128,13 @@ def extract_command(
         transition_status(state, STATUS_EXTRACTING)
     elif status != STATUS_EXTRACTING:
         raise ValueError(f"extract requires initialized/extracting state, got {status!r}")
-    extract_pbf(pbf_path, run_dir, run_state=state)
+    extract_pbf(
+        pbf_path,
+        run_dir,
+        run_state=state,
+        area_workers=area_workers,
+        max_in_flight_areas=max_in_flight_areas,
+    )
     if source_inventory_matches(run_dir):
         transition_status(state, STATUS_EXTRACTED)
     return 0
@@ -240,6 +262,21 @@ def run_all_command(
             help="Create the HF dataset repo if needed (only with --apply).",
         ),
     ] = False,
+    area_workers: Annotated[
+        int,
+        typer.Option("--area-workers", help="Bounded geometry workers per PBF."),
+    ] = DEFAULT_AREA_WORKERS,
+    max_in_flight_areas: Annotated[
+        int,
+        typer.Option(
+            "--max-in-flight-areas",
+            help="Maximum queued area payloads per PBF.",
+        ),
+    ] = DEFAULT_MAX_IN_FLIGHT_AREAS,
+    fetch_workers: Annotated[
+        int,
+        typer.Option("--fetch-workers", help="Bounded concurrent URL fetch workers."),
+    ] = DEFAULT_FETCH_WORKERS,
 ) -> int:
     """Run or resume the complete PBF inventory."""
     if ensure_repo and not apply:
@@ -254,6 +291,9 @@ def run_all_command(
             apply=apply,
             ensure_repo=ensure_repo,
             progress=progress,
+            area_workers=area_workers,
+            max_in_flight_areas=max_in_flight_areas,
+            fetch_workers=fetch_workers,
         )
     except BaseException:
         progress.close(completed=False)

@@ -10,7 +10,9 @@ import osmium
 import osmium.osm
 import pytest
 
+import osm_polygon_website_tag.domain.geometry as geometry_module
 from osm_polygon_website_tag.domain.geometry import (
+    CENTROID_KIND,
     PolygonGeometry,
     compute_polygon_area_m2,
     geometry_from_area,
@@ -73,6 +75,21 @@ def test_geometry_from_area_returns_polygon_for_simple_shape() -> None:
     parsed = json.loads(geom_record.geometry)
     assert parsed["type"] == "Polygon"
     assert parsed["coordinates"] == [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]]
+
+
+def test_geometry_from_geojson_returns_public_metrics() -> None:
+    raw = '{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}'
+
+    result = geometry_module.geometry_from_geojson(raw)
+
+    assert json.loads(result.geometry) == {
+        "type": "Polygon",
+        "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]],
+    }
+    assert result.centroid_kind == CENTROID_KIND
+    assert result.area_m2 > 0
+    assert result.area_bucket == ">=1000km2"
+    assert result.bbox == [0.0, 0.0, 1.0, 1.0]
 
 
 def test_geometry_from_area_returns_polygon_for_single_polygon_relation() -> None:

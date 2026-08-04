@@ -29,6 +29,7 @@ DEFAULT_BATCH_ROWS = 512
 # Fetching is I/O-bound; keep the pool bounded so one shard cannot create an
 # unbounded number of sockets or put avoidable pressure on public websites.
 DEFAULT_FETCH_WORKERS = 8
+MAX_FETCH_WORKERS = 32
 CHECKPOINT_VERSION = 1
 CHECKPOINT_DIRECTORY_SUFFIX = ".enriching.parts"
 CHECKPOINT_METADATA_NAME = "checkpoint.json"
@@ -73,6 +74,7 @@ def enrich_polygon_shard(
     fetcher: Fetcher = fetch_html,
     extractor: Extractor = extract_main_text,
     batch_rows: int = DEFAULT_BATCH_ROWS,
+    fetch_workers: int | None = None,
 ) -> EnrichmentResult:
     """Migrate/enrich one shard without reading its source PBF.
 
@@ -81,6 +83,9 @@ def enrich_polygon_shard(
     resume without refetching or reprocessing the completed prefix.
     """
     shard = Path(shard_path)
+    workers = DEFAULT_FETCH_WORKERS if fetch_workers is None else fetch_workers
+    if not 1 <= workers <= MAX_FETCH_WORKERS:
+        raise ValueError(f"fetch_workers must be between 1 and {MAX_FETCH_WORKERS}")
     parquet = pq.ParquetFile(shard)
     source_schema = parquet.schema_arrow
     source_row_count = parquet.metadata.num_rows
@@ -113,7 +118,7 @@ def enrich_polygon_shard(
     max_batch_rows = 0
     try:
         with ThreadPoolExecutor(
-            max_workers=DEFAULT_FETCH_WORKERS,
+            max_workers=workers,
             thread_name_prefix="website-fetch",
         ) as fetch_pool:
             rows_to_skip = checkpoint.completed_rows
@@ -502,4 +507,9 @@ def _apply_result(row: dict[str, object], prefix: str, value: CachedText) -> Non
     row[f"{prefix}_text_status"] = value.status
 
 
-__all__ = ["EnrichmentResult", "enrich_polygon_shard"]
+__all__ = [
+    "DEFAULT_FETCH_WORKERS",
+    "MAX_FETCH_WORKERS",
+    "EnrichmentResult",
+    "enrich_polygon_shard",
+]

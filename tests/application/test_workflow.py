@@ -299,6 +299,45 @@ def test_run_all_completes_each_source_before_extracting_the_next(
     ]
 
 
+def test_run_all_forwards_bounded_worker_configuration(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    extract_settings: list[dict[str, object]] = []
+    enrich_settings: list[dict[str, object]] = []
+    original_extract = workflow.extract_pbf
+    original_enrich = workflow.enrich_polygon_shard
+
+    def track_extract(source, run_dir, **kwargs):  # type: ignore[no-untyped-def]
+        extract_settings.append(dict(kwargs))
+        return original_extract(source, run_dir, **kwargs)
+
+    def track_enrich(shard, **kwargs):  # type: ignore[no-untyped-def]
+        enrich_settings.append(dict(kwargs))
+        return original_enrich(shard, **kwargs)
+
+    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
+    monkeypatch.setattr(workflow, "enrich_polygon_shard", track_enrich)
+
+    result = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        area_workers=3,
+        max_in_flight_areas=12,
+        fetch_workers=5,
+    )
+
+    assert result.complete
+    assert [settings["area_workers"] for settings in extract_settings] == [3, 3]
+    assert [settings["max_in_flight_areas"] for settings in extract_settings] == [12, 12]
+    assert [settings["fetch_workers"] for settings in enrich_settings] == [5]
+
+
 def test_old_extracting_run_reuses_completed_source_before_continuing(
     make_pbf,
     tmp_path: Path,
