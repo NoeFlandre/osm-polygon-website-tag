@@ -40,6 +40,22 @@ callbacks for the same ``(osm_type, osm_id)`` are recorded with
 No full candidate set is held in memory; the on-disk candidate log is
 streamed and reconciled with the area-callback log after ``apply_file``.
 
+Row builders
+------------
+
+The public, comparison, and rejection row builders share a single normalized
+tag projection (:func:`osm_polygon_website_tag.pipeline.record_builders.derive_tags`)
+for the normalized `website` / `contact:website` values, the website presence
+flags, and the primary category. The projection is computed once per builder
+invocation (not once per OSM object): each builder that runs reads it
+independently. The comparison and rejection builders additionally call
+:func:`osm_polygon_website_tag.pipeline.record_builders.derive_wikidata` to
+obtain the normalized `wikidata` value and its presence flag;
+``_public_record`` does not call it because the public shard's v1.3 schema
+omits Wikidata. URL classification and hostname extraction remain exclusive
+to ``_public_record`` (the public shard) and are never applied to comparison
+or rejection rows.
+
 Source identity
 ---------------
 
@@ -74,16 +90,10 @@ from osm_polygon_website_tag.contracts.rejection_schema import (
     REJECTION_SCHEMA_VERSION,
 )
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
-from osm_polygon_website_tag.domain.categories import select_primary_category
 from osm_polygon_website_tag.domain.geometry import GeometryRejection, geometry_from_area
 from osm_polygon_website_tag.domain.region import region_from_pbf_filename
 from osm_polygon_website_tag.domain.tags import (
-    CONTACT_WEBSITE_KEY,
-    WEBSITE_KEY,
-    WIKIDATA_KEY,
     has_any_website,
-    has_contact_website,
-    has_website,
     has_wikidata,
     normalize_value,
 )
@@ -93,6 +103,7 @@ from osm_polygon_website_tag.domain.website import (
     extract_contact_hostname,
     extract_hostname,
 )
+from osm_polygon_website_tag.pipeline.record_builders import derive_tags, derive_wikidata
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INCOMPLETE,
     RunState,
@@ -191,16 +202,16 @@ def _public_record(
     area_m2: float,
     area_bucket: str,
 ) -> dict[str, object]:
-    website_raw = normalize_value(tags_dict.get(WEBSITE_KEY, "")) or None
-    contact_raw = normalize_value(tags_dict.get(CONTACT_WEBSITE_KEY, "")) or None
+    derived = derive_tags(tags_dict)
     name_raw = normalize_value(tags_dict.get("name", "")) or None
-    has_ws = website_raw is not None
-    has_cw = contact_raw is not None
-    has_aw = has_ws or has_cw
-    website_class = classify_website(website_raw).value if website_raw else None
-    contact_class = classify_contact_website(contact_raw).value if contact_raw else None
-    website_hostname = extract_hostname(website_raw) if website_raw else None
-    contact_hostname = extract_contact_hostname(contact_raw) if contact_raw else None
+    website_class = classify_website(derived.website).value if derived.website else None
+    contact_class = (
+        classify_contact_website(derived.contact_website).value if derived.contact_website else None
+    )
+    website_hostname = extract_hostname(derived.website) if derived.website else None
+    contact_hostname = (
+        extract_contact_hostname(derived.contact_website) if derived.contact_website else None
+    )
 
     tag_keys_sorted = sorted(tags_dict.keys())
     tags_json = json.dumps(tags_dict, sort_keys=True, separators=(",", ":"))
@@ -216,11 +227,11 @@ def _public_record(
         "osm_version": osm_version,
         "osm_timestamp": osm_timestamp,
         "name": name_raw,
-        "website": website_raw,
-        "contact_website": contact_raw,
-        "has_website": has_ws,
-        "has_contact_website": has_cw,
-        "has_any_website": has_aw,
+        "website": derived.website,
+        "contact_website": derived.contact_website,
+        "has_website": derived.has_website,
+        "has_contact_website": derived.has_contact_website,
+        "has_any_website": derived.has_any_website,
         "website_class": website_class,
         "contact_website_class": contact_class,
         "website_hostname": website_hostname,
@@ -228,7 +239,7 @@ def _public_record(
         "tags": tags_json,
         "tag_keys": tag_keys_json,
         "tag_count": len(tags_dict),
-        "osm_primary_tag": select_primary_category(tags_dict),
+        "osm_primary_tag": derived.primary_category,
         "geometry": geom_text,
         "centroid": centroid_text,
         "centroid_kind": centroid_kind,
@@ -241,8 +252,8 @@ def _public_record(
     }
     record.update(
         initial_text_fields(
-            website_present=has_ws,
-            contact_website_present=has_cw,
+            website_present=derived.has_website,
+            contact_website_present=derived.has_contact_website,
         )
     )
     validate_public_row(record)
@@ -259,9 +270,8 @@ def _comparison_record(
     osm_version: int,
     osm_timestamp: dt.datetime,
 ) -> dict[str, object]:
-    website_raw = normalize_value(tags_dict.get(WEBSITE_KEY, "")) or None
-    contact_raw = normalize_value(tags_dict.get(CONTACT_WEBSITE_KEY, "")) or None
-    wikidata_raw = normalize_value(tags_dict.get(WIKIDATA_KEY, "")) or None
+    derived = derive_tags(tags_dict)
+    wikidata, has_wikidata = derive_wikidata(tags_dict)
     return {
         "osm_type": osm_type,
         "osm_id": osm_id,
@@ -269,14 +279,14 @@ def _comparison_record(
         "osm_timestamp": osm_timestamp,
         "source_pbf": source_pbf,
         "region": region,
-        "primary_category": select_primary_category(tags_dict),
-        "website": website_raw,
-        "contact_website": contact_raw,
-        "wikidata": wikidata_raw,
-        "has_website": has_website(tags_dict),
-        "has_contact_website": has_contact_website(tags_dict),
-        "has_any_website": has_any_website(tags_dict),
-        "has_wikidata": has_wikidata(tags_dict),
+        "primary_category": derived.primary_category,
+        "website": derived.website,
+        "contact_website": derived.contact_website,
+        "wikidata": wikidata,
+        "has_website": derived.has_website,
+        "has_contact_website": derived.has_contact_website,
+        "has_any_website": derived.has_any_website,
+        "has_wikidata": has_wikidata,
         "schema_version": COMPARISON_OBSERVATION_SCHEMA_VERSION,
     }
 
@@ -294,9 +304,8 @@ def _rejection_record(
     rejection_kind: str,
     message: str,
 ) -> dict[str, object]:
-    website_raw = normalize_value(tags_dict.get(WEBSITE_KEY, "")) or None
-    contact_raw = normalize_value(tags_dict.get(CONTACT_WEBSITE_KEY, "")) or None
-    wikidata_raw = normalize_value(tags_dict.get(WIKIDATA_KEY, "")) or None
+    derived = derive_tags(tags_dict)
+    wikidata, has_wikidata = derive_wikidata(tags_dict)
     return {
         "osm_type": osm_type,
         "osm_id": osm_id,
@@ -304,14 +313,14 @@ def _rejection_record(
         "osm_timestamp": osm_timestamp,
         "source_pbf": source_pbf,
         "region": region,
-        "primary_category": select_primary_category(tags_dict),
-        "website": website_raw,
-        "contact_website": contact_raw,
-        "wikidata": wikidata_raw,
-        "has_website": has_website(tags_dict),
-        "has_contact_website": has_contact_website(tags_dict),
-        "has_any_website": has_any_website(tags_dict),
-        "has_wikidata": has_wikidata(tags_dict),
+        "primary_category": derived.primary_category,
+        "website": derived.website,
+        "contact_website": derived.contact_website,
+        "wikidata": wikidata,
+        "has_website": derived.has_website,
+        "has_contact_website": derived.has_contact_website,
+        "has_any_website": derived.has_any_website,
+        "has_wikidata": has_wikidata,
         "candidate_kind": candidate_kind,
         "rejection_kind": rejection_kind,
         "message": message,
