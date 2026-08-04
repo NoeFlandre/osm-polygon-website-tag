@@ -131,7 +131,11 @@ content hash without PBF reads or website fetches.
 ## Boundedness and transactions
 
 - Extraction keeps at most the configured row batch in each Python sink.
-- Candidate and area-seen reconciliation lives in a run-owned SQLite file.
+- Candidate and area-seen reconciliation lives in a per-PBF SQLite scratch
+  file. It batches mutations behind a bounded commit interval and flushes on
+  close; it is deleted after successful extraction and is not a resume
+  checkpoint. Reads share the writer connection and see uncommitted rows, so
+  reconciliation semantics are unchanged.
 - DuckDB has an explicit memory limit, one deterministic worker, and a
   run-owned spill directory.
 - Source fingerprints are compared before and after reading.

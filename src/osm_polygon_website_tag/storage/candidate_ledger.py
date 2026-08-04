@@ -1,4 +1,10 @@
-"""SQLite-backed extraction candidate ledger."""
+"""SQLite-backed extraction candidate ledger.
+
+The ledger is per-attempt scratch state: it batches SQLite mutations behind a
+bounded commit interval to amortize journal ``fsync`` cost during extraction,
+flushes any pending mutations on :meth:`CandidateLedger.close`, and is deleted
+after successful extraction. It is **not** a resume checkpoint.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +15,32 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+# Internal default: commit after this many ledger mutations. The extraction hot
+# path calls upsert()/mark_area_seen() once per qualifying object, and every
+# commit forces an fsync of the SQLite journal. Batching amortizes that cost
+# while keeping memory bounded and preserving all read semantics. This is not
+# user-facing configuration; the value is deliberately conservative.
+DEFAULT_COMMIT_BATCH_SIZE = 4096
+
 
 class CandidateLedger:
     """Persist candidates and area callbacks without source-sized Python state."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        commit_batch_size: int = DEFAULT_COMMIT_BATCH_SIZE,
+    ) -> None:
+        if commit_batch_size <= 0:
+            raise ValueError(
+                f"commit_batch_size must be a positive integer, got {commit_batch_size!r}"
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self._commit_batch_size = commit_batch_size
+        self._pending_mutations = 0
+        self._closed = False
         # The ledger is per-attempt scratch state, not a resume checkpoint.
         # A prior interruption may leave it behind; retry must start clean.
         path.unlink(missing_ok=True)
@@ -59,7 +84,7 @@ class CandidateLedger:
                 candidate_kind,
             ),
         )
-        self._db.commit()
+        self._note_mutation()
 
     def mark_area_seen(self, osm_type: str, osm_id: int) -> bool:
         row = self._db.execute(
@@ -74,8 +99,20 @@ class CandidateLedger:
             "UPDATE candidates SET area_seen=1 WHERE osm_type=? AND osm_id=?",
             (osm_type, osm_id),
         )
-        self._db.commit()
+        self._note_mutation()
         return True
+
+    def _note_mutation(self) -> None:
+        """Count one successful mutation and commit when the batch is full."""
+        self._pending_mutations += 1
+        if self._pending_mutations >= self._commit_batch_size:
+            self._flush()
+
+    def _flush(self) -> None:
+        """Commit pending mutations, if any."""
+        if self._pending_mutations > 0:
+            self._db.commit()
+            self._pending_mutations = 0
 
     def get(self, osm_type: str, osm_id: int) -> dict[str, Any] | None:
         row = self._db.execute(
@@ -111,4 +148,11 @@ class CandidateLedger:
             )
 
     def close(self) -> None:
+        # Extraction calls close() on both the success and failure paths; the
+        # guard makes repeated calls a no-op. Pending mutations are flushed so
+        # the same-connection reads during extraction remain durable on disk.
+        if self._closed:
+            return
+        self._flush()
         self._db.close()
+        self._closed = True
