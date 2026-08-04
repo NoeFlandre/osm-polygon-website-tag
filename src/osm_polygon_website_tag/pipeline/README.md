@@ -9,6 +9,17 @@ Implements bounded data-processing stages.
   `migrate_public_shard`, `analyze_results`.
 - Excludes: full-run orchestration, card rendering, and remote publication.
 
+## Enrichment
+
+`enrich_polygon_shard` processes one bounded Arrow batch at a time. Cache
+lookups and SQLite writes stay on the caller thread, while distinct cache
+misses use a bounded pool of eight I/O workers for network retrieval and text
+extraction. Results are recorded and applied in deterministic URL and input-row
+order; duplicate normalized URLs are fetched once per batch. Cache commits are
+batched and flushed at each completed batch. Completed batches are written as
+source-bound atomic checkpoint parts, so an interruption preserves the shard
+prefix and retries only the unresolved suffix on resume.
+
 ## Record builders
 
 `record_builders` is a pure `domain`-only helper that factors out the

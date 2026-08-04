@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pyarrow as pa
@@ -13,7 +15,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
 )
-from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
+from osm_polygon_website_tag.pipeline.enrich import DEFAULT_FETCH_WORKERS, enrich_polygon_shard
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
 
@@ -129,6 +131,106 @@ def test_duplicate_url_across_both_tags_fetches_once(tmp_path: Path) -> None:
     )
 
     assert calls == 1
+
+
+def test_unique_urls_are_fetched_concurrently_in_stable_row_order(tmp_path: Path) -> None:
+    shard = tmp_path / "run" / "polygons" / "source.parquet"
+    rows = [
+        _legacy_row(
+            polygon_id=f"source:way/{index}", website=f"https://example.org/{index}", contact=None
+        )
+        for index in range(16)
+    ]
+    _write_legacy(shard, rows)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+
+    def fetch(url: str) -> FetchResult:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        return FetchResult("ok", url, final_url=url, body=f"text from {url}".encode())
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=tmp_path / "run" / "cache" / "text.sqlite3",
+        invocation_id="one",
+        fetcher=fetch,
+        extractor=_extract,
+    )
+
+    output = pq.read_table(shard).to_pylist()
+    assert peak >= 2
+    assert peak <= DEFAULT_FETCH_WORKERS
+    assert [row["website_text"] for row in output] == [
+        f"text from https://example.org/{index}" for index in range(16)
+    ]
+
+
+def test_interrupted_enrichment_keeps_completed_batches_for_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard = tmp_path / "run" / "polygons" / "source.parquet"
+    rows = [
+        _legacy_row(
+            polygon_id=f"source:way/{index}", website=f"https://example.org/{index}", contact=None
+        )
+        for index in range(4)
+    ]
+    _write_legacy(shard, rows)
+    monkeypatch.setattr("osm_polygon_website_tag.pipeline.enrich.DEFAULT_FETCH_WORKERS", 1)
+    first_calls: list[str] = []
+
+    def interrupting_fetch(url: str) -> FetchResult:
+        first_calls.append(url)
+        if url.endswith("/3"):
+            raise KeyboardInterrupt
+        return FetchResult("ok", url, final_url=url, body=f"text from {url}".encode())
+
+    with pytest.raises(KeyboardInterrupt):
+        enrich_polygon_shard(
+            shard,
+            cache_path=tmp_path / "run" / "cache" / "text.sqlite3",
+            invocation_id="one",
+            fetcher=interrupting_fetch,
+            extractor=_extract,
+            batch_rows=2,
+        )
+
+    checkpoint_dir = shard.with_name(f".{shard.name}.enriching.parts")
+    first_part = checkpoint_dir / "part-00000000.parquet"
+    assert first_part.is_file()
+    assert pq.ParquetFile(first_part).metadata.num_rows == 2
+    assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True)
+
+    resumed_calls: list[str] = []
+
+    def resuming_fetch(url: str) -> FetchResult:
+        resumed_calls.append(url)
+        return FetchResult("ok", url, final_url=url, body=f"text from {url}".encode())
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=tmp_path / "run" / "cache" / "text.sqlite3",
+        invocation_id="two",
+        fetcher=resuming_fetch,
+        extractor=_extract,
+        batch_rows=2,
+    )
+
+    assert first_calls[:2] == ["https://example.org/0", "https://example.org/1"]
+    assert resumed_calls == ["https://example.org/3"]
+    assert not checkpoint_dir.exists()
+    output = pq.read_table(shard).to_pylist()
+    assert [row["website_text"] for row in output] == [
+        f"text from https://example.org/{index}" for index in range(4)
+    ]
 
 
 def test_failed_url_retries_on_next_invocation(tmp_path: Path) -> None:

@@ -78,8 +78,10 @@ uv run osm-polygon-website-tag run-all \
 Press `Ctrl-C` to stop. Run the exact same command to resume. Successfully
 promoted local shards, successful URL extractions, and acknowledged per-PBF
 uploads are checkpointed. Existing v1.1 shards are enriched without rereading
-their PBF; only failed URLs retry on a later invocation. Source inventory drift
-or local shard mutation fails closed.
+their PBF; only failed URLs retry on a later invocation. During a shard
+enrichment, cache commits and completed Parquet batches are durable, so Ctrl-C
+preserves the completed prefix and resumes from the first unfinished batch.
+Source inventory drift or local shard mutation fails closed.
 
 After each PBF is enriched, its Parquet plus a freshly artifact-derived
 `README.md`, `dataset.yaml`, and logarithmic H3 resolution-3 density map are

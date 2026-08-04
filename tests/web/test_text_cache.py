@@ -7,17 +7,24 @@ import threading
 import time
 from pathlib import Path
 
-from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
+import pytest
+
+from osm_polygon_website_tag.web.text_cache import (
+    DEFAULT_COMMIT_BATCH_SIZE,
+    CachedText,
+    TextCache,
+)
 
 
 def _result(
     *,
+    url: str = "https://example.org",
     status: str = "success",
     text: str | None = "full text",
     count: int | None = 2,
 ) -> CachedText:
     return CachedText(
-        url="https://example.org",
+        url=url,
         status=status,
         text=text,
         word_count=count,
@@ -28,6 +35,44 @@ def _result(
         trafilatura_version="2.1.0",
         invocation_id="",
     )
+
+
+def _committed_count(path: Path) -> int:
+    connection = sqlite3.connect(path)
+    try:
+        return int(connection.execute("SELECT COUNT(*) FROM website_text").fetchone()[0])
+    finally:
+        connection.close()
+
+
+def test_cache_batches_commits_and_flushes_at_checkpoint(tmp_path: Path) -> None:
+    path = tmp_path / "text.sqlite3"
+    cache = TextCache(path)
+
+    for index in range(2):
+        cache.record(_result(url=f"https://example.org/{index}"), invocation_id="run-1")
+    assert _committed_count(path) == 0
+
+    cache.flush()
+    assert _committed_count(path) == 2
+    cache.close()
+
+
+def test_cache_close_flushes_pending_mutations(tmp_path: Path) -> None:
+    path = tmp_path / "text.sqlite3"
+    cache = TextCache(path)
+    cache.record(_result(url="https://example.org/one"), invocation_id="run-1")
+    assert _committed_count(path) == 0
+
+    cache.close()
+
+    assert _committed_count(path) == 1
+
+
+def test_cache_commit_batch_size_is_positive_and_bounded(tmp_path: Path) -> None:
+    assert DEFAULT_COMMIT_BATCH_SIZE == 64
+    with pytest.raises(ValueError):
+        TextCache(tmp_path / "unused-text-cache.sqlite3", commit_batch_size=0)
 
 
 def test_success_is_reused_across_invocations(tmp_path: Path) -> None:

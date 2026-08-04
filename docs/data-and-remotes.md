@@ -73,7 +73,9 @@ Parquets, and the changed shard plus card bundle are uploaded together; a local 
 before the next PBF begins. The final analysis, card, manifests, and completion
 receipt are uploaded only after the entire inventory verifies. Stopping with
 `Ctrl-C` and repeating the same command resumes without reprocessing exact
-completed bundles or successful URLs. Sources without any local extraction
+completed bundles or successful URLs. Within a shard, durable completed-batch
+checkpoint parts are reused, so an interrupted enrichment resumes from the
+first unfinished suffix. Sources without any local extraction
 bundle are prioritized before retries of previously processed sources. This includes bundles created by the old
 extract-all workflow: they are enriched and uploaded without rereading their
 PBFs. Legacy shards are likewise enriched without rereading PBFs; failed URLs

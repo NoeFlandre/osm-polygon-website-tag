@@ -15,6 +15,7 @@ from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES
 _CACHE_BUSY_TIMEOUT_SECONDS = 30.0
 _LOCK_RETRY_COUNT = 5
 _LOCK_RETRY_DELAY_SECONDS = 0.1
+DEFAULT_COMMIT_BATCH_SIZE = 64
 
 
 @dataclass(frozen=True)
@@ -34,11 +35,21 @@ class CachedText:
 
 
 class TextCache:
-    """SQLite-backed cache with retry-on-next-invocation semantics."""
+    """SQLite-backed cache with batched durable commits and retry semantics."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        commit_batch_size: int = DEFAULT_COMMIT_BATCH_SIZE,
+    ) -> None:
+        if commit_batch_size < 1:
+            raise ValueError("commit_batch_size must be positive")
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.commit_batch_size = commit_batch_size
+        self._pending_mutations = 0
+        self._closed = False
         self._db = sqlite3.connect(path, timeout=_CACHE_BUSY_TIMEOUT_SECONDS)
         try:
             self._create_schema()
@@ -79,7 +90,11 @@ class TextCache:
         return None
 
     def record(self, value: CachedText, *, invocation_id: str) -> CachedText:
-        """Persist one attempt and return its canonical stored representation."""
+        """Record one attempt and return its canonical stored representation.
+
+        The mutation is visible on this connection immediately. Call
+        :meth:`flush` (or :meth:`close`) to make accumulated records durable.
+        """
         if value.status not in TEXT_STATUSES - {"absent", "pending"}:
             raise ValueError(f"invalid cache status: {value.status!r}")
         prior = self._get(value.url)
@@ -116,8 +131,20 @@ class TextCache:
                 ),
             ),
         )
-        _retry_locked(self._db.commit)
+        self._note_mutation()
         return stored
+
+    def flush(self) -> None:
+        """Durably commit cache mutations accumulated since the last flush."""
+        if self._pending_mutations == 0:
+            return
+        _retry_locked(self._db.commit)
+        self._pending_mutations = 0
+
+    def _note_mutation(self) -> None:
+        self._pending_mutations += 1
+        if self._pending_mutations >= self.commit_batch_size:
+            self.flush()
 
     def _get(self, url: str) -> CachedText | None:
         row = _retry_locked(
@@ -145,7 +172,13 @@ class TextCache:
         )
 
     def close(self) -> None:
-        self._db.close()
+        if self._closed:
+            return
+        try:
+            self.flush()
+        finally:
+            self._db.close()
+            self._closed = True
 
 
 def _retry_locked[ResultT](operation: Callable[[], ResultT]) -> ResultT:
@@ -183,4 +216,4 @@ def _quarantine_corrupt_database(path: Path) -> Path:
     return quarantine
 
 
-__all__ = ["CachedText", "TextCache"]
+__all__ = ["DEFAULT_COMMIT_BATCH_SIZE", "CachedText", "TextCache"]

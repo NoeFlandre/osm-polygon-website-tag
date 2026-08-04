@@ -33,7 +33,11 @@ documents its boundary.
 3. Before the next PBF is opened, website-text enrichment safely downloads both website tag values,
    extracts full main text with Trafilatura, and transactionally migrates each
    polygon shard to the current public schema. A run-owned SQLite cache reuses successes and
-   retries failures on a later invocation.
+   retries failures on a later invocation. Distinct cache misses in each bounded
+   Arrow batch use a small I/O worker pool; cache access and row application stay
+   single-threaded and input-ordered. Cache commits and source-bound Parquet
+   checkpoint parts are flushed at each completed batch, so a `KeyboardInterrupt`
+   preserves the enriched prefix and resumes from the first incomplete batch.
 4. After every enriched PBF, the cumulative H3 resolution-3 polygon-density
    summary is computed once from all local public `lat`/`lon` values. The
    deterministic logarithmic `assets/geographic_polygon_density.png`, README,
@@ -136,6 +140,13 @@ content hash without PBF reads or website fetches.
   close; it is deleted after successful extraction and is not a resume
   checkpoint. Reads share the writer connection and see uncommitted rows, so
   reconciliation semantics are unchanged.
+- Enrichment overlaps network fetch/extraction for at most eight distinct URLs
+  per batch. The SQLite text cache is never shared with worker threads, and
+  results are recorded and applied in deterministic URL/row order.
+- Text-cache mutations commit in bounded batches and flush at every completed
+  enrichment batch. Atomic, source-hash-bound Parquet parts retain completed
+  prefixes across interruption; parts are assembled and removed only after the
+  final shard promotion succeeds.
 - DuckDB has an explicit memory limit, one deterministic worker, and a
   run-owned spill directory.
 - Source fingerprints are compared before and after reading.
