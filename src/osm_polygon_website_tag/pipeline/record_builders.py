@@ -4,7 +4,9 @@ The three row builders in :mod:`osm_polygon_website_tag.pipeline.extraction`
 (``_public_record``, ``_comparison_record``, ``_rejection_record``) each
 independently normalized the same OSM tags and selected the primary
 category. This module factors out the values genuinely reused by all three
-into a single frozen value object computed once per builder invocation.
+into a single frozen value object. Production extraction computes it once per
+area payload and passes it to the builders; direct builder calls can omit it
+and use the same derive-on-demand fallback.
 
 Scope
 -----

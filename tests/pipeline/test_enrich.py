@@ -11,10 +11,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import osm_polygon_website_tag.pipeline.enrich as enrich_module
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
 )
+from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.pipeline.enrich import (
     DEFAULT_FETCH_WORKERS,
     MAX_FETCH_WORKERS,
@@ -79,9 +81,69 @@ def _write_legacy(path: Path, rows: list[dict[str, object]]) -> None:
     pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_1), path)
 
 
+def _current_row(index: int) -> dict[str, object]:
+    row = _legacy_row(
+        polygon_id=f"source:way/{index}",
+        website="https://example.org",
+        contact=None,
+    )
+    for field in (
+        "preferred_website",
+        "preferred_website_source",
+        "wikidata",
+        "wikidata_qid",
+        "wikidata_class",
+        "area_km2",
+    ):
+        row.pop(field)
+    row.update(initial_text_fields(website_present=True, contact_website_present=False))
+    row["website_text"] = "text"
+    row["website_word_count"] = 1
+    row["website_text_status"] = "success"
+    row["schema_version"] = "v1.3"
+    return {field.name: row[field.name] for field in POLYGON_PUBLIC_SCHEMA}
+
+
 def _extract(html: bytes, *, url: str) -> TextExtraction:
     text = html.decode()
     return TextExtraction("success", text, len(text.split()), None, "2.1.0")
+
+
+def test_assemble_checkpoint_streams_arrow_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Assembly writes Arrow batches without materializing every row in Python."""
+    part = tmp_path / "parts" / "part-00000000.parquet"
+    part.parent.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist([_current_row(0), _current_row(1)], schema=POLYGON_PUBLIC_SCHEMA),
+        part,
+        compression="snappy",
+    )
+
+    def unexpected_row_sink(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("assembly must not construct BatchParquetSink")
+
+    monkeypatch.setattr(enrich_module, "BatchParquetSink", unexpected_row_sink)
+    staged = tmp_path / "staged.parquet"
+
+    max_batch_rows = enrich_module._assemble_checkpoint(
+        (part,),
+        staged,
+        batch_rows=2,
+        row_count=2,
+    )
+
+    assert max_batch_rows == 2
+    assert pq.read_schema(staged).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
+    assert [row["polygon_id"] for row in pq.read_table(staged).to_pylist()] == [
+        "source:way/0",
+        "source:way/1",
+    ]
+    repeated = tmp_path / "repeated.parquet"
+    enrich_module._assemble_checkpoint((part,), repeated, batch_rows=2, row_count=2)
+    assert repeated.read_bytes() == staged.read_bytes()
 
 
 def test_legacy_shard_migrates_both_tags_without_pbf_access(tmp_path: Path) -> None:

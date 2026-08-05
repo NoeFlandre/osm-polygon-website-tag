@@ -23,6 +23,7 @@ from osm_polygon_website_tag.pipeline.extraction import (
     _ExtractionHandler,
     extract_pbf,
 )
+from osm_polygon_website_tag.pipeline.record_builders import DerivedTags
 from osm_polygon_website_tag.runtime.run_state import SourceFingerprint, load_run
 
 _SIMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -120,6 +121,49 @@ def _worker_payload(sequence: int):
         candidate_kind="closed_way",
         raw_geojson='{"type":"Polygon","coordinates":[]}',
     )
+
+
+def test_area_worker_reuses_precomputed_tag_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The area worker must not re-derive tags already projected by the callback."""
+    payload_type = getattr(extraction_module, "AreaPayload", None)
+    if payload_type is None:
+        pytest.fail("AreaPayload is not implemented")
+    derived = DerivedTags(
+        website="https://example.org",
+        contact_website=None,
+        has_website=True,
+        has_contact_website=False,
+        has_any_website=True,
+        primary_category="building",
+    )
+    payload = payload_type(
+        sequence=1,
+        source_pbf="synthetic-latest.osm.pbf",
+        region="synthetic",
+        tags_dict={"website": "https://example.org", "building": "yes"},
+        osm_type="way",
+        osm_id=1,
+        osm_version=1,
+        osm_timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+        candidate_kind="closed_way",
+        raw_geojson=(
+            '{"type":"Polygon","coordinates":[[[0.0,0.0],[0.01,0.0],[0.01,0.01],[0.0,0.0]]]}'
+        ),
+        derived_tags=derived,
+    )
+
+    def fail_derive(_tags: dict[str, str]) -> DerivedTags:
+        pytest.fail("area worker re-derived a precomputed tag projection")
+
+    monkeypatch.setattr(extraction_module, "derive_tags", fail_derive)
+    result = extraction_module._process_area_payload(payload)
+
+    assert result.public_row is not None
+    assert result.public_row["website"] == "https://example.org"
+    assert result.observation_row is not None
+    assert result.observation_row["has_any_website"] is True
 
 
 def test_area_work_coordinator_bounds_and_preserves_order() -> None:

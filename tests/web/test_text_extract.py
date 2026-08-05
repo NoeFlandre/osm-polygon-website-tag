@@ -27,6 +27,31 @@ def test_extract_main_text_from_static_html() -> None:
     assert result.word_count > 0
 
 
+def test_trafilatura_version_lookup_is_cached(monkeypatch) -> None:
+    """Repeated URL extraction must not rescan package metadata each time."""
+    calls: list[str] = []
+
+    def fake_version(name: str) -> str:
+        calls.append(name)
+        return "test-version"
+
+    cached_version = getattr(text_extract, "_trafilatura_version", None)
+    if cached_version is not None:
+        cached_version.cache_clear()
+    monkeypatch.setattr(text_extract, "version", fake_version)
+    monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: "text")
+    try:
+        first = extract_main_text(b"<html/>", url="https://example.org/one")
+        second = extract_main_text(b"<html/>", url="https://example.org/two")
+    finally:
+        if cached_version is not None:
+            cached_version.cache_clear()
+
+    assert first.trafilatura_version == "test-version"
+    assert second.trafilatura_version == "test-version"
+    assert calls == ["trafilatura"]
+
+
 def test_empty_trafilatura_result_is_explicit(monkeypatch) -> None:
     monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: None)
 

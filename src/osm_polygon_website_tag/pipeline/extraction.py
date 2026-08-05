@@ -46,9 +46,10 @@ Row builders
 The public, comparison, and rejection row builders share a single normalized
 tag projection (:func:`osm_polygon_website_tag.pipeline.record_builders.derive_tags`)
 for the normalized `website` / `contact:website` values, the website presence
-flags, and the primary category. The projection is computed once per builder
-invocation (not once per OSM object): each builder that runs reads it
-independently. The comparison and rejection builders additionally call
+flags, and the primary category. Production extraction computes this frozen
+projection once per area payload and passes it to every builder; direct builder
+calls may omit it and retain the same derive-on-demand fallback. The comparison
+and rejection builders additionally call
 :func:`osm_polygon_website_tag.pipeline.record_builders.derive_wikidata` to
 obtain the normalized `wikidata` value and its presence flag;
 ``_public_record`` does not call it because the public shard's v1.3 schema
@@ -109,7 +110,11 @@ from osm_polygon_website_tag.domain.website import (
     extract_contact_hostname,
     extract_hostname,
 )
-from osm_polygon_website_tag.pipeline.record_builders import derive_tags, derive_wikidata
+from osm_polygon_website_tag.pipeline.record_builders import (
+    DerivedTags,
+    derive_tags,
+    derive_wikidata,
+)
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INCOMPLETE,
     RunState,
@@ -183,6 +188,7 @@ class AreaPayload:
     osm_timestamp: dt.datetime
     candidate_kind: str
     raw_geojson: str | None
+    derived_tags: DerivedTags | None = None
 
 
 @dataclass(frozen=True)
@@ -197,7 +203,10 @@ class AreaResult:
 def _process_area_payload(payload: AreaPayload) -> AreaResult:
     """Build one area result without accessing libosmium or shared state."""
     tags_dict = payload.tags_dict
-    if has_any_website(tags_dict):
+    derived = payload.derived_tags
+    if derived is None:
+        derived = derive_tags(tags_dict)
+    if derived.has_any_website:
         if payload.raw_geojson is None:
             return AreaResult(
                 rejection_row=_rejection_record(
@@ -211,6 +220,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
                     candidate_kind=payload.candidate_kind,
                     rejection_kind="geometry_error",
                     message="missing serialized area geometry",
+                    derived=derived,
                 )
             )
         try:
@@ -228,6 +238,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
                     candidate_kind=payload.candidate_kind,
                     rejection_kind=rej.kind,
                     message=rej.message,
+                    derived=derived,
                 )
             )
         except Exception as exc:
@@ -243,6 +254,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
                     candidate_kind=payload.candidate_kind,
                     rejection_kind="geometry_error",
                     message=f"{type(exc).__name__}: {exc}",
+                    derived=derived,
                 )
             )
         stem = payload.source_pbf.removesuffix(".osm.pbf")
@@ -265,6 +277,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
                 bbox=geom.bbox,
                 area_m2=geom.area_m2,
                 area_bucket=geom.area_bucket,
+                derived=derived,
             )
         except PublicRowInvariantError as inv:
             return AreaResult(
@@ -279,6 +292,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
                     candidate_kind=payload.candidate_kind,
                     rejection_kind="public_invariant_violation",
                     message=str(inv),
+                    derived=derived,
                 )
             )
     else:
@@ -292,6 +306,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
         osm_id=payload.osm_id,
         osm_version=payload.osm_version,
         osm_timestamp=payload.osm_timestamp,
+        derived=derived,
     )
     return AreaResult(public_row=public_row, observation_row=observation_row)
 
@@ -399,8 +414,10 @@ def _public_record(
     bbox: list[float],
     area_m2: float,
     area_bucket: str,
+    derived: DerivedTags | None = None,
 ) -> dict[str, object]:
-    derived = derive_tags(tags_dict)
+    if derived is None:
+        derived = derive_tags(tags_dict)
     name_raw = normalize_value(tags_dict.get("name", "")) or None
     website_class = classify_website(derived.website).value if derived.website else None
     contact_class = (
@@ -467,8 +484,10 @@ def _comparison_record(
     osm_id: int,
     osm_version: int,
     osm_timestamp: dt.datetime,
+    derived: DerivedTags | None = None,
 ) -> dict[str, object]:
-    derived = derive_tags(tags_dict)
+    if derived is None:
+        derived = derive_tags(tags_dict)
     wikidata, has_wikidata = derive_wikidata(tags_dict)
     return {
         "osm_type": osm_type,
@@ -501,8 +520,10 @@ def _rejection_record(
     candidate_kind: str,
     rejection_kind: str,
     message: str,
+    derived: DerivedTags | None = None,
 ) -> dict[str, object]:
-    derived = derive_tags(tags_dict)
+    if derived is None:
+        derived = derive_tags(tags_dict)
     wikidata, has_wikidata = derive_wikidata(tags_dict)
     return {
         "osm_type": osm_type,
@@ -682,7 +703,8 @@ class _ExtractionHandler(osmium.SimpleHandler):
             )
             return
         tags_dict = cast(dict[str, str], candidate["tags"])
-        has_website = has_any_website(tags_dict)
+        derived = derive_tags(tags_dict)
+        has_website = derived.has_any_website
         has_candidate_observation = has_website or has_wikidata(tags_dict)
         if has_candidate_observation:
             raw_geojson: str | None = None
@@ -711,6 +733,7 @@ class _ExtractionHandler(osmium.SimpleHandler):
                 osm_timestamp=_as_utc(a.timestamp),
                 candidate_kind=str(candidate["candidate_kind"]),
                 raw_geojson=raw_geojson,
+                derived_tags=derived,
             )
             self._area_sequence += 1
             result = self._area_coordinator.submit(payload)

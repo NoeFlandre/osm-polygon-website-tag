@@ -46,8 +46,10 @@ exactly:
   `has_any_website`),
 - the primary category.
 
-It is computed once per builder invocation and never includes URL
-classification or hostname extraction -- those are public-row-only and
+Production extraction computes it once per area payload and passes the frozen
+projection to all row builders. Direct builder calls may omit the optional
+projection and retain the same derive-on-demand behavior. It never includes
+URL classification or hostname extraction -- those are public-row-only and
 remain in `extraction._public_record`.
 
 `derive_wikidata` is a separate small helper that returns the normalized

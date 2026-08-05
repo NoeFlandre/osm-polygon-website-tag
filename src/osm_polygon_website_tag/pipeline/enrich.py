@@ -337,23 +337,30 @@ def _assemble_checkpoint(
     batch_rows: int,
     row_count: int,
 ) -> int:
-    """Stream durable parts into one final staged Parquet."""
+    """Stream durable parts into one final staged Parquet.
+
+    Checkpoint parts already contain Arrow record batches in the target
+    schema. Writing those batches directly avoids converting every row to a
+    Python dictionary and back during final assembly while retaining the
+    existing bounded row-group size and deterministic part order.
+    """
     staged.unlink(missing_ok=True)
-    sink = BatchParquetSink(staged, POLYGON_PUBLIC_SCHEMA, batch_rows=batch_rows)
+    assembled_rows = 0
+    max_batch_rows = 0
     try:
-        for part in parts:
-            parquet = pq.ParquetFile(part)
-            for batch in parquet.iter_batches(batch_size=batch_rows):
-                for row in batch.to_pylist():
-                    sink.add(dict(row))
-        sink.close()
-        if sink.row_count != row_count:
+        with pq.ParquetWriter(staged, POLYGON_PUBLIC_SCHEMA, compression="snappy") as writer:
+            for part in parts:
+                parquet = pq.ParquetFile(part)
+                for batch in parquet.iter_batches(batch_size=batch_rows):
+                    writer.write_batch(batch)
+                    assembled_rows += batch.num_rows
+                    max_batch_rows = max(max_batch_rows, batch.num_rows)
+        if assembled_rows != row_count:
             raise ValueError("enrichment row count changed while assembling checkpoint")
         if not pq.read_schema(staged).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
             raise ValueError("assembled enrichment schema mismatch")
-        return sink.max_pending_rows
+        return max_batch_rows
     except BaseException:
-        sink.close()
         staged.unlink(missing_ok=True)
         raise
 

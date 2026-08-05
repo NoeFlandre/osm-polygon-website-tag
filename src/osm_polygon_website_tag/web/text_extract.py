@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib.metadata import version
 from typing import Literal
 
@@ -22,9 +23,15 @@ class TextExtraction:
     trafilatura_version: str
 
 
+@lru_cache(maxsize=1)
+def _trafilatura_version() -> str:
+    """Resolve the installed Trafilatura version once per process."""
+    return version("trafilatura")
+
+
 def extract_main_text(html: bytes, *, url: str) -> TextExtraction:
     """Extract full main text from already downloaded HTML."""
-    library_version = version("trafilatura")
+    library_version = _trafilatura_version()
     decoded = html.decode("utf-8", errors="replace")
     try:
         value = trafilatura.extract(
