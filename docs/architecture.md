@@ -51,7 +51,14 @@ documents its boundary.
    transaction begins.
 5. `analyze-results` uses DuckDB external memory and run-owned spill space.
    Large results go directly to staged Parquets and the complete analysis
-   bundle is promoted transactionally.
+   bundle is promoted transactionally. Each invocation writes into its own
+   unique staging directory under `<run_dir>/staging/` (via
+   `tempfile.mkdtemp`) and removes only that directory on success,
+   ordinary exceptions, or `BaseException` (including `KeyboardInterrupt`).
+   Pre-existing or diagnostic subdirectories under `staging/` are never
+   touched, so a failed or interrupted analysis never blocks a later
+   retry and the previously published `analysis/*.parquet` bundle stays
+   intact.
 6. `build-card` recomputes every displayed statistic from Parquet artifacts
    and writes deterministic `README.md` and `dataset.yaml`.
 7. `finalize-run` verifies the run, moves it to `complete`, and writes a
@@ -163,8 +170,62 @@ content hash without PBF reads or website fetches.
 - Source fingerprints are compared before and after reading.
 - Per-source three-shard promotion and whole-analysis promotion restore the
   previous bundle on failure.
+- The analysis stage writes into an invocation-owned, uniquely-named
+  staging directory under `<run_dir>/staging/` and removes only that
+  directory on success, ordinary exceptions, or `BaseException`. A
+  leftover staging tree cannot block a later retry because each call
+  uses a fresh directory name; unrelated diagnostic subdirectories of
+  `<run_dir>/staging/` are never inspected or deleted. Hard process
+  termination (e.g. `SIGKILL`) is outside the scope of these
+  guarantees.
 - Cleanup targets known temporary files only; non-empty diagnostic directories
   are retained.
+
+## Resumable upload checkpoint (`uploaded_polygons.json`)
+
+Operational resume state for partial Hugging Face uploads lives in
+`manifests/uploaded_polygons.json`. The shape is exposed as the
+`CheckpointV2` `TypedDict` (with `schema_version: Literal["v2"]`) and
+parsed/validated by small helpers in `publishing/incremental.py`
+(`_parse_checkpoint`, `_validate_sources_v2`, `_validate_legacy_sources`,
+`_validate_global_bundle`, `_validate_hex_sha256`):
+
+- `schema_version` is `Literal["v2"]` when the key is **present**. A
+  missing key is the legacy case and migrates; a present-but-`null`
+  value is rejected. Unknown schema versions fail closed with
+  `ValueError("invalid uploaded polygon checkpoint: <reason>")`.
+- Malformed JSON, non-UTF-8 bytes, malformed JSON root, unsupported
+  schema version, unknown `global_bundle` field, malformed
+  `map_contract_version` (string, bool, non-integer), non-hex
+  `<name>.osm.pbf` source key, missing/invalid `polygon_sha256`,
+  unknown per-source field, or malformed remote hash all raise the
+  documented `ValueError`.
+- `global_bundle` is a `TypedDict` (`_GlobalBundleStateV2`,
+  `total=False`) with the four known keys
+  `readme_sha256` / `dataset_yaml_sha256` / `map_sha256`
+  (each a lowercase 64-character hex string) and
+  `map_contract_version` (a non-bool integer). Empty or partial bundles
+  are valid; any other field is rejected.
+- `sources` maps `<name>.osm.pbf` filenames to
+  `{"polygon_sha256": <64-char lowercase hex>}` records via the shared
+  `_validate_hex_sha256` helper. Keys must end with `.osm.pbf`;
+  per-source entries must contain **only** `polygon_sha256`.
+- Legacy checkpoints (pre-`schema_version` flat dicts) are migrated
+  silently only when every legacy entry is well-formed; any malformed
+  entry raises `ValueError`.
+
+The checkpoint file is operational state: it is excluded from the
+completion receipt and from the publish plan, and remote SHA-256 hashes
+are authoritative during apply-mode reconciliation.
+
+`reconcile_upload_checkpoint` validates every remote SHA-256 and remote
+filename **before** rewriting the checkpoint; a malformed remote hash
+raises `ValueError("invalid uploaded polygon checkpoint: <reason>")`
+and the existing `uploaded_polygons.json` is left byte-identical.
+
+`load_upload_checkpoint` returns a fresh per-call dict and is safe to
+mutate in place; shared mutable defaults are deliberately avoided to
+keep resume state hermetic per run.
 
 ## Verification
 

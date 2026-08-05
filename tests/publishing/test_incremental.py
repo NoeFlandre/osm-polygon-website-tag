@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
 from osm_polygon_website_tag.publishing.incremental import (
     incremental_publish_changed_shard,
+    load_upload_checkpoint,
     reconcile_upload_checkpoint,
 )
 from osm_polygon_website_tag.runtime.run_state import hash_shard
@@ -168,3 +170,556 @@ def test_reconcile_checkpoint_uses_remote_shards_and_hashes(
     )
 
     assert checkpoint["sources"] == {"a.osm.pbf": {"polygon_sha256": remote_sha}}
+
+
+# ---------------------------------------------------------------------------
+# Typed-checkpoint parsing and validation
+# ---------------------------------------------------------------------------
+
+
+def _write_checkpoint(run_dir: Path, payload: object) -> Path:
+    path = run_dir / "manifests" / "uploaded_polygons.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_load_upload_checkpoint_returns_default_when_missing(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    checkpoint = load_upload_checkpoint(run_dir)
+
+    assert checkpoint == {
+        "schema_version": "v2",
+        "global_bundle": {},
+        "sources": {},
+    }
+
+
+def test_load_upload_checkpoint_round_trips_v2_checkpoint(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {
+                "readme_sha256": "a" * 64,
+                "dataset_yaml_sha256": "b" * 64,
+                "map_sha256": "c" * 64,
+                "map_contract_version": 2,
+            },
+            "sources": {
+                "a.osm.pbf": {"polygon_sha256": "d" * 64},
+            },
+        },
+    )
+
+    checkpoint = load_upload_checkpoint(run_dir)
+
+    assert checkpoint == {
+        "schema_version": "v2",
+        "global_bundle": {
+            "readme_sha256": "a" * 64,
+            "dataset_yaml_sha256": "b" * 64,
+            "map_sha256": "c" * 64,
+            "map_contract_version": 2,
+        },
+        "sources": {"a.osm.pbf": {"polygon_sha256": "d" * 64}},
+    }
+
+
+def test_load_upload_checkpoint_migrates_valid_legacy_checkpoint(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "a.osm.pbf": {"polygon_sha256": "0" * 64},
+            "b.osm.pbf": {"polygon_sha256": "f" * 64},
+        },
+    )
+
+    checkpoint = load_upload_checkpoint(run_dir)
+
+    assert checkpoint == {
+        "schema_version": "v2",
+        "global_bundle": {},
+        "sources": {
+            "a.osm.pbf": {"polygon_sha256": "0" * 64},
+            "b.osm.pbf": {"polygon_sha256": "f" * 64},
+        },
+    }
+
+
+def test_load_upload_checkpoint_rejects_malformed_root(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(run_dir, ["not", "a", "dict"])
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_unknown_schema_version(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v3",
+            "global_bundle": {},
+            "sources": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_malformed_global_bundle(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": [],
+            "sources": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_global_bundle_bool_values(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {"map_contract_version": True},
+            "sources": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_malformed_sources(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": [],
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_non_string_source_keys(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": {
+                42: {"polygon_sha256": "a" * 64},
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_source_keys_without_osm_pbf_suffix(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": {
+                "monaco-latest": {"polygon_sha256": "a" * 64},
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_non_dict_source_records(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": {"a.osm.pbf": "not-a-dict"},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+@pytest.mark.parametrize(
+    "bad_hash",
+    [
+        None,
+        "",
+        "abc",
+        "z" * 64,
+        "A" * 64,
+        "0" * 63,
+        "0" * 65,
+        123,
+        ["a" * 64],
+    ],
+)
+def test_load_upload_checkpoint_rejects_invalid_hashes(tmp_path: Path, bad_hash: object) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": {"a.osm.pbf": {"polygon_sha256": bad_hash}},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_malformed_legacy_entry(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "a.osm.pbf": {"polygon_sha256": "not-a-hex"},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_incremental_publish_changed_shard_persists_deterministic_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful incremental upload writes the same checkpoint bytes on
+    every equivalent invocation: identical filename set, ordering, and
+    formatting."""
+    run_dir, _ = _run(tmp_path)
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.publishing.incremental._upload_folder",
+        lambda _run, **_kwargs: None,
+    )
+    incremental_publish_changed_shard(run_dir, Path("a.osm.pbf"), dry_run=False)
+    first_bytes = (run_dir / "manifests" / "uploaded_polygons.json").read_text()
+
+    incremental_publish_changed_shard(run_dir, Path("a.osm.pbf"), dry_run=False)
+    second_bytes = (run_dir / "manifests" / "uploaded_polygons.json").read_text()
+
+    assert first_bytes == second_bytes
+    parsed = json.loads(first_bytes)
+    assert parsed["schema_version"] == "v2"
+    assert set(parsed["sources"]) == {"a.osm.pbf"}
+    assert set(parsed) == {"schema_version", "global_bundle", "sources"}
+
+
+# ---------------------------------------------------------------------------
+# Strict typed-checkpoint contract corrections
+# ---------------------------------------------------------------------------
+
+
+def test_load_upload_checkpoint_wraps_invalid_json_syntax(tmp_path: Path) -> None:
+    """Malformed JSON syntax raises the documented ``invalid uploaded polygon
+    checkpoint`` :class:`ValueError`; the underlying
+    :class:`json.JSONDecodeError` is normalised at the load boundary."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    path = run_dir / "manifests" / "uploaded_polygons.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ this is not valid json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_wraps_invalid_utf8_bytes(tmp_path: Path) -> None:
+    """Non-UTF-8 bytes on disk raise the documented :class:`ValueError`."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    path = run_dir / "manifests" / "uploaded_polygons.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # 0xff is invalid as the start of a UTF-8 code unit; write in binary
+    # mode so the encoding error originates from the JSON loader.
+    path.write_bytes(b"\xff\xfe\xfd")
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_explicit_null_schema_version(tmp_path: Path) -> None:
+    """An explicit ``schema_version: null`` is rejected; legacy migration is
+    reserved for checkpoints that omit the ``schema_version`` key entirely."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": None,
+            "a.osm.pbf": {"polygon_sha256": "0" * 64},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_invalid_global_bundle_hashes(
+    tmp_path: Path,
+) -> None:
+    """Each known global-bundle hash must be a lowercase 64-character hex
+    string. Bad values fail closed with the documented ValueError."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {
+                "readme_sha256": "A" * 64,
+                "dataset_yaml_sha256": "b" * 64,
+                "map_sha256": "c" * 64,
+                "map_contract_version": 1,
+            },
+            "sources": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+@pytest.mark.parametrize(
+    "bundle",
+    [
+        {"readme_sha256": "not-hex"},
+        {"dataset_yaml_sha256": "g" * 64},
+        {"map_sha256": "z" * 64},
+        {"map_sha256": "0" * 63},
+        {"map_sha256": "0" * 65},
+        {"readme_sha256": None},
+    ],
+)
+def test_load_upload_checkpoint_rejects_bad_bundle_hex(
+    tmp_path: Path, bundle: dict[str, object]
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    payload: dict[str, object] = {
+        "schema_version": "v2",
+        "global_bundle": dict(bundle),
+        "sources": {},
+    }
+    payload["global_bundle"]["map_contract_version"] = 1
+    _write_checkpoint(run_dir, payload)
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_string_map_contract_version(
+    tmp_path: Path,
+) -> None:
+    """``map_contract_version`` must be a non-bool integer; string values
+    are rejected."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {
+                "readme_sha256": "a" * 64,
+                "dataset_yaml_sha256": "b" * 64,
+                "map_sha256": "c" * 64,
+                "map_contract_version": "1",
+            },
+            "sources": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_unknown_source_field(tmp_path: Path) -> None:
+    """Per-source entries may only contain ``polygon_sha256``; any extra key
+    is rejected at the validation boundary."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": {
+                "a.osm.pbf": {
+                    "polygon_sha256": "a" * 64,
+                    "polygon_size": 1234,
+                },
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_rejects_unknown_global_bundle_field(
+    tmp_path: Path,
+) -> None:
+    """``global_bundle`` may only contain the documented keys
+    (readme_sha256, dataset_yaml_sha256, map_sha256, map_contract_version)."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "schema_version": "v2",
+            "global_bundle": {
+                "unexpected_key": "value",
+                "map_contract_version": 1,
+            },
+            "sources": {},
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(run_dir)
+
+
+def test_load_upload_checkpoint_preserves_legacy_default_global_bundle(
+    tmp_path: Path,
+) -> None:
+    """Legacy migration produces an empty ``global_bundle`` because legacy
+    checkpoints contain only source entries; missing bundle keys are
+    expected, not unknown."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_checkpoint(
+        run_dir,
+        {
+            "a.osm.pbf": {"polygon_sha256": "0" * 64},
+        },
+    )
+
+    checkpoint = load_upload_checkpoint(run_dir)
+
+    assert checkpoint["global_bundle"] == {}
+
+
+def test_checkpoint_v2_schema_version_is_literal_v2() -> None:
+    """``CheckpointV2.schema_version`` is statically ``Literal["v2"]``."""
+    from typing import get_type_hints
+
+    from osm_polygon_website_tag.publishing.incremental import CheckpointV2
+
+    hints = get_type_hints(CheckpointV2)
+    assert hints["schema_version"] == Literal["v2"]
+
+
+def test_load_upload_checkpoint_distinguishes_missing_from_null_schema_version(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint that omits ``schema_version`` is the legacy case and
+    migrates; a checkpoint that explicitly sets ``schema_version: null``
+    is rejected."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    legacy_path = run_dir / "manifests" / "uploaded_polygons.json"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    # Two siblings: one omits the key, one sets it to null.
+    missing_dir = tmp_path / "missing"
+    missing_dir.mkdir()
+    (missing_dir / "manifests").mkdir()
+    (missing_dir / "manifests" / "uploaded_polygons.json").write_text(
+        json.dumps({"a.osm.pbf": {"polygon_sha256": "0" * 64}}),
+        encoding="utf-8",
+    )
+
+    null_dir = tmp_path / "null"
+    null_dir.mkdir()
+    (null_dir / "manifests").mkdir()
+    (null_dir / "manifests" / "uploaded_polygons.json").write_text(
+        json.dumps({"schema_version": None, "a.osm.pbf": {"polygon_sha256": "0" * 64}}),
+        encoding="utf-8",
+    )
+
+    migrated = load_upload_checkpoint(missing_dir)
+    assert migrated["schema_version"] == "v2"
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        load_upload_checkpoint(null_dir)
+
+
+def test_reconcile_upload_checkpoint_rejects_malformed_remote_hashes_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed remote SHA-256 fails reconciliation with the documented
+    :class:`ValueError`, and ``uploaded_polygons.json`` is **not** written
+    (or rewritten); the existing file, if any, remains byte-identical."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    checkpoint_path = run_dir / "manifests" / "uploaded_polygons.json"
+    baseline_bytes = json.dumps(
+        {
+            "schema_version": "v2",
+            "global_bundle": {},
+            "sources": {"existing.osm.pbf": {"polygon_sha256": "f" * 64}},
+        }
+    )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text(baseline_bytes, encoding="utf-8")
+
+    valid_hash = "a" * 64
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.publishing.incremental.remote_polygon_shard_hashes",
+        lambda **_kwargs: {
+            "good.osm.pbf": valid_hash,
+            "bad.osm.pbf": "NOT-LOWER-HEX",
+        },
+    )
+
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        reconcile_upload_checkpoint(
+            run_dir,
+            repo_id="owner/dataset",
+            token="token",
+        )
+
+    assert checkpoint_path.read_text(encoding="utf-8") == baseline_bytes

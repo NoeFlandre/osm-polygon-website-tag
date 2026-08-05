@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
+import tempfile as tempfile_module
 from pathlib import Path
 
 import pyarrow as pa
@@ -557,3 +559,307 @@ def test_analysis_files_constant_lists_every_file() -> None:
     assert "hostnames_exact_contact_website.parquet" in ANALYSIS_FILES
     assert "top_hostnames_website.parquet" in ANALYSIS_FILES
     assert "top_hostnames_contact_website.parquet" in ANALYSIS_FILES
+
+
+# ---------------------------------------------------------------------------
+# Crash-safe and retry-safe analysis staging lifecycle
+# ---------------------------------------------------------------------------
+
+
+def _staging_dir_entries(staging_root: Path) -> list[Path]:
+    """Return every per-invocation staging directory that should have been
+    cleaned up by ``analyze_results``.
+
+    The legacy fixed name ``analysis-build`` predates the crash-safe
+    lifecycle and is intentionally ignored here: it is the diagnostic
+    directory the new code must learn to coexist with.
+    """
+    if not staging_root.exists():
+        return []
+    return [
+        path
+        for path in staging_root.iterdir()
+        if path.is_dir() and path.name.startswith("analysis-") and path.name != "analysis-build"
+    ]
+
+
+def test_analyze_results_ignores_legacy_staging_directory(tmp_path: Path) -> None:
+    """A pre-existing legacy staging directory from an older interrupted run
+    does not block a new analyze_results call; its contents are preserved
+    byte-for-byte and the new published bundle is valid."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[_row_obs(osm_id=1, website="https://a.example")],
+    )
+
+    legacy_staging = run_dir / "staging" / "analysis-build"
+    legacy_staging.mkdir(parents=True)
+    sentinel = legacy_staging / "DIAGNOSTIC_DO_NOT_TOUCH.txt"
+    sentinel.write_text("legacy-staging-content", encoding="utf-8")
+
+    summary = analyze_results(run_dir)
+
+    assert summary.observation_count == 1
+    # The sentinel inside the legacy directory is preserved verbatim.
+    assert sentinel.read_text(encoding="utf-8") == "legacy-staging-content"
+    # The newly published bundle is present and valid.
+    published = run_dir / "analysis" / "cells_global.parquet"
+    assert published.exists()
+    rows = pq.read_table(published).to_pylist()
+    assert len(rows) == 16
+    # No per-invocation staging dir was leaked.
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+
+def test_analyze_results_cleans_per_invocation_staging_on_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The unique staging directory created by the current invocation is
+    removed once analyze_results completes successfully."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[_row_obs(osm_id=1, website="https://a.example")],
+    )
+
+    staging_root = run_dir / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    captured: list[Path] = []
+    real_mkdtemp = tempfile_module.mkdtemp
+
+    def _spy(
+        suffix: str | None = None,
+        prefix: str | None = None,
+        dir: str | os.PathLike[str] | None = None,
+    ) -> str:
+        # Mirror the (suffix, prefix, dir) overload used by analyze_results.
+        result = real_mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
+        if str(dir) == str(staging_root):
+            captured.append(Path(result))
+        return result
+
+    monkeypatch.setattr("osm_polygon_website_tag.pipeline.analyze.tempfile.mkdtemp", _spy)
+    analyze_results(run_dir)
+
+    assert captured, "analyze_results did not invoke tempfile.mkdtemp"
+    for created in captured:
+        assert not created.exists(), f"per-invocation staging dir leaked: {created}"
+
+
+def test_analyze_results_promotion_failure_preserves_published_bundle_and_cleans_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure during atomic promotion leaves the previously published
+    analysis bundle byte-identical and removes the per-invocation staging
+    directory created by the failing call."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[_row_obs(osm_id=1, website="https://a.example")],
+    )
+    analyze_results(run_dir)
+    before = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+
+    def fail_promotion(_promotions: list[tuple[Path, Path]]) -> None:
+        raise OSError("injected promotion failure")
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.pipeline.analyze.atomic_promote_bundle",
+        fail_promotion,
+    )
+    with pytest.raises(OSError, match="injected promotion failure"):
+        analyze_results(run_dir)
+
+    after = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+    assert after == before
+    # The fixed legacy name must not have been (re)created by a failing call.
+    assert not (run_dir / "staging" / "analysis-build").exists()
+    # No per-invocation staging dir leaks either.
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+
+def test_analyze_results_retry_after_failure_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry after a failed analyze_results call succeeds without manual
+    cleanup, and the published bundle is rewritten with the new content."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[_row_obs(osm_id=1, website="https://a.example")],
+    )
+    fail_state = {"called": False}
+
+    def fail_once(_promotions: list[tuple[Path, Path]]) -> None:
+        if not fail_state["called"]:
+            fail_state["called"] = True
+            raise OSError("injected first-attempt failure")
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.pipeline.analyze.atomic_promote_bundle",
+        fail_once,
+    )
+    with pytest.raises(OSError, match="injected first-attempt failure"):
+        analyze_results(run_dir)
+    # Per-invocation staging directory must already be gone, otherwise the
+    # next invocation would either collide with the legacy fixed name or
+    # leak additional directories.
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+    monkeypatch.undo()
+    summary = analyze_results(run_dir)
+    assert summary.observation_count == 1
+    assert (run_dir / "analysis" / "cells_global.parquet").exists()
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+
+def test_analyze_results_keyboard_interrupt_during_staging_allows_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A BaseException raised mid-analysis is handled by the staging cleanup
+    logic; the per-invocation staging directory is removed and a subsequent
+    retry completes successfully without manual cleanup."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[_row_obs(osm_id=1, website="https://a.example")],
+    )
+    analyze_results(run_dir)
+    before = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+
+    def raise_interrupt(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt("simulated interrupt during analysis staging")
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.pipeline.analyze._write_arrow_table",
+        raise_interrupt,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        analyze_results(run_dir)
+
+    # The interrupting call did not leave any per-invocation staging dir.
+    assert _staging_dir_entries(run_dir / "staging") == []
+    # The previously published bundle is still byte-identical: no partial
+    # promotion could have occurred because writes targeted staging only.
+    after_interrupt = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+    assert after_interrupt == before
+
+    # A retry with the patch removed completes successfully.
+    monkeypatch.undo()
+    summary = analyze_results(run_dir)
+    assert summary.observation_count == 1
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+
+# ---------------------------------------------------------------------------
+# Focused review evidence: ordinary failure cleanup and successful determinism
+# ---------------------------------------------------------------------------
+
+
+def test_analyze_results_ordinary_failure_cleanup_and_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A normal RuntimeError raised during DuckDB setup (after the
+    per-invocation staging directory has been created) is handled by the
+    staging cleanup logic: the per-invocation directory is removed, the
+    previously published analysis bundle is byte-identical, and a retry
+    without the patch completes successfully with no manual cleanup."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[_row_obs(osm_id=1, website="https://a.example")],
+    )
+    analyze_results(run_dir)
+    before = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+
+    def boom(_run_dir: Path) -> object:
+        raise RuntimeError("injected duckdb setup failure")
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.pipeline.analyze.duckdb_engine.fresh_connection",
+        boom,
+    )
+    with pytest.raises(RuntimeError, match="injected duckdb setup failure"):
+        analyze_results(run_dir)
+
+    after = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+    # The previously published analysis bundle is byte-identical: no
+    # partial writes to <run_dir>/analysis/ could have happened because
+    # the failing call never reached the writes or promotion.
+    assert after == before
+    # The fixed legacy name must not have been (re)created by the failing call.
+    assert not (run_dir / "staging" / "analysis-build").exists()
+    # The per-invocation staging directory created by the failing call
+    # was removed by the cleanup logic.
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+    # A retry with the patch removed completes successfully and leaves no
+    # per-invocation staging directory behind.
+    monkeypatch.undo()
+    summary = analyze_results(run_dir)
+    assert summary.observation_count == 1
+    assert (run_dir / "analysis" / "cells_global.parquet").exists()
+    assert _staging_dir_entries(run_dir / "staging") == []
+
+
+def test_analyze_results_successful_run_is_byte_identical(tmp_path: Path) -> None:
+    """Two consecutive successful ``analyze_results`` calls on the same
+    synthetic inputs produce a byte-identical analysis bundle (filename to
+    SHA-256 mapping) and an equal :class:`AnalysisSummary`."""
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[
+            _row_obs(osm_id=1, website="https://a.example"),
+            _row_obs(osm_id=2, contact_website="https://b.example"),
+            _row_obs(osm_id=3, wikidata="Q1"),
+            _row_obs(
+                osm_id=4,
+                website="https://c.example",
+                contact_website="https://d.example",
+            ),
+        ],
+    )
+
+    first_summary = analyze_results(run_dir)
+    first_hashes = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+    assert set(first_hashes) == set(ANALYSIS_FILES)
+
+    second_summary = analyze_results(run_dir)
+    second_hashes = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted((run_dir / "analysis").glob("*.parquet"))
+    }
+
+    assert second_hashes == first_hashes
+    assert second_summary == first_summary
+    assert _staging_dir_entries(run_dir / "staging") == []

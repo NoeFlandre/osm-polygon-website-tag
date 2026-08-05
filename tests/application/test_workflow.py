@@ -754,3 +754,86 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     # completion.
     assert final_uploads == [run_dir]
     assert load_run(run_dir).metadata["status"] == STATUS_COMPLETE
+
+
+def test_workflow_resume_after_acknowledged_shard_is_skipped(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shard already present in ``uploaded_polygons.json`` with the current
+    public shard SHA-256 is skipped on resume: no upload call is made and the
+    checkpoint entry is left byte-identical."""
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
+    monkeypatch.setattr(workflow, "_upload_public_shard", lambda *_args: None)
+    monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
+
+    first = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+    checkpoint_path = first.run_dir / "manifests" / "uploaded_polygons.json"
+    pre_resume = checkpoint_path.read_text()
+    uploaded_during_resume: list[str] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "_upload_public_shard",
+        lambda _run, source, _repo: uploaded_during_resume.append(source.name),
+    )
+
+    resumed = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+
+    assert uploaded_during_resume == []
+    assert resumed.uploaded_count == 0
+    assert checkpoint_path.read_text() == pre_resume
+
+
+def test_workflow_upload_checkpoint_persistence_is_deterministic(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-uploading the same shard on a fresh apply-mode invocation rewrites
+    the per-shard checkpoint entry to a deterministic value: identical key
+    set, source ordering, and JSON formatting."""
+    from osm_polygon_website_tag.application import workflow
+
+    root = _sources(make_pbf, tmp_path)
+    monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
+    monkeypatch.setattr(workflow, "_upload_public_shard", lambda *_args: None)
+    monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
+
+    first = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+    checkpoint_path = first.run_dir / "manifests" / "uploaded_polygons.json"
+    first_bytes = checkpoint_path.read_text()
+
+    second = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+    second_bytes = checkpoint_path.read_text()
+
+    assert first.run_dir == second.run_dir
+    assert first_bytes == second_bytes
+    parsed = json.loads(first_bytes)
+    assert parsed["schema_version"] == "v2"
+    assert set(parsed["sources"]) == {"a-latest.osm.pbf", "b-latest.osm.pbf"}
+    assert set(parsed) == {"schema_version", "global_bundle", "sources"}

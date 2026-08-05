@@ -27,6 +27,7 @@ from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.pipeline.public_schema_migration import migrate_public_shard
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.publishing.incremental import (
+    CheckpointV2,
     incremental_publish_changed_shard,
     load_upload_checkpoint,
     persist_successful_upload,
@@ -291,7 +292,7 @@ def _process_source(
     total: int,
     invocation_id: str,
     allow_extraction: bool,
-    upload_checkpoint: dict[str, object],
+    upload_checkpoint: CheckpointV2,
     area_workers: int | None,
     max_in_flight_areas: int | None,
     fetch_workers: int | None,
@@ -420,10 +421,13 @@ def _process_source(
             published_source_names=published_source_names,
         )
     if uploaded_now:
-        checkpoint_sources = cast(dict[str, object], upload_checkpoint.setdefault("sources", {}))
-        checkpoint_sources[source.name] = {
-            "polygon_sha256": str(manifest_entry["public_shard_sha256"]),
-        }
+        # The per-source entry is a typed dict literal that structurally
+        # matches ``_SourceCheckpointEntry``; assigning via ``__setitem__``
+        # avoids re-introducing a ``dict[str, object]`` cast.
+        upload_checkpoint["sources"].__setitem__(
+            source.name,
+            {"polygon_sha256": str(manifest_entry["public_shard_sha256"])},
+        )
     return _SourceTransactionResult(
         extracted=extracted,
         reused=reused,
@@ -439,7 +443,7 @@ def _progress(callback: Callable[[str], None] | None, message: str) -> None:
 def _source_upload_is_current(
     manifest_entry: dict[str, object],
     filename: str,
-    checkpoint: dict[str, object],
+    checkpoint: CheckpointV2,
 ) -> bool:
     sources = checkpoint.get("sources")
     if not isinstance(sources, dict):

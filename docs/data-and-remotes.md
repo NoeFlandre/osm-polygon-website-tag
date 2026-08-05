@@ -89,6 +89,21 @@ In apply mode, startup reconciles the local upload checkpoint with the exact
 SHA-256 hashes of polygon Parquets currently on Hugging Face. Progress cards and
 maps are then computed only from that acknowledged remote shard set, so an
 interrupted upload cannot make the published card claim local-only coverage.
+The local `uploaded_polygons.json` checkpoint is typed (`CheckpointV2`,
+schema `Literal["v2"]`) and fail-closed: malformed JSON or non-UTF-8 bytes,
+a present-but-`null` schema version, an unknown or otherwise unsupported
+schema version, an unknown `global_bundle` field, a malformed
+`map_contract_version` (string, bool, non-integer), a non-hex SHA-256 in
+`sources[*].polygon_sha256` / `readme_sha256` / `dataset_yaml_sha256` /
+`map_sha256` / `remote_shards[*].sha256`, a non-`.osm.pbf` source key,
+or a per-source entry with any field other than `polygon_sha256` all
+raise `ValueError("invalid uploaded polygon checkpoint: <reason>")` at
+the load boundary. A **missing** `schema_version` key is the legacy
+case (silent migration per well-formed entry); a present-but-`null`
+value is rejected. Remote SHA-256 hashes are authoritative: a malformed
+remote hash fails reconciliation with the same `ValueError` *before*
+`uploaded_polygons.json` is rewritten, so the existing file stays
+byte-identical.
 
 Public schema v1.2 shards are migrated locally to v1.3 by column projection.
 The migration preserves extracted text and row order, performs no PBF or

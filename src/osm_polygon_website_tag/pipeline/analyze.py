@@ -33,6 +33,9 @@ Output tables in ``<run_dir>/analysis/``:
 
 from __future__ import annotations
 
+import contextlib
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +47,13 @@ from osm_polygon_website_tag.domain.website import extract_hostname
 from osm_polygon_website_tag.storage import duckdb_engine
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 from osm_polygon_website_tag.storage.duckdb_engine import EIGHT_CELL_EXPRESSIONS, EIGHT_CELL_LABELS
+
+# Prefix used for the per-invocation, run-owned analysis staging directory.
+# Every call to ``analyze_results`` creates a freshly-named subdirectory
+# of ``<run_dir>/staging/`` carrying this prefix; only that unique
+# directory is removed during cleanup, so a leftover, mis-named, or
+# diagnostic sibling directory is never touched.
+_ANALYSIS_STAGING_PREFIX = "analysis-"
 
 ANALYSIS_FILES: tuple[str, ...] = (
     "cells_global.parquet",
@@ -101,251 +111,294 @@ def _parquet_row_count(path: Path) -> int:
     return int(pq.ParquetFile(path).metadata.num_rows)
 
 
+def _cleanup_invocation_staging_dir(path: Path) -> None:
+    """Best-effort removal of the per-invocation analysis staging directory.
+
+    ``path`` is the unique staging directory created by the current
+    ``analyze_results`` call via :func:`tempfile.mkdtemp`. Every file
+    inside it was written by this invocation, so removing the entire
+    tree is safe and bounded.
+
+    Cleanup failures are intentionally suppressed: the original analysis
+    exception (or successful return) must remain visible to the caller.
+    A leftover per-invocation staging tree cannot block a retry because
+    subsequent calls create their own uniquely-named directory and never
+    touch ``path`` again.
+    """
+    if not path.exists():
+        return
+    # Cleanup must never mask the original analysis exception; a leftover
+    # per-invocation staging tree cannot block a retry because subsequent
+    # calls create their own uniquely-named directory.
+    with contextlib.suppress(OSError):
+        shutil.rmtree(path)
+
+
 def analyze_results(run_dir: Path | str) -> AnalysisSummary:
     """Compute every analysis table and write it under
-    ``<run_dir>/analysis/``. Returns an :class:`AnalysisSummary`."""
+    ``<run_dir>/analysis/``. Returns an :class:`AnalysisSummary`.
+
+    The analyzer writes every Parquet into an invocation-owned, uniquely
+    named staging directory under ``<run_dir>/staging/`` and atomically
+    promotes the complete bundle into the final ``<run_dir>/analysis/``
+    location. The staging directory is removed on success, ordinary
+    exceptions, and ``BaseException`` (including ``KeyboardInterrupt``),
+    so an interrupted or failed invocation never blocks a later retry.
+
+    Pre-existing subdirectories of ``<run_dir>/staging/`` -- including
+    any diagnostic or mis-named directory left by an older interrupted
+    run -- are never inspected, reused, or deleted. The DuckDB spill
+    directory and the existing all-old-or-all-new promotion contract
+    are preserved.
+    """
     run_dir = Path(run_dir)
     polygons_dir = run_dir / "polygons"
     obs_dir = run_dir / "analysis_observations"
     rej_dir = run_dir / "rejections"
     final_analysis_dir = run_dir / "analysis"
     final_analysis_dir.mkdir(parents=True, exist_ok=True)
-    analysis_dir = run_dir / "staging" / "analysis-build"
-    analysis_dir.mkdir(parents=True, exist_ok=False)
+    staging_root = run_dir / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    analysis_dir = Path(tempfile.mkdtemp(prefix=_ANALYSIS_STAGING_PREFIX, dir=staging_root))
 
-    if not polygons_dir.exists() or not obs_dir.exists() or not rej_dir.exists():
-        raise FileNotFoundError(
-            f"missing one of polygons/analysis_observations/rejections under {run_dir}"
-        )
-
-    con = duckdb_engine.fresh_connection(run_dir)
     try:
-        duckdb_engine.register_comparison_parquets(con, obs_dir)
-        duckdb_engine.register_public_parquets(con, polygons_dir)
-        duckdb_engine.register_rejection_parquets(con, rej_dir)
-        duckdb_engine.canonical_observations(con)
-
-        # cells_global: 16 rows (8 cells x {observation, canonical})
-        cells_obs = duckdb_engine.cells_global_observation(con)[0]
-        cells_canon = duckdb_engine.cells_global_canonical(con)[0]
-        cells_rows: list[dict[str, object]] = []
-        for key, _ in EIGHT_CELL_LABELS:
-            cells_rows.append(
-                {
-                    "cell": key,
-                    "level": "observation",
-                    "row_count": int(cells_obs.get(key, 0)),
-                }
+        if not polygons_dir.exists() or not obs_dir.exists() or not rej_dir.exists():
+            raise FileNotFoundError(
+                f"missing one of polygons/analysis_observations/rejections under {run_dir}"
             )
-            cells_rows.append(
-                {
-                    "cell": key,
-                    "level": "canonical",
-                    "row_count": int(cells_canon.get(key, 0)),
-                }
+
+        con = duckdb_engine.fresh_connection(run_dir)
+        try:
+            duckdb_engine.register_comparison_parquets(con, obs_dir)
+            duckdb_engine.register_public_parquets(con, polygons_dir)
+            duckdb_engine.register_rejection_parquets(con, rej_dir)
+            duckdb_engine.canonical_observations(con)
+
+            # cells_global: 16 rows (8 cells x {observation, canonical})
+            cells_obs = duckdb_engine.cells_global_observation(con)[0]
+            cells_canon = duckdb_engine.cells_global_canonical(con)[0]
+            cells_rows: list[dict[str, object]] = []
+            for key, _ in EIGHT_CELL_LABELS:
+                cells_rows.append(
+                    {
+                        "cell": key,
+                        "level": "observation",
+                        "row_count": int(cells_obs.get(key, 0)),
+                    }
+                )
+                cells_rows.append(
+                    {
+                        "cell": key,
+                        "level": "canonical",
+                        "row_count": int(cells_canon.get(key, 0)),
+                    }
+                )
+            _write_arrow_table(
+                analysis_dir / "cells_global.parquet",
+                cells_rows,
+                pa.schema(
+                    [
+                        pa.field("cell", pa.string(), nullable=False),
+                        pa.field("level", pa.string(), nullable=False),
+                        pa.field("row_count", pa.int64(), nullable=False),
+                    ]
+                ),
             )
-        _write_arrow_table(
-            analysis_dir / "cells_global.parquet",
-            cells_rows,
-            pa.schema(
-                [
-                    pa.field("cell", pa.string(), nullable=False),
-                    pa.field("level", pa.string(), nullable=False),
-                    pa.field("row_count", pa.int64(), nullable=False),
-                ]
-            ),
-        )
 
-        # cells_by_source (observation level, per source_pbf)
-        _write_cells_per_group(con, obs_dir, analysis_dir / "cells_by_source.parquet")
+            # cells_by_source (observation level, per source_pbf)
+            _write_cells_per_group(con, obs_dir, analysis_dir / "cells_by_source.parquet")
 
-        # cells_by_region (canonical)  # noqa: ERA001
-        _write_cells_per_group(
-            con,
-            obs_dir,
-            analysis_dir / "cells_by_region.parquet",
-            group_column="region",
-            view="canonical_observations",
-        )
-        _write_cells_per_group(
-            con,
-            obs_dir,
-            analysis_dir / "cells_by_osm_type.parquet",
-            group_column="osm_type",
-            view="canonical_observations",
-        )
-        # cells_by_primary_category (canonical)  # noqa: ERA001
-        _write_cells_per_group(
-            con,
-            obs_dir,
-            analysis_dir / "cells_by_primary_category.parquet",
-            group_column="primary_category",
-            view="canonical_observations",
-        )
-
-        # website_class canonical counts (read from public_polygons view
-        # because comparison observations don't carry classification columns)
-        _write_class_count(
-            con,
-            analysis_dir / "by_website_class_canonical.parquet",
-            column="website_class",
-            view="public_polygons",
-        )
-        _write_class_count(
-            con,
-            analysis_dir / "by_contact_website_class_canonical.parquet",
-            column="contact_website_class",
-            view="public_polygons",
-        )
-
-        duckdb_engine.copy_query_atomic(
-            con,
-            """
-            WITH public_counts AS (
-              SELECT source_pbf, COUNT(*)::BIGINT AS public_row_count
-              FROM public_polygons GROUP BY source_pbf
-            ), observation_counts AS (
-              SELECT source_pbf, COUNT(*)::BIGINT AS observation_row_count
-              FROM observations GROUP BY source_pbf
-            ), rejection_counts AS (
-              SELECT source_pbf, COUNT(*)::BIGINT AS rejection_count
-              FROM rejection_rows GROUP BY source_pbf
+            # cells_by_region (canonical)  # noqa: ERA001
+            _write_cells_per_group(
+                con,
+                obs_dir,
+                analysis_dir / "cells_by_region.parquet",
+                group_column="region",
+                view="canonical_observations",
             )
-            SELECT COALESCE(p.source_pbf, o.source_pbf, r.source_pbf) AS source_pbf,
-                   COALESCE(public_row_count, 0)::BIGINT AS public_row_count,
-                   COALESCE(observation_row_count, 0)::BIGINT AS observation_row_count,
-                   COALESCE(rejection_count, 0)::BIGINT AS rejection_count
-            FROM public_counts p FULL OUTER JOIN observation_counts o USING (source_pbf)
-            FULL OUTER JOIN rejection_counts r
-              ON COALESCE(p.source_pbf, o.source_pbf) = r.source_pbf
-            ORDER BY source_pbf
-            """,
-            analysis_dir / "by_source_overlap.parquet",
-        )
-
-        duckdb_engine.copy_query_atomic(
-            con,
-            """
-            SELECT source_pbf, COUNT(*)::BIGINT AS unique_canonical_count
-            FROM canonical_observations
-            GROUP BY source_pbf
-            ORDER BY source_pbf
-            """,
-            analysis_dir / "by_source_dedup.parquet",
-        )
-
-        duckdb_engine.copy_query_atomic(
-            con,
-            """
-            SELECT osm_type, osm_id, COUNT(*)::BIGINT AS observation_count
-            FROM observations
-            GROUP BY osm_type, osm_id
-            HAVING COUNT(*) > 1
-            ORDER BY osm_type, osm_id
-            """,
-            analysis_dir / "duplicate_observations.parquet",
-        )
-
-        duckdb_engine.copy_query_atomic(
-            con,
-            """
-            WITH ranked AS (
-              SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY osm_type, osm_id
-                ORDER BY osm_version DESC, osm_timestamp DESC, source_pbf ASC
-              ) AS rn FROM observations
+            _write_cells_per_group(
+                con,
+                obs_dir,
+                analysis_dir / "cells_by_osm_type.parquet",
+                group_column="osm_type",
+                view="canonical_observations",
             )
-            SELECT n.osm_type, n.osm_id,
-              c.source_pbf AS canonical_source_pbf,
-              n.source_pbf AS observed_source_pbf,
-              c.website AS canonical_website, n.website AS observed_website,
-              c.contact_website AS canonical_contact_website,
-              n.contact_website AS observed_contact_website,
-              c.wikidata AS canonical_wikidata, n.wikidata AS observed_wikidata
-            FROM ranked n JOIN ranked c
-              ON n.osm_type=c.osm_type AND n.osm_id=c.osm_id AND c.rn=1
-            WHERE n.rn > 1 AND (
-              (c.website IS NOT DISTINCT FROM n.website) IS FALSE OR
-              (c.contact_website IS NOT DISTINCT FROM n.contact_website) IS FALSE OR
-              (c.wikidata IS NOT DISTINCT FROM n.wikidata) IS FALSE
+            # cells_by_primary_category (canonical)  # noqa: ERA001
+            _write_cells_per_group(
+                con,
+                obs_dir,
+                analysis_dir / "cells_by_primary_category.parquet",
+                group_column="primary_category",
+                view="canonical_observations",
             )
-            ORDER BY n.osm_type, n.osm_id, n.source_pbf
-            """,
-            analysis_dir / "conflicting_snapshots.parquet",
-        )
-        duckdb_engine.copy_query_atomic(
-            con,
-            """
-            SELECT rejection_kind, COUNT(*)::BIGINT AS row_count
-            FROM rejection_rows
-            GROUP BY rejection_kind
-            ORDER BY rejection_kind
-            """,
-            analysis_dir / "rejections_by_kind.parquet",
-        )
 
-        con.create_function(
-            "normalize_hostname",
-            extract_hostname,
-            ["VARCHAR"],
-            "VARCHAR",
-        )
-        for raw_column, output_column in (
-            ("website", "website_hostname"),
-            ("contact_website", "contact_website_hostname"),
-        ):
-            exact_query = f"""
-                SELECT normalize_hostname({raw_column}) AS {output_column},
-                       COUNT(*)::BIGINT AS row_count
+            # website_class canonical counts (read from public_polygons view
+            # because comparison observations don't carry classification columns)
+            _write_class_count(
+                con,
+                analysis_dir / "by_website_class_canonical.parquet",
+                column="website_class",
+                view="public_polygons",
+            )
+            _write_class_count(
+                con,
+                analysis_dir / "by_contact_website_class_canonical.parquet",
+                column="contact_website_class",
+                view="public_polygons",
+            )
+
+            duckdb_engine.copy_query_atomic(
+                con,
+                """
+                WITH public_counts AS (
+                  SELECT source_pbf, COUNT(*)::BIGINT AS public_row_count
+                  FROM public_polygons GROUP BY source_pbf
+                ), observation_counts AS (
+                  SELECT source_pbf, COUNT(*)::BIGINT AS observation_row_count
+                  FROM observations GROUP BY source_pbf
+                ), rejection_counts AS (
+                  SELECT source_pbf, COUNT(*)::BIGINT AS rejection_count
+                  FROM rejection_rows GROUP BY source_pbf
+                )
+                SELECT COALESCE(p.source_pbf, o.source_pbf, r.source_pbf) AS source_pbf,
+                       COALESCE(public_row_count, 0)::BIGINT AS public_row_count,
+                       COALESCE(observation_row_count, 0)::BIGINT AS observation_row_count,
+                       COALESCE(rejection_count, 0)::BIGINT AS rejection_count
+                FROM public_counts p FULL OUTER JOIN observation_counts o USING (source_pbf)
+                FULL OUTER JOIN rejection_counts r
+                  ON COALESCE(p.source_pbf, o.source_pbf) = r.source_pbf
+                ORDER BY source_pbf
+                """,
+                analysis_dir / "by_source_overlap.parquet",
+            )
+
+            duckdb_engine.copy_query_atomic(
+                con,
+                """
+                SELECT source_pbf, COUNT(*)::BIGINT AS unique_canonical_count
                 FROM canonical_observations
-                WHERE normalize_hostname({raw_column}) IS NOT NULL
-                GROUP BY 1 ORDER BY row_count DESC, {output_column}
-            """  # noqa: S608
+                GROUP BY source_pbf
+                ORDER BY source_pbf
+                """,
+                analysis_dir / "by_source_dedup.parquet",
+            )
+
             duckdb_engine.copy_query_atomic(
                 con,
-                exact_query,
-                analysis_dir / f"hostnames_exact_{raw_column}.parquet",
+                """
+                SELECT osm_type, osm_id, COUNT(*)::BIGINT AS observation_count
+                FROM observations
+                GROUP BY osm_type, osm_id
+                HAVING COUNT(*) > 1
+                ORDER BY osm_type, osm_id
+                """,
+                analysis_dir / "duplicate_observations.parquet",
+            )
+
+            duckdb_engine.copy_query_atomic(
+                con,
+                """
+                WITH ranked AS (
+                  SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY osm_type, osm_id
+                    ORDER BY osm_version DESC, osm_timestamp DESC, source_pbf ASC
+                  ) AS rn FROM observations
+                )
+                SELECT n.osm_type, n.osm_id,
+                  c.source_pbf AS canonical_source_pbf,
+                  n.source_pbf AS observed_source_pbf,
+                  c.website AS canonical_website, n.website AS observed_website,
+                  c.contact_website AS canonical_contact_website,
+                  n.contact_website AS observed_contact_website,
+                  c.wikidata AS canonical_wikidata, n.wikidata AS observed_wikidata
+                FROM ranked n JOIN ranked c
+                  ON n.osm_type=c.osm_type AND n.osm_id=c.osm_id AND c.rn=1
+                WHERE n.rn > 1 AND (
+                  (c.website IS NOT DISTINCT FROM n.website) IS FALSE OR
+                  (c.contact_website IS NOT DISTINCT FROM n.contact_website) IS FALSE OR
+                  (c.wikidata IS NOT DISTINCT FROM n.wikidata) IS FALSE
+                )
+                ORDER BY n.osm_type, n.osm_id, n.source_pbf
+                """,
+                analysis_dir / "conflicting_snapshots.parquet",
             )
             duckdb_engine.copy_query_atomic(
                 con,
-                f"SELECT * FROM ({exact_query}) LIMIT {TOP_K_HOSTNAMES}",  # noqa: S608
-                analysis_dir / f"top_hostnames_{raw_column}.parquet",
+                """
+                SELECT rejection_kind, COUNT(*)::BIGINT AS row_count
+                FROM rejection_rows
+                GROUP BY rejection_kind
+                ORDER BY rejection_kind
+                """,
+                analysis_dir / "rejections_by_kind.parquet",
             )
 
-        # Summaries
-        observation_count = con.execute("SELECT COUNT(*) FROM observations").fetchone()
-        canonical_count = con.execute("SELECT COUNT(*) FROM canonical_observations").fetchone()
-        observation_count_int = int(observation_count[0]) if observation_count else 0
-        canonical_count_int = int(canonical_count[0]) if canonical_count else 0
-        public_row_count = _public_row_count(polygons_dir)
-        rejection_count = _rejection_count(rej_dir)
-        duplicate_count = _parquet_row_count(analysis_dir / "duplicate_observations.parquet")
-        conflicting_snapshot_count = _parquet_row_count(
-            analysis_dir / "conflicting_snapshots.parquet"
-        )
+            con.create_function(
+                "normalize_hostname",
+                extract_hostname,
+                ["VARCHAR"],
+                "VARCHAR",
+            )
+            for raw_column, output_column in (
+                ("website", "website_hostname"),
+                ("contact_website", "contact_website_hostname"),
+            ):
+                exact_query = f"""
+                    SELECT normalize_hostname({raw_column}) AS {output_column},
+                           COUNT(*)::BIGINT AS row_count
+                    FROM canonical_observations
+                    WHERE normalize_hostname({raw_column}) IS NOT NULL
+                    GROUP BY 1 ORDER BY row_count DESC, {output_column}
+                """  # noqa: S608
+                duckdb_engine.copy_query_atomic(
+                    con,
+                    exact_query,
+                    analysis_dir / f"hostnames_exact_{raw_column}.parquet",
+                )
+                duckdb_engine.copy_query_atomic(
+                    con,
+                    f"SELECT * FROM ({exact_query}) LIMIT {TOP_K_HOSTNAMES}",  # noqa: S608
+                    analysis_dir / f"top_hostnames_{raw_column}.parquet",
+                )
 
-        summary = AnalysisSummary(
-            observation_count=observation_count_int,
-            canonical_count=canonical_count_int,
-            public_row_count=int(public_row_count),
-            rejection_count=int(rejection_count),
-            duplicate_count=duplicate_count,
-            conflicting_snapshot_count=conflicting_snapshot_count,
-            cell_observation={k: int(cells_obs.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},
-            cell_canonical={k: int(cells_canon.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},
+            # Summaries
+            observation_count = con.execute("SELECT COUNT(*) FROM observations").fetchone()
+            canonical_count = con.execute("SELECT COUNT(*) FROM canonical_observations").fetchone()
+            observation_count_int = int(observation_count[0]) if observation_count else 0
+            canonical_count_int = int(canonical_count[0]) if canonical_count else 0
+            public_row_count = _public_row_count(polygons_dir)
+            rejection_count = _rejection_count(rej_dir)
+            duplicate_count = _parquet_row_count(analysis_dir / "duplicate_observations.parquet")
+            conflicting_snapshot_count = _parquet_row_count(
+                analysis_dir / "conflicting_snapshots.parquet"
+            )
+
+            summary = AnalysisSummary(
+                observation_count=observation_count_int,
+                canonical_count=canonical_count_int,
+                public_row_count=int(public_row_count),
+                rejection_count=int(rejection_count),
+                duplicate_count=duplicate_count,
+                conflicting_snapshot_count=conflicting_snapshot_count,
+                cell_observation={k: int(cells_obs.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},
+                cell_canonical={k: int(cells_canon.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},
+            )
+            _ = _cells_total_from_summary  # silence unused
+        finally:
+            try:  # noqa: SIM105
+                con.close()
+            except Exception:  # noqa: S110
+                pass
+        atomic_promote_bundle(
+            [
+                (analysis_dir / filename, final_analysis_dir / filename)
+                for filename in ANALYSIS_FILES
+            ]
         )
-        _ = _cells_total_from_summary  # silence unused
+        duckdb_engine.cleanup_temp_dir(run_dir)
+        return summary
     finally:
-        try:  # noqa: SIM105
-            con.close()
-        except Exception:  # noqa: S110
-            pass
-    atomic_promote_bundle(
-        [(analysis_dir / filename, final_analysis_dir / filename) for filename in ANALYSIS_FILES]
-    )
-    analysis_dir.rmdir()
-    duckdb_engine.cleanup_temp_dir(run_dir)
-    return summary
+        _cleanup_invocation_staging_dir(analysis_dir)
 
 
 def _write_arrow_table(path: Path, rows: list[dict[str, object]], schema: pa.Schema) -> None:
