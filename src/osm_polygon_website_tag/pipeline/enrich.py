@@ -426,20 +426,19 @@ def _resolve_pending(
     extractor: Extractor,
     fetch_pool: ThreadPoolExecutor,
 ) -> None:
-    """Fetch cache misses concurrently, then write results serially.
+    """Fetch cache misses concurrently, then extract and write results serially.
 
     ``TextCache`` deliberately remains confined to the caller thread because it
-    owns one SQLite connection. Network and extraction work is independent per
-    normalized URL, so it can safely fan out while cache reads/writes and row
-    application stay ordered and deterministic.
+    owns one SQLite connection. Network retrieval can safely fan out, but the
+    Trafilatura/lxml parser is kept on the caller thread because its native
+    parser state is not safe to run concurrently on this platform. Cache
+    writes, extraction, and row application stay ordered and deterministic.
     """
     futures = {
         url: fetch_pool.submit(
-            _fetch_and_extract,
+            _fetch,
             url,
-            invocation_id=invocation_id,
             fetcher=fetcher,
-            extractor=extractor,
         )
         for url in pending
     }
@@ -447,7 +446,16 @@ def _resolve_pending(
     try:
         for url, future in futures.items():
             recorded.add(url)
-            cached = cache.record(future.result(), invocation_id=invocation_id)
+            fetched = future.result()
+            cached = cache.record(
+                _extract_fetched(
+                    url,
+                    fetched,
+                    invocation_id=invocation_id,
+                    extractor=extractor,
+                ),
+                invocation_id=invocation_id,
+            )
             for row, field_prefix in pending[url]:
                 _apply_result(row, field_prefix, cached)
     except KeyboardInterrupt:
@@ -460,25 +468,37 @@ def _resolve_pending(
             if url in recorded or future.cancelled():
                 continue
             try:
-                value = future.result()
+                fetched = future.result()
             except BaseException:
-                value = None
-            if value is not None:
-                cached = cache.record(value, invocation_id=invocation_id)
+                fetched = None
+            if fetched is not None:
+                cached = cache.record(
+                    _extract_fetched(
+                        url,
+                        fetched,
+                        invocation_id=invocation_id,
+                        extractor=extractor,
+                    ),
+                    invocation_id=invocation_id,
+                )
                 for row, field_prefix in pending[url]:
                     _apply_result(row, field_prefix, cached)
         cache.flush()
         raise
 
 
-def _fetch_and_extract(
+def _fetch(url: str, *, fetcher: Fetcher) -> FetchResult:
+    """Retrieve one URL; native text parsing happens on the caller thread."""
+    return fetcher(url)
+
+
+def _extract_fetched(
     url: str,
+    fetched: FetchResult,
     *,
     invocation_id: str,
-    fetcher: Fetcher,
     extractor: Extractor,
 ) -> CachedText:
-    fetched = fetcher(url)
     if fetched.status != "ok" or fetched.body is None:
         return CachedText(
             url,

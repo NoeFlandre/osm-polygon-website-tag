@@ -75,11 +75,13 @@ receipt are uploaded only after the entire inventory verifies. Stopping with
 `Ctrl-C` and repeating the same command resumes without reprocessing exact
 completed bundles or successful URLs. Within a shard, durable completed-batch
 checkpoint parts are reused, so an interrupted enrichment resumes from the
-first unfinished suffix. Sources without any local extraction
-bundle are prioritized before retries of previously processed sources. This includes bundles created by the old
-extract-all workflow: they are enriched and uploaded without rereading their
-PBFs. Legacy shards are likewise enriched without rereading PBFs; failed URLs
-retry. If the run-owned URL cache is damaged, the pipeline quarantines the
+first unfinished suffix. Sources without an acknowledged upload are
+prioritized before retries of previously acknowledged sources. Sources with no
+local extraction bundle are first; already extracted but unacknowledged bundles
+are enriched and uploaded next without rereading their PBFs. This includes
+bundles created by the old extract-all workflow. Legacy shards are likewise
+enriched without rereading PBFs; failed URLs retry. If the run-owned URL cache
+is damaged, the pipeline quarantines the
 unreadable SQLite files and rebuilds an empty cache; completed Parquet text is
 kept, while only unresolved URLs are retried. Short-lived SQLite writer locks
 are retried with bounded backoff so a concurrent read or writer does not abort

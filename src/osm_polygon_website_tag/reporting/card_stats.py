@@ -5,6 +5,10 @@ directory. The card builder calls :func:`compute_card_stats` once and
 injects the result into the README template; the card builder does not
 otherwise compute anything.
 
+The per-shard text totals use bounded Arrow compute kernels over the required
+columns, avoiding one Python dictionary allocation per polygon while keeping
+the artifact-derived statistics unchanged.
+
 Outputs are returned as :class:`CardStats` dataclass for ergonomic
 use from the card builder.
 """
@@ -17,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
@@ -181,28 +187,69 @@ def _add_text_stats(stats: CardStats, shard: Path) -> None:
     has_pending = False
     columns = sorted(required)
     for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
-        for row in batch.to_pylist():
-            website_status = row["website_text_status"]
-            contact_status = row["contact_website_text_status"]
-            stats.website_urls_present += int(row["website"] is not None)
-            stats.contact_website_urls_present += int(row["contact_website"] is not None)
-            stats.website_text_success_count += int(website_status == "success")
-            stats.contact_website_text_success_count += int(contact_status == "success")
-            stats.website_text_empty_count += int(website_status == "empty")
-            stats.contact_website_text_empty_count += int(contact_status == "empty")
-            stats.website_text_failure_count += int(
-                website_status not in {"absent", "pending", "success", "empty"}
+        website = batch.column("website")
+        website_status = batch.column("website_text_status")
+        website_words = batch.column("website_word_count")
+        contact_website = batch.column("contact_website")
+        contact_status = batch.column("contact_website_text_status")
+        contact_words = batch.column("contact_website_word_count")
+        website_success = _arrow_kernel("equal", website_status, "success")
+        contact_success = _arrow_kernel("equal", contact_status, "success")
+        stats.website_urls_present += _count_true(_arrow_kernel("is_valid", website))
+        stats.contact_website_urls_present += _count_true(
+            _arrow_kernel("is_valid", contact_website)
+        )
+        stats.website_text_success_count += _count_true(website_success)
+        stats.contact_website_text_success_count += _count_true(contact_success)
+        stats.website_text_empty_count += _count_true(
+            _arrow_kernel("equal", website_status, "empty")
+        )
+        stats.contact_website_text_empty_count += _count_true(
+            _arrow_kernel("equal", contact_status, "empty")
+        )
+        stats.website_text_failure_count += _count_invalid_statuses(website_status)
+        stats.contact_website_text_failure_count += _count_invalid_statuses(contact_status)
+        stats.website_total_words += _sum_success_words(website_status, website_words)
+        stats.contact_website_total_words += _sum_success_words(contact_status, contact_words)
+        stats.polygons_with_any_text += _count_true(
+            _arrow_kernel("or_kleene", website_success, contact_success)
+        )
+        has_pending = has_pending or bool(
+            _count_true(
+                _arrow_kernel(
+                    "or_kleene",
+                    _arrow_kernel("equal", website_status, "pending"),
+                    _arrow_kernel("equal", contact_status, "pending"),
+                )
             )
-            stats.contact_website_text_failure_count += int(
-                contact_status not in {"absent", "pending", "success", "empty"}
-            )
-            if website_status == "success":
-                stats.website_total_words += int(row["website_word_count"])
-            if contact_status == "success":
-                stats.contact_website_total_words += int(row["contact_website_word_count"])
-            stats.polygons_with_any_text += int(
-                website_status == "success" or contact_status == "success"
-            )
-            has_pending = has_pending or website_status == "pending" or contact_status == "pending"
+        )
     if not has_pending:
         stats.enriched_sources_count += 1
+
+
+def _count_true(mask: pa.Array) -> int:
+    """Count true values in an Arrow boolean array, ignoring nulls."""
+    value = _arrow_kernel("sum", pc.cast(mask, pa.int64())).as_py()
+    return int(value or 0)
+
+
+def _count_invalid_statuses(status: pa.Array) -> int:
+    """Count null or unknown statuses exactly as the former row loop did."""
+    known = _arrow_kernel("equal", status, "absent")
+    for expected in ("pending", "success", "empty"):
+        known = _arrow_kernel("or_kleene", known, _arrow_kernel("equal", status, expected))
+    return _count_true(pc.fill_null(_arrow_kernel("invert", known), True))
+
+
+def _sum_success_words(status: pa.Array, word_counts: pa.Array) -> int:
+    """Sum word counts for successful rows while retaining null failures."""
+    selected = _arrow_kernel("filter", word_counts, _arrow_kernel("equal", status, "success"))
+    if selected.null_count:
+        raise TypeError("successful text row has no word count")
+    value = _arrow_kernel("sum", selected).as_py()
+    return int(value or 0)
+
+
+def _arrow_kernel(name: str, *args: Any) -> Any:
+    """Call a dynamically registered Arrow kernel while keeping ty strict."""
+    return pc.call_function(name, list(args))

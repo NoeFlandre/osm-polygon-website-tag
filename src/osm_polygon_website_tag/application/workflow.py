@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -82,12 +82,23 @@ class _SourceTransactionResult:
     uploaded: bool
 
 
-def prioritize_sources(sources: list[Path], processed_names: set[str]) -> list[Path]:
-    """Put sources without any local extraction bundle ahead of retries."""
+def prioritize_sources(
+    sources: list[Path],
+    processed_names: Collection[str],
+    *,
+    retry_names: Collection[str] = (),
+) -> list[Path]:
+    """Put untouched sources before retries and fully processed sources.
+
+    ``processed_names`` contains sources whose current work is complete;
+    ``retry_names`` contains sources with prior progress that still need a
+    retry. Any source in neither collection is genuinely untouched and gets
+    priority. The final path component remains the deterministic tie-breaker.
+    """
     return sorted(
         sources,
         key=lambda source: (
-            source.name in processed_names,
+            2 if source.name in processed_names else 1 if source.name in retry_names else 0,
             source.as_posix(),
         ),
     )
@@ -168,7 +179,6 @@ def run_all(
     skipped_count = 0
     uploaded_count = 0
     invocation_id = uuid4().hex
-    ordered_sources = prioritize_sources(sources, set(state.sources))
     fingerprints_by_name = {fingerprint.filename: fingerprint for fingerprint in fingerprints}
     upload_checkpoint = load_upload_checkpoint(run_dir)
     if apply:
@@ -177,6 +187,30 @@ def run_all(
             repo_id=repo_id,
             token=cast(str, hf_token),
         )
+    if apply:
+        acknowledged_names = set(upload_checkpoint["sources"])
+        processed_names = {
+            name
+            for name, entry in state.sources.items()
+            if name in acknowledged_names and entry.get("enrichment_pending") is False
+        }
+        retry_names = {
+            name
+            for name in acknowledged_names
+            if name in state.sources and name not in processed_names
+        }
+    else:
+        processed_names = {
+            name
+            for name, entry in state.sources.items()
+            if entry.get("enrichment_pending") is False
+        }
+        retry_names = set(state.sources) - processed_names
+    ordered_sources = prioritize_sources(
+        sources,
+        processed_names,
+        retry_names=retry_names,
+    )
     if status in {STATUS_INITIALIZED, STATUS_EXTRACTING}:
         if status == STATUS_INITIALIZED:
             transition_status(state, STATUS_EXTRACTING)

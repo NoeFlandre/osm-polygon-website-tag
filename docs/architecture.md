@@ -72,7 +72,9 @@ It validates the same source fingerprints on every restart, skips exact
 completed extraction bundles (including bundles produced by old extract-all
 runs), migrates legacy shards without reopening PBFs, checkpoints successful
 URL text and per-PBF enriched uploads, and performs the receipt-bound full
-upload only after final verification.
+upload only after final verification. Resume ordering puts sources with no
+acknowledged upload ahead of retryable acknowledged sources, while keeping
+already-complete sources last; deterministic filename order breaks ties.
 `KeyboardInterrupt` leaves the run in the resumable `extracting` state.
 If a completed run predates the H3 card contract, the next `run-all` invocation
 refreshes only its local card/map/receipt bundle before any remote action; the
@@ -157,10 +159,11 @@ content hash without PBF reads or website fetches.
   close; it is deleted after successful extraction and is not a resume
   checkpoint. Reads share the writer connection and see uncommitted rows, so
   reconciliation semantics are unchanged.
-- Enrichment overlaps network fetch/extraction for at most eight distinct URLs
-  per batch by default (`fetch_workers`, capped at 32). The SQLite text cache
-  is never shared with worker threads, and results are recorded and applied in
-  deterministic URL/row order.
+- Enrichment overlaps network retrieval for at most eight distinct URLs per
+  batch by default (`fetch_workers`, capped at 32). Trafilatura/lxml text
+  extraction, the SQLite text cache, and row application stay on the caller
+  thread because the native parser must not run concurrently on macOS. Results
+  remain deterministic in URL/row order without changing extracted text.
 - Text-cache mutations commit in bounded batches and flush at every completed
   enrichment batch. Atomic, source-hash-bound Parquet parts retain completed
   prefixes across interruption; parts are assembled and removed only after the

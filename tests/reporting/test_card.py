@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import osm_polygon_website_tag.reporting.card_stats as card_stats_module
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
@@ -89,6 +90,45 @@ def _setup_minimal_run(tmp_path: Path) -> Path:
     rej.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist([], schema=REJECTION_SCHEMA), rej, compression="snappy")
     return run_dir
+
+
+def test_card_stats_uses_arrow_columns_without_row_dicts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Text statistics scan Arrow columns directly instead of materializing rows."""
+
+    class FakeBatch:
+        num_rows = 1
+
+        def column(self, name: str) -> pa.Array:
+            values = {
+                "website": pa.array(["https://example.com"]),
+                "website_text_status": pa.array(["success"]),
+                "website_word_count": pa.array([3], type=pa.int64()),
+                "contact_website": pa.array([None], type=pa.string()),
+                "contact_website_text_status": pa.array(["absent"]),
+                "contact_website_word_count": pa.array([None], type=pa.int64()),
+            }
+            return values[name]
+
+        def to_pylist(self) -> list[dict[str, object]]:
+            raise AssertionError("card stats must not materialize row dictionaries")
+
+    class FakeParquet:
+        schema_arrow = POLYGON_PUBLIC_SCHEMA
+
+        def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
+            yield FakeBatch()
+
+    monkeypatch.setattr(card_stats_module.pq, "ParquetFile", lambda _path: FakeParquet())
+    stats = card_stats_module.CardStats()
+    card_stats_module._add_text_stats(stats, tmp_path / "source.parquet")
+
+    assert stats.website_urls_present == 1
+    assert stats.website_text_success_count == 1
+    assert stats.website_total_words == 3
+    assert stats.polygons_with_any_text == 1
 
 
 def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
@@ -245,6 +285,56 @@ def test_card_stats_derives_text_and_word_totals_from_polygon_parquet(tmp_path: 
     assert stats.website_total_words == 3
     assert stats.contact_website_urls_present == 0
     assert stats.polygons_with_any_text == 1
+
+
+def test_card_stats_preserves_status_buckets_and_pending_semantics(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    rows = []
+    statuses = (
+        ("success", 3, "success", 2),
+        ("empty", None, "unsafe_url", None),
+        ("fetch_error", None, "pending", None),
+        ("absent", None, "absent", None),
+    )
+    for index, (website_status, website_words, contact_status, contact_words) in enumerate(
+        statuses
+    ):
+        row = _public_row(polygon_id=f"p{index}")
+        row.update(
+            {
+                "website": None if website_status == "absent" else "https://example.com",
+                "contact_website": None
+                if contact_status == "absent"
+                else "https://contact.example",
+                "schema_version": "v1.3",
+                "website_text": "text" if website_status == "success" else None,
+                "website_word_count": website_words,
+                "website_text_status": website_status,
+                "contact_website_text": "text" if contact_status == "success" else None,
+                "contact_website_word_count": contact_words,
+                "contact_website_text_status": contact_status,
+            }
+        )
+        rows.append(row)
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA),
+        run_dir / "polygons" / "monaco-latest.parquet",
+    )
+
+    stats = compute_card_stats(run_dir)
+
+    assert stats.website_urls_present == 3
+    assert stats.contact_website_urls_present == 3
+    assert stats.website_text_success_count == 1
+    assert stats.contact_website_text_success_count == 1
+    assert stats.website_text_empty_count == 1
+    assert stats.contact_website_text_empty_count == 0
+    assert stats.website_text_failure_count == 1
+    assert stats.contact_website_text_failure_count == 1
+    assert stats.website_total_words == 3
+    assert stats.contact_website_total_words == 2
+    assert stats.polygons_with_any_text == 1
+    assert stats.enriched_sources_count == 0
 
 
 def test_card_stats_can_scope_to_uploaded_sources(tmp_path: Path) -> None:

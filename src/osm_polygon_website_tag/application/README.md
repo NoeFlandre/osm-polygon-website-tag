@@ -8,6 +8,8 @@ separate from workflow side effects.
     inventories. It performs no writes.
   - `workflow`: owns resumable per-source extraction, enrichment, upload
     transactions, run-level state transitions, reporting, and final publication.
+    Resume ordering puts genuinely unacknowledged sources first, retryable
+    acknowledged sources next, and already-complete sources last.
   - `progress`: adapts workflow messages to stable logs or interactive tqdm
     progress without leaking terminal concerns into the pipeline.
   - `cli`: exposes the typed Typer application, uses Rich for human-facing

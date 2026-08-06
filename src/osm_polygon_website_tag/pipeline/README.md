@@ -23,14 +23,16 @@ rejections, and shard hashes. PBFs themselves remain sequential in
 ## Enrichment
 
 `enrich_polygon_shard` processes one bounded Arrow batch at a time. Cache
-lookups and SQLite writes stay on the caller thread, while distinct cache
-misses use a bounded pool of eight I/O workers by default for network retrieval
-and text extraction. `fetch_workers` can be configured per invocation up to a
-safe cap of 32. Results are recorded and applied in deterministic URL and
-input-row order; duplicate normalized URLs are fetched once per batch. Cache
-commits are batched and flushed at each completed batch. Completed batches are
-written as source-bound atomic checkpoint parts, so an interruption preserves
-the shard prefix and retries only the unresolved suffix on resume.
+lookups, SQLite writes, and Trafilatura/lxml text extraction stay on the caller
+thread. Distinct cache misses use a bounded pool of eight I/O workers by
+default for network retrieval only; keeping native HTML parsing serial avoids
+platform-specific lxml allocator failures without changing extracted text.
+`fetch_workers` can be configured per invocation up to a safe cap of 32.
+Results are recorded and applied in deterministic URL and input-row order;
+duplicate normalized URLs are fetched once per batch. Cache commits are
+batched and flushed at each completed batch. Completed batches are written as
+source-bound atomic checkpoint parts, so an interruption preserves the shard
+prefix and retries only the unresolved suffix on resume.
 
 ## Record builders
 

@@ -238,6 +238,37 @@ def test_unique_urls_are_fetched_concurrently_in_stable_row_order(tmp_path: Path
     ]
 
 
+def test_text_extraction_runs_on_caller_thread_for_native_parser_safety(tmp_path: Path) -> None:
+    """Keep the lxml-backed extractor out of concurrent fetch worker threads."""
+    shard = tmp_path / "run" / "polygons" / "source.parquet"
+    rows = [
+        _legacy_row(
+            polygon_id=f"source:way/{index}",
+            website=f"https://example.org/{index}",
+            contact=None,
+        )
+        for index in range(4)
+    ]
+    _write_legacy(shard, rows)
+    caller_thread = threading.get_ident()
+    extractor_threads: set[int] = set()
+
+    def extractor(html: bytes, *, url: str) -> TextExtraction:
+        extractor_threads.add(threading.get_ident())
+        return _extract(html, url=url)
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=tmp_path / "run" / "cache" / "text.sqlite3",
+        invocation_id="one",
+        fetcher=lambda url: FetchResult("ok", url, final_url=url, body=b"text"),
+        extractor=extractor,
+        fetch_workers=2,
+    )
+
+    assert extractor_threads == {caller_thread}
+
+
 def test_fetch_workers_is_configurable_and_bounded(tmp_path: Path) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
     rows = [

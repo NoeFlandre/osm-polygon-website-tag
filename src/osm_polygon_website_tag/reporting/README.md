@@ -9,6 +9,8 @@ Builds and validates public-facing local artifacts.
   card asset without reading PBFs or contacting the network.
 - `repair.refresh_card_run` migrates a legacy completed local run by rebuilding
   only the card/map/receipt bundle; it never re-extracts or re-enriches sources.
+- Card text totals scan Parquet columns with bounded Arrow kernels rather than
+  materializing one Python row dictionary per polygon.
 - Entry points: `compute_card_stats`, `build_card`, `verify_results`,
   `finalize_run`, and `refresh_card_run`.
 - Excludes: extraction, HTTP fetching, remote upload, and CLI dispatch.

@@ -81,6 +81,28 @@ def test_prioritize_sources_puts_unprocessed_sources_first() -> None:
     ]
 
 
+def test_prioritize_sources_puts_unuploaded_before_retryable_sources() -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    sources = [
+        Path("uploaded-retry.osm.pbf"),
+        Path("unuploaded.osm.pbf"),
+        Path("uploaded-complete.osm.pbf"),
+    ]
+
+    ordered = workflow.prioritize_sources(
+        sources,
+        {"uploaded-complete.osm.pbf"},
+        retry_names={"uploaded-retry.osm.pbf"},
+    )
+
+    assert [source.name for source in ordered] == [
+        "unuploaded.osm.pbf",
+        "uploaded-retry.osm.pbf",
+        "uploaded-complete.osm.pbf",
+    ]
+
+
 def _sources(make_pbf, tmp_path: Path) -> Path:
     first = make_pbf(_WEBSITE_OSM, name="a-latest.osm.pbf")
     second = make_pbf(_EMPTY_OSM, name="b-latest.osm.pbf")
