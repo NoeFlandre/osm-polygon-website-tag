@@ -167,6 +167,9 @@ content hash without PBF reads or website fetches.
   extraction, the SQLite text cache, and row application stay on the caller
   thread because the native parser must not run concurrently on macOS. Results
   remain deterministic in URL/row order without changing extracted text.
+- Geographic aggregation reads only `lat` and `lon` columns in bounded batches,
+  converts their Arrow buffers without Python list materialization, and keeps an
+  explicit null mask so invalid-input errors remain fail-closed.
 - Text-cache mutations commit in bounded batches and flush at every completed
   enrichment batch. Atomic, source-hash-bound Parquet parts retain completed
   prefixes across interruption; parts are assembled and removed only after the

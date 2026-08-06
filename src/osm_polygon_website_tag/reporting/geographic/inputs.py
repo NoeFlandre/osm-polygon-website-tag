@@ -40,10 +40,16 @@ def iter_lat_lon_runs(
             raise ValueError(f"missing coordinate columns {sorted(missing)} in {path}")
         offset = 0
         for batch in parquet.iter_batches(columns=["lat", "lon"], batch_size=8192):
-            latitudes = batch.column("lat").to_pylist()
-            longitudes = batch.column("lon").to_pylist()
-            for index, (lat, lon) in enumerate(zip(latitudes, longitudes, strict=True), offset):
-                if lat is None or lon is None:
+            latitudes = batch.column("lat")
+            longitudes = batch.column("lon")
+            lat_values = latitudes.to_numpy(zero_copy_only=False)
+            lon_values = longitudes.to_numpy(zero_copy_only=False)
+            lat_nulls = latitudes.is_null().to_numpy(zero_copy_only=False)
+            lon_nulls = longitudes.is_null().to_numpy(zero_copy_only=False)
+            for index, (lat, lon, lat_is_null, lon_is_null) in enumerate(
+                zip(lat_values, lon_values, lat_nulls, lon_nulls, strict=True), offset
+            ):
+                if lat_is_null or lon_is_null:
                     raise ValueError(f"null coordinate in {path.name} row {index}")
                 yield path, index, float(lat), float(lon)
             offset += batch.num_rows

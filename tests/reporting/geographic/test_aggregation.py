@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from osm_polygon_website_tag.reporting.geographic import inputs
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
@@ -24,6 +25,55 @@ def _write_coords(path: Path, rows: list[tuple[float, float]]) -> None:
         ),
         path,
     )
+
+
+def test_iter_lat_lon_runs_uses_arrow_buffers_without_row_lists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Coordinate input should not materialize a Python row list per batch."""
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    path = polygons / "source.parquet"
+    path.touch()
+
+    class FakeBatch:
+        num_rows = 2
+
+        class FakeArray:
+            def __init__(self, values: list[float]) -> None:
+                self._array = pa.array(values, type=pa.float64())
+
+            def to_pylist(self) -> list[float]:
+                raise AssertionError("coordinate input must not materialize Python lists")
+
+            def to_numpy(self, *, zero_copy_only: bool) -> object:
+                return self._array.to_numpy(zero_copy_only=zero_copy_only)
+
+            def is_null(self) -> pa.Array:
+                return self._array.is_null()
+
+        def column(self, name: str) -> FakeArray:
+            values = {
+                "lat": [48.85, 48.86],
+                "lon": [2.35, 2.36],
+            }
+            return self.FakeArray(values[name])
+
+    class FakeParquet:
+        schema_arrow = pa.schema([("lat", pa.float64()), ("lon", pa.float64())])
+
+        def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
+            yield FakeBatch()
+
+    monkeypatch.setattr(inputs.pq, "ParquetFile", lambda _path: FakeParquet())
+
+    runs = list(inputs.iter_lat_lon_runs(tmp_path))
+
+    assert [(row_index, lat, lon) for _path, row_index, lat, lon in runs] == [
+        (0, 48.85, 2.35),
+        (1, 48.86, 2.36),
+    ]
 
 
 def test_summary_counts_rows_and_sorts_h3_cells(tmp_path: Path) -> None:
@@ -62,6 +112,18 @@ def test_summary_rejects_invalid_coordinates(tmp_path: Path, lat: float, lon: fl
     _write_coords(polygons / "a.parquet", [(lat, lon)])
 
     with pytest.raises(ValueError, match=r"a\.parquet row 0"):
+        compute_polygon_density_summary(tmp_path)
+
+
+def test_summary_rejects_null_coordinates(tmp_path: Path) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    pq.write_table(
+        pa.table({"lat": pa.array([None], type=pa.float64()), "lon": pa.array([2.35])}),
+        polygons / "a.parquet",
+    )
+
+    with pytest.raises(ValueError, match=r"null coordinate in a\.parquet row 0"):
         compute_polygon_density_summary(tmp_path)
 
 
