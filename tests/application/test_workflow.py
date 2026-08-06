@@ -103,6 +103,35 @@ def test_prioritize_sources_puts_unuploaded_before_retryable_sources() -> None:
     ]
 
 
+def test_shard_needs_enrichment_scans_status_columns_without_row_dicts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resume checks should inspect Arrow columns, not materialize every row."""
+    from osm_polygon_website_tag.application import workflow
+
+    class FakeBatch:
+        def column(self, name: str) -> pa.Array:
+            values = {
+                "website_text_status": pa.array(["success", "pending"]),
+                "contact_website_text_status": pa.array(["absent", "absent"]),
+            }
+            return values[name]
+
+        def to_pylist(self) -> list[dict[str, object]]:
+            raise AssertionError("resume status checks must not materialize row dictionaries")
+
+    class FakeParquet:
+        schema_arrow = POLYGON_PUBLIC_SCHEMA
+
+        def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
+            yield FakeBatch()
+
+    monkeypatch.setattr(workflow.pq, "ParquetFile", lambda _path: FakeParquet())
+
+    assert workflow._shard_needs_enrichment(tmp_path / "source.parquet") is True
+
+
 def _sources(make_pbf, tmp_path: Path) -> Path:
     first = make_pbf(_WEBSITE_OSM, name="a-latest.osm.pbf")
     second = make_pbf(_EMPTY_OSM, name="b-latest.osm.pbf")

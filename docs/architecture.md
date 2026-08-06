@@ -43,6 +43,9 @@ documents its boundary.
    input-ordered. Cache commits and source-bound Parquet
    checkpoint parts are flushed at each completed batch, so a `KeyboardInterrupt`
    preserves the enriched prefix and resumes from the first incomplete batch.
+   Resume checks inspect only the two text-status columns in bounded Arrow
+   batches: `success` and `absent` are terminal, while null or any other
+   status remains retryable.
 4. After every enriched PBF, the cumulative H3 resolution-3 polygon-density
    summary is computed once from all local public `lat`/`lon` values. The
    deterministic logarithmic `assets/geographic_polygon_density.png`, README,
@@ -168,6 +171,9 @@ content hash without PBF reads or website fetches.
   enrichment batch. Atomic, source-hash-bound Parquet parts retain completed
   prefixes across interruption; parts are assembled and removed only after the
   final shard promotion succeeds.
+- Resume status checks scan only the two text-status columns with Arrow kernels,
+  avoiding per-polygon Python row dictionaries while preserving the terminal
+  `success`/`absent` contract.
 - DuckDB has an explicit memory limit, one deterministic worker, and a
   run-owned spill directory.
 - Source fingerprints are compared before and after reading.
