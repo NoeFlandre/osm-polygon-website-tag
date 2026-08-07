@@ -27,6 +27,23 @@ def _write_coords(path: Path, rows: list[tuple[float, float]]) -> None:
     )
 
 
+def _write_text_coords(
+    path: Path,
+    rows: list[tuple[float, float, str, str]],
+) -> None:
+    pq.write_table(
+        pa.table(
+            {
+                "lat": [lat for lat, _lon, _website, _contact in rows],
+                "lon": [lon for _lat, lon, _website, _contact in rows],
+                "website_text_status": [website for _lat, _lon, website, _contact in rows],
+                "contact_website_text_status": [contact for _lat, _lon, _website, contact in rows],
+            }
+        ),
+        path,
+    )
+
+
 def test_iter_lat_lon_runs_uses_arrow_buffers_without_row_lists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -101,6 +118,35 @@ def test_summary_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
         tmp_path,
         source_names={"uploaded.osm.pbf"},
     )
+
+    assert summary.polygon_row_count == 1
+
+
+def test_summary_can_filter_to_polygons_with_extracted_text(tmp_path: Path) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    _write_text_coords(
+        polygons / "source.parquet",
+        [
+            (48.85, 2.35, "success", "absent"),
+            (40.7, -74.0, "empty", "success"),
+            (35.68, 139.69, "fetch_error", "absent"),
+        ],
+    )
+
+    summary = compute_polygon_density_summary(tmp_path, extracted_text_only=True)
+
+    assert summary.polygon_row_count == 2
+    assert sum(count for _cell, count in summary.cells) == 2
+
+
+def test_text_only_summary_excludes_shards_without_text_status_columns(tmp_path: Path) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    _write_coords(polygons / "legacy.parquet", [(48.85, 2.35)])
+    _write_text_coords(polygons / "current.parquet", [(40.7, -74.0, "success", "absent")])
+
+    summary = compute_polygon_density_summary(tmp_path, extracted_text_only=True)
 
     assert summary.polygon_row_count == 1
 

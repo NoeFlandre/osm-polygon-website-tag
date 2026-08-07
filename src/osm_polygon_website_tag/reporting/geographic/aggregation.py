@@ -19,11 +19,20 @@ def compute_polygon_density_summary(
     *,
     h3_resolution: int = DEFAULT_H3_RESOLUTION,
     source_names: Collection[str] | None = None,
+    extracted_text_only: bool = False,
 ) -> PolygonDensitySummary:
-    """Aggregate selected public polygon centroids into deterministic H3 counts."""
+    """Aggregate selected public polygon centroids into deterministic H3 counts.
+
+    Set ``extracted_text_only`` to count only rows with a successful
+    ``website`` or ``contact:website`` text extraction.
+    """
     counts: dict[str, int] = {}
     row_count = 0
-    for path, row_index, lat, lon in iter_lat_lon_runs(run_dir, source_names=source_names):
+    for path, row_index, lat, lon in iter_lat_lon_runs(
+        run_dir,
+        source_names=source_names,
+        extracted_text_only=extracted_text_only,
+    ):
         try:
             cell = assign_h3_cell(lat, lon, resolution=h3_resolution)
         except GeographicMapError as exc:

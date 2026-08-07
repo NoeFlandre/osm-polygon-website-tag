@@ -88,7 +88,11 @@ def compute_card_stats(
     """
     run_dir = Path(run_dir)
     stats = CardStats()
-    density = summary or compute_polygon_density_summary(run_dir, source_names=source_names)
+    density = summary or compute_polygon_density_summary(
+        run_dir,
+        source_names=source_names,
+        extracted_text_only=True,
+    )
     stats.polygon_density_h3_resolution = density.h3_resolution
     stats.occupied_h3_cell_count = density.occupied_cell_count
     stats.polygon_density_row_count = density.polygon_row_count

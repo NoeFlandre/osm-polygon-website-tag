@@ -47,7 +47,8 @@ documents its boundary.
    batches: `success` and `absent` are terminal, while null or any other
    status remains retryable.
 4. After every enriched PBF, the cumulative H3 resolution-3 polygon-density
-   summary is computed once from all local public `lat`/`lon` values. The
+   summary is computed once from local public rows with a successful `website`
+   or `contact:website` text extraction. The
    deterministic logarithmic `assets/geographic_polygon_density.png`, README,
    and YAML are promoted together and uploaded with the changed shard. An
    atomic schema-v2 acknowledgement is persisted before the next source
@@ -136,9 +137,9 @@ snapshot and website-text tables, combined word total, and top-ten hostname
 tables are regenerated from Parquets on every incremental upload. Detailed
 analysis stays in `analysis/*.parquet`; optional Hugging Face task metadata is
 omitted because no official task category accurately describes the dataset.
-The geographic map counts every public polygon centroid exactly once in H3
-resolution 3 and uses a logarithmic absolute-count color scale without a
-bundled Natural Earth 1:110m land backdrop and no network fetch. The map, README, and YAML are receipt-bound only after
+The geographic map counts every text-bearing public polygon centroid exactly
+once in H3 resolution 3 and uses a logarithmic absolute-count color scale with
+the bundled Natural Earth 1:110m land backdrop and no network fetch. The map, README, and YAML are receipt-bound only after
 final run-level verification; the per-PBF upload checkpoint remains operational
 state.
 

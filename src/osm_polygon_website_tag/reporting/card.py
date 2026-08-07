@@ -43,7 +43,11 @@ def build_card(
     bytes.
     """
     run_dir = Path(run_dir)
-    summary = compute_polygon_density_summary(run_dir, source_names=source_names)
+    summary = compute_polygon_density_summary(
+        run_dir,
+        source_names=source_names,
+        extracted_text_only=True,
+    )
     stats = compute_card_stats(run_dir, summary=summary, source_names=source_names)
     body = _render_markdown(stats)
     front_matter = _render_yaml_front_matter(stats)
@@ -60,6 +64,7 @@ def build_card(
             summary=summary,
             output_path=staged_map,
             source_names=source_names,
+            extracted_text_only=True,
         )
         staged_readme.write_text(readme, encoding="utf-8")
         staged_yaml.write_text(front_matter, encoding="utf-8")
@@ -202,7 +207,8 @@ def _render_markdown(stats: CardStats) -> str:
             f"![H3 polygon density]({POLYGON_DENSITY_ASSET_REL_PATH})\n\n"
             f"H3 resolution {stats.polygon_density_h3_resolution} contains "
             f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
-            f"**{stats.polygon_density_row_count:,}** polygon centroids. "
+            f"**{stats.polygon_density_row_count:,}** polygon centroids with at least "
+            "one successfully extracted website text. "
             "The color scale is logarithmic, counts are absolute, and a Natural Earth "
             "1:110m land backdrop provides geographic context."
         ),

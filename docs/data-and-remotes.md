@@ -68,8 +68,10 @@ verifies the local run before any upload.
 
 The resumable production command is documented in the root README. With
 `run-all --apply`, each polygon shard is safely enriched from both website
-tags, the cumulative card and logarithmic H3 density map are recomputed from
-Parquets, and the changed shard plus card bundle are uploaded together; a local acknowledgement is then written atomically
+tags, the cumulative card and logarithmic H3 density map of polygons with
+successfully extracted text are recomputed from Parquets, and the changed
+shard plus card bundle are uploaded together; a local acknowledgement is then
+written atomically
 before the next PBF begins. The final analysis, card, manifests, and completion
 receipt are uploaded only after the entire inventory verifies. Stopping with
 `Ctrl-C` and repeating the same command resumes without reprocessing exact

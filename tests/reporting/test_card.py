@@ -163,6 +163,24 @@ def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> No
     assert "H3 resolution 3" in card
 
 
+def test_build_card_map_counts_only_polygons_with_extracted_text(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    rows = [_public_row(polygon_id="pending"), _public_row(polygon_id="success")]
+    rows[0]["website_text_status"] = "pending"
+    rows[1]["website_text_status"] = "success"
+    rows[1]["website_text"] = "extracted text"
+    rows[1]["website_word_count"] = 2
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA),
+        run_dir / "polygons" / "monaco-latest.parquet",
+    )
+
+    build_card(run_dir)
+
+    card = (run_dir / "README.md").read_text()
+    assert "across **1** polygon centroids with at least one successfully extracted" in card
+
+
 def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     path = build_card(run_dir)
