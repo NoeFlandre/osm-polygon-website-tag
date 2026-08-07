@@ -22,6 +22,7 @@ from osm_polygon_website_tag.pipeline.enrich import (
     MAX_FETCH_WORKERS,
     enrich_polygon_shard,
 )
+from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
 
@@ -197,6 +198,65 @@ def test_duplicate_url_across_both_tags_fetches_once(tmp_path: Path) -> None:
     )
 
     assert calls == 1
+
+
+def test_enrichment_bulk_reads_each_batch_url_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard = tmp_path / "run" / "polygons" / "source.parquet"
+    rows = [
+        _legacy_row(
+            polygon_id=f"source:way/{index}",
+            website=f"https://example.org/{index % 2}",
+            contact=None,
+        )
+        for index in range(8)
+    ]
+    _write_legacy(shard, rows)
+    cache_path = tmp_path / "run" / "cache" / "text.sqlite3"
+    cache = TextCache(cache_path)
+    for index in range(2):
+        url = f"https://example.org/{index}"
+        cache.record(
+            CachedText(
+                url,
+                "success",
+                f"cached text {index}",
+                3,
+                url,
+                None,
+                1,
+                "2026-01-01T00:00:00+00:00",
+                "2.1.0",
+                "seed",
+            ),
+            invocation_id="seed",
+        )
+    cache.close()
+    lookups: list[tuple[str, ...]] = []
+    original_bulk_lookup = TextCache.get_reusable_many
+
+    def bulk_lookup(
+        self: TextCache,
+        urls: set[str],
+        *,
+        invocation_id: str,
+    ) -> dict[str, CachedText]:
+        lookups.append(tuple(sorted(urls)))
+        return original_bulk_lookup(self, urls, invocation_id=invocation_id)
+
+    monkeypatch.setattr(TextCache, "get_reusable_many", bulk_lookup)
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=cache_path,
+        invocation_id="run-1",
+        fetcher=lambda _url: pytest.fail("cached URLs must not be fetched"),
+        extractor=_extract,
+    )
+
+    assert lookups == [("https://example.org/0", "https://example.org/1")]
 
 
 def test_unique_urls_are_fetched_concurrently_in_stable_row_order(tmp_path: Path) -> None:

@@ -5,9 +5,10 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES
@@ -16,6 +17,8 @@ _CACHE_BUSY_TIMEOUT_SECONDS = 30.0
 _LOCK_RETRY_COUNT = 5
 _LOCK_RETRY_DELAY_SECONDS = 0.1
 DEFAULT_COMMIT_BATCH_SIZE = 64
+# Keep URL lookups comfortably below SQLite's default bound-variable limit.
+CACHE_LOOKUP_CHUNK_SIZE = 256
 
 
 @dataclass(frozen=True)
@@ -89,6 +92,38 @@ class TextCache:
             return value
         return None
 
+    def get_reusable_many(
+        self,
+        urls: Collection[str],
+        *,
+        invocation_id: str,
+    ) -> dict[str, CachedText]:
+        """Return reusable entries for ``urls`` using bounded SQL batches."""
+        ordered_urls = sorted(set(urls))
+        reusable: dict[str, CachedText] = {}
+        for start in range(0, len(ordered_urls), CACHE_LOOKUP_CHUNK_SIZE):
+            chunk = ordered_urls[start : start + CACHE_LOOKUP_CHUNK_SIZE]
+            if not chunk:
+                continue
+            placeholders = ",".join("?" for _ in chunk)
+            query = f"""SELECT url, status, text, word_count, final_url, message,
+                  attempt_count, last_attempt_at, trafilatura_version,
+                  invocation_id
+               FROM website_text
+               WHERE url IN ({placeholders})
+                 AND (status = ? OR invocation_id = ?)
+               ORDER BY url"""  # noqa: S608
+            parameters = (*chunk, "success", invocation_id)
+            rows = _retry_locked(
+                lambda query=query, parameters=parameters: self._db.execute(
+                    query, parameters
+                ).fetchall()
+            )
+            for row in rows:
+                value = _cached_text_from_row(row)
+                reusable[value.url] = value
+        return reusable
+
     def record(self, value: CachedText, *, invocation_id: str) -> CachedText:
         """Record one attempt and return its canonical stored representation.
 
@@ -158,18 +193,7 @@ class TextCache:
         )
         if row is None:
             return None
-        return CachedText(
-            url=str(row[0]),
-            status=str(row[1]),
-            text=row[2],
-            word_count=None if row[3] is None else int(row[3]),
-            final_url=row[4],
-            message=row[5],
-            attempt_count=int(row[6]),
-            last_attempt_at=str(row[7]),
-            trafilatura_version=row[8],
-            invocation_id=str(row[9]),
-        )
+        return _cached_text_from_row(row)
 
     def close(self) -> None:
         if self._closed:
@@ -191,6 +215,22 @@ def _retry_locked[ResultT](operation: Callable[[], ResultT]) -> ResultT:
                 raise
             time.sleep(_LOCK_RETRY_DELAY_SECONDS * (2**attempt))
     raise AssertionError("unreachable")
+
+
+def _cached_text_from_row(row: tuple[Any, ...]) -> CachedText:
+    """Convert one SQLite row to the immutable cache value."""
+    return CachedText(
+        url=str(row[0]),
+        status=str(row[1]),
+        text=row[2],
+        word_count=None if row[3] is None else int(row[3]),
+        final_url=row[4],
+        message=row[5],
+        attempt_count=int(row[6]),
+        last_attempt_at=str(row[7]),
+        trafilatura_version=row[8],
+        invocation_id=str(row[9]),
+    )
 
 
 def _is_locked_error(error: sqlite3.OperationalError) -> bool:
@@ -216,4 +256,9 @@ def _quarantine_corrupt_database(path: Path) -> Path:
     return quarantine
 
 
-__all__ = ["DEFAULT_COMMIT_BATCH_SIZE", "CachedText", "TextCache"]
+__all__ = [
+    "CACHE_LOOKUP_CHUNK_SIZE",
+    "DEFAULT_COMMIT_BATCH_SIZE",
+    "CachedText",
+    "TextCache",
+]

@@ -132,6 +132,7 @@ def enrich_polygon_shard(
                     rows_to_skip = 0
                 states: list[_RowState] = []
                 pending: dict[str, list[tuple[dict[str, object], str]]] = {}
+                lookup_urls: set[str] = set()
                 for original in originals:
                     row = dict(original)
                     if source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True):
@@ -146,21 +147,34 @@ def enrich_polygon_shard(
                         row,
                         value_column="website",
                         field_prefix="website",
-                        cache=cache,
                         invocation_id=invocation_id,
                         pending=pending,
+                        lookup_urls=lookup_urls,
                     )
                     _queue_tag(
                         row,
                         value_column="contact_website",
                         field_prefix="contact_website",
-                        cache=cache,
                         invocation_id=invocation_id,
                         pending=pending,
+                        lookup_urls=lookup_urls,
                     )
                     states.append(_RowState(original, row, before))
+                unresolved_pending: dict[str, list[tuple[dict[str, object], str]]] = {}
+                if lookup_urls:
+                    cached_by_url = cache.get_reusable_many(
+                        lookup_urls,
+                        invocation_id=invocation_id,
+                    )
+                    for url, references in pending.items():
+                        cached = cached_by_url.get(url)
+                        if cached is None:
+                            unresolved_pending[url] = references
+                            continue
+                        for row, field_prefix in references:
+                            _apply_result(row, field_prefix, cached)
                 _resolve_pending(
-                    pending,
+                    unresolved_pending,
                     cache=cache,
                     invocation_id=invocation_id,
                     fetcher=fetcher,
@@ -370,11 +384,11 @@ def _queue_tag(
     *,
     value_column: str,
     field_prefix: str,
-    cache: TextCache,
     invocation_id: str,
     pending: dict[str, list[tuple[dict[str, object], str]]],
+    lookup_urls: set[str],
 ) -> None:
-    """Resolve local/cache-only cases and queue one cache miss by URL."""
+    """Resolve local cases and collect one cache lookup per normalized URL."""
     value = row.get(value_column)
     text_column = f"{field_prefix}_text"
     count_column = f"{field_prefix}_word_count"
@@ -410,10 +424,7 @@ def _queue_tag(
             ),
         )
         return
-    cached = cache.get_reusable(normalized, invocation_id=invocation_id)
-    if cached is not None:
-        _apply_result(row, field_prefix, cached)
-        return
+    lookup_urls.add(normalized)
     pending.setdefault(normalized, []).append((row, field_prefix))
 
 

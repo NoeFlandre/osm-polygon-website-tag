@@ -100,6 +100,53 @@ def test_failure_is_reused_only_within_same_invocation(tmp_path: Path) -> None:
     cache.close()
 
 
+def test_bulk_reusable_lookup_filters_by_status_and_invocation(tmp_path: Path) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+    cache.record(_result(url="https://example.org/success"), invocation_id="run-1")
+    cache.record(
+        _result(
+            url="https://example.org/current-failure", status="fetch_error", text=None, count=None
+        ),
+        invocation_id="run-2",
+    )
+    cache.record(
+        _result(
+            url="https://example.org/prior-failure", status="fetch_error", text=None, count=None
+        ),
+        invocation_id="run-1",
+    )
+
+    reusable = cache.get_reusable_many(
+        {
+            "https://example.org/success",
+            "https://example.org/current-failure",
+            "https://example.org/prior-failure",
+            "https://example.org/missing",
+        },
+        invocation_id="run-2",
+    )
+
+    assert set(reusable) == {
+        "https://example.org/success",
+        "https://example.org/current-failure",
+    }
+    assert reusable["https://example.org/success"].attempt_count == 1
+    assert reusable["https://example.org/current-failure"].status == "fetch_error"
+    cache.close()
+
+
+def test_bulk_reusable_lookup_chunks_large_url_sets(tmp_path: Path) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+    urls = {f"https://example.org/{index}" for index in range(600)}
+    for url in urls:
+        cache.record(_result(url=url), invocation_id="run-1")
+
+    reusable = cache.get_reusable_many(urls, invocation_id="run-2")
+
+    assert set(reusable) == urls
+    cache.close()
+
+
 def test_later_failure_attempt_increments_counter(tmp_path: Path) -> None:
     path = tmp_path / "text.sqlite3"
     cache = TextCache(path)

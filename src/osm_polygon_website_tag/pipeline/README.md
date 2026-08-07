@@ -24,8 +24,10 @@ rejections, and shard hashes. PBFs themselves remain sequential in
 
 `enrich_polygon_shard` processes one bounded Arrow batch at a time. Cache
 lookups, SQLite writes, and Trafilatura/lxml text extraction stay on the caller
-thread. Distinct cache misses use a bounded pool of eight I/O workers by
-default for network retrieval only; keeping native HTML parsing serial avoids
+thread. Each batch performs a parameterized, chunked lookup for its unique
+normalized URLs, so repeated rows do not issue repeated SQLite reads. Distinct
+cache misses use a bounded pool of eight I/O workers by default for network
+retrieval only; keeping native HTML parsing serial avoids
 platform-specific lxml allocator failures without changing extracted text.
 `fetch_workers` can be configured per invocation up to a safe cap of 32.
 Results are recorded and applied in deterministic URL and input-row order;
