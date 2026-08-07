@@ -169,8 +169,9 @@ content hash without PBF reads or website fetches.
   eight distinct misses per batch by default (`fetch_workers`, capped at 32).
   Trafilatura/lxml text extraction, the SQLite text cache, and row application
   stay on the caller thread because the native parser must not run concurrently
-  on macOS. Results remain deterministic in URL/row order without changing
-  extracted text.
+  on macOS. Trafilatura's configuration setup is reused per caller thread
+  while the URL is refreshed for each document. Results remain deterministic in
+  URL/row order without changing extracted text.
 - Geographic aggregation reads only `lat` and `lon` columns in bounded batches,
   converts their Arrow buffers without Python list materialization, and keeps an
   explicit null mask so invalid-input errors remain fail-closed.

@@ -52,6 +52,43 @@ def test_trafilatura_version_lookup_is_cached(monkeypatch) -> None:
     assert calls == ["trafilatura"]
 
 
+def test_trafilatura_options_are_reused_per_thread(monkeypatch) -> None:
+    """Repeated extraction reuses setup while updating the current URL."""
+    state = getattr(text_extract, "_extractor_state", None)
+    if state is not None:
+        state.__dict__.clear()
+    constructions: list[dict[str, object]] = []
+
+    class FakeExtractor:
+        def __init__(self, **kwargs: object) -> None:
+            constructions.append(kwargs)
+            self.url = kwargs.get("url")
+            self.source = kwargs.get("url")
+
+    seen_options: list[FakeExtractor] = []
+
+    def fake_extract(*_args: object, **kwargs: object) -> str:
+        option = kwargs["options"]
+        assert isinstance(option, FakeExtractor)
+        seen_options.append(option)
+        return "text"
+
+    monkeypatch.setattr(text_extract, "Extractor", FakeExtractor, raising=False)
+    monkeypatch.setattr(text_extract.trafilatura, "extract", fake_extract)
+    try:
+        first = extract_main_text(b"<html/>", url="https://example.org/one")
+        second = extract_main_text(b"<html/>", url="https://example.org/two")
+    finally:
+        if state is not None:
+            state.__dict__.clear()
+
+    assert first.text == second.text == "text"
+    assert len(constructions) == 1
+    assert seen_options[0] is seen_options[1]
+    assert seen_options[1].url == "https://example.org/two"
+    assert seen_options[1].source == "https://example.org/two"
+
+
 def test_empty_trafilatura_result_is_explicit(monkeypatch) -> None:
     monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: None)
 
