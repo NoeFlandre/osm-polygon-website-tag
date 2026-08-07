@@ -83,6 +83,10 @@ already-complete sources last; deterministic filename order breaks ties.
 If a completed run predates the H3 card contract, the next `run-all` invocation
 refreshes only its local card/map/receipt bundle before any remote action; the
 `refresh-card` command exposes the same migration explicitly.
+Run metadata and source manifests are read as UTF-8 JSON and structurally
+validated at the resume boundary; duplicate filenames, missing fingerprints,
+non-integer fingerprints, and malformed JSON fail closed instead of being
+silently collapsed into a partial run state.
 
 ## Run layout
 

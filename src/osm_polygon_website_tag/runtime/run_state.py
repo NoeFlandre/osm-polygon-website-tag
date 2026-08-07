@@ -50,7 +50,7 @@ import datetime as dt
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 # Run state names. Transitions are documented in the module docstring.
 STATUS_INITIALIZED = "initialized"
@@ -141,6 +141,41 @@ def _atomic_write_json(path: Path, payload: Any) -> None:
     atomic_write_json(path, payload)
 
 
+def _read_json_document(path: Path, *, label: str) -> Any:
+    """Read a UTF-8 JSON document and normalize corruption errors."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid {label} JSON: {path}: {exc.msg}") from exc
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"invalid {label} encoding: {path}") from exc
+
+
+def _validated_source_entries(raw: object, *, label: str) -> list[dict[str, Any]]:
+    """Validate the structural contract shared by source manifests."""
+    if not isinstance(raw, list):
+        raise ValueError(f"{label} must be a JSON array")
+
+    entries: list[dict[str, Any]] = []
+    seen_filenames: set[str] = set()
+    for index, raw_entry in enumerate(raw):
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"{label}[{index}] must be a JSON object")
+        entry = cast(dict[str, Any], raw_entry)
+        filename = entry.get("filename")
+        if not isinstance(filename, str) or not filename:
+            raise ValueError(f"{label}[{index}].filename must be a non-empty string")
+        if filename in seen_filenames:
+            raise ValueError(f"{label} contains duplicate filename: {filename!r}")
+        for field_name in ("size_bytes", "mtime_ns"):
+            value = entry.get(field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{label}[{index}].{field_name} must be a non-bool integer")
+        seen_filenames.add(filename)
+        entries.append(entry)
+    return entries
+
+
 def _source_fingerprint_payload(fp: SourceFingerprint) -> dict[str, int | str]:
     return {
         "filename": fp.filename,
@@ -218,9 +253,15 @@ def load_run(run_dir: Path) -> RunState:
     sources_json = run_dir / "manifests" / "sources.json"
     if not run_json.exists():
         raise FileNotFoundError(f"missing {run_json}")
-    metadata: dict[str, Any] = json.loads(run_json.read_text())
-    sources_raw = json.loads(sources_json.read_text()) if sources_json.exists() else []
-    sources = {entry["filename"]: entry for entry in sources_raw}
+    metadata_raw = _read_json_document(run_json, label="run metadata")
+    if not isinstance(metadata_raw, dict):
+        raise ValueError("run metadata must be a JSON object")
+    metadata = cast(dict[str, Any], metadata_raw)
+    sources_raw = (
+        _read_json_document(sources_json, label="sources manifest") if sources_json.exists() else []
+    )
+    source_entries = _validated_source_entries(sources_raw, label="sources manifest")
+    sources = {entry["filename"]: entry for entry in source_entries}
     run_id = metadata.get("run_id", run_dir.name)
     return RunState(run_dir=run_dir, run_id=run_id, metadata=metadata, sources=sources)
 
@@ -360,8 +401,8 @@ def expected_source_inventory(run_dir: Path) -> list[dict[str, Any]]:
     path = run_dir / "manifests" / "expected_sources.json"
     if not path.exists():
         raise FileNotFoundError(f"missing {path}")
-    raw = json.loads(path.read_text())
-    return list(raw)
+    raw = _read_json_document(path, label="expected sources manifest")
+    return _validated_source_entries(raw, label="expected sources manifest")
 
 
 def source_inventory_matches(run_dir: Path) -> bool:
@@ -371,7 +412,10 @@ def source_inventory_matches(run_dir: Path) -> bool:
         expected = expected_source_inventory(run_dir)
     except FileNotFoundError:
         return False
-    actual = json.loads((run_dir / "manifests" / "sources.json").read_text())
+    actual_raw = _read_json_document(
+        run_dir / "manifests" / "sources.json", label="sources manifest"
+    )
+    actual = _validated_source_entries(actual_raw, label="sources manifest")
     actual_by_name = {e["filename"]: e for e in actual}
     if set(actual_by_name) != {e["filename"] for e in expected}:
         return False

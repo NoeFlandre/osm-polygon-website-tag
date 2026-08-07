@@ -83,6 +83,73 @@ def test_load_run_round_trips_metadata(tmp_path: Path) -> None:
     assert reloaded.metadata["python"] == "3.12"
 
 
+def test_load_run_rejects_non_object_run_metadata(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    (run_dir / "manifests" / "run.json").write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="run metadata must be a JSON object"):
+        load_run(run_dir)
+
+
+def test_load_run_rejects_non_array_sources_manifest(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    (run_dir / "manifests" / "sources.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sources manifest must be a JSON array"):
+        load_run(run_dir)
+
+
+def test_load_run_reports_malformed_json_with_manifest_context(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    (run_dir / "manifests" / "run.json").write_text("{", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid run metadata JSON"):
+        load_run(run_dir)
+
+
+def test_load_run_reports_non_utf8_manifest_with_context(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    (run_dir / "manifests" / "sources.json").write_bytes(b"\xff")
+
+    with pytest.raises(ValueError, match="invalid sources manifest encoding"):
+        load_run(run_dir)
+
+
+def test_load_run_rejects_duplicate_source_filenames(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    entries = [
+        {"filename": "a-latest.osm.pbf", "size_bytes": 1, "mtime_ns": 2},
+        {"filename": "a-latest.osm.pbf", "size_bytes": 3, "mtime_ns": 4},
+    ]
+    (run_dir / "manifests" / "sources.json").write_text(json.dumps(entries), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sources manifest contains duplicate filename"):
+        load_run(run_dir)
+
+
+def test_load_run_rejects_invalid_source_fingerprint(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    entry = {"filename": "a-latest.osm.pbf", "size_bytes": True, "mtime_ns": 2}
+    (run_dir / "manifests" / "sources.json").write_text(json.dumps([entry]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"sources manifest\[0\]\.size_bytes"):
+        load_run(run_dir)
+
+
+def test_expected_source_inventory_rejects_duplicate_filenames(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+    entries = [
+        {"filename": "a-latest.osm.pbf", "size_bytes": 1, "mtime_ns": 2},
+        {"filename": "a-latest.osm.pbf", "size_bytes": 1, "mtime_ns": 2},
+    ]
+    (run_dir / "manifests" / "expected_sources.json").write_text(
+        json.dumps(entries), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="expected sources manifest contains duplicate filename"):
+        expected_source_inventory(run_dir)
+
+
 def test_source_fingerprint_captures_size_and_mtime(tmp_path: Path) -> None:
     p = tmp_path / "monaco-latest.osm.pbf"
     p.write_bytes(b"data")
@@ -319,3 +386,16 @@ def test_source_inventory_matches_detects_mutation(tmp_path: Path) -> None:
     mutated = SourceFingerprint(filename="a-latest.osm.pbf", size_bytes=11, mtime_ns=12345)
     record_processed_source(state, mutated, public_row_count=1, observation_row_count=1)
     assert source_inventory_matches(_run_dir) is False
+
+
+def test_source_inventory_matches_rejects_duplicate_actual_entries(tmp_path: Path) -> None:
+    fp_a = SourceFingerprint(filename="a-latest.osm.pbf", size_bytes=10, mtime_ns=12345)
+    run_dir, _state = initialise_run(tmp_path, run_id="r", expected_sources=[fp_a])
+    entries = [
+        {"filename": "a-latest.osm.pbf", "size_bytes": 10, "mtime_ns": 12345},
+        {"filename": "a-latest.osm.pbf", "size_bytes": 10, "mtime_ns": 12345},
+    ]
+    (run_dir / "manifests" / "sources.json").write_text(json.dumps(entries), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sources manifest contains duplicate filename"):
+        source_inventory_matches(run_dir)
