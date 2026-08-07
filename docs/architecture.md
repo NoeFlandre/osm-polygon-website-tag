@@ -87,6 +87,8 @@ Run metadata and source manifests are read as UTF-8 JSON and structurally
 validated at the resume boundary; duplicate filenames, missing fingerprints,
 non-integer fingerprints, and malformed JSON fail closed instead of being
 silently collapsed into a partial run state.
+All persisted JSON, Markdown, and YAML artifacts use explicit UTF-8 I/O, so
+verification, resume, and publication do not depend on the host locale.
 
 ## Run layout
 

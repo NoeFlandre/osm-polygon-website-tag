@@ -59,10 +59,10 @@ def preflight_legacy_refresh(run_dir: Path | str) -> PreflightReport:
     receipt = root / "manifests" / "completion_receipt.json"
     if receipt.is_file():
         try:
-            payload = json.loads(receipt.read_text())
+            payload = json.loads(receipt.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 errors.append("completion receipt is not a JSON object")
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             errors.append(f"invalid completion receipt: {exc}")
     return PreflightReport(not errors, errors)
 

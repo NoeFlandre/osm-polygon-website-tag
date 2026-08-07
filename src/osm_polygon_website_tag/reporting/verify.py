@@ -354,11 +354,13 @@ def _verify_analysis_and_card(root: Path, errors: list[str]) -> None:
         stats = compute_card_stats(root)
         expected_yaml = _render_yaml_front_matter(stats)
         expected_readme = expected_yaml + "\n" + _render_markdown(stats)
-        if (root / "dataset.yaml").is_file() and (
-            root / "dataset.yaml"
-        ).read_text() != expected_yaml:
+        if (root / "dataset.yaml").is_file() and (root / "dataset.yaml").read_text(
+            encoding="utf-8"
+        ) != expected_yaml:
             errors.append("dataset.yaml does not match artifact-derived statistics")
-        if (root / "README.md").is_file() and (root / "README.md").read_text() != expected_readme:
+        if (root / "README.md").is_file() and (root / "README.md").read_text(
+            encoding="utf-8"
+        ) != expected_readme:
             errors.append("README.md does not match artifact-derived statistics")
     except Exception as exc:
         errors.append(f"card statistic verification failed: {exc}")
@@ -368,7 +370,9 @@ def _verify_analysis_and_card(root: Path, errors: list[str]) -> None:
     elif map_path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
         errors.append("map artifact is not a valid PNG")
     readme_path = root / "README.md"
-    if readme_path.is_file() and POLYGON_DENSITY_ASSET_REL_PATH not in readme_path.read_text():
+    if readme_path.is_file() and POLYGON_DENSITY_ASSET_REL_PATH not in readme_path.read_text(
+        encoding="utf-8"
+    ):
         errors.append(f"README does not reference {POLYGON_DENSITY_ASSET_REL_PATH}")
 
 
@@ -391,7 +395,7 @@ def _verify_analysis_arithmetic(root: Path, errors: list[str]) -> None:
             continue
         total = sum(int(row["row_count"]) for row in level_rows)
         if level == "observation":
-            manifest = json.loads((root / "manifests" / "sources.json").read_text())
+            manifest = json.loads((root / "manifests" / "sources.json").read_text(encoding="utf-8"))
             expected_total = sum(int(entry["observation_row_count"]) for entry in manifest)
             if total != expected_total:
                 errors.append(f"observation cell total mismatch: {total} != {expected_total}")
@@ -481,8 +485,8 @@ def _current_publishable_relative_paths(root: Path) -> set[str]:
 
 def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON object {path}: {exc}")
         return {}
     if not isinstance(value, dict):
@@ -493,8 +497,8 @@ def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:
 
 def _read_json_array(path: Path, errors: list[str]) -> list[dict[str, Any]]:
     try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON array {path}: {exc}")
         return []
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):

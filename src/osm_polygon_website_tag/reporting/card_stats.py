@@ -114,7 +114,7 @@ def compute_card_stats(
     stats.sources_count = len(public_shards)
     expected_path = run_dir / "manifests" / "expected_sources.json"
     if expected_path.is_file():
-        expected = json.loads(expected_path.read_text())
+        expected = json.loads(expected_path.read_text(encoding="utf-8"))
         stats.expected_sources_count = len(expected)
     else:
         stats.expected_sources_count = stats.sources_count

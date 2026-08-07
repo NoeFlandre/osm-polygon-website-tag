@@ -91,7 +91,13 @@ def test_package_dependency_graph_is_acyclic() -> None:
 
 
 def test_source_root_contains_only_package_entry_files() -> None:
-    root_files = {path.name for path in PACKAGE_ROOT.iterdir() if path.is_file()}
+    # Finder metadata is ignored by git and is not a Python package entry file.
+    platform_metadata = {".DS_Store"}
+    root_files = {
+        path.name
+        for path in PACKAGE_ROOT.iterdir()
+        if path.is_file() and path.name not in platform_metadata
+    }
     assert root_files == {"__init__.py", "py.typed"}
 
 

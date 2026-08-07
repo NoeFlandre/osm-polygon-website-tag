@@ -319,6 +319,16 @@ def test_verify_results_rejects_corrupt_manifest(tmp_path: Path) -> None:
     assert report.ok is False
 
 
+def test_verify_results_reports_non_utf8_manifest(tmp_path: Path) -> None:
+    run_dir, _ = initialise_run(tmp_path, run_id="r")
+    (run_dir / "manifests" / "sources.json").write_bytes(b"\xff")
+
+    report = verify_results(run_dir)
+
+    assert report.ok is False
+    assert any("invalid JSON array" in error for error in report.errors)
+
+
 def test_verify_results_math_isfinite_helper() -> None:
     assert math.isfinite(1.0)
     assert not math.isfinite(float("inf"))

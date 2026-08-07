@@ -2,11 +2,31 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _implicit_text_io_calls() -> list[str]:
+    violations: list[str] = []
+    for source in sorted((ROOT / "src").rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"read_text", "write_text"}:
+                continue
+            if not any(
+                keyword.arg == "encoding"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value == "utf-8"
+                for keyword in node.keywords
+            ):
+                violations.append(f"{source}:{node.lineno}:{node.func.attr}")
+    return violations
 
 
 def test_requested_python_tools_are_direct_dependencies() -> None:
@@ -70,3 +90,7 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
     uses = re.findall(r"uses: [^@\s]+@([^\s]+)", workflow)
     assert len(uses) == 3
     assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for revision in uses)
+
+
+def test_production_text_io_declares_utf8_encoding() -> None:
+    assert _implicit_text_io_calls() == []

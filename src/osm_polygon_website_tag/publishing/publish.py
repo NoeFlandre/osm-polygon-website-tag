@@ -57,7 +57,7 @@ def build_publish_plan(
     plan = PublishPlan(repo_id=repo_id, repo_kind=repo_kind)
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     if receipt_path.is_file():
-        receipt = json.loads(receipt_path.read_text())
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         plan.artifact_paths = [run_dir / entry["path"] for entry in receipt.get("artifacts", [])]
         plan.artifact_paths.append(receipt_path)
         readme = run_dir / "README.md"

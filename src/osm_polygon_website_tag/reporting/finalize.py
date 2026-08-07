@@ -83,7 +83,7 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         for path in _publishable_paths(root)
     ]
     canonical = json.dumps(artifacts, sort_keys=True, separators=(",", ":"))
-    sources = json.loads((root / "manifests" / "sources.json").read_text())
+    sources = json.loads((root / "manifests" / "sources.json").read_text(encoding="utf-8"))
     receipt = {
         "schema_version": "v1.2",
         "digest_algorithm": "sha256",
@@ -95,7 +95,10 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         receipt["card_contract_version"] = 1
     destination = root / "manifests" / "completion_receipt.json"
     temporary = destination.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+    temporary.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     temporary.replace(destination)
     return receipt
 
