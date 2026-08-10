@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-import osm_polygon_website_tag.pipeline.enrich as enrich_module
+import osm_polygon_website_tag.pipeline.enrichment_checkpoint as checkpoint_module
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
@@ -126,10 +126,10 @@ def test_assemble_checkpoint_streams_arrow_batches(
     def unexpected_row_sink(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("assembly must not construct BatchParquetSink")
 
-    monkeypatch.setattr(enrich_module, "BatchParquetSink", unexpected_row_sink)
+    monkeypatch.setattr(checkpoint_module, "BatchParquetSink", unexpected_row_sink)
     staged = tmp_path / "staged.parquet"
 
-    max_batch_rows = enrich_module._assemble_checkpoint(
+    max_batch_rows = checkpoint_module.assemble_checkpoint(
         (part,),
         staged,
         batch_rows=2,
@@ -143,7 +143,7 @@ def test_assemble_checkpoint_streams_arrow_batches(
         "source:way/1",
     ]
     repeated = tmp_path / "repeated.parquet"
-    enrich_module._assemble_checkpoint((part,), repeated, batch_rows=2, row_count=2)
+    checkpoint_module.assemble_checkpoint((part,), repeated, batch_rows=2, row_count=2)
     assert repeated.read_bytes() == staged.read_bytes()
 
 

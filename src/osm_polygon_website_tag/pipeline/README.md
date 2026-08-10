@@ -2,8 +2,8 @@
 
 Implements bounded data-processing stages.
 
-- Modules: `extraction`, `record_builders`, `enrich`, `public_schema_migration`, `analyze`,
-  `partition_aggregate`.
+- Modules: `extraction`, `record_builders`, `enrich`, `enrichment_checkpoint`,
+  `public_schema_migration`, `analyze`, `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
   `migrate_public_shard`, `analyze_results`.
@@ -35,6 +35,12 @@ duplicate normalized URLs are fetched once per batch. Cache commits are
 batched and flushed at each completed batch. Completed batches are written as
 source-bound atomic checkpoint parts, so an interruption preserves the shard
 prefix and retries only the unresolved suffix on resume.
+
+`enrich` owns row orchestration, URL resolution, cache use, and final shard
+promotion. `enrichment_checkpoint` owns the source-bound checkpoint metadata,
+sequential part validation, atomic part writes, and bounded final assembly.
+This boundary keeps durable resume-state rules independently reviewable while
+leaving the `enrich_polygon_shard` entry point and on-disk contract unchanged.
 
 ## Record builders
 

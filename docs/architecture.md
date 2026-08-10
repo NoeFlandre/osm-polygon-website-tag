@@ -43,6 +43,10 @@ documents its boundary.
    input-ordered. Cache commits and source-bound Parquet
    checkpoint parts are flushed at each completed batch, so a `KeyboardInterrupt`
    preserves the enriched prefix and resumes from the first incomplete batch.
+   `pipeline.enrich` owns URL and row orchestration, while
+   `pipeline.enrichment_checkpoint` owns checkpoint metadata, part validation,
+   atomic part writes, and bounded assembly; the split does not change the
+   checkpoint layout or the `enrich_polygon_shard` entry point.
    Resume checks inspect only the two text-status columns in bounded Arrow
    batches: `success` and `absent` are terminal, while null or any other
    status remains retryable.
