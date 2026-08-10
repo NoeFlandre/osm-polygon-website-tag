@@ -1,12 +1,11 @@
 """Shared normalized tag projection for extraction row builders.
 
-The three row builders in :mod:`osm_polygon_website_tag.pipeline.extraction`
-(``_public_record``, ``_comparison_record``, ``_rejection_record``) each
-independently normalized the same OSM tags and selected the primary
-category. This module factors out the values genuinely reused by all three
-into a single frozen value object. Production extraction computes it once per
-area payload and passes it to the builders; direct builder calls can omit it
-and use the same derive-on-demand fallback.
+The three builders in
+:mod:`osm_polygon_website_tag.pipeline.extraction_records` each need the same
+normalized OSM tags and primary category. This module factors the genuinely
+shared values into one frozen value object. Production extraction computes it
+once per area payload and passes it to the builders; direct builder calls can
+omit it and use the same derive-on-demand fallback.
 
 Scope
 -----
@@ -18,13 +17,13 @@ Scope
 * ``primary_category``
 
 Wikidata normalization and presence live in a separate small helper
-(:func:`derive_wikidata`) used only by ``_comparison_record`` and
-``_rejection_record``.
+(:func:`derive_wikidata`) used only by ``build_comparison_record`` and
+``build_rejection_record``.
 
 URL classification and hostname extraction are **public-row-only**: they
 belong only to the public shard and would be a processing regression if
 applied to every comparison and rejection row. They remain in
-``_public_record``.
+``build_public_record``.
 
 Equivalence
 -----------
@@ -88,8 +87,8 @@ def derive_tags(tags: dict[str, str]) -> DerivedTags:
 def derive_wikidata(tags: dict[str, str]) -> tuple[str | None, bool]:
     """Normalize ``wikidata`` once and return ``(value, has_value)``.
 
-    Used only by ``_comparison_record`` and ``_rejection_record``; the public
-    shard's v1.3 schema omits Wikidata.
+    Used only by ``build_comparison_record`` and ``build_rejection_record``;
+    the public shard's v1.3 schema omits Wikidata.
     """
     wikidata = normalize_value(tags.get(WIKIDATA_KEY, "")) or None
     return wikidata, wikidata is not None

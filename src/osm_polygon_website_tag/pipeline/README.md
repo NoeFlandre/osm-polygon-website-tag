@@ -2,8 +2,9 @@
 
 Implements bounded data-processing stages.
 
-- Modules: `extraction`, `area_work`, `record_builders`, `enrich`,
-  `enrichment_checkpoint`, `public_schema_migration`, `analyze`,
+- Modules: `extraction`, `area_work`, `extraction_records`,
+  `record_builders`, `enrich`, `enrichment_checkpoint`,
+  `public_schema_migration`, `analyze`,
   `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
@@ -21,11 +22,13 @@ emitted in callback order, so worker-count changes preserve row order, schemas,
 rejections, and shard hashes. PBFs themselves remain sequential in
 `application.workflow`.
 
-`extraction` owns libosmium callbacks, candidate reconciliation, geometry and
-row construction, and shard persistence. `area_work` owns only the copied
+`extraction` owns libosmium callbacks, candidate reconciliation, area-task
+orchestration, and shard persistence. `area_work` owns only the copied
 payload/result contracts, validated worker bounds, and bounded FIFO executor;
-it has no libosmium, SQLite, or Parquet dependency. `extraction` re-exports the
-existing worker constants and payload/result types for compatibility.
+it has no libosmium, SQLite, or Parquet dependency. `extraction_records` owns
+the deterministic, side-effect-free construction of public, comparison, and
+rejection rows. `extraction` re-exports the existing worker constants,
+payload/result types, and private row-builder aliases for compatibility.
 
 ## Enrichment
 
@@ -52,10 +55,10 @@ leaving the `enrich_polygon_shard` entry point and on-disk contract unchanged.
 ## Record builders
 
 `record_builders` is a pure `domain`-only helper that factors out the
-tag-derived values reused by the extraction row builders.
+tag-derived values reused by the three builders in `extraction_records`.
 
-`derive_tags` is the projection shared by all three row builders
-(`_public_record`, `_comparison_record`, `_rejection_record`). It returns
+`derive_tags` is the projection shared by `build_public_record`,
+`build_comparison_record`, and `build_rejection_record`. It returns
 exactly:
 
 - normalized `website` and `contact:website`,
@@ -67,12 +70,12 @@ Production extraction computes it once per area payload and passes the frozen
 projection to all row builders. Direct builder calls may omit the optional
 projection and retain the same derive-on-demand behavior. It never includes
 URL classification or hostname extraction -- those are public-row-only and
-remain in `extraction._public_record`.
+remain in `extraction_records.build_public_record`.
 
 `derive_wikidata` is a separate small helper that returns the normalized
 `wikidata` value and its presence flag. It is used only by
-`_comparison_record` and `_rejection_record`; the public shard's v1.3
-schema omits Wikidata, so `_public_record` does not call it.
+`build_comparison_record` and `build_rejection_record`; the public shard's
+v1.3 schema omits Wikidata, so `build_public_record` does not call it.
 
 ## Analysis
 

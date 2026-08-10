@@ -43,19 +43,15 @@ streamed and reconciled with the area-callback log after ``apply_file``.
 Row builders
 ------------
 
-The public, comparison, and rejection row builders share a single normalized
-tag projection (:func:`osm_polygon_website_tag.pipeline.record_builders.derive_tags`)
-for the normalized `website` / `contact:website` values, the website presence
-flags, and the primary category. Production extraction computes this frozen
-projection once per area payload and passes it to every builder; direct builder
-calls may omit it and retain the same derive-on-demand fallback. The comparison
-and rejection builders additionally call
-:func:`osm_polygon_website_tag.pipeline.record_builders.derive_wikidata` to
-obtain the normalized `wikidata` value and its presence flag;
-``_public_record`` does not call it because the public shard's v1.3 schema
-omits Wikidata. URL classification and hostname extraction remain exclusive
-to ``_public_record`` (the public shard) and are never applied to comparison
-or rejection rows.
+Pure public, comparison, and rejection row construction lives in
+:mod:`osm_polygon_website_tag.pipeline.extraction_records`. The builders share
+a single normalized tag projection from
+:mod:`osm_polygon_website_tag.pipeline.record_builders`; production extraction
+computes it once per area payload and passes it to every applicable builder.
+The established ``_public_record``, ``_comparison_record``, and
+``_rejection_record`` names remain aliases here for compatibility. The public
+builder alone performs URL classification and hostname extraction, while the
+comparison and rejection builders alone derive Wikidata fields.
 
 Source identity
 ---------------
@@ -78,19 +74,14 @@ import osmium.osm
 
 from osm_polygon_website_tag.contracts.comparison_schema import (
     COMPARISON_OBSERVATION_SCHEMA,
-    COMPARISON_OBSERVATION_SCHEMA_VERSION,
 )
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
-    SCHEMA_VERSION,
     PublicRowInvariantError,
-    validate_public_row,
 )
 from osm_polygon_website_tag.contracts.rejection_schema import (
     REJECTION_SCHEMA,
-    REJECTION_SCHEMA_VERSION,
 )
-from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.domain.geometry import (
     GeometryRejection,
     geometry_from_geojson,
@@ -99,14 +90,8 @@ from osm_polygon_website_tag.domain.region import region_from_pbf_filename
 from osm_polygon_website_tag.domain.tags import (
     has_any_website,
     has_wikidata,
-    normalize_value,
 )
-from osm_polygon_website_tag.domain.website import (
-    classify_contact_website,
-    classify_website,
-    extract_contact_hostname,
-    extract_hostname,
-)
+from osm_polygon_website_tag.pipeline import extraction_records as _extraction_records
 from osm_polygon_website_tag.pipeline.area_work import (
     DEFAULT_AREA_WORKERS,
     DEFAULT_MAX_IN_FLIGHT_AREAS,
@@ -121,11 +106,7 @@ from osm_polygon_website_tag.pipeline.area_work import (
 from osm_polygon_website_tag.pipeline.area_work import (
     validate_area_settings as _validate_area_settings,
 )
-from osm_polygon_website_tag.pipeline.record_builders import (
-    DerivedTags,
-    derive_tags,
-    derive_wikidata,
-)
+from osm_polygon_website_tag.pipeline.record_builders import derive_tags
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INCOMPLETE,
     RunState,
@@ -140,6 +121,12 @@ from osm_polygon_website_tag.storage.candidate_ledger import CandidateLedger
 
 # Flush a batch of polygons to the shard every N rows.
 FLUSH_BATCH_ROWS = 5_000
+
+# Preserve the established private extraction facade while pure row
+# construction lives in its focused module.
+_public_record = _extraction_records.build_public_record
+_comparison_record = _extraction_records.build_comparison_record
+_rejection_record = _extraction_records.build_rejection_record
 
 # Closed-way inclusion requires the way to have at least this many
 # distinct node references.
@@ -314,157 +301,6 @@ def _tags_dict(obj: osmium.osm.Area | osmium.osm.Way | osmium.osm.Relation) -> d
     for k, v in obj.tags:
         out[k] = v
     return out
-
-
-def _public_record(
-    *,
-    polygon_id: str,
-    source_pbf: str,
-    region: str,
-    tags_dict: dict[str, str],
-    osm_type: str,
-    osm_id: int,
-    osm_version: int,
-    osm_timestamp: dt.datetime,
-    geom_text: str,
-    centroid_text: str,
-    centroid_kind: str,
-    lat: float,
-    lon: float,
-    bbox: list[float],
-    area_m2: float,
-    area_bucket: str,
-    derived: DerivedTags | None = None,
-) -> dict[str, object]:
-    if derived is None:
-        derived = derive_tags(tags_dict)
-    name_raw = normalize_value(tags_dict.get("name", "")) or None
-    website_class = classify_website(derived.website).value if derived.website else None
-    contact_class = (
-        classify_contact_website(derived.contact_website).value if derived.contact_website else None
-    )
-    website_hostname = extract_hostname(derived.website) if derived.website else None
-    contact_hostname = (
-        extract_contact_hostname(derived.contact_website) if derived.contact_website else None
-    )
-
-    tag_keys_sorted = sorted(tags_dict.keys())
-    tags_json = json.dumps(tags_dict, sort_keys=True, separators=(",", ":"))
-    tag_keys_json = json.dumps(tag_keys_sorted, separators=(",", ":"))
-    bbox_json = json.dumps(bbox, separators=(",", ":"))
-
-    record: dict[str, object] = {
-        "polygon_id": polygon_id,
-        "region": region,
-        "source_pbf": source_pbf,
-        "osm_type": osm_type,
-        "osm_id": osm_id,
-        "osm_version": osm_version,
-        "osm_timestamp": osm_timestamp,
-        "name": name_raw,
-        "website": derived.website,
-        "contact_website": derived.contact_website,
-        "has_website": derived.has_website,
-        "has_contact_website": derived.has_contact_website,
-        "has_any_website": derived.has_any_website,
-        "website_class": website_class,
-        "contact_website_class": contact_class,
-        "website_hostname": website_hostname,
-        "contact_website_hostname": contact_hostname,
-        "tags": tags_json,
-        "tag_keys": tag_keys_json,
-        "tag_count": len(tags_dict),
-        "osm_primary_tag": derived.primary_category,
-        "geometry": geom_text,
-        "centroid": centroid_text,
-        "centroid_kind": centroid_kind,
-        "lat": lat,
-        "lon": lon,
-        "bbox": bbox_json,
-        "area_m2": area_m2,
-        "area_bucket": area_bucket,
-        "schema_version": SCHEMA_VERSION,
-    }
-    record.update(
-        initial_text_fields(
-            website_present=derived.has_website,
-            contact_website_present=derived.has_contact_website,
-        )
-    )
-    validate_public_row(record)
-    return record
-
-
-def _comparison_record(
-    *,
-    source_pbf: str,
-    region: str,
-    tags_dict: dict[str, str],
-    osm_type: str,
-    osm_id: int,
-    osm_version: int,
-    osm_timestamp: dt.datetime,
-    derived: DerivedTags | None = None,
-) -> dict[str, object]:
-    if derived is None:
-        derived = derive_tags(tags_dict)
-    wikidata, has_wikidata = derive_wikidata(tags_dict)
-    return {
-        "osm_type": osm_type,
-        "osm_id": osm_id,
-        "osm_version": osm_version,
-        "osm_timestamp": osm_timestamp,
-        "source_pbf": source_pbf,
-        "region": region,
-        "primary_category": derived.primary_category,
-        "website": derived.website,
-        "contact_website": derived.contact_website,
-        "wikidata": wikidata,
-        "has_website": derived.has_website,
-        "has_contact_website": derived.has_contact_website,
-        "has_any_website": derived.has_any_website,
-        "has_wikidata": has_wikidata,
-        "schema_version": COMPARISON_OBSERVATION_SCHEMA_VERSION,
-    }
-
-
-def _rejection_record(
-    *,
-    source_pbf: str,
-    region: str,
-    tags_dict: dict[str, str],
-    osm_type: str,
-    osm_id: int,
-    osm_version: int,
-    osm_timestamp: dt.datetime,
-    candidate_kind: str,
-    rejection_kind: str,
-    message: str,
-    derived: DerivedTags | None = None,
-) -> dict[str, object]:
-    if derived is None:
-        derived = derive_tags(tags_dict)
-    wikidata, has_wikidata = derive_wikidata(tags_dict)
-    return {
-        "osm_type": osm_type,
-        "osm_id": osm_id,
-        "osm_version": osm_version,
-        "osm_timestamp": osm_timestamp,
-        "source_pbf": source_pbf,
-        "region": region,
-        "primary_category": derived.primary_category,
-        "website": derived.website,
-        "contact_website": derived.contact_website,
-        "wikidata": wikidata,
-        "has_website": derived.has_website,
-        "has_contact_website": derived.has_contact_website,
-        "has_any_website": derived.has_any_website,
-        "has_wikidata": has_wikidata,
-        "candidate_kind": candidate_kind,
-        "rejection_kind": rejection_kind,
-        "message": message,
-        "schema_version": REJECTION_SCHEMA_VERSION,
-    }
 
 
 class _ExtractionHandler(osmium.SimpleHandler):

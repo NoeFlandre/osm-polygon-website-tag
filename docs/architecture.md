@@ -36,7 +36,11 @@ documents its boundary.
    emitted in source order, and PBFs remain sequential across the inventory.
    `pipeline.area_work` isolates the copied payload/result contracts, validated
    bounds, and FIFO coordination from `pipeline.extraction`; it has no
-   libosmium or persistence dependency.
+   libosmium or persistence dependency. `pipeline.extraction_records` isolates
+   deterministic public, comparison, and rejection row construction from
+   libosmium callbacks, candidate reconciliation, and Parquet persistence.
+   `pipeline.extraction` keeps its established private row-builder aliases for
+   compatibility.
 3. Before the next PBF is opened, website-text enrichment safely downloads both website tag values,
    extracts full main text with Trafilatura, and transactionally migrates each
    polygon shard to the current public schema. A run-owned SQLite cache reuses successes and
