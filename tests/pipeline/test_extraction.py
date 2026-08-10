@@ -6,8 +6,6 @@ import datetime as dt
 import hashlib
 import inspect
 import json
-import threading
-import time
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -17,6 +15,12 @@ import osm_polygon_website_tag.pipeline.extraction as extraction_module
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+from osm_polygon_website_tag.pipeline.area_work import (
+    AreaPayload,
+    AreaResult,
+    AreaWorkCoordinator,
+    validate_area_settings,
+)
 from osm_polygon_website_tag.pipeline.extraction import (
     ExtractFailure,
     ExtractionResult,
@@ -105,24 +109,6 @@ def test_handler_has_no_source_sized_python_collections(tmp_path: Path) -> None:
     assert not hasattr(handler, "_area_seen")
 
 
-def _worker_payload(sequence: int):
-    payload_type = getattr(extraction_module, "AreaPayload", None)
-    if payload_type is None:
-        pytest.fail("AreaPayload is not implemented")
-    return payload_type(
-        sequence=sequence,
-        source_pbf="synthetic-latest.osm.pbf",
-        region="synthetic",
-        tags_dict={"website": "https://example.org"},
-        osm_type="way",
-        osm_id=sequence,
-        osm_version=1,
-        osm_timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
-        candidate_kind="closed_way",
-        raw_geojson='{"type":"Polygon","coordinates":[]}',
-    )
-
-
 def test_area_worker_reuses_precomputed_tag_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -166,82 +152,11 @@ def test_area_worker_reuses_precomputed_tag_projection(
     assert result.observation_row["has_any_website"] is True
 
 
-def test_area_work_coordinator_bounds_and_preserves_order() -> None:
-    coordinator_type = getattr(extraction_module, "_AreaWorkCoordinator", None)
-    if coordinator_type is None:
-        pytest.fail("_AreaWorkCoordinator is not implemented")
-    lock = threading.Lock()
-    active = 0
-    peak = 0
-
-    def process(payload):  # type: ignore[no-untyped-def]
-        nonlocal active, peak
-        with lock:
-            active += 1
-            peak = max(peak, active)
-        time.sleep(0.03 if payload.sequence == 0 else 0.0)
-        with lock:
-            active -= 1
-        return extraction_module.AreaResult(public_row={"sequence": payload.sequence})
-
-    coordinator = coordinator_type(
-        area_workers=2,
-        max_in_flight_areas=2,
-        processor=process,
-    )
-    ready = []
-    for sequence in range(4):
-        result = coordinator.submit(_worker_payload(sequence))
-        if result is not None:
-            ready.append(result)
-    ready.extend(coordinator.close())
-
-    assert peak <= 2
-    assert [result.public_row["sequence"] for result in ready] == [0, 1, 2, 3]
-
-
-def test_area_worker_counts_produce_identical_records() -> None:
-    payloads = [_worker_payload(sequence) for sequence in range(4)]
-
-    def process(payload):  # type: ignore[no-untyped-def]
-        return extraction_module.AreaResult(public_row={"sequence": payload.sequence})
-
-    outputs = []
-    for workers in (1, 3):
-        coordinator_type = getattr(extraction_module, "_AreaWorkCoordinator", None)
-        if coordinator_type is None:
-            pytest.fail("_AreaWorkCoordinator is not implemented")
-        coordinator = coordinator_type(
-            area_workers=workers,
-            max_in_flight_areas=workers * 2,
-            processor=process,
-        )
-        results = [coordinator.submit(payload) for payload in payloads]
-        results = [result for result in results if result is not None]
-        results.extend(coordinator.close())
-        outputs.append([result.public_row for result in results])
-
-    assert outputs[0] == outputs[1]
-
-
-def test_area_worker_settings_reject_unsafe_bounds() -> None:
-    coordinator_type = extraction_module._AreaWorkCoordinator
-
-    def process(payload):  # type: ignore[no-untyped-def]
-        return extraction_module.AreaResult(public_row={"sequence": payload.sequence})
-
-    with pytest.raises(ValueError, match="area_workers"):
-        coordinator_type(
-            area_workers=extraction_module.MAX_AREA_WORKERS + 1,
-            max_in_flight_areas=1,
-            processor=process,
-        )
-    with pytest.raises(ValueError, match="max_in_flight_areas"):
-        coordinator_type(
-            area_workers=1,
-            max_in_flight_areas=extraction_module.MAX_IN_FLIGHT_AREAS + 1,
-            processor=process,
-        )
+def test_extraction_preserves_area_work_compatibility_surface() -> None:
+    assert extraction_module.AreaPayload is AreaPayload
+    assert extraction_module.AreaResult is AreaResult
+    assert extraction_module._AreaWorkCoordinator is AreaWorkCoordinator
+    assert extraction_module._validate_area_settings is validate_area_settings
 
 
 def test_extract_worker_counts_produce_identical_shards(

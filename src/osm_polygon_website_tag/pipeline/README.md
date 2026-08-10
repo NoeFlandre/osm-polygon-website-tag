@@ -2,8 +2,9 @@
 
 Implements bounded data-processing stages.
 
-- Modules: `extraction`, `record_builders`, `enrich`, `enrichment_checkpoint`,
-  `public_schema_migration`, `analyze`, `partition_aggregate`.
+- Modules: `extraction`, `area_work`, `record_builders`, `enrich`,
+  `enrichment_checkpoint`, `public_schema_migration`, `analyze`,
+  `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
   `migrate_public_shard`, `analyze_results`.
@@ -19,6 +20,12 @@ payloads; safe caps are 16 workers and 256 in-flight payloads. Results are
 emitted in callback order, so worker-count changes preserve row order, schemas,
 rejections, and shard hashes. PBFs themselves remain sequential in
 `application.workflow`.
+
+`extraction` owns libosmium callbacks, candidate reconciliation, geometry and
+row construction, and shard persistence. `area_work` owns only the copied
+payload/result contracts, validated worker bounds, and bounded FIFO executor;
+it has no libosmium, SQLite, or Parquet dependency. `extraction` re-exports the
+existing worker constants and payload/result types for compatibility.
 
 ## Enrichment
 

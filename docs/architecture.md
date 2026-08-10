@@ -34,6 +34,9 @@ documents its boundary.
    GeoJSON payloads (four workers and 32 in-flight areas by default), while
    libosmium, SQLite, and Parquet remain callback-thread-owned. Results are
    emitted in source order, and PBFs remain sequential across the inventory.
+   `pipeline.area_work` isolates the copied payload/result contracts, validated
+   bounds, and FIFO coordination from `pipeline.extraction`; it has no
+   libosmium or persistence dependency.
 3. Before the next PBF is opened, website-text enrichment safely downloads both website tag values,
    extracts full main text with Trafilatura, and transactionally migrates each
    polygon shard to the current public schema. A run-owned SQLite cache reuses successes and

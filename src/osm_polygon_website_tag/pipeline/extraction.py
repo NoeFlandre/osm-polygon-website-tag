@@ -68,9 +68,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from collections import deque
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -110,6 +107,20 @@ from osm_polygon_website_tag.domain.website import (
     extract_contact_hostname,
     extract_hostname,
 )
+from osm_polygon_website_tag.pipeline.area_work import (
+    DEFAULT_AREA_WORKERS,
+    DEFAULT_MAX_IN_FLIGHT_AREAS,
+    MAX_AREA_WORKERS,
+    MAX_IN_FLIGHT_AREAS,
+    AreaPayload,
+    AreaResult,
+)
+from osm_polygon_website_tag.pipeline.area_work import (
+    AreaWorkCoordinator as _AreaWorkCoordinator,
+)
+from osm_polygon_website_tag.pipeline.area_work import (
+    validate_area_settings as _validate_area_settings,
+)
 from osm_polygon_website_tag.pipeline.record_builders import (
     DerivedTags,
     derive_tags,
@@ -129,13 +140,6 @@ from osm_polygon_website_tag.storage.candidate_ledger import CandidateLedger
 
 # Flush a batch of polygons to the shard every N rows.
 FLUSH_BATCH_ROWS = 5_000
-
-# Area geometry and record construction are CPU-heavy but bounded. The
-# callback thread retains ownership of libosmium, SQLite, and Parquet state.
-DEFAULT_AREA_WORKERS = 4
-MAX_AREA_WORKERS = 16
-DEFAULT_MAX_IN_FLIGHT_AREAS = 32
-MAX_IN_FLIGHT_AREAS = 256
 
 # Closed-way inclusion requires the way to have at least this many
 # distinct node references.
@@ -172,32 +176,6 @@ class ExtractionResult:
     duration_seconds: float
     started_at: str
     finished_at: str
-
-
-@dataclass(frozen=True)
-class AreaPayload:
-    """Copied data safe to pass from a libosmium callback to a worker."""
-
-    sequence: int
-    source_pbf: str
-    region: str
-    tags_dict: dict[str, str]
-    osm_type: str
-    osm_id: int
-    osm_version: int
-    osm_timestamp: dt.datetime
-    candidate_kind: str
-    raw_geojson: str | None
-    derived_tags: DerivedTags | None = None
-
-
-@dataclass(frozen=True)
-class AreaResult:
-    """Rows produced by one area worker, in deterministic input order."""
-
-    public_row: dict[str, object] | None = None
-    observation_row: dict[str, object] | None = None
-    rejection_row: dict[str, object] | None = None
 
 
 def _process_area_payload(payload: AreaPayload) -> AreaResult:
@@ -309,64 +287,6 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
         derived=derived,
     )
     return AreaResult(public_row=public_row, observation_row=observation_row)
-
-
-def _validate_area_settings(area_workers: int, max_in_flight_areas: int) -> None:
-    if not 1 <= area_workers <= MAX_AREA_WORKERS:
-        raise ValueError(f"area_workers must be between 1 and {MAX_AREA_WORKERS}")
-    if not 1 <= max_in_flight_areas <= MAX_IN_FLIGHT_AREAS:
-        raise ValueError(f"max_in_flight_areas must be between 1 and {MAX_IN_FLIGHT_AREAS}")
-
-
-class _AreaWorkCoordinator:
-    """Bounded FIFO executor for pure area payload processing."""
-
-    def __init__(
-        self,
-        *,
-        area_workers: int,
-        max_in_flight_areas: int,
-        processor: Callable[[AreaPayload], AreaResult],
-    ) -> None:
-        _validate_area_settings(area_workers, max_in_flight_areas)
-        self._executor = ThreadPoolExecutor(
-            max_workers=area_workers,
-            thread_name_prefix="area-worker",
-        )
-        self._max_in_flight = max_in_flight_areas
-        self._processor = processor
-        self._pending: deque[Future[AreaResult]] = deque()
-        self._closed = False
-
-    def submit(self, payload: AreaPayload) -> AreaResult | None:
-        if self._closed:
-            raise RuntimeError("area work coordinator is closed")
-        self._pending.append(self._executor.submit(self._processor, payload))
-        if len(self._pending) >= self._max_in_flight:
-            return self._pending.popleft().result()
-        return None
-
-    def drain(self) -> list[AreaResult]:
-        results: list[AreaResult] = []
-        while self._pending:
-            results.append(self._pending.popleft().result())
-        return results
-
-    def close(self) -> list[AreaResult]:
-        if self._closed:
-            return []
-        try:
-            return self.drain()
-        finally:
-            self._executor.shutdown(wait=True, cancel_futures=True)
-            self._closed = True
-
-    def abort(self) -> None:
-        if self._closed:
-            return
-        self._pending.clear()
-        self._executor.shutdown(wait=True, cancel_futures=True)
-        self._closed = True
 
 
 def _now_iso() -> str:
