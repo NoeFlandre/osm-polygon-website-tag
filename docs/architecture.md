@@ -71,6 +71,8 @@ documents its boundary.
    and writes deterministic `README.md` and `dataset.yaml`.
 7. `finalize-run` verifies the run, moves it to `complete`, and writes a
    receipt binding every publishable relative path, byte size, and SHA-256.
+   Receipt creation and verification share the canonical deterministic
+   inventory and bounded hashing rules in `reporting.artifact_inventory`.
 8. `publish` is network-free by default. `--apply` re-verifies a complete run
    and uses Hugging Face's resumable large-folder uploader with a receipt-based
    allow-list.

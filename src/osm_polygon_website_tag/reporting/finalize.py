@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
 from osm_polygon_website_tag.runtime.run_state import (
-    OPERATIONAL_MANIFEST_NAMES,
     STATUS_CARD_BUILT,
     STATUS_COMPLETE,
     STATUS_VERIFIED,
@@ -51,36 +51,14 @@ def finalize_run(run_dir: Path | str) -> FinalizationReport:
     return FinalizationReport(True, receipt, report)
 
 
-def _publishable_paths(root: Path) -> list[Path]:
-    paths: list[Path] = []
-    for directory in (
-        "polygons",
-        "analysis_observations",
-        "rejections",
-        "analysis",
-        "manifests",
-    ):
-        for path in sorted((root / directory).glob("*")):
-            if path.is_file() and path.name not in OPERATIONAL_MANIFEST_NAMES:
-                paths.append(path)
-    for name in ("README.md", "dataset.yaml", "failures.jsonl"):
-        path = root / name
-        if path.is_file():
-            paths.append(path)
-    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
-    if map_path.is_file():
-        paths.append(map_path)
-    return sorted(paths, key=lambda path: path.relative_to(root).as_posix())
-
-
 def _write_completion_receipt(root: Path) -> dict[str, Any]:
     artifacts = [
         {
             "path": path.relative_to(root).as_posix(),
             "size_bytes": path.stat().st_size,
-            "sha256": _hash_file(path),
+            "sha256": hash_file(path),
         }
-        for path in _publishable_paths(root)
+        for path in publishable_paths(root)
     ]
     canonical = json.dumps(artifacts, sort_keys=True, separators=(",", ":"))
     sources = json.loads((root / "manifests" / "sources.json").read_text(encoding="utf-8"))
@@ -106,11 +84,3 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
 def replace_receipt_atomic(run_dir: Path | str) -> dict[str, Any]:
     """Write a current content-only receipt after a refresh-specific verification."""
     return _write_completion_receipt(Path(run_dir))
-
-
-def _hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()

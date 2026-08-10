@@ -17,6 +17,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, count_words
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
+from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
 from osm_polygon_website_tag.reporting.card import _render_markdown, _render_yaml_front_matter
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
@@ -131,7 +132,7 @@ def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
             if not isinstance(expected_hash, str) or len(expected_hash) != 64:
                 errors.append(f"missing {kind} shard hash for {filename}")
             else:
-                actual_hash = _hash_file(path)
+                actual_hash = hash_file(path)
                 if actual_hash != expected_hash:
                     errors.append(
                         f"{kind} shard hash mismatch for {filename}: "
@@ -446,11 +447,11 @@ def _verify_receipt(root: Path, errors: list[str]) -> None:
             errors.append(f"missing receipt-bound artifact: {relative}")
             continue
         size = artifact.stat().st_size
-        digest = _hash_file(artifact)
+        digest = hash_file(artifact)
         if entry.get("size_bytes") != size or entry.get("sha256") != digest:
             errors.append(f"receipt-bound artifact mismatch: {relative}")
         canonical_entries.append({"path": relative, "size_bytes": size, "sha256": digest})
-    expected_paths = _current_publishable_relative_paths(root)
+    expected_paths = {path.relative_to(root).as_posix() for path in publishable_paths(root)}
     if seen != expected_paths:
         errors.append("completion receipt artifact inventory mismatch")
     canonical = json.dumps(
@@ -460,27 +461,6 @@ def _verify_receipt(root: Path, errors: list[str]) -> None:
     )
     if receipt.get("manifest_digest") != hashlib.sha256(canonical.encode()).hexdigest():
         errors.append("completion receipt digest mismatch")
-
-
-def _current_publishable_relative_paths(root: Path) -> set[str]:
-    result: set[str] = set()
-    for directory in (
-        "polygons",
-        "analysis_observations",
-        "rejections",
-        "analysis",
-        "manifests",
-    ):
-        for path in (root / directory).glob("*"):
-            if path.is_file() and path.name not in OPERATIONAL_MANIFEST_NAMES:
-                result.add(path.relative_to(root).as_posix())
-    for name in ("README.md", "dataset.yaml", "failures.jsonl"):
-        if (root / name).is_file():
-            result.add(name)
-    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
-    if map_path.is_file():
-        result.add(POLYGON_DENSITY_ASSET_REL_PATH)
-    return result
 
 
 def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -505,11 +485,3 @@ def _read_json_array(path: Path, errors: list[str]) -> list[dict[str, Any]]:
         errors.append(f"expected array of objects: {path}")
         return []
     return value
-
-
-def _hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
