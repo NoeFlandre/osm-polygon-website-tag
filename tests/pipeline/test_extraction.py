@@ -113,6 +113,8 @@ def test_area_worker_reuses_precomputed_tag_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The area worker must not re-derive tags already projected by the callback."""
+    from osm_polygon_website_tag.pipeline import extraction_handler
+
     payload_type = getattr(extraction_module, "AreaPayload", None)
     if payload_type is None:
         pytest.fail("AreaPayload is not implemented")
@@ -143,7 +145,7 @@ def test_area_worker_reuses_precomputed_tag_projection(
     def fail_derive(_tags: dict[str, str]) -> DerivedTags:
         pytest.fail("area worker re-derived a precomputed tag projection")
 
-    monkeypatch.setattr(extraction_module, "derive_tags", fail_derive)
+    monkeypatch.setattr(extraction_handler, "derive_tags", fail_derive)
     result = extraction_module._process_area_payload(payload)
 
     assert result.public_row is not None
@@ -157,6 +159,13 @@ def test_extraction_preserves_area_work_compatibility_surface() -> None:
     assert extraction_module.AreaResult is AreaResult
     assert extraction_module._AreaWorkCoordinator is AreaWorkCoordinator
     assert extraction_module._validate_area_settings is validate_area_settings
+
+
+def test_extraction_handler_implementation_has_a_focused_module() -> None:
+    from osm_polygon_website_tag.pipeline import extraction_handler
+
+    assert extraction_module._ExtractionHandler.__module__ == extraction_handler.__name__
+    assert extraction_module._process_area_payload.__module__ == extraction_handler.__name__
 
 
 def test_extract_worker_counts_produce_identical_shards(

@@ -2,7 +2,7 @@
 
 Implements bounded data-processing stages.
 
-- Modules: `extraction`, `area_work`, `extraction_records`,
+- Modules: `extraction`, `extraction_handler`, `area_work`, `extraction_records`,
   `record_builders`, `enrich`, `enrichment_checkpoint`,
   `public_schema_migration`, `analyze`,
   `partition_aggregate`.
@@ -22,13 +22,15 @@ emitted in callback order, so worker-count changes preserve row order, schemas,
 rejections, and shard hashes. PBFs themselves remain sequential in
 `application.workflow`.
 
-`extraction` owns libosmium callbacks, candidate reconciliation, area-task
-orchestration, and shard persistence. `area_work` owns only the copied
+`extraction_handler` owns libosmium callbacks, candidate reconciliation,
+area-task orchestration, and bounded shard sinks. `extraction` owns source
+validation, run-state updates, and atomic promotion, while re-exporting the
+established worker constants, payload/result types, handler names, and private
+row-builder aliases for compatibility. `area_work` owns only the copied
 payload/result contracts, validated worker bounds, and bounded FIFO executor;
 it has no libosmium, SQLite, or Parquet dependency. `extraction_records` owns
 the deterministic, side-effect-free construction of public, comparison, and
-rejection rows. `extraction` re-exports the existing worker constants,
-payload/result types, and private row-builder aliases for compatibility.
+rejection rows.
 
 ## Enrichment
 
