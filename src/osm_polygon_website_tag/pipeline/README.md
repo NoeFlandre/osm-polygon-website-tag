@@ -46,6 +46,15 @@ batched and flushed at each completed batch. Completed batches are written as
 source-bound atomic checkpoint parts, so an interruption preserves the shard
 prefix and retries only the unresolved suffix on resume.
 
+The workflow classifies retryable shards from the two status columns with
+bounded Arrow batches and persists the small per-source counts in
+`manifests/sources.json`. Resumes therefore prioritize unfinished rows and
+transient fetch/extraction failures, then deterministic invalid/unsafe URL
+failures; a shard with durable checkpoint parts is always handled before an
+ordinary retry. Sources without an extraction bundle remain first. Missing
+summaries from older runs are backfilled once at the resume boundary without
+opening any PBF.
+
 `enrich` owns row orchestration, URL resolution, cache use, and final shard
 promotion. `enrichment_checkpoint` owns the source-bound checkpoint metadata,
 sequential part validation, atomic part writes, and bounded final assembly.

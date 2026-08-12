@@ -42,12 +42,16 @@ Source identity contract
   mtime_ns.
 * No SHA-256 of the PBF is computed during extraction; the card and
   documentation state this explicitly.
+* ``sources.json`` may also contain a bounded ``enrichment_status_counts``
+  hint used only to order resumable website-text work. The Parquet status
+  columns remain authoritative.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -372,13 +376,62 @@ def update_source_enrichment_status(
     *,
     filename: str,
     pending: bool,
+    status_counts: Mapping[str, Mapping[str, int]] | None = None,
 ) -> None:
-    """Persist whether a source shard still has retryable text work."""
+    """Persist text completion and an optional deterministic status summary.
+
+    The summary is a small resume hint, not a second source of truth: the
+    Parquet status columns remain authoritative and are re-read whenever the
+    summary is absent or malformed.
+    """
     entry = state.sources.get(filename)
     if entry is None:
         raise ValueError(f"source is not processed: {filename}")
     entry["enrichment_pending"] = pending
+    if status_counts is not None:
+        entry["enrichment_status_counts"] = _normalise_enrichment_status_counts(status_counts)
     _write_sources_manifest(state)
+
+
+def persist_enrichment_status_summaries(
+    state: RunState,
+    summaries: Mapping[str, Mapping[str, Mapping[str, int]]],
+) -> None:
+    """Persist multiple resume summaries with one manifest write.
+
+    This is used by the startup classifier so a legacy run with no summaries
+    pays one bounded status scan, then reuses those results on later resumes.
+    It never changes ``enrichment_pending`` or any source identity field.
+    """
+    for filename, status_counts in sorted(summaries.items()):
+        entry = state.sources.get(filename)
+        if entry is None:
+            continue
+        entry["enrichment_status_counts"] = _normalise_enrichment_status_counts(status_counts)
+    if summaries:
+        _write_sources_manifest(state)
+
+
+def _normalise_enrichment_status_counts(
+    status_counts: Mapping[str, Mapping[str, int]],
+) -> dict[str, dict[str, int]]:
+    """Return a validated, key-sorted copy of status counts."""
+    normalised: dict[str, dict[str, int]] = {}
+    for field_name, counts in sorted(status_counts.items()):
+        if not isinstance(field_name, str) or not isinstance(counts, Mapping):
+            raise ValueError("enrichment status counts must be string-keyed mappings")
+        field_counts: dict[str, int] = {}
+        for status, count in sorted(counts.items()):
+            if (
+                not isinstance(status, str)
+                or isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+            ):
+                raise ValueError("enrichment status counts must contain non-negative integers")
+            field_counts[status] = count
+        normalised[field_name] = field_counts
+    return normalised
 
 
 def source_is_unchanged(state: RunState, fp: SourceFingerprint) -> bool:
@@ -449,6 +502,7 @@ __all__ = [
     "hash_shard",
     "initialise_run",
     "load_run",
+    "persist_enrichment_status_summaries",
     "record_processed_source",
     "snapshot_source_fingerprint",
     "source_inventory_matches",

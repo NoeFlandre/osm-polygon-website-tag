@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Collection
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.application.inventory import (
     discover_sources,
     source_bundle_is_complete,
     source_inventory_matches_expected,
+)
+from osm_polygon_website_tag.application.resume_planner import (
+    coerce_enrichment_status_summary,
+    prepare_resume_priorities,
+    prioritize_sources,
+    summarize_enrichment_status,
 )
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
@@ -82,28 +87,6 @@ class _SourceTransactionResult:
     extracted: bool
     reused: bool
     uploaded: bool
-
-
-def prioritize_sources(
-    sources: list[Path],
-    processed_names: Collection[str],
-    *,
-    retry_names: Collection[str] = (),
-) -> list[Path]:
-    """Put untouched sources before retries and fully processed sources.
-
-    ``processed_names`` contains sources whose current work is complete;
-    ``retry_names`` contains sources with prior progress that still need a
-    retry. Any source in neither collection is genuinely untouched and gets
-    priority. The final path component remains the deterministic tie-breaker.
-    """
-    return sorted(
-        sources,
-        key=lambda source: (
-            2 if source.name in processed_names else 1 if source.name in retry_names else 0,
-            source.as_posix(),
-        ),
-    )
 
 
 def run_all(
@@ -208,10 +191,18 @@ def run_all(
             if entry.get("enrichment_pending") is False
         }
         retry_names = set(state.sources) - processed_names
+    partial_names, retry_priorities = prepare_resume_priorities(
+        run_dir,
+        state,
+        sources,
+        retry_names=retry_names,
+    )
     ordered_sources = prioritize_sources(
         sources,
         processed_names,
         retry_names=retry_names,
+        partial_names=partial_names,
+        retry_priorities=retry_priorities,
     )
     if status in {STATUS_INITIALIZED, STATUS_EXTRACTING}:
         if status == STATUS_INITIALIZED:
@@ -366,16 +357,15 @@ def _process_source(
                 max_in_flight_areas=max_in_flight_areas,
             )
         extracted = True
+        if not source_bundle_is_complete(
+            run_dir,
+            state.sources.get(source.name),
+            fingerprint,
+        ):
+            raise ValueError(f"source bundle is incomplete after extraction: {source.name}")
     elif allow_extraction:
         reused = True
         _progress(progress, f"[{index}/{total}] Resuming: {source.name} is complete")
-
-    if not source_bundle_is_complete(
-        run_dir,
-        state.sources.get(source.name),
-        fingerprint,
-    ):
-        raise ValueError(f"source bundle is incomplete after extraction: {source.name}")
 
     shard = _public_shard_path(run_dir, source)
     manifest_entry = state.sources[source.name]
@@ -391,9 +381,16 @@ def _process_source(
             shard_sha256=migration.shard_sha256,
         )
     marker = manifest_entry.get("enrichment_pending")
+    status_summary = coerce_enrichment_status_summary(
+        manifest_entry.get("enrichment_status_counts")
+    )
     needs_enrichment = (
         _shard_needs_enrichment(shard)
-        if migration_changed or not isinstance(marker, bool)
+        if (
+            migration_changed
+            or not isinstance(marker, bool)
+            or (marker is False and status_summary is None)
+        )
         else marker
     )
     if needs_enrichment:
@@ -418,12 +415,16 @@ def _process_source(
             shard_sha256=enrichment.shard_sha256,
         )
         needs_enrichment = _shard_needs_enrichment(shard)
+        status_summary = summarize_enrichment_status(shard)
     else:
+        if status_summary is None:
+            status_summary = summarize_enrichment_status(shard)
         _progress(progress, f"[{index}/{total}] Resuming: {source.name} text is complete")
     update_source_enrichment_status(
         state,
         filename=source.name,
         pending=needs_enrichment,
+        status_counts=status_summary,
     )
 
     if (
@@ -581,16 +582,11 @@ def _shard_needs_enrichment(shard: Path) -> bool:
         columns=["website_text_status", "contact_website_text_status"],
         batch_size=8_192,
     ):
-        if _status_has_retryable_value(batch.column("website_text_status")):
+        if status_has_retryable_value(batch.column("website_text_status")):
             return True
-        if _status_has_retryable_value(batch.column("contact_website_text_status")):
+        if status_has_retryable_value(batch.column("contact_website_text_status")):
             return True
     return False
-
-
-def _status_has_retryable_value(status: pa.Array) -> bool:
-    """Preserve the workflow helper while using the shared text contract."""
-    return status_has_retryable_value(status)
 
 
 __all__ = ["WorkflowResult", "discover_sources", "prioritize_sources", "run_all"]

@@ -66,41 +66,9 @@ def _offline_remote_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_workflow_preserves_discover_sources_compatibility_import() -> None:
     assert discover_sources is inventory_discover_sources
+    from osm_polygon_website_tag.application import resume_planner, workflow
 
-
-def test_prioritize_sources_puts_unprocessed_sources_first() -> None:
-    from osm_polygon_website_tag.application import workflow
-
-    sources = [Path("alsace-latest.osm.pbf"), Path("new-region.osm.pbf")]
-
-    ordered = workflow.prioritize_sources(sources, {"alsace-latest.osm.pbf"})
-
-    assert [source.name for source in ordered] == [
-        "new-region.osm.pbf",
-        "alsace-latest.osm.pbf",
-    ]
-
-
-def test_prioritize_sources_puts_unuploaded_before_retryable_sources() -> None:
-    from osm_polygon_website_tag.application import workflow
-
-    sources = [
-        Path("uploaded-retry.osm.pbf"),
-        Path("unuploaded.osm.pbf"),
-        Path("uploaded-complete.osm.pbf"),
-    ]
-
-    ordered = workflow.prioritize_sources(
-        sources,
-        {"uploaded-complete.osm.pbf"},
-        retry_names={"uploaded-retry.osm.pbf"},
-    )
-
-    assert [source.name for source in ordered] == [
-        "unuploaded.osm.pbf",
-        "uploaded-retry.osm.pbf",
-        "uploaded-complete.osm.pbf",
-    ]
+    assert workflow.prioritize_sources is resume_planner.prioritize_sources
 
 
 def test_shard_needs_enrichment_scans_status_columns_without_row_dicts(
@@ -681,6 +649,15 @@ def test_resume_enriches_only_shards_with_retryable_text(
     )
     original = workflow.enrich_polygon_shard
     enriched: list[str] = []
+    bundle_checks: list[str] = []
+
+    original_bundle_check = workflow.source_bundle_is_complete
+
+    def track_bundle_check(run_dir, manifest, fingerprint):
+        bundle_checks.append(fingerprint.filename)
+        return original_bundle_check(run_dir, manifest, fingerprint)
+
+    monkeypatch.setattr(workflow, "source_bundle_is_complete", track_bundle_check)
 
     def track(shard, **kwargs):
         enriched.append(Path(shard).name)
@@ -691,6 +668,7 @@ def test_resume_enriches_only_shards_with_retryable_text(
     run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
 
     assert enriched == ["a-latest.parquet"]
+    assert bundle_checks == ["a-latest.osm.pbf", "b-latest.osm.pbf"]
 
 
 def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(

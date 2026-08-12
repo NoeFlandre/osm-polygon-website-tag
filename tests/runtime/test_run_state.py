@@ -27,6 +27,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     source_inventory_matches,
     source_is_unchanged,
     transition_status,
+    update_source_enrichment_status,
     upsert_run_metadata,
 )
 
@@ -185,6 +186,31 @@ def test_record_processed_source_appends(tmp_path: Path) -> None:
     assert data[0]["filename"] == "monaco-latest.osm.pbf"
     assert data[0]["public_row_count"] == 10
     assert data[0]["observation_row_count"] == 10
+
+
+def test_update_source_enrichment_status_persists_deterministic_summary(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
+    p = tmp_path / "monaco-latest.osm.pbf"
+    p.write_bytes(b"data")
+    fp = snapshot_source_fingerprint(p)
+    record_processed_source(state, fp, public_row_count=10, observation_row_count=10)
+
+    update_source_enrichment_status(
+        state,
+        filename=fp.filename,
+        pending=True,
+        status_counts={
+            "website": {"fetch_error": 2, "success": 8},
+            "contact_website": {"absent": 10},
+        },
+    )
+
+    loaded = load_run(run_dir)
+    assert loaded.sources[fp.filename]["enrichment_pending"] is True
+    assert loaded.sources[fp.filename]["enrichment_status_counts"] == {
+        "contact_website": {"absent": 10},
+        "website": {"fetch_error": 2, "success": 8},
+    }
 
 
 def test_record_processed_source_dedupes_by_filename(tmp_path: Path) -> None:

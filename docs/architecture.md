@@ -16,7 +16,7 @@ The source and test trees are organized by responsibility:
 - `pipeline`: extraction, enrichment, and analysis stages;
 - `reporting`: artifact-derived cards, verification, and finalization;
 - `publishing`: Hugging Face credential and upload adapters;
-- `application`: workflow composition and CLI dispatch.
+- `application`: workflow composition, resume planning, and CLI dispatch.
 
 Dependencies flow toward lower-level packages. `application` is the only
 composition layer and no lower package imports it. The executable architecture
@@ -93,8 +93,15 @@ completed extraction bundles (including bundles produced by old extract-all
 runs), migrates legacy shards without reopening PBFs, checkpoints successful
 URL text and per-PBF enriched uploads, and performs the receipt-bound full
 upload only after final verification. Resume ordering puts sources with no
-acknowledged upload ahead of retryable acknowledged sources, while keeping
-already-complete sources last; deterministic filename order breaks ties.
+acknowledged upload first, then sources with durable enrichment checkpoint
+parts, then retryable sources ranked by their persisted status composition
+(unfinished rows, transient failures, deterministic URL failures), while
+keeping already-complete sources last. Legacy runs missing those small
+summaries are classified once from the two status columns without opening a
+PBF; deterministic filename order breaks ties.
+The pure ordering and status-summary logic lives in
+`application.resume_planner`; `workflow` remains the side-effectful composition
+layer.
 `KeyboardInterrupt` leaves the run in the resumable `extracting` state.
 If a completed run predates the H3 card contract, the next `run-all` invocation
 refreshes only its local card/map/receipt bundle before any remote action; the
@@ -204,6 +211,11 @@ content hash without PBF reads or website fetches.
 - Resume status checks scan only the two text-status columns with Arrow kernels,
   avoiding per-polygon Python row dictionaries while preserving the terminal
   `success`/`absent` contract.
+- Each enriched source persists bounded status counts in `sources.json` as a
+  resume hint. The Parquet status columns remain authoritative; malformed or
+  missing hints are recomputed once. This avoids repeating startup
+  classification work while ensuring unfinished and transient failures receive
+  attention before deterministic URL failures.
 - DuckDB has an explicit memory limit, one deterministic worker, and a
   run-owned spill directory.
 - Source fingerprints are compared before and after reading.
