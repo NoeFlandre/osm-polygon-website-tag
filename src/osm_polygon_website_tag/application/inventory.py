@@ -11,9 +11,8 @@ import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
-    POLYGON_PUBLIC_SCHEMA,
-    POLYGON_PUBLIC_SCHEMA_V1_1,
-    POLYGON_PUBLIC_SCHEMA_V1_2,
+    is_supported_public_polygon_schema,
+    schema_matches,
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.runtime.run_state import SourceFingerprint, hash_shard
@@ -55,17 +54,18 @@ def source_bundle_is_complete(
     if any(manifest.get(key) != value for key, value in asdict(fingerprint).items()):
         return False
     stem = fingerprint.short_id()
+    public_path = run_dir / "polygons" / f"{stem}.parquet"
+    if not public_path.is_file():
+        return False
+    public_parquet = pq.ParquetFile(public_path)
+    if not is_supported_public_polygon_schema(public_parquet.schema_arrow):
+        return False
+    if public_parquet.metadata.num_rows != manifest.get("public_row_count"):
+        return False
+    if hash_shard(public_path) != manifest.get("public_shard_sha256"):
+        return False
+
     paths_and_contracts = (
-        (
-            run_dir / "polygons" / f"{stem}.parquet",
-            (
-                POLYGON_PUBLIC_SCHEMA_V1_1,
-                POLYGON_PUBLIC_SCHEMA_V1_2,
-                POLYGON_PUBLIC_SCHEMA,
-            ),
-            "public_row_count",
-            "public_shard_sha256",
-        ),
         (
             run_dir / "analysis_observations" / f"{stem}.parquet",
             COMPARISON_OBSERVATION_SCHEMA,
@@ -83,8 +83,7 @@ def source_bundle_is_complete(
         if not path.is_file():
             return False
         parquet = pq.ParquetFile(path)
-        schemas = schema_contract if isinstance(schema_contract, tuple) else (schema_contract,)
-        if not any(parquet.schema_arrow.equals(schema, check_metadata=True) for schema in schemas):
+        if not schema_matches(parquet.schema_arrow, schema_contract):
             return False
         if parquet.metadata.num_rows != manifest.get(count_key):
             return False

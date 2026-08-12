@@ -26,6 +26,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
+    schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
@@ -370,7 +371,7 @@ def _process_source(
     shard = _public_shard_path(run_dir, source)
     manifest_entry = state.sources[source.name]
     migration_changed = False
-    if pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA_V1_2, check_metadata=True):
+    if schema_matches(pq.read_schema(shard), POLYGON_PUBLIC_SCHEMA_V1_2):
         migration = migrate_public_shard(shard)
         migration_changed = migration.changed
         _progress(progress, f"[{index}/{total}] Migrating {source.name} to public schema v1.3")
@@ -574,9 +575,10 @@ def _run_needs_enrichment(run_dir: Path) -> bool:
 
 def _shard_needs_enrichment(shard: Path) -> bool:
     parquet = pq.ParquetFile(shard)
-    if parquet.schema_arrow.equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True):
+    schema = parquet.schema_arrow
+    if schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_1):
         return True
-    if not parquet.schema_arrow.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+    if not schema_matches(schema, POLYGON_PUBLIC_SCHEMA):
         return True
     for batch in parquet.iter_batches(
         columns=["website_text_status", "contact_website_text_status"],

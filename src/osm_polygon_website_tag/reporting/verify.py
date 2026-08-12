@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, schema_matches
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, count_words
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
@@ -118,7 +118,7 @@ def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
             except Exception as exc:
                 errors.append(f"unreadable {kind} shard {path}: {exc}")
                 continue
-            if not actual_schema.equals(schema, check_metadata=True):
+            if not schema_matches(actual_schema, schema):
                 errors.append(f"exact schema mismatch in {kind} shard {path}")
             expected_count = entry.get(count_key)
             if not isinstance(expected_count, int) or isinstance(expected_count, bool):

@@ -13,8 +13,9 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
-    POLYGON_PUBLIC_SCHEMA_V1_2,
     SCHEMA_VERSION,
+    is_supported_public_polygon_schema,
+    schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import TEXT_COLUMN_NAMES, initial_text_fields
 from osm_polygon_website_tag.pipeline.enrichment_checkpoint import (
@@ -83,11 +84,7 @@ def enrich_polygon_shard(
     source_row_count = parquet.metadata.num_rows
     if batch_rows < 1:
         raise ValueError("batch_rows must be positive")
-    if not (
-        source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True)
-        or source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_2, check_metadata=True)
-        or source_schema.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
-    ):
+    if not is_supported_public_polygon_schema(source_schema):
         raise ValueError(f"unsupported polygon schema for enrichment: {shard.name}")
 
     cache = TextCache(Path(cache_path))
@@ -102,9 +99,7 @@ def enrich_polygon_shard(
         raise
     staged = shard.with_name(f".{shard.name}.enriching")
     staged.unlink(missing_ok=True)
-    changed = not source_schema.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True) or bool(
-        checkpoint.parts
-    )
+    changed = not schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA) or bool(checkpoint.parts)
     processed_rows = checkpoint.completed_rows
     next_part_index = len(checkpoint.parts)
     max_batch_rows = 0
@@ -127,7 +122,7 @@ def enrich_polygon_shard(
                 lookup_urls: set[str] = set()
                 for original in originals:
                     row = dict(original)
-                    if source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_1, check_metadata=True):
+                    if schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA_V1_1):
                         row.update(
                             initial_text_fields(
                                 website_present=row["website"] is not None,
@@ -204,7 +199,7 @@ def enrich_polygon_shard(
         )
         max_batch_rows = max(max_batch_rows, assembled_max_batch_rows)
         if changed:
-            if not pq.read_schema(staged).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+            if not schema_matches(pq.read_schema(staged), POLYGON_PUBLIC_SCHEMA):
                 raise ValueError("enriched shard schema mismatch")
             atomic_promote_bundle([(staged, shard)])
         else:

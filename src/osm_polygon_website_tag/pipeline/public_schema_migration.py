@@ -11,6 +11,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_2,
     SCHEMA_VERSION,
+    schema_matches,
 )
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -40,7 +41,7 @@ def migrate_public_shard(
     parquet = pq.ParquetFile(shard)
     source_schema = parquet.schema_arrow
     row_count = parquet.metadata.num_rows
-    if source_schema.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+    if schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA):
         return PublicSchemaMigrationResult(
             shard_path=shard,
             row_count=row_count,
@@ -48,7 +49,7 @@ def migrate_public_shard(
             shard_sha256=hash_shard(shard),
             max_batch_rows=0,
         )
-    if not source_schema.equals(POLYGON_PUBLIC_SCHEMA_V1_2, check_metadata=True):
+    if not schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA_V1_2):
         raise ValueError(f"unsupported polygon schema for migration: {shard.name}")
 
     staged = shard.with_name(f".{shard.name}.migrating")
@@ -63,7 +64,7 @@ def migrate_public_shard(
         sink.close()
         if sink.row_count != row_count:
             raise ValueError("public schema migration changed row count")
-        if not pq.read_schema(staged).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+        if not schema_matches(pq.read_schema(staged), POLYGON_PUBLIC_SCHEMA):
             raise ValueError("migrated public shard schema mismatch")
         atomic_promote_bundle([(staged, shard)])
     except BaseException:

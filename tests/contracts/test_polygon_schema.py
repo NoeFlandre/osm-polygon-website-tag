@@ -7,10 +7,14 @@ import pytest
 
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_2,
     SCHEMA_VERSION,
     PublicRowInvariantError,
     column_doc,
+    is_supported_public_polygon_schema,
     polygon_column_names,
+    schema_matches,
     validate_public_row,
 )
 
@@ -21,6 +25,25 @@ def test_schema_version_is_v1_3() -> None:
 
 def test_polygon_public_schema_is_arrow_schema() -> None:
     assert isinstance(POLYGON_PUBLIC_SCHEMA, pa.Schema)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [POLYGON_PUBLIC_SCHEMA_V1_1, POLYGON_PUBLIC_SCHEMA_V1_2, POLYGON_PUBLIC_SCHEMA],
+)
+def test_supported_public_polygon_schema_accepts_known_versions(schema: pa.Schema) -> None:
+    assert is_supported_public_polygon_schema(schema)
+
+
+def test_supported_public_polygon_schema_rejects_unknown_columns() -> None:
+    unsupported = POLYGON_PUBLIC_SCHEMA.append(pa.field("unexpected", pa.string()))
+    assert not is_supported_public_polygon_schema(unsupported)
+
+
+def test_schema_matches_requires_exact_metadata() -> None:
+    with_metadata = POLYGON_PUBLIC_SCHEMA.with_metadata({b"fixture": b"metadata"})
+    assert not schema_matches(with_metadata, POLYGON_PUBLIC_SCHEMA)
+    assert schema_matches(POLYGON_PUBLIC_SCHEMA, POLYGON_PUBLIC_SCHEMA)
 
 
 def test_polygon_public_schema_required_columns() -> None:

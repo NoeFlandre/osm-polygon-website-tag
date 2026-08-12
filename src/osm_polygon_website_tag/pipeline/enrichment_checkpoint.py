@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     SCHEMA_VERSION,
+    schema_matches,
 )
 from osm_polygon_website_tag.runtime.run_state import atomic_write_json
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -62,7 +63,7 @@ def checkpoint_parts(directory: Path) -> tuple[Path, ...]:
         if part.name != _checkpoint_part_path(directory, index).name:
             raise ValueError(f"non-sequential enrichment checkpoint part: {part.name}")
         parquet = pq.ParquetFile(part)
-        if not parquet.schema_arrow.equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+        if not schema_matches(parquet.schema_arrow, POLYGON_PUBLIC_SCHEMA):
             raise ValueError(f"invalid enrichment checkpoint schema: {part.name}")
         if parquet.metadata.num_rows < 1:
             raise ValueError(f"empty enrichment checkpoint part: {part.name}")
@@ -132,7 +133,7 @@ def write_checkpoint_part(
         sink.close()
         if sink.row_count != len(rows):
             raise ValueError("enrichment checkpoint row count changed")
-        if not pq.read_schema(temporary).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+        if not schema_matches(pq.read_schema(temporary), POLYGON_PUBLIC_SCHEMA):
             raise ValueError("enrichment checkpoint schema mismatch")
         atomic_promote_bundle([(temporary, target)])
     finally:
@@ -167,7 +168,7 @@ def assemble_checkpoint(
                     max_batch_rows = max(max_batch_rows, batch.num_rows)
         if assembled_rows != row_count:
             raise ValueError("enrichment row count changed while assembling checkpoint")
-        if not pq.read_schema(staged).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True):
+        if not schema_matches(pq.read_schema(staged), POLYGON_PUBLIC_SCHEMA):
             raise ValueError("assembled enrichment schema mismatch")
         return max_batch_rows
     except BaseException:

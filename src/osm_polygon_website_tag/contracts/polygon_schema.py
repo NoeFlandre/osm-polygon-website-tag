@@ -31,6 +31,11 @@ Schema versioning
 The schema version is part of the dataset contract. A new schema MUST be
 introduced with a new ``SCHEMA_VERSION`` (and a new column order) rather
 than a silent in-place change. The verifier rejects schema drift.
+
+The exact metadata-aware comparison is centralized in
+:func:`schema_matches`; :func:`is_supported_public_polygon_schema` is the
+compatibility predicate for the three public versions accepted during
+resumption and migration.
 """
 
 from __future__ import annotations
@@ -108,6 +113,22 @@ _REMOVED_V1_3_FIELDS = frozenset(
 POLYGON_PUBLIC_SCHEMA: pa.Schema = pa.schema(
     field for field in POLYGON_PUBLIC_SCHEMA_V1_2 if field.name not in _REMOVED_V1_3_FIELDS
 )
+
+_SUPPORTED_PUBLIC_POLYGON_SCHEMAS: tuple[pa.Schema, ...] = (
+    POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_2,
+    POLYGON_PUBLIC_SCHEMA,
+)
+
+
+def schema_matches(actual: pa.Schema, expected: pa.Schema) -> bool:
+    """Return whether two Arrow schemas match, including metadata."""
+    return actual.equals(expected, check_metadata=True)
+
+
+def is_supported_public_polygon_schema(schema: pa.Schema) -> bool:
+    """Return whether ``schema`` is one of the supported public versions."""
+    return any(schema_matches(schema, candidate) for candidate in _SUPPORTED_PUBLIC_POLYGON_SCHEMAS)
 
 
 _COLUMN_DOCS: dict[str, str] = {
@@ -314,6 +335,8 @@ __all__ = [
     "PublicRowInvariantError",
     "column_doc",
     "column_documentation",
+    "is_supported_public_polygon_schema",
     "polygon_column_names",
+    "schema_matches",
     "validate_public_row",
 ]
