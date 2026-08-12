@@ -6,8 +6,12 @@ import pyarrow as pa
 
 from osm_polygon_website_tag.contracts.text_schema import (
     TEXT_COLUMN_NAMES,
+    TEXT_DETERMINISTIC_STATUSES,
+    TEXT_NULL_STATUS,
     TEXT_STATUSES,
     TEXT_TERMINAL_STATUSES,
+    TEXT_TRANSIENT_STATUSES,
+    TEXT_UNFINISHED_STATUSES,
     count_words,
     initial_text_fields,
     status_has_retryable_value,
@@ -48,6 +52,19 @@ def test_terminal_status_contract_matches_resume_semantics() -> None:
     assert not status_has_retryable_value(pa.array(["success", "absent"]))
     assert status_has_retryable_value(pa.array(["success", "fetch_error"]))
     assert status_has_retryable_value(pa.array([None], type=pa.string()))
+
+
+def test_status_priority_categories_cover_nonterminal_statuses() -> None:
+    assert TEXT_NULL_STATUS == "__null__"
+    assert frozenset({"pending", TEXT_NULL_STATUS}) == TEXT_UNFINISHED_STATUSES
+    assert frozenset({"empty", "fetch_error", "extract_error"}) == TEXT_TRANSIENT_STATUSES
+    assert frozenset({"invalid_url", "unsafe_url"}) == TEXT_DETERMINISTIC_STATUSES
+    categories = (
+        (TEXT_UNFINISHED_STATUSES - {TEXT_NULL_STATUS})
+        | TEXT_TRANSIENT_STATUSES
+        | TEXT_DETERMINISTIC_STATUSES
+    )
+    assert categories == TEXT_STATUSES - TEXT_TERMINAL_STATUSES
 
 
 def test_count_words_uses_unicode_word_sequences() -> None:

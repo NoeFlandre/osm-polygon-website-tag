@@ -9,6 +9,12 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.contracts.text_schema import (
+    TEXT_DETERMINISTIC_STATUSES,
+    TEXT_NULL_STATUS,
+    TEXT_TRANSIENT_STATUSES,
+    TEXT_UNFINISHED_STATUSES,
+)
 from osm_polygon_website_tag.runtime.run_state import (
     RunState,
     persist_enrichment_status_summaries,
@@ -18,10 +24,6 @@ _STATUS_SUMMARY_COLUMNS = {
     "website": "website_text_status",
     "contact_website": "contact_website_text_status",
 }
-_NULL_STATUS = "__null__"
-_UNFINISHED_STATUSES = frozenset({"pending", _NULL_STATUS})
-_TRANSIENT_STATUSES = frozenset({"empty", "fetch_error", "extract_error"})
-_DETERMINISTIC_STATUSES = frozenset({"invalid_url", "unsafe_url"})
 
 
 def prioritize_sources(
@@ -87,7 +89,7 @@ def summarize_enrichment_status(
     for batch in batches:
         for field_name, column_name in _STATUS_SUMMARY_COLUMNS.items():
             for value in batch.column(column_name).to_pylist():
-                counters[field_name][value if isinstance(value, str) else _NULL_STATUS] += 1
+                counters[field_name][value if isinstance(value, str) else TEXT_NULL_STATUS] += 1
     return {
         field_name: dict(sorted(field_counts.items()))
         for field_name, field_counts in sorted(counters.items())
@@ -123,11 +125,11 @@ def _retry_priority(summary: Mapping[str, Mapping[str, int]]) -> tuple[int, int]
     for counts in summary.values():
         for status, count in counts.items():
             total += count
-            if status in _UNFINISHED_STATUSES:
+            if status in TEXT_UNFINISHED_STATUSES:
                 unfinished += count
-            elif status in _TRANSIENT_STATUSES:
+            elif status in TEXT_TRANSIENT_STATUSES:
                 transient += count
-            elif status in _DETERMINISTIC_STATUSES:
+            elif status in TEXT_DETERMINISTIC_STATUSES:
                 deterministic += count
             else:
                 # Unknown non-terminal values remain actionable and are safer

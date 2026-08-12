@@ -11,4 +11,7 @@ Defines the exact public, comparison, rejection, and text Arrow schemas.
 - `TEXT_TERMINAL_STATUSES` (`success` and `absent`) is the shared completion
   contract used by resumable enrichment and card reporting; all other or null
   statuses remain retryable.
+- `TEXT_UNFINISHED_STATUSES`, `TEXT_TRANSIENT_STATUSES`, and
+  `TEXT_DETERMINISTIC_STATUSES` are the canonical resume-priority categories;
+  `TEXT_NULL_STATUS` is the persisted summary sentinel for null Arrow values.
 - Excludes: pipeline behavior, persistence, and remote adapters.

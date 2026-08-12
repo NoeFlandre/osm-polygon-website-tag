@@ -1,4 +1,4 @@
-"""Website-text schema fields and deterministic word counting."""
+"""Website-text schema fields, status priorities, and deterministic word counting."""
 
 from __future__ import annotations
 
@@ -23,6 +23,14 @@ TEXT_STATUSES = frozenset(
 
 # Only these values mean that no further URL work is required for a row.
 TEXT_TERMINAL_STATUSES = frozenset({"absent", "success"})
+
+# ``TEXT_NULL_STATUS`` is the persisted summary sentinel for a null Arrow
+# status. The remaining sets classify every nonterminal status for deterministic
+# resume prioritization; unknown values remain retryable by policy.
+TEXT_NULL_STATUS = "__null__"
+TEXT_UNFINISHED_STATUSES = frozenset({"pending", TEXT_NULL_STATUS})
+TEXT_TRANSIENT_STATUSES = frozenset({"empty", "fetch_error", "extract_error"})
+TEXT_DETERMINISTIC_STATUSES = frozenset({"invalid_url", "unsafe_url"})
 
 TEXT_COLUMN_NAMES = (
     "website_text",
@@ -86,9 +94,13 @@ def _arrow_kernel(name: str, *args: Any) -> Any:
 
 __all__ = [
     "TEXT_COLUMN_NAMES",
+    "TEXT_DETERMINISTIC_STATUSES",
     "TEXT_FIELDS",
+    "TEXT_NULL_STATUS",
     "TEXT_STATUSES",
     "TEXT_TERMINAL_STATUSES",
+    "TEXT_TRANSIENT_STATUSES",
+    "TEXT_UNFINISHED_STATUSES",
     "count_words",
     "initial_text_fields",
     "status_has_retryable_value",
