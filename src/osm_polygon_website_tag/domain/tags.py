@@ -17,6 +17,9 @@ trimming (``has_any_website``). Both original values are preserved
 verbatim in the public shard and in the comparison-observation shard;
 neither is aliased or overwritten.
 
+The public schema intentionally keeps ``website`` and ``contact_website``
+separate. There is no preferred-website projection.
+
 The Wikidata key remains ``wikidata``.
 """
 
@@ -84,41 +87,6 @@ def has_wikidata(tags: dict[str, str]) -> bool:
     return is_present(tags, WIKIDATA_KEY)
 
 
-def preferred_website(tags: dict[str, str]) -> str | None:
-    """Return the convenience-preferred website value.
-
-    Preference order:
-
-    1. trimmed ``website`` if non-empty,
-    2. else trimmed ``contact:website`` if non-empty,
-    3. else ``None``.
-
-    The original keys are never overwritten. Use this only as a
-    derived convenience field in the public shard.
-    """
-    w = normalize_value(tags.get(WEBSITE_KEY, ""))
-    if w:
-        return w
-    cw = normalize_value(tags.get(CONTACT_WEBSITE_KEY, ""))
-    if cw:
-        return cw
-    return None
-
-
-def preferred_website_source(tags: dict[str, str]) -> str | None:
-    """Return which key was chosen by :func:`preferred_website`.
-
-    Returns ``"website"``, ``"contact:website"``, or ``None``.
-    """
-    w = normalize_value(tags.get(WEBSITE_KEY, ""))
-    if w:
-        return WEBSITE_KEY
-    cw = normalize_value(tags.get(CONTACT_WEBSITE_KEY, ""))
-    if cw:
-        return CONTACT_WEBSITE_KEY
-    return None
-
-
 __all__ = [
     "CONTACT_WEBSITE_KEY",
     "WEBSITE_KEY",
@@ -129,6 +97,4 @@ __all__ = [
     "has_wikidata",
     "is_present",
     "normalize_value",
-    "preferred_website",
-    "preferred_website_source",
 ]
