@@ -91,10 +91,6 @@ class AnalysisSummary:
     cell_canonical: dict[str, int]
 
 
-def _cells_total_from_summary(summary: AnalysisSummary) -> dict[str, int]:
-    return dict(summary.cell_observation)
-
-
 def _public_row_count(polygons_dir: Path) -> int:
     return sum(
         int(pq.ParquetFile(path).metadata.num_rows) for path in polygons_dir.glob("*.parquet")
@@ -383,7 +379,6 @@ def analyze_results(run_dir: Path | str) -> AnalysisSummary:
                 cell_observation={k: int(cells_obs.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},
                 cell_canonical={k: int(cells_canon.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},
             )
-            _ = _cells_total_from_summary  # silence unused
         finally:
             try:  # noqa: SIM105
                 con.close()
