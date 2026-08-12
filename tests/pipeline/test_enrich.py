@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from pathlib import Path
@@ -10,6 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import legacy_polygon_row, write_legacy_polygon_shard
 
 import osm_polygon_website_tag.pipeline.enrichment_checkpoint as checkpoint_module
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -27,63 +27,8 @@ from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
 
 
-def _ts():
-    return pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py()
-
-
-def _legacy_row(
-    *,
-    polygon_id: str = "source:way/1",
-    website: str | None = "https://example.org",
-    contact: str | None = "https://contact.example.org",
-) -> dict[str, object]:
-    return {
-        "polygon_id": polygon_id,
-        "region": "source",
-        "source_pbf": "source.osm.pbf",
-        "osm_type": "way",
-        "osm_id": int(polygon_id.rsplit("/", 1)[1]),
-        "osm_version": 1,
-        "osm_timestamp": _ts(),
-        "name": None,
-        "website": website,
-        "contact_website": contact,
-        "has_website": website is not None,
-        "has_contact_website": contact is not None,
-        "has_any_website": True,
-        "website_class": "absolute_url" if website else None,
-        "contact_website_class": "absolute_url" if contact else None,
-        "website_hostname": "example.org" if website else None,
-        "contact_website_hostname": "contact.example.org" if contact else None,
-        "preferred_website": website or contact,
-        "preferred_website_source": "website" if website else "contact:website",
-        "wikidata": None,
-        "wikidata_qid": None,
-        "wikidata_class": None,
-        "tags": json.dumps({"website": website, "contact:website": contact}),
-        "tag_keys": '["contact:website","website"]',
-        "tag_count": 2,
-        "osm_primary_tag": "building",
-        "geometry": '{"type":"Polygon","coordinates":[]}',
-        "centroid": '{"type":"Point","coordinates":[0,0]}',
-        "centroid_kind": "lambert_azimuthal_equal_area",
-        "lat": 0.0,
-        "lon": 0.0,
-        "bbox": "[0,0,0,0]",
-        "area_m2": 1.0,
-        "area_km2": 0.000001,
-        "area_bucket": "<10m2",
-        "schema_version": "v1.1",
-    }
-
-
-def _write_legacy(path: Path, rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_1), path)
-
-
 def _current_row(index: int) -> dict[str, object]:
-    row = _legacy_row(
+    row = legacy_polygon_row(
         polygon_id=f"source:way/{index}",
         website="https://example.org",
         contact=None,
@@ -149,7 +94,7 @@ def test_assemble_checkpoint_streams_arrow_batches(
 
 def test_legacy_shard_migrates_both_tags_without_pbf_access(tmp_path: Path) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
-    _write_legacy(shard, [_legacy_row()])
+    write_legacy_polygon_shard(shard, [legacy_polygon_row()])
     fetched: list[str] = []
 
     def fetch(url: str) -> FetchResult:
@@ -178,9 +123,9 @@ def test_legacy_shard_migrates_both_tags_without_pbf_access(tmp_path: Path) -> N
 
 def test_duplicate_url_across_both_tags_fetches_once(tmp_path: Path) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
-    _write_legacy(
+    write_legacy_polygon_shard(
         shard,
-        [_legacy_row(website="https://example.org", contact="https://example.org")],
+        [legacy_polygon_row(website="https://example.org", contact="https://example.org")],
     )
     calls = 0
 
@@ -206,14 +151,14 @@ def test_enrichment_bulk_reads_each_batch_url_once(
 ) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
     rows = [
-        _legacy_row(
+        legacy_polygon_row(
             polygon_id=f"source:way/{index}",
             website=f"https://example.org/{index % 2}",
             contact=None,
         )
         for index in range(8)
     ]
-    _write_legacy(shard, rows)
+    write_legacy_polygon_shard(shard, rows)
     cache_path = tmp_path / "run" / "cache" / "text.sqlite3"
     cache = TextCache(cache_path)
     for index in range(2):
@@ -262,12 +207,12 @@ def test_enrichment_bulk_reads_each_batch_url_once(
 def test_unique_urls_are_fetched_concurrently_in_stable_row_order(tmp_path: Path) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
     rows = [
-        _legacy_row(
+        legacy_polygon_row(
             polygon_id=f"source:way/{index}", website=f"https://example.org/{index}", contact=None
         )
         for index in range(16)
     ]
-    _write_legacy(shard, rows)
+    write_legacy_polygon_shard(shard, rows)
     lock = threading.Lock()
     active = 0
     peak = 0
@@ -302,14 +247,14 @@ def test_text_extraction_runs_on_caller_thread_for_native_parser_safety(tmp_path
     """Keep the lxml-backed extractor out of concurrent fetch worker threads."""
     shard = tmp_path / "run" / "polygons" / "source.parquet"
     rows = [
-        _legacy_row(
+        legacy_polygon_row(
             polygon_id=f"source:way/{index}",
             website=f"https://example.org/{index}",
             contact=None,
         )
         for index in range(4)
     ]
-    _write_legacy(shard, rows)
+    write_legacy_polygon_shard(shard, rows)
     caller_thread = threading.get_ident()
     extractor_threads: set[int] = set()
 
@@ -332,12 +277,12 @@ def test_text_extraction_runs_on_caller_thread_for_native_parser_safety(tmp_path
 def test_fetch_workers_is_configurable_and_bounded(tmp_path: Path) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
     rows = [
-        _legacy_row(
+        legacy_polygon_row(
             polygon_id=f"source:way/{index}", website=f"https://example.org/{index}", contact=None
         )
         for index in range(8)
     ]
-    _write_legacy(shard, rows)
+    write_legacy_polygon_shard(shard, rows)
     lock = threading.Lock()
     active = 0
     peak = 0
@@ -381,12 +326,12 @@ def test_interrupted_enrichment_keeps_completed_batches_for_resume(
 ) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
     rows = [
-        _legacy_row(
+        legacy_polygon_row(
             polygon_id=f"source:way/{index}", website=f"https://example.org/{index}", contact=None
         )
         for index in range(4)
     ]
-    _write_legacy(shard, rows)
+    write_legacy_polygon_shard(shard, rows)
     monkeypatch.setattr("osm_polygon_website_tag.pipeline.enrich.DEFAULT_FETCH_WORKERS", 1)
     first_calls: list[str] = []
 
@@ -438,7 +383,7 @@ def test_interrupted_enrichment_keeps_completed_batches_for_resume(
 
 def test_failed_url_retries_on_next_invocation(tmp_path: Path) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
-    _write_legacy(shard, [_legacy_row(contact=None)])
+    write_legacy_polygon_shard(shard, [legacy_polygon_row(contact=None)])
     cache = tmp_path / "run" / "cache" / "text.sqlite3"
 
     enrich_polygon_shard(
@@ -468,7 +413,7 @@ def test_promotion_failure_preserves_prior_shard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     shard = tmp_path / "run" / "polygons" / "source.parquet"
-    _write_legacy(shard, [_legacy_row()])
+    write_legacy_polygon_shard(shard, [legacy_polygon_row()])
     original = shard.read_bytes()
 
     def fail(_pairs):

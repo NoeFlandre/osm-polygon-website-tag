@@ -8,6 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import project_current_rows_to_legacy
 
 from osm_polygon_website_tag.application.inventory import (
     discover_sources as inventory_discover_sources,
@@ -473,19 +474,8 @@ def test_complete_legacy_run_migrates_without_reextracting_pbf(
     first = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
     shard = first.run_dir / "polygons" / "a-latest.parquet"
     rows = pq.read_table(shard).to_pylist()
-    for row in rows:
-        row.update(
-            {
-                "preferred_website": row["website"] or row["contact_website"],
-                "preferred_website_source": ("website" if row["website"] else "contact:website"),
-                "wikidata": None,
-                "wikidata_qid": None,
-                "wikidata_class": None,
-                "area_km2": row["area_m2"] / 1_000_000,
-                "schema_version": "v1.1",
-            }
-        )
-    legacy = pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_1)
+    legacy_rows = project_current_rows_to_legacy(rows, schema_version="v1.1")
+    legacy = pa.Table.from_pylist(legacy_rows, schema=POLYGON_PUBLIC_SCHEMA_V1_1)
     pq.write_table(legacy, shard)
     state = load_run(first.run_dir)
     update_public_shard_metadata(
@@ -532,24 +522,13 @@ def test_complete_v1_2_run_projects_and_reuploads_without_source_or_web_work(
     uploads.clear()
     shard = first.run_dir / "polygons" / "a-latest.parquet"
     rows = pq.read_table(shard).to_pylist()
-    for row in rows:
-        row.update(
-            {
-                "preferred_website": row["website"] or row["contact_website"],
-                "preferred_website_source": ("website" if row["website"] else "contact:website"),
-                "wikidata": None,
-                "wikidata_qid": None,
-                "wikidata_class": None,
-                "area_km2": row["area_m2"] / 1_000_000,
-                "schema_version": "v1.2",
-            }
-        )
-    pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_2), shard)
+    legacy_rows = project_current_rows_to_legacy(rows, schema_version="v1.2")
+    pq.write_table(pa.Table.from_pylist(legacy_rows, schema=POLYGON_PUBLIC_SCHEMA_V1_2), shard)
     state = load_run(first.run_dir)
     update_public_shard_metadata(
         state,
         filename="a-latest.osm.pbf",
-        row_count=len(rows),
+        row_count=len(legacy_rows),
         shard_sha256=hash_shard(shard),
     )
     checkpoint_path = first.run_dir / "manifests" / "uploaded_polygons.json"
