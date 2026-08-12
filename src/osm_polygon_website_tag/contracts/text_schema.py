@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 TEXT_STATUSES = frozenset(
     {
@@ -18,6 +20,9 @@ TEXT_STATUSES = frozenset(
         "extract_error",
     }
 )
+
+# Only these values mean that no further URL work is required for a row.
+TEXT_TERMINAL_STATUSES = frozenset({"absent", "success"})
 
 TEXT_COLUMN_NAMES = (
     "website_text",
@@ -59,10 +64,32 @@ def initial_text_fields(
     }
 
 
+def status_has_retryable_value(status: pa.Array) -> bool:
+    """Return whether a status column contains null or a nonterminal value.
+
+    The workflow resume check and the dataset-card completion count share this
+    Arrow-level contract so a failed, empty, unsafe, or otherwise unknown URL
+    result cannot be reported as a completed source.
+    """
+    terminal: Any = None
+    for expected in sorted(TEXT_TERMINAL_STATUSES):
+        match = _arrow_kernel("equal", status, expected)
+        terminal = match if terminal is None else _arrow_kernel("or_kleene", terminal, match)
+    retryable = pc.fill_null(_arrow_kernel("invert", terminal), True)
+    return bool(_arrow_kernel("any", retryable).as_py() or False)
+
+
+def _arrow_kernel(name: str, *args: Any) -> Any:
+    """Call a dynamically registered Arrow kernel while keeping ty strict."""
+    return pc.call_function(name, list(args))
+
+
 __all__ = [
     "TEXT_COLUMN_NAMES",
     "TEXT_FIELDS",
     "TEXT_STATUSES",
+    "TEXT_TERMINAL_STATUSES",
     "count_words",
     "initial_text_fields",
+    "status_has_retryable_value",
 ]

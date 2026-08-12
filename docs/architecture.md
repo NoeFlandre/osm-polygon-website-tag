@@ -75,7 +75,10 @@ documents its boundary.
    retry and the previously published `analysis/*.parquet` bundle stays
    intact.
 6. `build-card` recomputes every displayed statistic from Parquet artifacts
-   and writes deterministic `README.md` and `dataset.yaml`.
+   and writes deterministic `README.md` and `dataset.yaml`. A source is counted
+   as enriched only when both text-status columns contain terminal values
+   (`success` or `absent`); failures, empty results, unsafe/invalid URLs, and
+   unknown or null statuses remain incomplete and retryable.
 7. `finalize-run` verifies the run, moves it to `complete`, and writes a
    receipt binding every publishable relative path, byte size, and SHA-256.
    Receipt creation and verification share the canonical deterministic

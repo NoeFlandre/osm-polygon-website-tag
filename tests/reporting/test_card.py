@@ -355,6 +355,37 @@ def test_card_stats_preserves_status_buckets_and_pending_semantics(tmp_path: Pat
     assert stats.enriched_sources_count == 0
 
 
+def test_card_stats_does_not_mark_retryable_statuses_enriched(tmp_path: Path) -> None:
+    """A failed or empty URL result keeps the source incomplete for the card."""
+    run_dir = _setup_minimal_run(tmp_path)
+    rows = []
+    for index, (website_status, contact_status) in enumerate(
+        (("fetch_error", "absent"), ("absent", "unsafe_url"))
+    ):
+        row = _public_row(polygon_id=f"retryable-{index}")
+        row.update(
+            {
+                "schema_version": "v1.3",
+                "website": None if website_status == "absent" else "https://example.com",
+                "contact_website": None
+                if contact_status == "absent"
+                else "https://contact.example",
+                "website_text_status": website_status,
+                "contact_website_text_status": contact_status,
+            }
+        )
+        rows.append(row)
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA),
+        run_dir / "polygons" / "monaco-latest.parquet",
+    )
+
+    stats = compute_card_stats(run_dir)
+
+    assert stats.enriched_sources_count == 0
+    assert "| Dataset status | In progress |" in build_card(run_dir).read_text()
+
+
 def test_card_stats_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     second = _public_row(polygon_id="p2", source_pbf="france-latest.osm.pbf")

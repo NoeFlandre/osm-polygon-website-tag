@@ -6,11 +6,10 @@ import json
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 from uuid import uuid4
 
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.application.inventory import (
@@ -23,6 +22,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
 )
+from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -589,19 +589,8 @@ def _shard_needs_enrichment(shard: Path) -> bool:
 
 
 def _status_has_retryable_value(status: pa.Array) -> bool:
-    """Return whether a status column contains null or a nonterminal value."""
-    terminal = _arrow_kernel(
-        "or_kleene",
-        _arrow_kernel("equal", status, "success"),
-        _arrow_kernel("equal", status, "absent"),
-    )
-    retryable = pc.fill_null(_arrow_kernel("invert", terminal), True)
-    return bool(_arrow_kernel("any", retryable).as_py() or False)
-
-
-def _arrow_kernel(name: str, *args: Any) -> Any:
-    """Call a dynamically registered Arrow kernel while keeping ty strict."""
-    return pc.call_function(name, list(args))
+    """Preserve the workflow helper while using the shared text contract."""
+    return status_has_retryable_value(status)
 
 
 __all__ = ["WorkflowResult", "discover_sources", "prioritize_sources", "run_all"]

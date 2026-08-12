@@ -257,6 +257,7 @@ def _render_markdown(stats: CardStats) -> str:
             (
                 "Text statuses are `absent`, `pending`, `success`, `empty`, "
                 "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
+                "A source is enriched only when every status is `success` or `absent`. "
                 "Failed values retry on later resumptions; successful values are cached."
             ),
             "",

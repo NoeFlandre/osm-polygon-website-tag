@@ -25,6 +25,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
@@ -188,7 +189,7 @@ def _add_text_stats(stats: CardStats, shard: Path) -> None:
     }
     if not required.issubset(available):
         return
-    has_pending = False
+    has_retryable_status = False
     columns = sorted(required)
     for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
         website = batch.column("website")
@@ -218,16 +219,9 @@ def _add_text_stats(stats: CardStats, shard: Path) -> None:
         stats.polygons_with_any_text += _count_true(
             _arrow_kernel("or_kleene", website_success, contact_success)
         )
-        has_pending = has_pending or bool(
-            _count_true(
-                _arrow_kernel(
-                    "or_kleene",
-                    _arrow_kernel("equal", website_status, "pending"),
-                    _arrow_kernel("equal", contact_status, "pending"),
-                )
-            )
-        )
-    if not has_pending:
+        has_retryable_status = has_retryable_status or status_has_retryable_value(website_status)
+        has_retryable_status = has_retryable_status or status_has_retryable_value(contact_status)
+    if not has_retryable_status:
         stats.enriched_sources_count += 1
 
 

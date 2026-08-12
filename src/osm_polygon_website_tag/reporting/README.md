@@ -14,6 +14,9 @@ Builds and validates public-facing local artifacts.
   only the card/map/receipt bundle; it never re-extracts or re-enriches sources.
 - Card text totals scan Parquet columns with bounded Arrow kernels rather than
   materializing one Python row dictionary per polygon.
+- A source contributes to the card's enriched count only when every website and
+  contact-website text status is terminal (`success` or `absent`), matching the
+  workflow's resumable retry contract.
 - `artifact_inventory` is the shared source of truth for deterministic
   publishable paths and bounded SHA-256 hashing used by both finalization and
   receipt verification.
