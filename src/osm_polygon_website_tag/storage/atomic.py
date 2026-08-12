@@ -59,7 +59,10 @@ def atomic_promote_bundle(
     """Promote a set of staged files or restore every prior target.
 
     Individual renames are atomic; this rollback protocol provides the
-    all-old-or-all-new contract required for a per-source shard bundle.
+    all-old-or-all-new contract required for a per-source shard bundle. The
+    optional ``mover`` observes every forward rename (backup and promotion);
+    rollback uses the trusted default rename so failure injection cannot
+    prevent restoration.
     """
     move = mover if mover is not None else _default_mover
     backups: dict[Path, Path | None] = {}
@@ -73,8 +76,8 @@ def atomic_promote_bundle(
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
                 backup = target.with_name(f".{target.name}.{token}.backup")
-                target.replace(backup)
                 backups[target] = backup
+                move(target, backup)
             else:
                 backups[target] = None
         for staged, target in promotions:
@@ -85,7 +88,7 @@ def atomic_promote_bundle(
             target.unlink(missing_ok=True)
         for target, backup_path in backups.items():
             if backup_path is not None and backup_path.exists():
-                backup_path.replace(target)
+                _default_mover(backup_path, target)
         raise
     else:
         for backup_path in backups.values():

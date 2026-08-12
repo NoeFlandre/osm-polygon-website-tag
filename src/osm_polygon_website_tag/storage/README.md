@@ -7,6 +7,12 @@ Provides bounded and transactional local persistence.
 - Entry points: atomic promotion, bounded Parquet writes, SQLite ledgers, DuckDB setup.
 - Excludes: run lifecycle, pipeline sequencing, and remote publication.
 
+`atomic_promote_bundle` moves existing targets to tokenized backups before
+promoting staged files, then removes backups only after every forward rename
+succeeds. Its optional test mover observes both backup and promotion renames;
+rollback deliberately uses the default atomic rename so an injected failure
+cannot disable restoration.
+
 ## Candidate ledger
 
 `candidate_ledger` is per-PBF extraction scratch state, not a resume checkpoint.

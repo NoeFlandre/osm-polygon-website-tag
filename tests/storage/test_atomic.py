@@ -66,7 +66,7 @@ def test_atomic_promote_bundle_rolls_back_all_targets_on_failure(tmp_path: Path)
     def failing_mover(source: Path, target: Path) -> None:
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 5:
             raise OSError("injected promotion failure")
         source.replace(target)
 
@@ -77,3 +77,29 @@ def test_atomic_promote_bundle_rolls_back_all_targets_on_failure(tmp_path: Path)
         )
 
     assert [path.read_text() for path in targets] == ["old-0", "old-1", "old-2"]
+
+
+def test_atomic_promote_bundle_routes_forward_moves_through_mover(tmp_path: Path) -> None:
+    """The injected mover observes backups and staged-file promotions alike."""
+    targets = [tmp_path / f"target-{index}.txt" for index in range(2)]
+    staged = [tmp_path / f"staged-{index}.txt" for index in range(2)]
+    for index, path in enumerate(targets):
+        path.write_text(f"old-{index}")
+    for index, path in enumerate(staged):
+        path.write_text(f"new-{index}")
+    calls: list[tuple[Path, Path]] = []
+
+    def recording_mover(source: Path, target: Path) -> None:
+        calls.append((source, target))
+        source.replace(target)
+
+    atomic_promote_bundle(
+        list(zip(staged, targets, strict=True)),
+        mover=recording_mover,
+    )
+
+    assert [path.read_text() for path in targets] == ["new-0", "new-1"]
+    assert len(calls) == 4
+    assert [source for source, _target in calls[:2]] == targets
+    assert all(path.name.startswith(".target-") for _source, path in calls[:2])
+    assert calls[2:] == list(zip(staged, targets, strict=True))
