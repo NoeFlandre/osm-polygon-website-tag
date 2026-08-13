@@ -282,6 +282,22 @@ def _render_markdown(stats: CardStats) -> str:
                 "(https://www.openstreetmap.org/copyright). Regional PBF extracts are "
                 "provided by [Geofabrik](https://download.geofabrik.de/)."
             ),
+            "",
+            "## Citation",
+            "",
+            (
+                "If you use this dataset, please cite it using the machine-readable "
+                "metadata in [`CITATION.cff`]"
+                "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/"
+                "blob/main/CITATION.cff). GitHub and the Hugging Face dataset page "
+                "can then display the citation directly."
+            ),
+            "",
+            (
+                "> Flandre, Noé. *OSM Polygon Website Tag Dataset*. "
+                "[Hugging Face dataset]"
+                "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)"
+            ),
         ]
     )
     return "\n".join(parts) + "\n"

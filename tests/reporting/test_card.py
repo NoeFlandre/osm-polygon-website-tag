@@ -146,6 +146,9 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
     assert "https://download.geofabrik.de/" in content
+    assert "## Citation" in content
+    assert "blob/main/CITATION.cff" in content
+    assert "https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag" in content
     assert "assets/hero.png" in content
     assert content.index("assets/hero.png") < content.index("# OSM Polygon Website Dataset") + 200
 
