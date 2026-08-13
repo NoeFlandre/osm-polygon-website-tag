@@ -208,6 +208,21 @@ def test_run_all_refreshes_legacy_complete_card_without_reprocessing_sources(
     assert json.loads(receipt_path.read_text())["card_contract_version"] == 1
 
 
+def test_run_all_clears_frozen_snapshot_marker_on_resume(
+    make_pbf,
+    tmp_path: Path,
+) -> None:
+    root = _sources(make_pbf, tmp_path)
+    first = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
+    state = load_run(first.run_dir)
+    upsert_run_metadata(state, {"snapshot_status": "done"})
+
+    resumed = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
+
+    assert resumed.complete
+    assert load_run(first.run_dir).metadata["snapshot_status"] == "in_progress"
+
+
 def test_run_all_resumes_after_ctrl_c(
     make_pbf,
     tmp_path: Path,

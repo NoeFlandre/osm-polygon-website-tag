@@ -106,7 +106,6 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         "      - split: polygons",
         "        path: polygons/*.parquet",
         f"observation_count: {stats.observation_count}",
-        f"canonical_count: {stats.canonical_count}",
         f"public_row_count: {stats.public_row_count}",
         f"rejection_count: {stats.rejection_count}",
         f"duplicate_count: {stats.duplicate_count}",
@@ -114,12 +113,7 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         f"sources_count: {stats.sources_count}",
         f"expected_sources_count: {stats.expected_sources_count}",
         f"enriched_sources_count: {stats.enriched_sources_count}",
-        (
-            "dataset_status: complete"
-            if stats.expected_sources_count > 0
-            and stats.enriched_sources_count == stats.expected_sources_count
-            else "dataset_status: in_progress"
-        ),
+        f"dataset_status: {_dataset_status_value(stats)}",
         f"website_text_success_count: {stats.website_text_success_count}",
         f"website_total_words: {stats.website_total_words}",
         f"contact_website_text_success_count: {stats.contact_website_text_success_count}",
@@ -151,11 +145,31 @@ def _size_category(row_count: int) -> str:
 
 def _render_markdown(stats: CardStats) -> str:
     """Render a concise public-facing card from artifact-derived statistics."""
-    complete = (
-        stats.expected_sources_count > 0
-        and stats.enriched_sources_count == stats.expected_sources_count
-    )
     combined_words = stats.website_total_words + stats.contact_website_total_words
+    status_label = _dataset_status_label(stats)
+    hostname_sections: list[str] = []
+    if stats.top_hostnames_website:
+        hostname_sections.extend(
+            [
+                "",
+                _render_hostnames(
+                    "website",
+                    stats.top_hostnames_website,
+                    hostname_key="website_hostname",
+                ),
+            ]
+        )
+    if stats.top_hostnames_contact_website:
+        hostname_sections.extend(
+            [
+                "",
+                _render_hostnames(
+                    "contact:website",
+                    stats.top_hostnames_contact_website,
+                    hostname_key="contact_website_hostname",
+                ),
+            ]
+        )
     parts = [
         "# OSM Polygon Website Dataset",
         "",
@@ -172,14 +186,19 @@ def _render_markdown(stats: CardStats) -> str:
         "",
         "| Metric | Value |",
         "| --- | ---: |",
-        f"| Dataset status | {'Complete' if complete else 'In progress'} |",
-        f"| Source PBFs | {stats.sources_count:,} / {stats.expected_sources_count:,} |",
+        f"| Snapshot status | {status_label} |",
+        f"| Source regions processed | {stats.sources_count:,} / {stats.expected_sources_count:,} |",
         f"| Public polygons | {stats.public_row_count:,} |",
-        f"| Canonical polygons | {stats.canonical_count:,} |",
-        f"| Comparison observations | {stats.observation_count:,} |",
-        f"| Duplicate observations | {stats.duplicate_count:,} |",
-        f"| Conflicting snapshots | {stats.conflicting_snapshot_count:,} |",
-        f"| Geometry rejections | {stats.rejection_count:,} |",
+        f"| Comparison records | {stats.observation_count:,} |",
+        f"| Duplicate records | {stats.duplicate_count:,} |",
+        f"| Conflicting versions | {stats.conflicting_snapshot_count:,} |",
+        f"| Geometry rejected | {stats.rejection_count:,} |",
+        "",
+        (
+            "`Source regions processed` counts one source PBF. `Public polygons` "
+            "counts rows in the published split. `Geometry rejected` counts OSM "
+            "objects that did not produce a usable polygon."
+        ),
         "",
         "## Website text",
         "",
@@ -213,18 +232,7 @@ def _render_markdown(stats: CardStats) -> str:
             "1:110m land backdrop provides geographic context."
         ),
         "",
-        _render_hostnames(
-            "website",
-            stats.top_hostnames_website,
-            hostname_key="website_hostname",
-        ),
-        "",
-        _render_hostnames(
-            "contact:website",
-            stats.top_hostnames_contact_website,
-            hostname_key="contact_website_hostname",
-        ),
-        "",
+        *hostname_sections,
         "## Dataset contents",
         "",
         "- `polygons/*.parquet`: the public polygon split, one shard per source PBF.",
@@ -259,6 +267,16 @@ def _render_markdown(stats: CardStats) -> str:
                 "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
                 "A source is enriched only when every status is `success` or `absent`. "
                 "Failed values retry on later resumptions; successful values are cached."
+            ),
+            "",
+            (
+                "A URL is marked `unsafe_url` when its hostname, or any redirect "
+                "target, does not resolve exclusively to globally routable public "
+                "IP addresses. Localhost, private, reserved, multicast, and "
+                "unspecified targets are blocked. Unsupported schemes and URLs "
+                "containing credentials are classified as `invalid_url`; redirect "
+                "limits, timeouts, oversized responses, and unsupported content "
+                "types are recorded as `fetch_error`."
             ),
             "",
             "## Provenance and license",
@@ -301,6 +319,27 @@ def _render_markdown(stats: CardStats) -> str:
         ]
     )
     return "\n".join(parts) + "\n"
+
+
+def _dataset_status_value(stats: CardStats) -> str:
+    """Return the stable machine-readable status shown in card metadata."""
+    if stats.snapshot_status == "done":
+        return "done"
+    if (
+        stats.expected_sources_count > 0
+        and stats.enriched_sources_count == stats.expected_sources_count
+    ):
+        return "complete"
+    return "in_progress"
+
+
+def _dataset_status_label(stats: CardStats) -> str:
+    """Return a short human-readable status label for the snapshot table."""
+    return {
+        "done": "Done",
+        "complete": "Complete",
+        "in_progress": "In progress",
+    }[_dataset_status_value(stats)]
 
 
 def _render_hostnames(

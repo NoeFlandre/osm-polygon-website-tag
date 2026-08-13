@@ -16,7 +16,7 @@ from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.card import build_card
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
-from osm_polygon_website_tag.runtime.run_state import initialise_run
+from osm_polygon_website_tag.runtime.run_state import initialise_run, load_run, upsert_run_metadata
 
 
 def _ts():
@@ -151,6 +151,8 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag" in content
     assert "assets/hero.png" in content
     assert content.index("assets/hero.png") < content.index("# OSM Polygon Website Dataset") + 200
+    assert "Top `website` hostnames" not in content
+    assert "Top `contact:website` hostnames" not in content
 
 
 def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> None:
@@ -189,13 +191,29 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     path = build_card(run_dir)
     content = path.read_text()
     assert "| Public polygons | 1 |" in content
-    assert "| Source PBFs | 1 / 1 |" in content
+    assert "| Source regions processed | 1 / 1 |" in content
     assert "`website` OR `contact:website`" in content
     assert "| `polygon_id` |" in content
     assert "| `contact_website` |" in content
     assert "| `preferred_website` |" not in content
     assert "| `wikidata` |" not in content
     assert "| `area_km2` |" not in content
+
+
+def test_build_card_renders_done_snapshot_without_zero_canonical_metric(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    state = load_run(run_dir)
+    upsert_run_metadata(state, {"snapshot_status": "done"})
+
+    content = build_card(run_dir).read_text()
+
+    assert "dataset_status: done" in content
+    assert "| Snapshot status | Done |" in content
+    assert "| Canonical polygons |" not in content
+    assert "canonical_count:" not in content
+    assert "Source regions processed" in content
+    assert "one source PBF" in content
+    assert "globally routable public IP addresses" in content
 
 
 def test_build_card_links_detailed_analysis_instead_of_embedding_it(tmp_path: Path) -> None:
@@ -386,7 +404,7 @@ def test_card_stats_does_not_mark_retryable_statuses_enriched(tmp_path: Path) ->
     stats = compute_card_stats(run_dir)
 
     assert stats.enriched_sources_count == 0
-    assert "| Dataset status | In progress |" in build_card(run_dir).read_text()
+    assert "| Snapshot status | In progress |" in build_card(run_dir).read_text()
 
 
 def test_card_stats_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
@@ -442,7 +460,7 @@ def test_incremental_card_renders_progress_and_text_statistics(tmp_path: Path) -
     content = build_card(run_dir).read_text()
 
     assert "dataset_status: in_progress" in content
-    assert "| Source PBFs | 1 / 2 |" in content
+    assert "| Source regions processed | 1 / 2 |" in content
     assert "| `website` | 1 | 1 | 0 | 0 | 3 |" in content
     assert "Combined extracted words: **3**" in content
     assert "Trafilatura" in content

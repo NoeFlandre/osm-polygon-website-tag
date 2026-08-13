@@ -17,6 +17,10 @@ Builds and validates public-facing local artifacts.
 - A source contributes to the card's enriched count only when every website and
   contact-website text status is terminal (`success` or `absent`), matching the
   workflow's resumable retry contract.
+- A user-frozen run may set `manifests/run.json` `snapshot_status` to `done`;
+  the card then labels that published snapshot `Done` while retaining all
+  retry and failure counts. Resuming the workflow clears the marker and returns
+  the card to `In progress`.
 - `artifact_inventory` is the shared source of truth for deterministic
   publishable paths and bounded SHA-256 hashing used by both finalization and
   receipt verification.

@@ -145,6 +145,8 @@ def run_all(
         STATUS_COMPLETE,
     }:
         raise ValueError(f"run cannot be resumed from terminal status {status!r}")
+    if state.metadata.get("snapshot_status") == "done":
+        upsert_run_metadata(state, {"snapshot_status": "in_progress"})
 
     if status == STATUS_COMPLETE and _card_refresh_needed(run_dir):
         _progress(progress, "Refreshing the legacy dataset card and H3 density map")

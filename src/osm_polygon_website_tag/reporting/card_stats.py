@@ -36,6 +36,7 @@ from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySu
 class CardStats:
     """All numeric statistics rendered on the README card."""
 
+    snapshot_status: str | None = None
     observation_count: int = 0
     canonical_count: int = 0
     public_row_count: int = 0
@@ -89,6 +90,7 @@ def compute_card_stats(
     """
     run_dir = Path(run_dir)
     stats = CardStats()
+    stats.snapshot_status = _read_snapshot_status(run_dir)
     density = summary or compute_polygon_density_summary(
         run_dir,
         source_names=source_names,
@@ -162,6 +164,23 @@ def compute_card_stats(
                 setattr(stats, dst_attr, rows)
 
     return stats
+
+
+def _read_snapshot_status(run_dir: Path) -> str | None:
+    """Read the optional user-declared frozen-snapshot marker.
+
+    A ``done`` marker means the owner has intentionally stopped retry work and
+    published the current artifacts as the final snapshot. Other values are
+    ignored so malformed or unrelated run metadata cannot change the card.
+    """
+    metadata_path = run_dir / "manifests" / "run.json"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return (
+        "done" if isinstance(metadata, dict) and metadata.get("snapshot_status") == "done" else None
+    )
 
 
 def _selected_parquets(directory: Path, source_names: Collection[str] | None) -> list[Path]:
