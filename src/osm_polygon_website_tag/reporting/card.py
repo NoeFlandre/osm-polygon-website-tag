@@ -214,9 +214,12 @@ def _render_markdown(stats: CardStats) -> str:
         "",
         (
             "The regional PBF ratio is **published source shards / expected source PBFs**. "
-            "Comparison observations retain source-level records, so the same OSM object "
-            "can appear more than once across regional snapshots. Rejected candidates are "
-            "excluded from both the public and comparison files."
+            "The published polygon split is globally canonicalized: at most one row "
+            "per OSM object, selected by version, timestamp, and a stable source-name "
+            "tie-breaker. Each selected row keeps its own website, geometry, and text; "
+            "comparison observations retain source-level records, so the same OSM object "
+            "can appear more than once there. Rejected candidates are excluded from both "
+            "the public and comparison files."
         ),
         "",
         "## Website text",
@@ -282,6 +285,8 @@ def _render_markdown(stats: CardStats) -> str:
         "- `polygons/*.parquet`: the public polygon split, one shard per source PBF.",
         "- `analysis/*.parquet`: detailed overlap, provenance, hostname, duplicate, "
         "conflict, and per-source statistics.",
+        "- `deduplication_summary.json`: counts and tag-conflict totals from the global "
+        "canonicalization pass.",
         "- `manifests/`: source inventory, upload checkpoints, and completion receipt.",
         "",
         "## Public polygon schema",

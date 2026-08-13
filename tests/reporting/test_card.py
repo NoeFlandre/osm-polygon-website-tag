@@ -202,6 +202,9 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     assert "| Comparison observations | 0 |" in content
     assert "| What it means |" in content
     assert "`website` OR `contact:website`" in content
+    assert "published polygon split is globally canonicalized" in content
+    assert "at most one row per OSM object" in content
+    assert "`deduplication_summary.json`" in content
     assert "| `polygon_id` |" in content
     assert "| `contact_website` |" in content
     assert "| `preferred_website` |" not in content

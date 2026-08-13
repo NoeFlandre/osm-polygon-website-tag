@@ -8,8 +8,17 @@ Implements bounded data-processing stages.
   `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
-  `migrate_public_shard`, `analyze_results`.
+  `migrate_public_shard`, `analyze_results`, `deduplicate_public_shards`.
 - Excludes: full-run orchestration, card rendering, and remote publication.
+
+`deduplicate_public_shards` is a read-only derivative stage. It reads finalized
+public shards, selects one complete row per `(osm_type, osm_id)` using OSM
+version, timestamp, and stable source-name tie-breakers, then writes the winner
+back to the same source-named shard (including empty expected shards). The
+winner's website, geometry, and extracted text are kept together; values from
+discarded snapshots are never merged into it. The original source-level run is
+not modified, and the output is promoted only after every shard satisfies the
+public schema.
 
 ## Extraction
 
