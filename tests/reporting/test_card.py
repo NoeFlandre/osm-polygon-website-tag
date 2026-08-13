@@ -151,6 +151,7 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag" in content
     assert "assets/hero.png" in content
     assert content.index("assets/hero.png") < content.index("# OSM Polygon Website Dataset") + 200
+    assert content.index("## Methodology and quality") < content.index("## Public polygon schema")
     assert "Top `website` hostnames" not in content
     assert "Top `contact:website` hostnames" not in content
 
@@ -190,8 +191,13 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     path = build_card(run_dir)
     content = path.read_text()
-    assert "| Public polygons | 1 |" in content
-    assert "| Source regions processed | 1 / 1 |" in content
+    assert "| Published polygon rows | 1 | Rows in the public `polygons/` files |" in content
+    assert (
+        "| Regional PBFs included | 1 / 1 | Published source shards / expected source PBFs |"
+        in content
+    )
+    assert "| Comparison observations | 0 |" in content
+    assert "| What it means |" in content
     assert "`website` OR `contact:website`" in content
     assert "| `polygon_id` |" in content
     assert "| `contact_website` |" in content
@@ -211,8 +217,8 @@ def test_build_card_renders_done_snapshot_without_zero_canonical_metric(tmp_path
     assert "| Snapshot status | Done |" in content
     assert "| Canonical polygons |" not in content
     assert "canonical_count:" not in content
-    assert "Source regions processed" in content
-    assert "one source PBF" in content
+    assert "Regional PBFs included" in content
+    assert "expected source PBFs" in content
     assert "globally routable public IP addresses" in content
 
 
@@ -460,7 +466,7 @@ def test_incremental_card_renders_progress_and_text_statistics(tmp_path: Path) -
     content = build_card(run_dir).read_text()
 
     assert "dataset_status: in_progress" in content
-    assert "| Source regions processed | 1 / 2 |" in content
+    assert "| Regional PBFs included | 1 / 2 |" in content
     assert "| `website` | 1 | 1 | 0 | 0 | 3 |" in content
     assert "Combined extracted words: **3**" in content
     assert "Trafilatura" in content

@@ -306,8 +306,8 @@ def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:
     # Build the card; every number must come from the artifacts.
     readme_path = build_card(run_dir)
     text = readme_path.read_text()
-    assert "| Source regions processed | 3 / 3 |" in text
-    assert "| Public polygons | 9 |" in text
+    assert "| Regional PBFs included | 3 / 3 |" in text
+    assert "| Published polygon rows | 9 |" in text
     assert "ODbL" in text
     assert "license: odbl" in text
     assert "task_categories:" not in text

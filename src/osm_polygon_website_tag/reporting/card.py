@@ -184,20 +184,39 @@ def _render_markdown(stats: CardStats) -> str:
         "",
         "## Snapshot",
         "",
-        "| Metric | Value |",
-        "| --- | ---: |",
-        f"| Snapshot status | {status_label} |",
-        f"| Source regions processed | {stats.sources_count:,} / {stats.expected_sources_count:,} |",
-        f"| Public polygons | {stats.public_row_count:,} |",
-        f"| Comparison records | {stats.observation_count:,} |",
-        f"| Duplicate records | {stats.duplicate_count:,} |",
-        f"| Conflicting versions | {stats.conflicting_snapshot_count:,} |",
-        f"| Geometry rejected | {stats.rejection_count:,} |",
+        "| Metric | Value | What it means |",
+        "| --- | ---: | --- |",
+        f"| Snapshot status | {status_label} | Current published snapshot |",
+        (
+            f"| Regional PBFs included | {stats.sources_count:,} / "
+            f"{stats.expected_sources_count:,} | Published source shards / expected source PBFs |"
+        ),
+        (
+            f"| Published polygon rows | {stats.public_row_count:,} | "
+            "Rows in the public `polygons/` files |"
+        ),
+        (
+            f"| Comparison observations | {stats.observation_count:,} | "
+            "Source-level records with a website, contact:website, or Wikidata tag |"
+        ),
+        (
+            f"| Duplicate OSM objects | {stats.duplicate_count:,} | "
+            "Objects observed in more than one source snapshot |"
+        ),
+        (
+            f"| Conflicting snapshot observations | {stats.conflicting_snapshot_count:,} | "
+            "Repeated observations whose tag values disagree with the selected version |"
+        ),
+        (
+            f"| Rejected polygon candidates | {stats.rejection_count:,} | "
+            "Candidate objects that did not produce a usable polygon row |"
+        ),
         "",
         (
-            "`Source regions processed` counts one source PBF. `Public polygons` "
-            "counts rows in the published split. `Geometry rejected` counts OSM "
-            "objects that did not produce a usable polygon."
+            "The regional PBF ratio is **published source shards / expected source PBFs**. "
+            "Comparison observations retain source-level records, so the same OSM object "
+            "can appear more than once across regional snapshots. Rejected candidates are "
+            "excluded from both the public and comparison files."
         ),
         "",
         "## Website text",
@@ -233,6 +252,31 @@ def _render_markdown(stats: CardStats) -> str:
         ),
         "",
         *hostname_sections,
+        "## Methodology and quality",
+        "",
+        (
+            "Geometry is assembled with libosmium. Full main text is extracted "
+            "independently for both website tags with Trafilatura and is not "
+            "truncated. Word counts are Python Unicode `\\w+` matches."
+        ),
+        "",
+        (
+            "Text statuses are `absent`, `pending`, `success`, `empty`, "
+            "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
+            "A source is enriched only when every status is `success` or `absent`. "
+            "Failed values retry on later resumptions; successful values are cached."
+        ),
+        "",
+        (
+            "A URL is marked `unsafe_url` when its hostname, or any redirect "
+            "target, does not resolve exclusively to globally routable public "
+            "IP addresses. Localhost, private, reserved, multicast, and "
+            "unspecified targets are blocked. Unsupported schemes and URLs "
+            "containing credentials are classified as `invalid_url`; redirect "
+            "limits, timeouts, oversized responses, and unsupported content "
+            "types are recorded as `fetch_error`."
+        ),
+        "",
         "## Dataset contents",
         "",
         "- `polygons/*.parquet`: the public polygon split, one shard per source PBF.",
@@ -253,31 +297,6 @@ def _render_markdown(stats: CardStats) -> str:
         )
     parts.extend(
         [
-            "",
-            "## Methodology and quality",
-            "",
-            (
-                "Geometry is assembled with libosmium. Full main text is extracted "
-                "independently for both website tags with Trafilatura and is not "
-                "truncated. Word counts are Python Unicode `\\w+` matches."
-            ),
-            "",
-            (
-                "Text statuses are `absent`, `pending`, `success`, `empty`, "
-                "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
-                "A source is enriched only when every status is `success` or `absent`. "
-                "Failed values retry on later resumptions; successful values are cached."
-            ),
-            "",
-            (
-                "A URL is marked `unsafe_url` when its hostname, or any redirect "
-                "target, does not resolve exclusively to globally routable public "
-                "IP addresses. Localhost, private, reserved, multicast, and "
-                "unspecified targets are blocked. Unsupported schemes and URLs "
-                "containing credentials are classified as `invalid_url`; redirect "
-                "limits, timeouts, oversized responses, and unsupported content "
-                "types are recorded as `fetch_error`."
-            ),
             "",
             "## Provenance and license",
             "",
