@@ -320,6 +320,14 @@ def _render_markdown(stats: CardStats) -> str:
                 "provided by [Geofabrik](https://download.geofabrik.de/)."
             ),
             "",
+            (
+                "Website text is third-party content, separate from the OSM data, and "
+                "is not covered by the ODbL. This dataset asserts no license for that "
+                "text and grants no additional reuse rights: copyright and licensing "
+                "conditions remain with each source website. Check the source site's "
+                "terms or license before using or redistributing extracted text."
+            ),
+            "",
             "## Citation",
             "",
             (

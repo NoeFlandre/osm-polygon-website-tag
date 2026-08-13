@@ -146,6 +146,9 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
     assert "https://download.geofabrik.de/" in content
+    assert "Website text is third-party content" in content
+    assert "grants no additional reuse rights" in content
+    assert "Check the source site's terms or license" in content
     assert "## Citation" in content
     assert "blob/main/CITATION.cff" in content
     assert "https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag" in content
