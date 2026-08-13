@@ -197,3 +197,13 @@ line-oriented progress logs.
   `dataset.yaml`.
 
 [ODbL 1.0]: https://opendatacommons.org/licenses/odbl/1-0/
+
+## Citation
+
+If you use this software or the accompanying dataset, please cite this
+project. The complete machine-readable citation is available in
+[`CITATION.cff`](CITATION.cff), and GitHub exposes it through the repository's
+**Cite this repository** action.
+
+> Flandre, Noé. *OSM Polygon Website Tag*. Version 0.1.0.
+> [https://github.com/NoeFlandre/osm-polygon-website-tag](https://github.com/NoeFlandre/osm-polygon-website-tag)

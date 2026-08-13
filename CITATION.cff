@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software or the accompanying dataset, please cite this
+  project using the metadata below.
+title: OSM Polygon Website Tag
+type: software
+authors:
+  - family-names: Flandre
+    given-names: Noé
+version: 0.1.0
+abstract: >-
+  Reproducible extraction, enrichment, and publication of OpenStreetMap
+  polygons carrying a non-empty website or contact:website tag.
+repository-code: https://github.com/NoeFlandre/osm-polygon-website-tag
+repository-artifact: https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag
+license: Apache-2.0
+keywords:
+  - OpenStreetMap
+  - geospatial data
+  - polygon data
+  - website tags
+  - reproducible research
