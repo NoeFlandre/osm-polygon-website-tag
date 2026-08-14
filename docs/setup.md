@@ -1,58 +1,74 @@
-# Setup
+# Getting started
 
-Step-by-step guide to get the project running from a fresh clone.
+This guide sets up a fresh clone. The [CLI reference](cli.md) has the command
+options; [Operations and resume](operations.md) explains where large runs and
+uploads live.
 
 ## Prerequisites
 
-| Tool       | Version  | Notes                                                  |
-| ---------- | -------- | ------------------------------------------------------ |
-| Python     | 3.12     | Managed by `uv` from `.python-version`; do not install manually. |
-| `uv`       | >= 0.5   | `brew install uv`                                      |
-| `just`     | >= 1.50  | `brew install just`                                    |
-| `git`      | any      | For cloning and pushing.                               |
-| `hf` (HF CLI) | latest | `brew install hf` (optional, only for dataset uploads) |
-| Hugging Face account | - | Required for dataset pushes; create a token at https://huggingface.co/settings/tokens |
-| Docker | current Docker Desktop/Engine | Optional, for the reproducible container workflow below. |
+| Tool | Version | Why it is needed |
+| --- | --- | --- |
+| Python | 3.12 | Selected by `.python-version`; `uv` manages the environment. |
+| `uv` | 0.5 or newer | Locked dependency and tool runner (`brew install uv`). |
+| `just` | 1.50 or newer | Project command runner (`brew install just`). |
+| Git | Any current version | Clone the source and install hooks. |
+| `hf` | Optional | Hugging Face login for an approved upload (`brew install hf`). |
+| Docker | Optional | Reproducible image build and smoke test. |
 
-Trafilatura and its Python dependencies are installed from `uv.lock`; do not
-install them globally with `pip`.
+Trafilatura and the other Python dependencies come from `uv.lock`; do not
+install them globally with `pip`. A Hugging Face account and write token are
+needed only for publication.
 
 ## First-time setup
 
 ```bash
-# 1. Clone
 git clone https://github.com/NoeFlandre/osm-polygon-website-tag.git
 cd osm-polygon-website-tag
 
-# 2. Install dependencies (creates .venv automatically)
+# Creates the locked .venv.
 just sync
 
-# 3. Create your optional local configuration
+# Optional local settings; never commit a populated .env.
 cp .env.example .env
 
-# 4. Sanity-check the install
+# Install both Git hooks and run the repository checks.
 just install-hooks
 just check
 ```
 
-## Reproducible Docker workflow
+If `uv` cannot find Python 3.12, run `uv python install 3.12` once and repeat
+`just sync`.
 
-The repository also provides a multi-stage Docker build. The runtime image is
-based on a digest-pinned Python 3.12 image, installs the exact versions from
-`uv.lock`, runs as an unprivileged `app` user, and defaults to the harmless CLI
-help command. The dev target contains the locked test/tooling environment.
+## First local run
 
-Build and smoke-test the runtime image without reading any PBF or using any
-credentials:
+Use a read-only source mount and a separate writable output root. Publication
+is off unless `--apply` is explicitly supplied:
+
+```bash
+uv run --locked osm-polygon-website-tag run-all \
+  --source-root '/path/to/read-only/pbf-root' \
+  --output-root '/path/to/writable/runs' \
+  --run-id 'website-v1'
+```
+
+Repeat the command with the same roots and run ID after an interruption. The
+pipeline records source fingerprints and resumes verified extraction,
+enrichment, and upload checkpoints. See [Operations and resume](operations.md)
+for the exact safety rules.
+
+## Docker workflow
+
+The multi-stage image uses the digest-pinned Python 3.12 and `uv.lock` setup,
+runs as an unprivileged `app` user, and defaults to the harmless CLI help
+command. The smoke test reads no PBF and uses no credentials:
 
 ```bash
 just docker-build
 just docker-smoke
 ```
 
-The image never copies production inputs, generated runs, `.env` files, or
-tokens. Mount those explicitly when running a real workflow. Keep the source
-mount read-only and store generated artifacts on a separate writable volume:
+For a local run, mount the immutable input read-only and keep generated files
+on a separate writable volume:
 
 ```bash
 docker run --rm --read-only \
@@ -67,8 +83,9 @@ docker run --rm --read-only \
   --repo-id NoeFlandre/osm-polygon-website-tag
 ```
 
-For an explicitly approved upload, pass the token through the environment
-only; never put it in a Dockerfile or image layer:
+The image does not contain production PBFs, generated runs, `.env` files, or
+tokens. For an explicitly approved upload, pass a token through the
+environment only and add `--apply`:
 
 ```bash
 docker run --rm --read-only \
@@ -78,72 +95,57 @@ docker run --rm --read-only \
   --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs",dst=/data/runs \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw --output-root /data/runs \
-  --run-id geofabrik-website-v1 --repo-id NoeFlandre/osm-polygon-website-tag --apply
+  --run-id geofabrik-website-v1 \
+  --repo-id NoeFlandre/osm-polygon-website-tag --apply
 ```
 
-The base-image and uv-image manifest digests are intentionally pinned in
-`Dockerfile`. Refreshing them is a deliberate dependency-maintenance change:
-resolve new multi-platform digests, run the full quality suite and Docker smoke
-test, then review the diff. The Docker smoke workflow performs only the build
-and safe `--help` invocation; it never accesses production data or Hugging Face.
+Refreshing the digest-pinned base images is a dependency-maintenance change.
+Review the new multi-platform digests and rerun the full quality and Docker
+smoke checks before changing `Dockerfile`.
 
-## Day-to-day commands
+## Useful project commands
 
-| Action                          | Command                              |
-| ------------------------------- | ------------------------------------ |
-| Run every CI quality gate       | `just check`                         |
-| Synchronize the locked environment | `just sync`                       |
-| Run tests                       | `just test`                          |
-| Run tests with coverage         | `uv run pytest --cov`                |
-| Lint                            | `just lint`                          |
-| Auto-format                     | `just format`                        |
-| Verify formatting               | `just format-check`                  |
-| Type-check                      | `just typecheck`                     |
-| Build distributions             | `just build`                         |
-| Run every pre-commit hook       | `just pre-commit`                    |
-| Run the pre-push test hook      | `just pre-push`                      |
-| Install commit and push hooks   | `just install-hooks`                 |
-| Build the documentation site    | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
-| Add a runtime dependency        | edit `pyproject.toml`, then `uv sync` |
-| Add a dev dependency            | edit `pyproject.toml`, then `uv sync` |
-| Update all deps                 | `uv sync --upgrade`                  |
-| Open a REPL with the package    | `uv run python`                      |
+| Task | Command |
+| --- | --- |
+| Locked environment | `just sync` |
+| Full quality suite | `just check` |
+| Tests | `just test` |
+| Lint and formatting check | `just lint` and `just format-check` |
+| Type check | `just typecheck` |
+| Pre-commit hooks | `just pre-commit` |
+| Pre-push hook | `just pre-push` |
+| Build distributions | `just build` |
+| Strict docs build | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
 
-## Documentation site
+All Python tools run inside the locked `uv` environment. If a hook fails, run
+the named recipe directly, fix the reported issue, and retry; do not bypass
+hooks with `--no-verify`.
 
-The public site is built from this `docs/` directory with MkDocs Material.
-The `main` branch workflow builds with strict link and configuration checks
-and deploys the generated site to
-[GitHub Pages](https://noeflandre.github.io/osm-polygon-website-tag/).
-For a new repository, set **Settings → Pages → Build and deployment → Source**
-to **GitHub Actions** once before the first deployment.
+## Public documentation
 
-## Working with the external data drive
+MkDocs Material builds `docs/` on pushes to `main` and deploys the strict build
+through GitHub Actions to
+[GitHub Pages](https://noeflandre.github.io/osm-polygon-website-tag/). The
+repository's Pages source must be **GitHub Actions** (`Settings → Pages →
+Build and deployment → Source`) before the first deployment.
 
-The immutable production source root is
-`/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw`.
-Three things to know:
+## Storage defaults
 
-1. The PBF source root is supplied explicitly and remains read-only.
-2. Run artifacts live under
-   `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`.
-3. Override only the artifact location with
-   `OSM_POLY_DATA_DIR=/some/local/output/path`.
+The production source root used by the reviewed workflow is
+`/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw`. Generated runs
+default to `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`; set
+`OSM_POLY_DATA_DIR=/some/local/output/path` to override the generated-data root.
+The CLI's explicit `--output-root` still controls the run location and must
+remain outside the source root.
 
-## Pushing data to Hugging Face
-
-See [`docs/data-and-remotes.md`](data-and-remotes.md) for the full flow.
+For Hugging Face publication, authenticate with `hf auth login` and follow
+[Data and remotes](data-and-remotes.md). The CLI reads credentials from the
+environment or the local Hugging Face store, never from a token option.
 
 ## Troubleshooting
 
-- **`uv sync` fails to find Python 3.12** — install it once via
-  `uv python install 3.12`. `uv` will manage it from there.
-- **`ty` reports a third-party typing problem** — confirm the package's type
-  information first. Prefer a narrow code correction or diagnostic-specific
-  suppression; never disable unresolved-import checking repository-wide.
-- **`pytest` cannot import `osm_polygon_website_tag`** — run `uv sync` again.
-  The src/ layout means the package only becomes importable after install.
-- **`just` is missing** — install it with `brew install just`. Just delegates
-  all Python work to uv and never replaces the locked environment.
-- **A Git hook fails** — run the named Just recipe directly, fix the reported
-  issue, and retry. Do not bypass hooks with `--no-verify`.
+- `pytest` cannot import the package: run `just sync` again; this is a `src/`
+  layout and the package is imported from the installed environment.
+- `ty` reports a third-party typing issue: keep the diagnostic narrow and do
+  not disable unresolved-import checking for the whole repository.
+- `just` is missing: install it with `brew install just`.

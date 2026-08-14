@@ -1,155 +1,131 @@
 # Data and remotes
 
-Where data lives on disk, and how it gets to Hugging Face.
+This project separates code, immutable inputs, local run artifacts, and public
+publication. A local artifact is not public until an apply-mode upload sends
+it; a complete snapshot additionally requires the final receipt verification.
 
-## Run-artifact root
+## Local paths
 
-Code stays on the MacBook. Generated artifacts live on the Seagate under
-`/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`; override it with
-`OSM_POLY_DATA_DIR`. Production commands use an explicit `--output-root`.
+Code and tests stay in the Git checkout. The reviewed production PBFs are
+under:
 
-## Immutable PBF sources
-
-Production PBFs live at:
-
-```
+```text
 /Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw
 ```
 
-The pipeline **never writes** to this directory. The safety module
-(`osm_polygon_website_tag.safety`) refuses any output path that is equal
-to or contained by the required `--source-root`. PBFs are read-only
-inputs: the pipeline never hashes, copies, moves, renames, or modifies them.
+Generated data defaults to:
 
-## Output root
-
-The pipeline accepts an explicit `--output-root` outside the source root.
-Each run owns this layout:
-
+```text
+/Volumes/Seagate M3/projects/osm-polygon-website-tag-data
 ```
+
+Set `OSM_POLY_DATA_DIR` to override that generated-data root. The CLI's
+`--output-root` is explicit for each run and must remain outside the source
+root.
+
+## Immutable source boundary
+
+`--source-root` is read-only input. The safety module refuses an output path
+that is equal to or contained by it. The pipeline records each PBF's filename,
+size, and nanosecond mtime, checks those values before and after processing,
+and never copies, renames, moves, hashes, or modifies the source file.
+
+## Run artifacts
+
+Each run owns a directory under the output root:
+
+```text
 <output-root>/<run-id>/
   polygons/<source-stem>.parquet
   analysis_observations/<source-stem>.parquet
   rejections/<source-stem>.parquet
   analysis/*.parquet
   manifests/
+    run.json
+    expected_sources.json
+    sources.json
+    uploaded_polygons.json
+    completion_receipt.json
   assets/geographic_polygon_density.png
   README.md
   dataset.yaml
 ```
 
-Run-owned staging is excluded from the completion receipt and publication.
-Publication uses only receipt-bound paths.
+These files are local run artifacts. Staging, DuckDB spill data, URL-cache
+files, and enrichment checkpoint parts support resume and are not part of the
+publication plan. `uploaded_polygons.json` is operational state; the
+completion receipt is the final allow-list and records each publishable path,
+size, and SHA-256.
 
 ## GitHub remote
 
-```
-https://github.com/NoeFlandre/osm-polygon-website-tag.git
-```
-
-Push flow (typical):
-
-```bash
-git status
-git diff --staged   # review before committing
-git add <files>
-git commit -m "<message>"
-git push origin main
-```
+The source repository is
+[NoeFlandre/osm-polygon-website-tag](https://github.com/NoeFlandre/osm-polygon-website-tag).
+The Pages workflow builds `docs/` with `mkdocs build --strict` on `main` and
+deploys through GitHub Actions. Source changes and generated dataset artifacts
+have separate lifecycles: the production run does not write into Git.
 
 ## Hugging Face dataset remote
 
-```
-https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag
-```
-
-Use the `publish` subcommand, which is **dry-run by default** and
-verifies the local run before any upload.
-
-The resumable production command is documented in the root README. With
-`run-all --apply`, each polygon shard is safely enriched from both website
-tags, the cumulative card and logarithmic H3 density map of polygons with
-successfully extracted text are recomputed from Parquets, and the changed
-shard plus card bundle are uploaded together; a local acknowledgement is then
-written atomically
-before the next PBF begins. The final analysis, card, manifests, and completion
-receipt are uploaded only after the entire inventory verifies. Stopping with
-`Ctrl-C` and repeating the same command resumes without reprocessing exact
-completed bundles or successful URLs. Within a shard, durable completed-batch
-checkpoint parts are reused, so an interrupted enrichment resumes from the
-first unfinished suffix. Sources without an acknowledged upload are
-prioritized before retries of previously acknowledged sources. Sources with no
-local extraction bundle are first; already extracted but unacknowledged bundles
-are enriched and uploaded next without rereading their PBFs. This includes
-bundles created by the old extract-all workflow. Legacy shards are likewise
-enriched without rereading PBFs; failed URLs retry. If the run-owned URL cache
-is damaged, the pipeline quarantines the
-unreadable SQLite files and rebuilds an empty cache; completed Parquet text is
-kept, while only unresolved URLs are retried. Short-lived SQLite writer locks
-are retried with bounded backoff so a concurrent read or writer does not abort
-the source transaction.
-
-In apply mode, startup reconciles the local upload checkpoint with the exact
-SHA-256 hashes of polygon Parquets currently on Hugging Face. Progress cards and
-maps are then computed only from that acknowledged remote shard set, so an
-interrupted upload cannot make the published card claim local-only coverage.
-The local `uploaded_polygons.json` checkpoint is typed (`CheckpointV2`,
-schema `Literal["v2"]`) and fail-closed: malformed JSON or non-UTF-8 bytes,
-a present-but-`null` schema version, an unknown or otherwise unsupported
-schema version, an unknown `global_bundle` field, a malformed
-`map_contract_version` (string, bool, non-integer), a non-hex SHA-256 in
-`sources[*].polygon_sha256` / `readme_sha256` / `dataset_yaml_sha256` /
-`map_sha256` / `remote_shards[*].sha256`, a non-`.osm.pbf` source key,
-or a per-source entry with any field other than `polygon_sha256` all
-raise `ValueError("invalid uploaded polygon checkpoint: <reason>")` at
-the load boundary. A **missing** `schema_version` key is the legacy
-case (silent migration per well-formed entry); a present-but-`null`
-value is rejected. Remote SHA-256 hashes are authoritative: a malformed
-remote hash fails reconciliation with the same `ValueError` *before*
-`uploaded_polygons.json` is rewritten, so the existing file stays
-byte-identical.
-
-Public schema v1.2 shards are migrated locally to v1.3 by column projection.
-The migration preserves extracted text and row order, performs no PBF or
-network work, and causes only the changed shard plus recomputed card to upload.
-An acknowledged v1.3 shard is skipped on the next resume.
-
-For a run created before the map contract, either repeat `run-all` or run the
-local-only migration below. It rebuilds the map, README, YAML, and receipt from
-existing Parquets and performs no PBF reads, website fetches, or remote calls:
+The public dataset repository is
+[NoeFlandre/osm-polygon-website-tag](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag).
+Use the CLI rather than uploading a run directory manually:
 
 ```bash
-uv run osm-polygon-website-tag refresh-card \
-  --run-dir '<output-root>/<run_id>'
+# Read-only checks and a publication plan.
+uv run --locked osm-polygon-website-tag verify-results --run-dir '<run-dir>'
+uv run --locked osm-polygon-website-tag publish-plan --run-dir '<run-dir>'
+uv run --locked osm-polygon-website-tag publish --run-dir '<run-dir>'
+
+# After separate review and approval.
+hf auth login
+uv run --locked osm-polygon-website-tag publish \
+  --run-dir '<run-dir>' \
+  --repo-id 'NoeFlandre/osm-polygon-website-tag' \
+  --apply
 ```
+
+`publish` is a dry run unless `--apply` is present. It re-runs verification
+before any upload and refuses a partial or tampered run. Credentials come from
+`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the local Hugging Face credential
+store; the CLI never accepts a token flag.
+
+For a reviewed end-to-end run, `run-all --apply` uploads an enriched polygon
+shard and refreshed card/map bundle, then records its acknowledgement before
+continuing. Repeating the command resumes successful URL results, durable
+enrichment batches, and acknowledged source uploads. It reconciles the local
+upload checkpoint with remote polygon SHA-256 values before new uploads; a
+malformed or mismatched checkpoint fails closed.
+
+When the full inventory is enriched, analysis, card, manifests, and the
+completion receipt are finalized together. The final upload uses only the
+receipt-bound allow-list. Therefore a local analysis file is not a public
+analysis file until the final apply upload succeeds; inspect the remote tree or
+card for the contents of a particular published snapshot.
+
+## Existing runs and schema migration
+
+Public schema v1.2 shards are projected locally to v1.3 without PBF reads or
+website fetches. Only changed content and its regenerated card need a later
+upload. For a run created before the map contract, refresh the local bundle:
 
 ```bash
-# One-time
-hf auth login                                  # paste a write token from
-                                               # https://huggingface.co/settings/tokens
-
-# After artifacts are produced in <output-root>/<run_id>
-uv run osm-polygon-website-tag verify-results \
-  --run-dir '<output-root>/<run_id>'
-
-uv run osm-polygon-website-tag publish \
-  --run-dir '<output-root>/<run_id>'            # dry-run
-
-uv run osm-polygon-website-tag publish \
-  --run-dir '<output-root>/<run_id>' \
-  --apply                                      # real upload, approval-gated
+uv run --locked osm-polygon-website-tag refresh-card \
+  --run-dir '<output-root>/<run-id>'
 ```
 
-The CLI never accepts an HF token as a flag. The token is read from
-`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the local Hugging Face
-credential store via `hf auth login`. `publish` re-runs
-`verify-results` before any upload; a partial or tampered run is
-rejected before any HTTP traffic is initiated.
+This migration is local-only: it rebuilds the map, README, YAML, and receipt
+from existing Parquets and performs no remote call.
 
-## Why split code and data
+## Why separate code and data
 
-- **Code in git, data on disk** keeps the repo cloneable and lightweight.
-- The external drive provides the storage needed for planet-scale OSM data,
-  which would otherwise bloat history.
-- Treating `raw/` as immutable mirrors the way OSM providers serve data:
-  every extraction produces a new run-owned directory.
+- Git remains cloneable and reviewable because planet-scale PBFs and generated
+  Parquets stay off-repository.
+- The Seagate volume provides the capacity needed for immutable inputs and
+  resumable runs.
+- Every extraction is a new run-owned directory, so raw inputs remain stable
+  and a failed run can be inspected or resumed without rewriting its source.
+
+The derived dataset carries the ODbL 1.0 notice, OpenStreetMap contributor
+attribution, and Geofabrik extract-provider attribution in its generated card
+and `dataset.yaml`.

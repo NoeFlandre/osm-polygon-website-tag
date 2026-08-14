@@ -6,7 +6,8 @@ A repository for analysing OpenStreetMap (OSM) polygons that carry a
 `website` or `contact:website` tag.
 
 Read the [project documentation](https://noeflandre.github.io/osm-polygon-website-tag/)
-for setup, architecture, and data-publication guidance.
+for setup, the [CLI reference](docs/cli.md), [resume and publication operations](docs/operations.md),
+architecture, and data-publication guidance.
 
 The project streams polygons (closed ways and assembled multipolygon
 relations) from local PBF files, classifies their `website` and
@@ -16,10 +17,10 @@ deterministic public polygon dataset
 under the [Open Database License (ODbL) 1.0] to
 [Hugging Face](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag).
 
-> **Status:** deterministic polygon-extraction pipeline implemented and
-> locally verified on synthetic fixtures. The production run over the
-> Seagate PBF collection has not been executed (this commit is a
-> readiness review only).
+> **Status:** the current production snapshot is complete and published on
+> Hugging Face. See the [dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)
+> for current row, text, and word totals; this README intentionally avoids
+> duplicating snapshot metrics.
 
 ## Dataset at a glance
 
@@ -99,7 +100,10 @@ unchanged.
 The generated Hugging Face card is intentionally concise: it presents current
 progress, polygon and text-extraction totals, combined word count, top
 hostnames, public schema, methodology, and attribution. Detailed overlap and
-per-source results remain in `analysis/*.parquet`. The optional
+per-source results are generated in `analysis/*.parquet` for local finalized
+runs and included in the final receipt-bound publication. `run-all --apply`
+uploads incremental shard/card/map progress before finalization; those
+progress uploads do not by themselves publish the analysis bundle. The optional
 `task_categories` metadata is omitted because this geographic source dataset
 does not map to an official Hugging Face machine-learning task.
 

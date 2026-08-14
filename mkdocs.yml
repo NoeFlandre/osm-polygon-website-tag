@@ -28,5 +28,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started: setup.md
+  - CLI reference: cli.md
+  - Operations and resume: operations.md
   - Architecture: architecture.md
   - Data and remotes: data-and-remotes.md
