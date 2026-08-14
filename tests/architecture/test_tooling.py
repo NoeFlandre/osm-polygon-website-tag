@@ -56,6 +56,8 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "pre-commit:",
         "pre-push:",
         "install-hooks:",
+        "docker-build:",
+        "docker-smoke:",
     ):
         assert recipe in justfile
     for command in (
@@ -65,6 +67,8 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "uv run --locked ty check src tests",
         "uv run --locked pytest",
         "uv build",
+        "docker build --pull",
+        "docker run --rm --read-only",
     ):
         assert command in justfile
 

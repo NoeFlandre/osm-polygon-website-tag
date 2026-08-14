@@ -12,6 +12,7 @@ Step-by-step guide to get the project running from a fresh clone.
 | `git`      | any      | For cloning and pushing.                               |
 | `hf` (HF CLI) | latest | `brew install hf` (optional, only for dataset uploads) |
 | Hugging Face account | - | Required for dataset pushes; create a token at https://huggingface.co/settings/tokens |
+| Docker | current Docker Desktop/Engine | Optional, for the reproducible container workflow below. |
 
 Trafilatura and its Python dependencies are installed from `uv.lock`; do not
 install them globally with `pip`.
@@ -33,6 +34,58 @@ cp .env.example .env
 just install-hooks
 just check
 ```
+
+## Reproducible Docker workflow
+
+The repository also provides a multi-stage Docker build. The runtime image is
+based on a digest-pinned Python 3.12 image, installs the exact versions from
+`uv.lock`, runs as an unprivileged `app` user, and defaults to the harmless CLI
+help command. The dev target contains the locked test/tooling environment.
+
+Build and smoke-test the runtime image without reading any PBF or using any
+credentials:
+
+```bash
+just docker-build
+just docker-smoke
+```
+
+The image never copies production inputs, generated runs, `.env` files, or
+tokens. Mount those explicitly when running a real workflow. Keep the source
+mount read-only and store generated artifacts on a separate writable volume:
+
+```bash
+docker run --rm --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
+  --user "$(id -u):$(id -g)" \
+  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw",dst=/data/raw,readonly \
+  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs",dst=/data/runs \
+  osm-polygon-website-tag:local run-all \
+  --source-root /data/raw \
+  --output-root /data/runs \
+  --run-id geofabrik-website-v1 \
+  --repo-id NoeFlandre/osm-polygon-website-tag
+```
+
+For an explicitly approved upload, pass the token through the environment
+only; never put it in a Dockerfile or image layer:
+
+```bash
+docker run --rm --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
+  --env HF_TOKEN \
+  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw",dst=/data/raw,readonly \
+  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs",dst=/data/runs \
+  osm-polygon-website-tag:local run-all \
+  --source-root /data/raw --output-root /data/runs \
+  --run-id geofabrik-website-v1 --repo-id NoeFlandre/osm-polygon-website-tag --apply
+```
+
+The base-image and uv-image manifest digests are intentionally pinned in
+`Dockerfile`. Refreshing them is a deliberate dependency-maintenance change:
+resolve new multi-platform digests, run the full quality suite and Docker smoke
+test, then review the diff. The Docker smoke workflow performs only the build
+and safe `--help` invocation; it never accesses production data or Hugging Face.
 
 ## Day-to-day commands
 

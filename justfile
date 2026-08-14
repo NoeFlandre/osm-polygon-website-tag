@@ -37,3 +37,11 @@ pre-push:
 
 install-hooks:
     uv run --locked pre-commit install --hook-type pre-commit --hook-type pre-push
+
+docker-image := "osm-polygon-website-tag:local"
+
+docker-build:
+    docker build --pull --target runtime --tag "{{docker-image}}" .
+
+docker-smoke: docker-build
+    docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m "{{docker-image}}" --help

@@ -1,0 +1,24 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build immutable runtime image
+        run: docker build --pull --target runtime --tag osm-polygon-website-tag:ci .
+
+      - name: Run safe CLI smoke test
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m
+          osm-polygon-website-tag:ci --help

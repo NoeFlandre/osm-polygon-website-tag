@@ -1,0 +1,33 @@
+# Version-control and local tooling metadata
+.git/
+.github/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+coverage.xml
+htmlcov/
+.DS_Store
+dist/
+build/
+*.egg-info/
+
+# Local agent notes and unrelated presentation artifacts
+docs/superpowers/
+slides/
+
+# Credentials and local configuration
+.env
+.env.*
+
+# Production inputs and generated data must be mounted at runtime, never copied
+*.pbf
+*.osm
+*.osm.pbf
+*.parquet
+*.geojsonl
+data/
+runs/

@@ -157,6 +157,8 @@ line-oriented progress logs.
 .
 ├── pyproject.toml          # Project metadata + tooling config
 ├── uv.lock                 # Locked dependency versions
+├── Dockerfile              # Digest-pinned runtime and dev images
+├── .dockerignore           # Keeps secrets and data out of image builds
 ├── README.md               # You are here
 ├── AGENTS.md               # Conventions for AI coding agents
 ├── docs/                   # Long-form documentation
