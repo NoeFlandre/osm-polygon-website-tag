@@ -1,215 +1,126 @@
-# osm-polygon-website-tag
+# OSM Polygon Website Tag
 
-![osm-polygon-website-tag hero banner](assets/hero.png)
+![OSM Polygon Website Tag](assets/hero.png)
 
-A repository for analysing OpenStreetMap (OSM) polygons that carry a
-`website` or `contact:website` tag.
+A reproducible pipeline and public dataset for OpenStreetMap (OSM) polygons
+with a non-empty `website` or `contact:website` tag. The current snapshot is
+complete and published; the dataset card is the source of truth for its totals.
 
-Read the [project documentation](https://noeflandre.github.io/osm-polygon-website-tag/)
-for setup, the [CLI reference](docs/cli.md), [resume and publication operations](docs/operations.md),
-architecture, and data-publication guidance.
+[Hugging Face dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag) ·
+[Trackio metrics](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics) ·
+[Documentation](https://noeflandre.github.io/osm-polygon-website-tag/) ·
+[Citation](CITATION.cff)
 
-The project streams polygons (closed ways and assembled multipolygon
-relations) from local PBF files, classifies their `website` and
-`wikidata` tags, extracts full main text independently from both
-`website` and `contact:website` with Trafilatura, and publishes a
-deterministic public polygon dataset
-under the [Open Database License (ODbL) 1.0] to
-[Hugging Face](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag).
+## What this project produces
 
-> **Status:** the current production snapshot is complete and published on
-> Hugging Face. See the [dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)
-> for current row, text, and word totals; this README intentionally avoids
-> duplicating snapshot metrics.
+The pipeline reads immutable OSM PBF extracts and selects polygon geometries
+from closed ways and supported polygon relations. It then:
 
-## Dataset at a glance
+- preserves the original OSM tags and provenance;
+- stores one versioned Parquet shard per source PBF;
+- extracts the main text independently from `website` and `contact:website`
+  with [Trafilatura](https://trafilatura.readthedocs.io/);
+- records text status, word counts, geometry, and source metadata; and
+- generates an artifact-derived dataset card and a text-only H3 geographic map.
 
-The public dataset contains one Parquet shard per source PBF, in a
-run-owned directory. Each row corresponds to one OSM object whose
-`website` or `contact:website` tag is non-empty and whose geometry was successfully
-assembled by libosmium (closed way or multipolygon/boundary relation).
-The schema is versioned (`v1.3`) and documented column-by-column in
-`osm_polygon_website_tag.polygon_schema`. The full text of the dataset
-card is regenerated from the shards by `osm-polygon-website-tag
-build-card`.
+The public polygon schema is versioned (`v1.3`) and documented in
+[`contracts/polygon_schema.py`](src/osm_polygon_website_tag/contracts/polygon_schema.py).
+Full extracted text is retained without truncation. Current row, text, and word
+totals are maintained in the [dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag),
+not duplicated here.
 
-## Quick start
+Website content remains third-party material: the pipeline applies URL safety
+checks before fetching it, and the dataset does not grant additional rights to
+that content.
+
+## Reproduce a run
+
+The project uses Python 3.12, [`uv`](https://docs.astral.sh/uv/), and
+[`just`](https://just.systems/). From a fresh clone:
 
 ```bash
-# 1. Install uv (once, if missing)
-brew install uv
-
-# 2. Sync dependencies into an isolated .venv
-uv sync --group dev
-
-# 3. Install Just once, then synchronize and install Git hooks
-brew install just
+brew install uv just
 just sync
-just install-hooks
-
-# 4. Run the complete local/CI quality suite
 just check
 ```
 
-Just is only a command runner: Python and every Python tool still execute
-inside the uv-locked project `.venv`. The equivalent individual commands are
-documented in [`docs/setup.md`](docs/setup.md).
-
-## CLI
-
-The CLI is phase-oriented. Only `extract` opens a PBF, and every source
-must first be recorded in the immutable expected-source inventory.
-Publication is opt-in and dry-runs by default.
-
-For the reviewed production workflow, one command discovers every PBF and
-records the exact inventory. It then extracts, enriches, recomputes the card,
-uploads, and checkpoints one PBF before moving to the next. After the inventory
-finishes, it builds and publishes the receipt-bound analysis and final card:
+Run the pipeline with an immutable, read-only PBF directory and a separate
+writable output directory:
 
 ```bash
-uv run osm-polygon-website-tag run-all \
-  --source-root '/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw' \
-  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs' \
-  --run-id 'geofabrik-website-v1' \
-  --repo-id 'NoeFlandre/osm-polygon-website-tag' \
-  --ensure-repo \
-  --apply
+uv run --locked osm-polygon-website-tag run-all \
+  --source-root /path/to/read-only/pbf-root \
+  --output-root /path/to/writable/runs \
+  --run-id website-v1
 ```
 
-Press `Ctrl-C` to stop. Run the exact same command to resume. Successfully
-promoted local shards, successful URL extractions, and acknowledged per-PBF
-uploads are checkpointed. Existing v1.1 shards are enriched without rereading
-their PBF; only failed URLs retry on a later invocation. During a shard
-enrichment, cache commits and completed Parquet batches are durable, so Ctrl-C
-preserves the completed prefix and resumes from the first unfinished batch.
-Source inventory drift or local shard mutation fails closed.
+`Ctrl-C` is safe. Repeat the same command to resume verified shards, URL-cache
+results, completed enrichment batches, and acknowledged uploads. PBF inputs are
+never modified; PBF processing stays sequential while extraction and fetching
+use bounded workers. See [Operations and resume](docs/operations.md) for the
+checkpoint and freeze rules.
 
-After each PBF is enriched, its Parquet plus a freshly artifact-derived
-`README.md`, `dataset.yaml`, and logarithmic H3 resolution-3 density map are
-uploaded together before the next PBF is opened. Old runs that already extracted several PBFs reuse every verified local
-bundle and begin with enrichment/upload; they do not reread those PBFs. The card
-reports exact word totals for both website tags. Full extracted text is never
-truncated.
+For a reproducible container workflow, see [Getting started](docs/setup.md#docker-workflow).
 
-The default `run-all` settings use four bounded geometry workers, at most 32
-in-flight area payloads, and eight bounded URL workers. They can be tuned for a
-machine with `--area-workers`, `--max-in-flight-areas`, and `--fetch-workers`
-(safe caps are enforced); PBF processing remains sequential and output order is
-unchanged.
+## Publish deliberately
 
-The generated Hugging Face card is intentionally concise: it presents current
-progress, polygon and text-extraction totals, combined word count, top
-hostnames, public schema, methodology, and attribution. Detailed overlap and
-per-source results are generated in `analysis/*.parquet` for local finalized
-runs and included in the final receipt-bound publication. `run-all --apply`
-uploads incremental shard/card/map progress before finalization; those
-progress uploads do not by themselves publish the analysis bundle. The optional
-`task_categories` metadata is omitted because this geographic source dataset
-does not map to an official Hugging Face machine-learning task.
-
-The card map is stored locally at
-`assets/geographic_polygon_density.png` and counts public polygon centroids
-once per H3 cell. It is rendered headlessly and atomically with the bundled
-Natural Earth 1:110m land backdrop, without network access. A completed run created before this map contract is upgraded
-on resume without reopening PBFs; the same local-only migration is available as:
+Local runs do not become public automatically. Inspect a complete run first:
 
 ```bash
-uv run osm-polygon-website-tag refresh-card \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run_id>'
+uv run --locked osm-polygon-website-tag verify-results \
+  --run-dir /path/to/writable/runs/website-v1
+uv run --locked osm-polygon-website-tag publish-plan \
+  --run-dir /path/to/writable/runs/website-v1 \
+  --repo-id NoeFlandre/osm-polygon-website-tag
 ```
 
-Schema v1.3 removes the redundant public columns `preferred_website`,
-`preferred_website_source`, `wikidata`, `wikidata_qid`, `wikidata_class`, and
-`area_km2`. Wikidata comparison fields remain in the analysis observations, and
-all original OSM tags remain available in `tags`. Existing v1.2 shards are
-projected atomically and reuploaded by content hash without reopening PBFs or
-refetching website text.
+After separate approval, authenticate with `hf auth login` and add `--apply` to
+`publish`. The CLI reads credentials from the environment or the local
+Hugging Face credential store; it never accepts a token as a command-line
+argument. See [Data and remotes](docs/data-and-remotes.md) for the publication
+contract.
 
-The low-level phase commands are intended for development and recovery. Website
-enrichment is deliberately orchestrated by `run-all`, which owns its persistent
-URL cache, retry invocation, state transitions, and per-source upload checkpoint.
-The checkpoint is operational state and is excluded from the final receipt;
-the receipt binds the map, card, analysis, manifests, and Parquet artifacts only
-after final verification.
-After a run completes, it can be verified again or its publication plan inspected:
+The optional [Trackio Space](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics)
+shows a small set of aggregate snapshot metrics. It is updated explicitly from
+a verified snapshot and receives no website text or credentials.
 
-```bash
-uv run osm-polygon-website-tag verify-results \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run_id>'
-uv run osm-polygon-website-tag publish \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run_id>'
+## Development
 
-# 7. Real publication (requires a separately reviewed approval)
-hf auth login
-uv run osm-polygon-website-tag publish \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run_id>' \
-  --apply
+The repository is organized as a `src/` package with mirrored hermetic tests:
+
+```text
+src/osm_polygon_website_tag/   pipeline, contracts, storage, web, reporting
+tests/                          unit, integration, and architecture checks
+docs/                           MkDocs Material documentation
 ```
 
-The CLI never accepts an HF token as a flag; tokens are read from
-`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN`, or the local Hugging Face
-credential store via `hf auth login`.
+Useful commands:
 
-The installed CLI is built with Typer. Rich provides terminal-aware
-human-facing output, while JSON on stdout remains plain and scriptable.
-Interactive `run-all` progress uses tqdm; redirected stderr retains stable
-line-oriented progress logs.
+| Task | Command |
+| --- | --- |
+| Full quality suite | `just check` |
+| Tests | `just test` |
+| Lint and format | `just lint` / `just format-check` |
+| Type checking | `just typecheck` |
+| Hooks | `just pre-commit` / `just pre-push` |
+| Documentation | `uv run --locked mkdocs build --strict` |
+| Container smoke test | `just docker-smoke` |
 
-## Project layout
+Ruff, `ty`, pytest, pre-commit, Just, Docker, and GitHub Actions keep the
+workflow reproducible and reviewable. The detailed [CLI reference](docs/cli.md)
+and [architecture guide](docs/architecture.md) explain the implementation
+boundaries.
 
-```
-.
-├── pyproject.toml          # Project metadata + tooling config
-├── uv.lock                 # Locked dependency versions
-├── Dockerfile              # Digest-pinned runtime and dev images
-├── .dockerignore           # Keeps secrets and data out of image builds
-├── README.md               # You are here
-├── AGENTS.md               # Conventions for AI coding agents
-├── docs/                   # Long-form documentation
-│   ├── setup.md            # Detailed environment setup
-│   ├── architecture.md     # How the modules fit together
-│   └── data-and-remotes.md # Where data lives and how it gets to HF
-├── scripts/                # Operational scripts (HF upload, data prep)
-├── src/osm_polygon_website_tag/
-│   ├── contracts/          # Exact Arrow and text contracts
-│   ├── domain/             # OSM classification and geometry rules
-│   ├── storage/            # Bounded and transactional local I/O
-│   ├── web/                # Safe fetch, Trafilatura, and URL cache
-│   ├── runtime/            # Configuration, paths, safety, run lifecycle
-│   ├── pipeline/           # Extraction, enrichment, and analysis stages
-│   ├── reporting/          # Cards, verification, and finalization
-│   ├── publishing/         # Hugging Face credentials and upload
-│   ├── application/        # Workflow composition and CLI
-│   └── py.typed            # PEP 561 type-distribution marker
-└── tests/                  # Mirrored hermetic pytest suite + architecture checks
-```
+## Data boundaries and licensing
 
-## Where data lives
+- **Source code:** [Apache-2.0](LICENSE).
+- **OSM-derived dataset:** [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/),
+  with OpenStreetMap and Geofabrik attribution in the dataset card.
+- **Website text:** fetched third-party content under the terms of its
+  respective publishers; no additional reuse rights are granted here.
+- **Source PBFs:** read-only inputs supplied explicitly by the operator; run
+  artifacts are written to a separate output root and are not committed to Git.
 
-| Concern                   | Location                                                       |
-| ------------------------- | -------------------------------------------------------------- |
-| Code                      | This repository (local, git)                                   |
-| Source PBFs (read-only)   | `/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw`   |
-| Local data root           | Configurable via `OSM_POLY_DATA_DIR` (see `paths.py`)          |
-| Analysis output           | Configurable `--output-root`; one run-owned directory per run |
-| Published dataset         | https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag |
-
-## License
-
-* **Source code**: Apache-2.0. See [LICENSE](LICENSE).
-* **Published dataset**: [ODbL 1.0]. The dataset carries the ODbL
-  notice, the OpenStreetMap contributor attribution, and the Geofabrik
-  extract-provider attribution rendered in `README.md` and
-  `dataset.yaml`.
-
-[ODbL 1.0]: https://opendatacommons.org/licenses/odbl/1-0/
-
-## Citation
-
-If you use this software or the accompanying dataset, please cite this
-project. The complete machine-readable citation is available in
-[`CITATION.cff`](CITATION.cff), and GitHub exposes it through the repository's
-**Cite this repository** action.
-
-> Flandre, Noé. *OSM Polygon Website Tag*. Version 0.1.0.
-> [https://github.com/NoeFlandre/osm-polygon-website-tag](https://github.com/NoeFlandre/osm-polygon-website-tag)
+Please cite the project using [`CITATION.cff`](CITATION.cff). GitHub's
+**Cite this repository** action and the Hugging Face dataset card both expose
+the machine-readable citation.
