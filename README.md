@@ -9,6 +9,7 @@ complete and published; the dataset card is the source of truth for its totals.
 [Hugging Face dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag) ·
 [Trackio metrics](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics) ·
 [Documentation](https://noeflandre.github.io/osm-polygon-website-tag/) ·
+[Latest release: v0.1.0](https://github.com/NoeFlandre/osm-polygon-website-tag/releases/tag/v0.1.0) ·
 [Citation](CITATION.cff)
 
 ## What this project produces

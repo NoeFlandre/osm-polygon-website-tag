@@ -39,3 +39,5 @@ present; both commands re-verify before publication.
 The [GitHub repository](https://github.com/NoeFlandre/osm-polygon-website-tag)
 contains the source code, tests, and Pages workflow. Current row and text
 totals belong to the generated public card, not to this landing page.
+
+The current software release is [v0.1.0](https://github.com/NoeFlandre/osm-polygon-website-tag/releases/tag/v0.1.0).
