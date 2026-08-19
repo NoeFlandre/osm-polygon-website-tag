@@ -76,6 +76,7 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     ):
         assert command in justfile
     assert "--max-crap 6" in justfile
+    assert "src/osm_polygon_website_tag/application/workflow.py" in justfile
 
 
 def test_pre_commit_uses_uv_locked_project_tools() -> None:

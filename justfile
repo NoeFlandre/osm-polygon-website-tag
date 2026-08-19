@@ -39,7 +39,7 @@ coverage:
     uv run --locked pytest --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:/tmp/osm-polygon-website-tag-coverage.json --cov-fail-under=75
 
 crap: coverage
-    uv run --locked python scripts/quality/crap_report.py --coverage-json /tmp/osm-polygon-website-tag-coverage.json --path src/osm_polygon_website_tag/domain/tags.py --path src/osm_polygon_website_tag/contracts/polygon_schema.py --max-crap 6
+    uv run --locked python scripts/quality/crap_report.py --coverage-json /tmp/osm-polygon-website-tag-coverage.json --path src/osm_polygon_website_tag/domain/tags.py --path src/osm_polygon_website_tag/contracts/polygon_schema.py --path src/osm_polygon_website_tag/application/workflow.py --max-crap 6
 
 mutation:
     uv run --locked mutmut run --max-children 2

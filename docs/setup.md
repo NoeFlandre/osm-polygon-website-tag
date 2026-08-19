@@ -126,8 +126,9 @@ the named recipe directly, fix the reported issue, and retry; do not bypass
 hooks with `--no-verify`.
 
 The test-quality pass keeps the deterministic tag and public-schema contracts
-under a 75% project-wide coverage floor, reports CRAP scores for those two
-high-value modules, and runs Mutmut against them with their focused tests. Every
+under a 75% project-wide coverage floor, reports CRAP scores for those
+contracts and the end-to-end workflow orchestration, and runs Mutmut against
+the deterministic tag/schema contracts with their focused tests. Every
 selected function must have a CRAP score strictly below 6; the mutation gate
 fails on any surviving or timed-out mutant. Mutation testing is intentionally separate from `just check` because
 it is substantially slower. Both commands are read-only with respect to PBFs,

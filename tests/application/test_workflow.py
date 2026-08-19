@@ -208,19 +208,61 @@ def test_run_all_refreshes_legacy_complete_card_without_reprocessing_sources(
     assert json.loads(receipt_path.read_text())["card_contract_version"] == 1
 
 
-def test_run_all_clears_frozen_snapshot_marker_on_resume(
+def test_run_all_does_not_resume_a_finalized_frozen_snapshot(
     make_pbf,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A finalized snapshot is immutable and never retries website failures."""
+    from osm_polygon_website_tag.application import workflow
+
     root = _sources(make_pbf, tmp_path)
     first = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
     state = load_run(first.run_dir)
     upsert_run_metadata(state, {"snapshot_status": "done"})
 
-    resumed = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
+    monkeypatch.setattr(
+        workflow,
+        "discover_sources",
+        lambda _root: pytest.fail("frozen resume must not rediscover source PBFs"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "enrich_polygon_shard",
+        lambda *_args, **_kwargs: pytest.fail("frozen resume must not retry websites"),
+    )
+    progress: list[str] = []
+    resumed = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        progress=progress.append,
+    )
 
     assert resumed.complete
-    assert load_run(first.run_dir).metadata["snapshot_status"] == "in_progress"
+    assert resumed.source_count == 2
+    assert resumed.extracted_count == 0
+    assert resumed.skipped_count == 0
+    assert resumed.uploaded_count == 0
+    assert resumed.dry_run is True
+    assert load_run(first.run_dir).metadata["snapshot_status"] == "done"
+    assert progress == ["Frozen snapshot is already complete; skipping enrichment and uploads"]
+
+    monkeypatch.setattr(
+        workflow,
+        "resolve_hf_token",
+        lambda: pytest.fail("frozen resume must not resolve upload credentials"),
+    )
+    applied_resume = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="production",
+        apply=True,
+    )
+    assert applied_resume.complete
+    assert applied_resume.dry_run is False
+    assert applied_resume.extracted_count == 0
+    assert applied_resume.uploaded_count == 0
 
 
 def test_run_all_resumes_after_ctrl_c(
