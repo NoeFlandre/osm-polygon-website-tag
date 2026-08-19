@@ -26,6 +26,13 @@ def test_dockerfile_uses_locked_multi_stage_non_root_defaults() -> None:
     assert "MPLBACKEND=Agg" in dockerfile
 
 
+def test_dockerfile_installs_osmium_runtime_library() -> None:
+    dockerfile = _read("Dockerfile")
+
+    assert "apt-get install --no-install-recommends -y libexpat1" in dockerfile
+    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
+
+
 def test_dockerignore_excludes_credentials_and_production_data() -> None:
     dockerignore = _read(".dockerignore")
 
