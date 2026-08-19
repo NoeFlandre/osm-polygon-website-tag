@@ -76,16 +76,16 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     ):
         assert command in justfile
     assert "--max-crap 6" in justfile
-    assert "src/osm_polygon_website_tag/application/workflow.py" in justfile
-    assert "src/osm_polygon_website_tag/reporting/verify.py" in justfile
-    for path in (
-        "src/osm_polygon_website_tag/reporting/verification/shards.py",
-        "src/osm_polygon_website_tag/reporting/verification/text.py",
-        "src/osm_polygon_website_tag/reporting/verification/rows.py",
-        "src/osm_polygon_website_tag/reporting/verification/analysis.py",
-        "src/osm_polygon_website_tag/reporting/verification/receipt.py",
-    ):
-        assert path in justfile
+    assert "--path src/osm_polygon_website_tag" in justfile
+    assert "--path src/osm_polygon_website_tag/application/workflow.py" not in justfile
+
+
+def test_mutation_gate_covers_the_whole_package_and_test_suite() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    config = project["tool"]["mutmut"]
+
+    assert config["source_paths"] == ["src/osm_polygon_website_tag"]
+    assert "pytest_add_cli_args_test_selection" not in config
 
 
 def test_pre_commit_uses_uv_locked_project_tools() -> None:

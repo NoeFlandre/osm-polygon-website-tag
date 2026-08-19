@@ -7,7 +7,11 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
+import osmium
+import osmium.osm
 import pyarrow.parquet as pq
 import pytest
 
@@ -15,6 +19,8 @@ import osm_polygon_website_tag.pipeline.extraction as extraction_module
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+from osm_polygon_website_tag.domain.geometry import GeometryRejection
+from osm_polygon_website_tag.pipeline import extraction_handler as extraction_handler_module
 from osm_polygon_website_tag.pipeline.area_work import (
     AreaPayload,
     AreaResult,
@@ -29,6 +35,7 @@ from osm_polygon_website_tag.pipeline.extraction import (
 )
 from osm_polygon_website_tag.pipeline.record_builders import DerivedTags
 from osm_polygon_website_tag.runtime.run_state import SourceFingerprint, load_run
+from osm_polygon_website_tag.storage.batch_sink import BatchParquetSink
 
 _SIMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6"><node id="1" lat="0.0" lon="0.0"/><node id="2" lat="0.0" lon="1.0"/>
@@ -107,6 +114,117 @@ def test_handler_has_no_source_sized_python_collections(tmp_path: Path) -> None:
     assert not hasattr(handler, "_rej_rows")
     assert not hasattr(handler, "_candidates")
     assert not hasattr(handler, "_area_seen")
+
+
+def test_geometry_rejection_is_written_with_candidate_metadata() -> None:
+    rows: list[dict[str, object]] = []
+    handler = object.__new__(_ExtractionHandler)
+    handler._source_pbf = "monaco-latest.osm.pbf"
+    handler._region = "monaco"
+    handler.rej_sink = cast(BatchParquetSink, SimpleNamespace(add=rows.append))
+    area = SimpleNamespace(
+        tags=[("website", "https://example.org"), ("building", "yes")],
+        from_way=lambda: True,
+        orig_id=lambda: 42,
+        version=3,
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+    )
+
+    handler._flush_geometry_rejection(
+        cast(osmium.osm.Area, area), "antimeridian", "crosses antimeridian"
+    )
+
+    assert rows[0]["rejection_kind"] == "antimeridian"
+    assert rows[0]["osm_type"] == "way"
+    assert rows[0]["osm_id"] == 42
+
+
+def _website_payload(raw_geojson: str) -> AreaPayload:
+    return AreaPayload(
+        sequence=1,
+        source_pbf="synthetic-latest.osm.pbf",
+        region="synthetic",
+        tags_dict={"website": "https://example.org", "building": "yes"},
+        osm_type="way",
+        osm_id=1,
+        osm_version=1,
+        osm_timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+        candidate_kind="closed_way",
+        raw_geojson=raw_geojson,
+        derived_tags=DerivedTags(
+            website="https://example.org",
+            contact_website=None,
+            has_website=True,
+            has_contact_website=False,
+            has_any_website=True,
+            primary_category="building",
+        ),
+    )
+
+
+def test_load_geometry_converts_expected_and_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _website_payload("not-used")
+    derived = payload.derived_tags
+    assert derived is not None
+
+    def raise_geometry_rejection(_raw: str):
+        raise GeometryRejection("antimeridian", "crosses antimeridian")
+
+    monkeypatch.setattr(
+        extraction_handler_module, "geometry_from_geojson", raise_geometry_rejection
+    )
+    rejected = extraction_handler_module._load_geometry(payload, derived)
+    assert isinstance(rejected, AreaResult)
+    assert rejected.rejection_row is not None
+    assert rejected.rejection_row["rejection_kind"] == "antimeridian"
+
+    def raise_unexpected(_raw: str):
+        raise RuntimeError("broken geometry")
+
+    monkeypatch.setattr(extraction_handler_module, "geometry_from_geojson", raise_unexpected)
+    failed = extraction_handler_module._load_geometry(payload, derived)
+    assert isinstance(failed, AreaResult)
+    assert failed.rejection_row is not None
+    assert failed.rejection_row["rejection_kind"] == "geometry_error"
+
+
+@pytest.mark.parametrize(
+    ("factory_error", "expected_kind"),
+    [
+        (GeometryRejection("antimeridian", "crosses antimeridian"), "antimeridian"),
+        (RuntimeError("factory failed"), "geometry_error"),
+    ],
+)
+def test_serialize_area_geometry_records_factory_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    factory_error: Exception,
+    expected_kind: str,
+) -> None:
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        _ExtractionHandler,
+        "_drain_area_work",
+        lambda _self: events.append(("drain", "")),
+    )
+    monkeypatch.setattr(
+        _ExtractionHandler,
+        "_flush_geometry_rejection",
+        lambda _self, _area, kind, _message: events.append(("reject", kind)),
+    )
+
+    class Factory:
+        def create_multipolygon(self, _area):
+            raise factory_error
+
+    monkeypatch.setattr(extraction_handler_module.osmium.geom, "GeoJSONFactory", Factory)
+
+    handler = object.__new__(_ExtractionHandler)
+    result = handler._serialize_area_geometry(cast(osmium.osm.Area, object()))
+
+    assert result is None
+    assert events == [("drain", ""), ("reject", expected_kind)]
 
 
 def test_area_worker_reuses_precomputed_tag_projection(

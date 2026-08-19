@@ -68,7 +68,9 @@ fingerprints must still match; changed, duplicate, malformed, or missing
 inventory entries fail closed. Existing complete extraction bundles are reused,
 legacy v1.2 shards are migrated without reopening PBFs, terminal text statuses
 (`success` and `absent`) are skipped, and retryable statuses are attempted
-again. `Ctrl-C` leaves the run in a resumable state.
+again. `Ctrl-C` leaves an active run in a resumable state. Once a completed
+snapshot is explicitly frozen (`snapshot_status=done` plus a completion
+receipt), `run-all` treats it as immutable and performs no retry or upload.
 
 The local `manifests/uploaded_polygons.json` file records acknowledged remote
 polygon hashes during apply mode. It is operational state, excluded from the

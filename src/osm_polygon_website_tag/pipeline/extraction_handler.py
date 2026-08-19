@@ -28,7 +28,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     PublicRowInvariantError,
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
-from osm_polygon_website_tag.domain.geometry import GeometryRejection, geometry_from_geojson
+from osm_polygon_website_tag.domain.geometry import (
+    GeometryRejection,
+    PolygonGeometry,
+    geometry_from_geojson,
+)
 from osm_polygon_website_tag.domain.tags import has_any_website, has_wikidata
 from osm_polygon_website_tag.pipeline import extraction_records as _extraction_records
 from osm_polygon_website_tag.pipeline.area_work import (
@@ -62,113 +66,95 @@ _rejection_record = _extraction_records.build_rejection_record
 
 def _process_area_payload(payload: AreaPayload) -> AreaResult:
     """Build one area result without accessing libosmium or shared state."""
-    tags_dict = payload.tags_dict
-    derived = payload.derived_tags
-    if derived is None:
-        derived = derive_tags(tags_dict)
-    if derived.has_any_website:
-        if payload.raw_geojson is None:
-            return AreaResult(
-                rejection_row=_rejection_record(
-                    source_pbf=payload.source_pbf,
-                    region=payload.region,
-                    tags_dict=tags_dict,
-                    osm_type=payload.osm_type,
-                    osm_id=payload.osm_id,
-                    osm_version=payload.osm_version,
-                    osm_timestamp=payload.osm_timestamp,
-                    candidate_kind=payload.candidate_kind,
-                    rejection_kind="geometry_error",
-                    message="missing serialized area geometry",
-                    derived=derived,
-                )
-            )
-        try:
-            geom = geometry_from_geojson(payload.raw_geojson)
-        except GeometryRejection as rej:
-            return AreaResult(
-                rejection_row=_rejection_record(
-                    source_pbf=payload.source_pbf,
-                    region=payload.region,
-                    tags_dict=tags_dict,
-                    osm_type=payload.osm_type,
-                    osm_id=payload.osm_id,
-                    osm_version=payload.osm_version,
-                    osm_timestamp=payload.osm_timestamp,
-                    candidate_kind=payload.candidate_kind,
-                    rejection_kind=rej.kind,
-                    message=rej.message,
-                    derived=derived,
-                )
-            )
-        except Exception as exc:
-            return AreaResult(
-                rejection_row=_rejection_record(
-                    source_pbf=payload.source_pbf,
-                    region=payload.region,
-                    tags_dict=tags_dict,
-                    osm_type=payload.osm_type,
-                    osm_id=payload.osm_id,
-                    osm_version=payload.osm_version,
-                    osm_timestamp=payload.osm_timestamp,
-                    candidate_kind=payload.candidate_kind,
-                    rejection_kind="geometry_error",
-                    message=f"{type(exc).__name__}: {exc}",
-                    derived=derived,
-                )
-            )
-        stem = payload.source_pbf.removesuffix(".osm.pbf")
-        polygon_id = f"{stem}:{payload.osm_type}/{payload.osm_id}"
-        try:
-            public_row = _public_record(
-                polygon_id=polygon_id,
-                source_pbf=payload.source_pbf,
-                region=payload.region,
-                tags_dict=tags_dict,
-                osm_type=payload.osm_type,
-                osm_id=payload.osm_id,
-                osm_version=payload.osm_version,
-                osm_timestamp=payload.osm_timestamp,
-                geom_text=geom.geometry,
-                centroid_text=geom.centroid,
-                centroid_kind=geom.centroid_kind,
-                lat=geom.lat,
-                lon=geom.lon,
-                bbox=geom.bbox,
-                area_m2=geom.area_m2,
-                area_bucket=geom.area_bucket,
-                derived=derived,
-            )
-        except PublicRowInvariantError as inv:
-            return AreaResult(
-                rejection_row=_rejection_record(
-                    source_pbf=payload.source_pbf,
-                    region=payload.region,
-                    tags_dict=tags_dict,
-                    osm_type=payload.osm_type,
-                    osm_id=payload.osm_id,
-                    osm_version=payload.osm_version,
-                    osm_timestamp=payload.osm_timestamp,
-                    candidate_kind=payload.candidate_kind,
-                    rejection_kind="public_invariant_violation",
-                    message=str(inv),
-                    derived=derived,
-                )
-            )
-    else:
-        public_row = None
-
+    derived = payload.derived_tags or derive_tags(payload.tags_dict)
+    public = _build_public_result(payload, derived)
+    if isinstance(public, AreaResult):
+        return public
     observation_row = _comparison_record(
         source_pbf=payload.source_pbf,
         region=payload.region,
-        tags_dict=tags_dict,
+        tags_dict=payload.tags_dict,
         osm_type=payload.osm_type,
         osm_id=payload.osm_id,
         osm_version=payload.osm_version,
         osm_timestamp=payload.osm_timestamp,
         derived=derived,
     )
-    return AreaResult(public_row=public_row, observation_row=observation_row)
+    return AreaResult(public_row=public, observation_row=observation_row)
+
+
+def _build_public_result(
+    payload: AreaPayload,
+    derived,
+) -> dict[str, object] | AreaResult | None:
+    """Build a public row, or a rejection when website geometry is unusable."""
+    if not derived.has_any_website:
+        return None
+    if payload.raw_geojson is None:
+        return _geometry_rejection(
+            payload, derived, "geometry_error", "missing serialized area geometry"
+        )
+    geometry = _load_geometry(payload, derived)
+    if isinstance(geometry, AreaResult):
+        return geometry
+    try:
+        stem = payload.source_pbf.removesuffix(".osm.pbf")
+        return _public_record(
+            polygon_id=f"{stem}:{payload.osm_type}/{payload.osm_id}",
+            source_pbf=payload.source_pbf,
+            region=payload.region,
+            tags_dict=payload.tags_dict,
+            osm_type=payload.osm_type,
+            osm_id=payload.osm_id,
+            osm_version=payload.osm_version,
+            osm_timestamp=payload.osm_timestamp,
+            geom_text=geometry.geometry,
+            centroid_text=geometry.centroid,
+            centroid_kind=geometry.centroid_kind,
+            lat=geometry.lat,
+            lon=geometry.lon,
+            bbox=geometry.bbox,
+            area_m2=geometry.area_m2,
+            area_bucket=geometry.area_bucket,
+            derived=derived,
+        )
+    except PublicRowInvariantError as inv:
+        return _geometry_rejection(payload, derived, "public_invariant_violation", str(inv))
+
+
+def _load_geometry(payload: AreaPayload, derived) -> PolygonGeometry | AreaResult:
+    """Parse payload geometry and convert all failures to rejection rows."""
+    assert payload.raw_geojson is not None
+    try:
+        return geometry_from_geojson(payload.raw_geojson)
+    except GeometryRejection as rejection:
+        return _geometry_rejection(payload, derived, rejection.kind, rejection.message)
+    except Exception as error:
+        return _geometry_rejection(
+            payload,
+            derived,
+            "geometry_error",
+            f"{type(error).__name__}: {error}",
+        )
+
+
+def _geometry_rejection(payload: AreaPayload, derived, kind: str, message: str) -> AreaResult:
+    """Build one rejection result with the payload's candidate metadata."""
+    return AreaResult(
+        rejection_row=_rejection_record(
+            source_pbf=payload.source_pbf,
+            region=payload.region,
+            tags_dict=payload.tags_dict,
+            osm_type=payload.osm_type,
+            osm_id=payload.osm_id,
+            osm_version=payload.osm_version,
+            osm_timestamp=payload.osm_timestamp,
+            candidate_kind=payload.candidate_kind,
+            rejection_kind=kind,
+            message=message,
+            derived=derived,
+        )
+    )
 
 
 def _is_closed_way(way: osmium.osm.Way) -> bool:
@@ -304,25 +290,17 @@ class _ExtractionHandler(osmium.SimpleHandler):
         )
 
     def area(self, a: osmium.osm.Area) -> None:
-        osm_type = "relation" if a.from_way() is False else "way"
-        osm_id = int(a.orig_id())
+        osm_type, osm_id = _area_identity(a)
         try:
             tracked = self.ledger.mark_area_seen(osm_type, osm_id)
         except ValueError:
             self._drain_area_work()
-            self.rej_sink.add(
-                _rejection_record(
-                    source_pbf=self._source_pbf,
-                    region=self._region,
-                    tags_dict=_tags_dict(a),
-                    osm_type=osm_type,
-                    osm_id=osm_id,
-                    osm_version=int(a.version),
-                    osm_timestamp=_as_utc(a.timestamp),
-                    candidate_kind="closed_way" if osm_type == "way" else "relation_polygon",
-                    rejection_kind="duplicate_area_callback",
-                    message="area callback fired more than once for the same object",
-                )
+            self._emit_area_rejection(
+                a,
+                osm_type,
+                osm_id,
+                "duplicate_area_callback",
+                "area callback fired more than once for the same object",
             )
             return
         candidate = self.ledger.get(osm_type, osm_id) if tracked else None
@@ -332,60 +310,100 @@ class _ExtractionHandler(osmium.SimpleHandler):
             # sub-relations we did not pre-record. We still treat it
             # as a candidate and emit a rejection for the
             # not-tracked reason.
-            tags_dict = _tags_dict(a)
             self._drain_area_work()
-            self.rej_sink.add(
-                _rejection_record(
-                    source_pbf=self._source_pbf,
-                    region=self._region,
-                    tags_dict=tags_dict,
-                    osm_type=osm_type,
-                    osm_id=osm_id,
-                    osm_version=int(a.version),
-                    osm_timestamp=_as_utc(a.timestamp),
-                    candidate_kind="closed_way" if osm_type == "way" else "relation_polygon",
-                    rejection_kind="untracked_candidate",
-                    message="area callback fired without a prior candidate record",
-                )
+            self._emit_area_rejection(
+                a,
+                osm_type,
+                osm_id,
+                "untracked_candidate",
+                "area callback fired without a prior candidate record",
             )
             return
-        tags_dict = cast(dict[str, str], candidate["tags"])
-        derived = derive_tags(tags_dict)
-        has_website = derived.has_any_website
-        has_candidate_observation = has_website or has_wikidata(tags_dict)
-        if has_candidate_observation:
-            raw_geojson: str | None = None
-            if has_website:
-                try:
-                    raw_geojson = osmium.geom.GeoJSONFactory().create_multipolygon(a)
-                except GeometryRejection as rej:
-                    self._drain_area_work()
-                    self._flush_geometry_rejection(a, rej.kind, rej.message)
-                    return
-                except Exception as exc:
-                    self._drain_area_work()
-                    self._flush_geometry_rejection(
-                        a, "geometry_error", f"{type(exc).__name__}: {exc}"
-                    )
-                    return
+        self._submit_candidate_area(a, osm_type, osm_id, candidate)
 
-            payload = AreaPayload(
-                sequence=self._area_sequence,
+    def _emit_area_rejection(
+        self,
+        area: osmium.osm.Area,
+        osm_type: str,
+        osm_id: int,
+        rejection_kind: str,
+        message: str,
+    ) -> None:
+        """Append one callback-level rejection using area metadata."""
+        self.rej_sink.add(
+            _rejection_record(
                 source_pbf=self._source_pbf,
                 region=self._region,
-                tags_dict=dict(tags_dict),
+                tags_dict=_tags_dict(area),
                 osm_type=osm_type,
                 osm_id=osm_id,
-                osm_version=int(a.version),
-                osm_timestamp=_as_utc(a.timestamp),
-                candidate_kind=str(candidate["candidate_kind"]),
-                raw_geojson=raw_geojson,
-                derived_tags=derived,
+                osm_version=int(area.version),
+                osm_timestamp=_as_utc(area.timestamp),
+                candidate_kind="closed_way" if osm_type == "way" else "relation_polygon",
+                rejection_kind=rejection_kind,
+                message=message,
             )
-            self._area_sequence += 1
-            result = self._area_coordinator.submit(payload)
-            if result is not None:
-                self._emit_area_result(result)
+        )
+
+    def _submit_candidate_area(
+        self,
+        area: osmium.osm.Area,
+        osm_type: str,
+        osm_id: int,
+        candidate: dict[str, Any],
+    ) -> None:
+        """Build and submit one tracked candidate when it qualifies."""
+        tags_dict = cast(dict[str, str], candidate["tags"])
+        derived = derive_tags(tags_dict)
+        if not (derived.has_any_website or has_wikidata(tags_dict)):
+            return
+        payload = self._build_area_payload(area, osm_type, osm_id, candidate, derived)
+        if payload is None:
+            return
+        self._area_sequence += 1
+        result = self._area_coordinator.submit(payload)
+        if result is not None:
+            self._emit_area_result(result)
+
+    def _build_area_payload(
+        self,
+        area: osmium.osm.Area,
+        osm_type: str,
+        osm_id: int,
+        candidate: dict[str, Any],
+        derived: Any,
+    ) -> AreaPayload | None:
+        """Serialize geometry and construct an immutable worker payload."""
+        raw_geojson = self._serialize_area_geometry(area) if derived.has_any_website else None
+        if derived.has_any_website and raw_geojson is None:
+            return None
+        return AreaPayload(
+            sequence=self._area_sequence,
+            source_pbf=self._source_pbf,
+            region=self._region,
+            tags_dict=cast(dict[str, str], dict(candidate["tags"])),
+            osm_type=osm_type,
+            osm_id=osm_id,
+            osm_version=int(area.version),
+            osm_timestamp=_as_utc(area.timestamp),
+            candidate_kind=str(candidate["candidate_kind"]),
+            raw_geojson=raw_geojson,
+            derived_tags=derived,
+        )
+
+    def _serialize_area_geometry(self, area: osmium.osm.Area) -> str | None:
+        """Serialize website-qualified geometry, recording expected failures."""
+        try:
+            return osmium.geom.GeoJSONFactory().create_multipolygon(area)
+        except GeometryRejection as rejection:
+            self._drain_area_work()
+            self._flush_geometry_rejection(area, rejection.kind, rejection.message)
+        except Exception as error:
+            self._drain_area_work()
+            self._flush_geometry_rejection(
+                area, "geometry_error", f"{type(error).__name__}: {error}"
+            )
+        return None
 
     def way(self, w: osmium.osm.Way) -> None:
         tags_dict = _tags_dict(w)
@@ -478,6 +496,11 @@ class _ExtractionHandler(osmium.SimpleHandler):
 def _as_utc(ts: Any) -> dt.datetime:
     result: dt.datetime = ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.UTC)
     return result
+
+
+def _area_identity(area: osmium.osm.Area) -> tuple[str, int]:
+    """Return the OSM type and identifier represented by an area callback."""
+    return ("relation" if area.from_way() is False else "way", int(area.orig_id()))
 
 
 __all__ = [

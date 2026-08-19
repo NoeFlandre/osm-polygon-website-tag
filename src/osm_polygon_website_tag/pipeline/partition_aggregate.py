@@ -72,54 +72,90 @@ def aggregate_shard(table: pa.Table) -> ShardAggregate:
     for i in range(len(polygon_ids)):
         pid = polygon_ids[i]
         ids.append(pid)
-        ws = website[i]
-        raw_tags = json.loads(tags[i])
-        wd = raw_tags.get("wikidata")
-        has_ws = _nonempty(ws)
-        has_wd = _nonempty(wd)
-        if has_ws:
-            agg.website_count += 1
-        if has_wd:
-            agg.wikidata_count += 1
-        if has_ws and has_wd:
-            agg.both_count += 1
-        elif has_ws:
-            agg.website_only_count += 1
-        elif has_wd:
-            agg.wikidata_only_count += 1
-        else:
-            agg.neither_count += 1
-        agg.per_source_counts[source_pbf[i]] = agg.per_source_counts.get(source_pbf[i], 0) + 1
-        agg.per_osm_type_counts[osm_type[i]] = agg.per_osm_type_counts.get(osm_type[i], 0) + 1
-        agg.per_primary_category_counts[primary[i]] = (
-            agg.per_primary_category_counts.get(primary[i], 0) + 1
-        )
-        agg.per_website_class_counts[website_class[i]] = (
-            agg.per_website_class_counts.get(website_class[i], 0) + 1
-        )
-        if has_wd:
-            wikidata_class = classify_wikidata(wd).value
-            agg.per_wikidata_class_counts[wikidata_class] = (
-                agg.per_wikidata_class_counts.get(wikidata_class, 0) + 1
-            )
-        agg.per_region_counts[region[i]] = agg.per_region_counts.get(region[i], 0) + 1
-        agg.per_area_bucket_counts[area_bucket[i]] = (
-            agg.per_area_bucket_counts.get(area_bucket[i], 0) + 1
+        _record_row(
+            agg,
+            website=website[i],
+            tags=tags[i],
+            source_pbf=source_pbf[i],
+            osm_type=osm_type[i],
+            primary=primary[i],
+            website_class=website_class[i],
+            region=region[i],
+            area_bucket=area_bucket[i],
         )
 
-    agg.row_count = len(polygon_ids)
+    _finish_identity_counts(agg, ids)
+    agg.top_hostnames = _top_hostnames(hostname)
+
+    return agg
+
+
+def _record_row(
+    agg: ShardAggregate,
+    *,
+    website: object,
+    tags: str,
+    source_pbf: str,
+    osm_type: str,
+    primary: str,
+    website_class: str,
+    region: str,
+    area_bucket: str,
+) -> None:
+    """Accumulate one row's overlap and dimension counts."""
+    wikidata = json.loads(tags).get("wikidata")
+    has_website = _nonempty(website)
+    has_wikidata = _nonempty(wikidata)
+    _update_overlap_counts(agg, has_website, has_wikidata)
+    for mapping, key in (
+        (agg.per_source_counts, source_pbf),
+        (agg.per_osm_type_counts, osm_type),
+        (agg.per_primary_category_counts, primary),
+        (agg.per_website_class_counts, website_class),
+        (agg.per_region_counts, region),
+        (agg.per_area_bucket_counts, area_bucket),
+    ):
+        _increment(mapping, key)
+    if has_wikidata:
+        _increment(agg.per_wikidata_class_counts, classify_wikidata(wikidata).value)
+
+
+def _update_overlap_counts(agg: ShardAggregate, has_website: bool, has_wikidata: bool) -> None:
+    """Update the exact two-tag overlap buckets for one row."""
+    agg.website_count += int(has_website)
+    agg.wikidata_count += int(has_wikidata)
+    bucket = _overlap_bucket(has_website, has_wikidata)
+    setattr(agg, bucket, getattr(agg, bucket) + 1)
+
+
+def _overlap_bucket(has_website: bool, has_wikidata: bool) -> str:
+    """Return the exact bucket name for two presence flags."""
+    if has_website and has_wikidata:
+        return "both_count"
+    if has_website:
+        return "website_only_count"
+    if has_wikidata:
+        return "wikidata_only_count"
+    return "neither_count"
+
+
+def _finish_identity_counts(agg: ShardAggregate, ids: list[str]) -> None:
+    """Finalize row and duplicate identity counts for one shard."""
+    agg.row_count = len(ids)
     agg.unique_polygon_ids = set(ids)
     counts = Counter(ids)
     agg.duplicate_within_shard_count = sum(c for c in counts.values() if c > 1)
 
-    host_counter: Counter[str] = Counter()
-    for h in hostname:
-        if h is None:
-            continue
-        host_counter[h] += 1
-    agg.top_hostnames = sorted(host_counter.items(), key=lambda kv: (-kv[1], kv[0]))
 
-    return agg
+def _top_hostnames(hostnames: list[str | None]) -> list[tuple[str, int]]:
+    """Return all non-null hostnames in deterministic descending order."""
+    host_counter: Counter[str] = Counter(h for h in hostnames if h is not None)
+    return sorted(host_counter.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def _increment(mapping: dict[str, int], key: str) -> None:
+    """Increment a string-keyed count mapping."""
+    mapping[key] = mapping.get(key, 0) + 1
 
 
 def merge_aggregates(aggs: list[ShardAggregate]) -> ShardAggregate:
@@ -134,7 +170,35 @@ def merge_aggregates(aggs: list[ShardAggregate]) -> ShardAggregate:
     out = ShardAggregate()
     if not aggs:
         return out
-    counter_keys = [
+    host_counter: Counter[str] = Counter()
+    for a in aggs:
+        _merge_scalar_counts(out, a)
+        _merge_dimension_counts(out, a)
+        for hostname, count in a.top_hostnames:
+            host_counter[hostname] += count
+    out.top_hostnames = sorted(host_counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return out
+
+
+def _merge_scalar_counts(out: ShardAggregate, source: ShardAggregate) -> None:
+    """Merge scalar counters and identity sets from one shard aggregate."""
+    for field_name in (
+        "row_count",
+        "website_count",
+        "wikidata_count",
+        "both_count",
+        "website_only_count",
+        "wikidata_only_count",
+        "neither_count",
+        "duplicate_within_shard_count",
+    ):
+        setattr(out, field_name, getattr(out, field_name) + getattr(source, field_name))
+    out.unique_polygon_ids |= source.unique_polygon_ids
+
+
+def _merge_dimension_counts(out: ShardAggregate, source: ShardAggregate) -> None:
+    """Sum all per-dimension counter dictionaries."""
+    for field_name in (
         "per_source_counts",
         "per_osm_type_counts",
         "per_primary_category_counts",
@@ -142,26 +206,10 @@ def merge_aggregates(aggs: list[ShardAggregate]) -> ShardAggregate:
         "per_wikidata_class_counts",
         "per_region_counts",
         "per_area_bucket_counts",
-    ]
-    host_counter: Counter[str] = Counter()
-    for a in aggs:
-        out.row_count += a.row_count
-        out.website_count += a.website_count
-        out.wikidata_count += a.wikidata_count
-        out.both_count += a.both_count
-        out.website_only_count += a.website_only_count
-        out.wikidata_only_count += a.wikidata_only_count
-        out.neither_count += a.neither_count
-        out.duplicate_within_shard_count += a.duplicate_within_shard_count
-        out.unique_polygon_ids |= a.unique_polygon_ids
-        for k in counter_keys:
-            d = getattr(out, k)
-            for key, v in getattr(a, k).items():
-                d[key] = d.get(key, 0) + v
-        for h, n in a.top_hostnames:
-            host_counter[h] += n
-    out.top_hostnames = sorted(host_counter.items(), key=lambda kv: (-kv[1], kv[0]))
-    return out
+    ):
+        target = getattr(out, field_name)
+        for key, value in getattr(source, field_name).items():
+            target[key] = target.get(key, 0) + value
 
 
 def count_duplicate_ids(aggs: list[ShardAggregate]) -> dict[str, int]:

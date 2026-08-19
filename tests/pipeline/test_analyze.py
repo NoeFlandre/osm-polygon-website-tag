@@ -18,6 +18,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import (
     ANALYSIS_FILES,
+    _validate_analysis_inputs,
     analyze_results,
 )
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -348,6 +349,24 @@ def test_hostname_analysis_accepts_bare_and_scheme_relative_values(tmp_path: Pat
     assert contact == [{"contact_website_hostname": "contact.example", "row_count": 1}]
 
 
+def test_hostname_analysis_accepts_rows_without_a_hostname(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    _write_comparison_shard(
+        run_dir,
+        stem="monaco-latest",
+        rows=[
+            _row_obs(osm_id=1),
+            _row_obs(osm_id=2, website="not-a-host"),
+            _row_obs(osm_id=3, website="https://a.com"),
+        ],
+    )
+
+    analyze_results(run_dir)
+
+    website = pq.read_table(run_dir / "analysis" / "hostnames_exact_website.parquet").to_pylist()
+    assert website == [{"website_hostname": "a.com", "row_count": 1}]
+
+
 def test_analysis_orchestrator_does_not_fetch_unbounded_result_sets() -> None:
     source = inspect.getsource(analyze_results)
     assert ".fetchall(" not in source
@@ -400,6 +419,18 @@ def test_analyze_results_no_shards_returns_zero_summary(tmp_path: Path) -> None:
     assert summary.conflicting_snapshot_count == 0
     for k in summary.cell_observation:
         assert summary.cell_observation[k] == 0
+
+
+def test_validate_analysis_inputs_requires_all_source_directories(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    polygons_dir = run_dir / "polygons"
+    observations_dir = run_dir / "analysis_observations"
+    rejections_dir = run_dir / "rejections"
+    polygons_dir.mkdir(parents=True)
+    observations_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="polygons/analysis_observations/rejections"):
+        _validate_analysis_inputs(run_dir, polygons_dir, observations_dir, rejections_dir)
 
 
 def test_analyze_results_emits_stable_summary(tmp_path: Path) -> None:

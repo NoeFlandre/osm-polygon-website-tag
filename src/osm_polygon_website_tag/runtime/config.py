@@ -15,6 +15,10 @@ from osm_polygon_website_tag.runtime.paths import data_root
 # Default remote destinations, captured here so they live in one obvious place.
 DEFAULT_GITHUB_REPO = "https://github.com/NoeFlandre/osm-polygon-website-tag.git"
 DEFAULT_HF_DATASET = "NoeFlandre/osm-polygon-website-tag"
+DEFAULT_TRACKIO_PROJECT = "osm-polygon-website-tag"
+DEFAULT_TRACKIO_SPACE = "NoeFlandre/osm-polygon-website-tag-metrics"
+TRACKIO_SPACE_URL = f"https://huggingface.co/spaces/{DEFAULT_TRACKIO_SPACE}"
+TRACKIO_DASHBOARD_URL = TRACKIO_SPACE_URL
 
 
 class Settings(BaseSettings):

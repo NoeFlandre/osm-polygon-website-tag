@@ -57,8 +57,6 @@ class WebsiteClass(StrEnum):
 
 _MULTIPLE_SEP_RE = re.compile(r"[;,\s]+")
 _SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):(//)?")
-_USERINFO_HOST_RE = re.compile(r"(?:[^@/]+@)?([^/?#]+)")
-_SCHEME_RELATIVE_RE = re.compile(r"^//([^/?#]+)")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 _USERINFO_RE = re.compile(r"[^@/]+@")
 
@@ -74,29 +72,40 @@ def classify_website(value: str) -> WebsiteClass:
     stripped = value.strip()
     if not stripped:
         return WebsiteClass.MALFORMED
+    return _classify_nonempty(stripped)
 
-    # Multi-value detection must come first; a single value containing
-    # ";" is still multiple.
-    parts = [p for p in _MULTIPLE_SEP_RE.split(stripped) if p]
-    if len(parts) > 1:
+
+def _classify_nonempty(value: str) -> WebsiteClass:
+    """Classify a value known to contain non-whitespace characters."""
+    if _has_multiple_values(value):
         return WebsiteClass.MULTIPLE
-
-    if stripped.startswith("http://") or stripped.startswith("https://"):
+    if _is_absolute_http(value):
         return WebsiteClass.ABSOLUTE_URL
+    return _classify_single_value(value)
 
-    if stripped.startswith("//"):
+
+def _classify_single_value(value: str) -> WebsiteClass:
+    """Classify a value that contains exactly one non-empty part."""
+    if value.startswith("//"):
         return WebsiteClass.SCHEME_RELATIVE
-
-    if stripped[:5].lower() == "http:" or stripped[:6].lower() == "https:":
-        return WebsiteClass.ABSOLUTE_URL
-
-    if _SCHEME_RE.match(stripped):
+    if _SCHEME_RE.match(value):
         return WebsiteClass.OTHER_SCHEME
+    return WebsiteClass.BARE_HOSTNAME if _is_bare_hostname(value) else WebsiteClass.MALFORMED
 
-    if "." in stripped and _HOSTNAME_RE.match(stripped):
-        return WebsiteClass.BARE_HOSTNAME
 
-    return WebsiteClass.MALFORMED
+def _has_multiple_values(value: str) -> bool:
+    """Return whether a trimmed value contains multiple non-empty parts."""
+    return sum(bool(part) for part in _MULTIPLE_SEP_RE.split(value)) > 1
+
+
+def _is_absolute_http(value: str) -> bool:
+    """Return whether a value uses the HTTP or HTTPS scheme."""
+    return value.lower().startswith(("http://", "https://"))
+
+
+def _is_bare_hostname(value: str) -> bool:
+    """Return whether a value is a dotted hostname without other syntax."""
+    return "." in value and _HOSTNAME_RE.match(value) is not None
 
 
 def classify_contact_website(value: str) -> WebsiteClass:
@@ -119,13 +128,23 @@ def extract_hostname(value: str) -> str | None:
     if not stripped:
         return None
 
-    if len([part for part in _MULTIPLE_SEP_RE.split(stripped) if part]) > 1:
+    if _has_multiple_values(stripped):
         return None
-    candidate = stripped if _SCHEME_RE.match(stripped) else f"//{stripped.lstrip('/')}"
+    candidate = _hostname_candidate(stripped)
     try:
         hostname = urlsplit(candidate).hostname
     except ValueError:
         return None
+    return _normalise_hostname(hostname)
+
+
+def _hostname_candidate(value: str) -> str:
+    """Add the scheme-relative marker required by ``urlsplit`` for bare hosts."""
+    return value if _SCHEME_RE.match(value) else f"//{value.lstrip('/')}"
+
+
+def _normalise_hostname(hostname: str | None) -> str | None:
+    """Validate and IDNA-normalize a parsed hostname."""
     if not hostname or "." not in hostname:
         return None
     try:
@@ -153,13 +172,6 @@ def is_redacted(value: str) -> bool:
     if "?" in stripped:
         return True
     return "#" in stripped
-
-
-def _strip_port(host: str) -> str:
-    """Strip a trailing ``:port`` from a hostname."""
-    if ":" in host:
-        return host.split(":", 1)[0]
-    return host
 
 
 __all__ = [

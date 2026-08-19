@@ -137,6 +137,24 @@ def test_build_publish_plan_includes_readme(tmp_path: Path) -> None:
     assert plan.readme_path is not None
 
 
+def test_build_publish_plan_binds_completed_receipt_artifacts(tmp_path: Path) -> None:
+    run_dir = _setup_run(tmp_path)
+    receipt = run_dir / "manifests" / "completion_receipt.json"
+    receipt.write_text(
+        json.dumps({"artifacts": [{"path": "polygons/monaco-latest.parquet"}]}),
+        encoding="utf-8",
+    )
+    (run_dir / "README.md").write_text("# Test\n", encoding="utf-8")
+
+    plan = build_publish_plan(run_dir)
+
+    assert plan.artifact_paths == [
+        run_dir / "polygons" / "monaco-latest.parquet",
+        receipt,
+    ]
+    assert plan.readme_path == run_dir / "README.md"
+
+
 def test_publish_to_hf_dry_run_skips_network(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     plan = publish_to_hf(run_dir, dry_run=True)

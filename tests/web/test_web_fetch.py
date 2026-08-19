@@ -6,6 +6,7 @@ import socket
 
 import pytest
 
+import osm_polygon_website_tag.web.web_fetch as web_fetch_module
 from osm_polygon_website_tag.web.web_fetch import (
     HttpResponse,
     UnsafeUrlError,
@@ -127,3 +128,33 @@ def test_fetch_classifies_request_exception_without_leaking_details() -> None:
 
     assert result.status == "fetch_error"
     assert result.message == "TimeoutError"
+
+
+def test_download_once_reads_response_without_following_redirects(monkeypatch) -> None:
+    class Response:
+        status = 200
+
+        def __init__(self) -> None:
+            self.headers = {"Content-Type": "text/plain"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            assert limit == 11
+            return b"hello"
+
+    class Opener:
+        def open(self, request, *, timeout: float):
+            assert request.full_url == "https://example.org"
+            assert timeout == 3.0
+            return Response()
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
+
+    result = web_fetch_module._download_once("https://example.org", 3.0, 10)
+
+    assert result == HttpResponse(200, {"Content-Type": "text/plain"}, b"hello")

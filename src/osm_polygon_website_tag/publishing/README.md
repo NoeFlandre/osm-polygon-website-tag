@@ -2,7 +2,7 @@
 
 Adapts verified artifacts to Hugging Face publication.
 
-- Modules: `hf_token`, `incremental`, `publish`.
+- Modules: `hf_token`, `incremental`, `publish`, `trackio`.
 - Dependencies: `reporting` and `runtime`.
 - `incremental` compares content hashes for one polygon shard and the global
   README/YAML/map bundle. It uploads only changed files and atomically records
@@ -10,7 +10,27 @@ Adapts verified artifacts to Hugging Face publication.
   and is intentionally excluded from the completion receipt.
 - Entry points: `resolve_hf_token`, `build_publish_plan`, `publish_to_hf`, and
   `incremental_publish_changed_shard`.
+- `trackio` is an optional, explicit publisher for the public dataset metrics
+  dashboard. It reads only a complete run's receipt-bound Parquets and uses the
+  same `CardStats` source as the generated dataset card. The normal pipeline
+  does not import Trackio; install it only for the `publish-trackio --apply`
+  command (for example, with `uv run --with trackio`).
+- The default Space is `NoeFlandre/osm-polygon-website-tag-metrics`. Apply mode
+  logs one receipt-derived run locally, then freezes it with
+  `trackio.sync(..., sdk="static")` into a public, read-only Space. A stable
+  receipt-derived run name and `resume="allow"` keep repeated publication of
+  the same snapshot deterministic.
 - Excludes: extraction, enrichment, artifact derivation, and CLI dispatch.
+
+## Metrics contract
+
+`build_trackio_snapshot` requires `manifests/run.json` to be in `complete`
+status, a valid `manifests/completion_receipt.json`, and a fresh successful
+`verify_results` check. To keep the public dashboard focused, it reports only
+the headline metrics: public polygon rows, polygons with extracted text, total
+extracted words, website and contact-website text coverage, source-shard count,
+and occupied H3 cells. All values are recomputed from the finalized Parquets;
+no hand-written counts or raw website content are sent to Trackio.
 
 ## Resumable upload checkpoint (`uploaded_polygons.json`)
 

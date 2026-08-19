@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -129,13 +130,38 @@ def test_typer_help_lists_every_public_command() -> None:
         "verify-results",
         "refresh-card",
         "finalize-run",
+        "finalize-snapshot",
         "publish-plan",
         "publish",
         "create-repo",
         "card-stats",
+        "publish-trackio",
         "run-all",
     ):
         assert command in result.stdout
+
+
+def test_cli_finalize_snapshot_reports_result(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "finalize_snapshot",
+        lambda _run_dir: SimpleNamespace(
+            ok=True,
+            receipt={"manifest_digest": "a" * 64},
+            verification=SimpleNamespace(errors=[]),
+        ),
+    )
+
+    assert main(["finalize-snapshot", "--run-dir", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "digest": "a" * 64,
+        "errors": [],
+        "ok": True,
+    }
 
 
 def test_run_all_help_lists_bounded_worker_options() -> None:
@@ -262,6 +288,30 @@ def test_cli_verify_results_returns_zero_on_pass(tmp_path: Path) -> None:
     assert rc == 0
 
 
+def test_cli_publish_trackio_defaults_to_dry_run(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    from osm_polygon_website_tag.publishing.trackio import TrackioSnapshot
+
+    snapshot = TrackioSnapshot(
+        run_name="dataset-abc",
+        manifest_digest="a" * 64,
+        dataset_repo="owner/dataset",
+        metrics={"dataset_public_polygon_rows": 3},
+    )
+    monkeypatch.setattr(cli, "build_trackio_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(
+        cli,
+        "publish_trackio_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("published")),
+    )
+
+    assert main(["publish-trackio", "--run-dir", str(tmp_path / "run")]) == 0
+    assert json.loads(capsys.readouterr().out)["dry_run"] is True
+
+
 def test_cli_verify_results_returns_nonzero_on_failure(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     (run_dir / "polygons" / "monaco-latest.parquet").write_bytes(b"junk")
@@ -290,3 +340,72 @@ def test_cli_publish_dry_run(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     rc = main(["publish", "--run-dir", str(run_dir)])
     assert rc == 0
+
+
+def test_cli_analyze_card_refresh_and_finalize_commands_delegate(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    run_dir = tmp_path / "run"
+    state = SimpleNamespace(metadata={"status": "enriched"})
+    monkeypatch.setattr(cli, "load_run", lambda _run_dir: state)
+    monkeypatch.setattr(cli, "analyze_results", lambda _run_dir: SimpleNamespace(value=1))
+    monkeypatch.setattr(cli, "build_card", lambda _run_dir: run_dir / "README.md")
+    monkeypatch.setattr(
+        cli,
+        "refresh_card_run",
+        lambda _run_dir: SimpleNamespace(ok=True, verification=SimpleNamespace(errors=[])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "finalize_run",
+        lambda _run_dir: SimpleNamespace(ok=True, receipt={"manifest_digest": "a" * 64}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "transition_status",
+        lambda _state, new_status: state.metadata.__setitem__("status", new_status),
+    )
+
+    assert cli.analyze_command(run_dir) == 0
+    assert cli.card_command(run_dir) == 0
+    assert cli.refresh_card_command(run_dir) == 0
+    assert cli.finalize_command(run_dir) == 0
+    assert '"digest"' in capsys.readouterr().out
+
+
+def test_cli_run_all_command_closes_progress_and_reports_result(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    events: list[bool] = []
+
+    class FakeProgress:
+        def close(self, *, completed: bool) -> None:
+            events.append(completed)
+
+    monkeypatch.setattr(cli, "ProgressReporter", FakeProgress)
+    monkeypatch.setattr(
+        cli,
+        "run_all",
+        lambda **_kwargs: SimpleNamespace(complete=True, run_dir=tmp_path / "run", sources=3),
+    )
+
+    assert (
+        cli.run_all_command(
+            source_root=tmp_path / "source",
+            output_root=tmp_path / "runs",
+            run_id="run",
+            repo_id="owner/dataset",
+            apply=False,
+            ensure_repo=False,
+            area_workers=1,
+            max_in_flight_areas=1,
+            fetch_workers=1,
+        )
+        == 0
+    )
+    assert events == [True]
+    assert '"complete": true' in capsys.readouterr().out

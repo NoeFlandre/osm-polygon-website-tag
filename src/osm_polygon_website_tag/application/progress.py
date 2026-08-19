@@ -28,12 +28,24 @@ class ProgressReporter:
     def __call__(self, message: str) -> None:
         match = _COUNTED_MESSAGE.fullmatch(message)
         if not self._interactive:
-            print(message, file=self._stream, flush=True)
+            self._write_plain(message)
             return
         if match is None:
-            self._finish_bar(completed=True)
-            tqdm.write(message, file=self._stream)
+            self._write_uncounted(message)
             return
+        self._update_counted(match)
+
+    def _write_plain(self, message: str) -> None:
+        """Write a stable line when no terminal progress bar is active."""
+        print(message, file=self._stream, flush=True)
+
+    def _write_uncounted(self, message: str) -> None:
+        """Finish a bar before emitting an ordinary interactive message."""
+        self._finish_bar(completed=True)
+        tqdm.write(message, file=self._stream)
+
+    def _update_counted(self, match: re.Match[str]) -> None:
+        """Update the bounded tqdm display for one counted workflow message."""
         current, total, description = match.groups()
         current_value = int(current)
         total_value = int(total)

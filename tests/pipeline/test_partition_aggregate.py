@@ -7,7 +7,10 @@ import json
 import pyarrow as pa
 
 from osm_polygon_website_tag.pipeline.partition_aggregate import (
+    ShardAggregate,
     aggregate_shard,
+    count_duplicate_ids,
+    merge_aggregates,
 )
 
 
@@ -282,3 +285,69 @@ def test_aggregate_shard_excludes_null_hostname_from_top_hostnames() -> None:
     )
     agg = aggregate_shard(table)
     assert agg.top_hostnames == [("example.com", 1)]
+
+
+def test_count_duplicate_ids_reports_cross_shard_ids_only() -> None:
+    first = ShardAggregate(unique_polygon_ids={"p1", "p2"})
+    second = ShardAggregate(unique_polygon_ids={"p1", "p3"})
+
+    assert count_duplicate_ids([first, second]) == {"p1": 2}
+
+
+def test_merge_aggregates_empty_input_returns_zero_aggregate() -> None:
+    result = merge_aggregates([])
+
+    assert result.row_count == 0
+    assert result.unique_polygon_ids == set()
+
+
+def test_merge_aggregates_sums_scalars_dimensions_and_hosts() -> None:
+    first = ShardAggregate(
+        row_count=2,
+        website_count=2,
+        wikidata_count=1,
+        both_count=1,
+        website_only_count=1,
+        duplicate_within_shard_count=1,
+        unique_polygon_ids={"a", "b"},
+        per_source_counts={"a.osm.pbf": 2},
+        per_osm_type_counts={"way": 2},
+        per_primary_category_counts={"building": 2},
+        per_website_class_counts={"absolute_url": 2},
+        per_wikidata_class_counts={"canonical_qid": 1},
+        per_region_counts={"a": 2},
+        per_area_bucket_counts={"10-100m2": 2},
+        top_hostnames=[("example.com", 2)],
+    )
+    second = ShardAggregate(
+        row_count=1,
+        website_count=1,
+        wikidata_count=1,
+        both_count=1,
+        unique_polygon_ids={"b", "c"},
+        per_source_counts={"b.osm.pbf": 1},
+        per_osm_type_counts={"relation": 1},
+        per_primary_category_counts={"boundary": 1},
+        per_website_class_counts={"absolute_url": 1},
+        per_wikidata_class_counts={"canonical_qid": 1},
+        per_region_counts={"b": 1},
+        per_area_bucket_counts={"100m2-1km2": 1},
+        top_hostnames=[("example.com", 1), ("other.example", 1)],
+    )
+
+    result = merge_aggregates([first, second])
+
+    assert result.row_count == 3
+    assert result.website_count == 3
+    assert result.wikidata_count == 2
+    assert result.both_count == 2
+    assert result.duplicate_within_shard_count == 1
+    assert result.unique_polygon_ids == {"a", "b", "c"}
+    assert result.per_source_counts == {"a.osm.pbf": 2, "b.osm.pbf": 1}
+    assert result.per_osm_type_counts == {"way": 2, "relation": 1}
+    assert result.per_primary_category_counts == {"building": 2, "boundary": 1}
+    assert result.per_website_class_counts == {"absolute_url": 3}
+    assert result.per_wikidata_class_counts == {"canonical_qid": 2}
+    assert result.per_region_counts == {"a": 2, "b": 1}
+    assert result.per_area_bucket_counts == {"10-100m2": 2, "100m2-1km2": 1}
+    assert result.top_hostnames == [("example.com", 3), ("other.example", 1)]

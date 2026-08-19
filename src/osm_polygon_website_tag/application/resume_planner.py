@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Collection, Mapping
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -74,26 +75,35 @@ def summarize_enrichment_status(
     payloads are never materialised during resume classification.
     """
     counters = {field: Counter() for field in _STATUS_SUMMARY_COLUMNS}
-    if isinstance(source, pa.Table):
-        batches = source.to_batches()
-    else:
-        parquet = pq.ParquetFile(source)
-        if any(
-            column not in parquet.schema_arrow.names for column in _STATUS_SUMMARY_COLUMNS.values()
-        ):
-            return {}
-        batches = parquet.iter_batches(
-            columns=list(_STATUS_SUMMARY_COLUMNS.values()),
-            batch_size=8_192,
-        )
+    batches = _status_batches(source)
+    if batches is None:
+        return {}
     for batch in batches:
-        for field_name, column_name in _STATUS_SUMMARY_COLUMNS.items():
-            for value in batch.column(column_name).to_pylist():
-                counters[field_name][value if isinstance(value, str) else TEXT_NULL_STATUS] += 1
+        _accumulate_status_batch(counters, batch)
     return {
         field_name: dict(sorted(field_counts.items()))
         for field_name, field_counts in sorted(counters.items())
     }
+
+
+def _status_batches(source: Path | pa.Table):
+    """Return bounded status batches for a table or Parquet shard."""
+    if isinstance(source, pa.Table):
+        return source.to_batches()
+    parquet = pq.ParquetFile(source)
+    if any(column not in parquet.schema_arrow.names for column in _STATUS_SUMMARY_COLUMNS.values()):
+        return None
+    return parquet.iter_batches(
+        columns=list(_STATUS_SUMMARY_COLUMNS.values()),
+        batch_size=8_192,
+    )
+
+
+def _accumulate_status_batch(counters: dict[str, Counter[str]], batch: pa.RecordBatch) -> None:
+    """Accumulate one bounded Arrow status batch."""
+    for field_name, column_name in _STATUS_SUMMARY_COLUMNS.items():
+        for value in batch.column(column_name).to_pylist():
+            counters[field_name][value if isinstance(value, str) else TEXT_NULL_STATUS] += 1
 
 
 def coerce_enrichment_status_summary(raw: object) -> dict[str, dict[str, int]] | None:
@@ -102,21 +112,33 @@ def coerce_enrichment_status_summary(raw: object) -> dict[str, dict[str, int]] |
         return None
     summary: dict[str, dict[str, int]] = {}
     for field_name in _STATUS_SUMMARY_COLUMNS:
-        counts = raw.get(field_name)
-        if not isinstance(counts, Mapping):
+        field_counts = _coerce_status_field(raw.get(field_name))
+        if field_counts is None:
             return None
-        field_counts: dict[str, int] = {}
-        for status, count in counts.items():
-            if (
-                not isinstance(status, str)
-                or isinstance(count, bool)
-                or not isinstance(count, int)
-                or count < 0
-            ):
-                return None
-            field_counts[status] = count
-        summary[field_name] = dict(sorted(field_counts.items()))
+        summary[field_name] = field_counts
     return summary
+
+
+def _coerce_status_field(raw: object) -> dict[str, int] | None:
+    """Validate and sort one persisted status-count mapping."""
+    if not isinstance(raw, Mapping):
+        return None
+    field_counts: dict[str, int] = {}
+    for status, count in raw.items():
+        if not _valid_status_count(status, count):
+            return None
+        field_counts[cast(str, status)] = cast(int, count)
+    return dict(sorted(field_counts.items()))
+
+
+def _valid_status_count(status: object, count: object) -> bool:
+    """Return whether one persisted status count has the required shape."""
+    return (
+        isinstance(status, str)
+        and not isinstance(count, bool)
+        and isinstance(count, int)
+        and count >= 0
+    )
 
 
 def _retry_priority(summary: Mapping[str, Mapping[str, int]]) -> tuple[int, int]:
@@ -125,25 +147,31 @@ def _retry_priority(summary: Mapping[str, Mapping[str, int]]) -> tuple[int, int]
     for counts in summary.values():
         for status, count in counts.items():
             total += count
-            if status in TEXT_UNFINISHED_STATUSES:
-                unfinished += count
-            elif status in TEXT_TRANSIENT_STATUSES:
-                transient += count
-            elif status in TEXT_DETERMINISTIC_STATUSES:
-                deterministic += count
-            else:
-                # Unknown non-terminal values remain actionable and are safer
-                # to process before deterministic URL rejections.
-                transient += count
+            add_unfinished, add_transient, add_deterministic = _priority_counts(status, count)
+            unfinished += add_unfinished
+            transient += add_transient
+            deterministic += add_deterministic
+    return _priority_tier(unfinished, transient, deterministic), -total
+
+
+def _priority_counts(status: str, count: int) -> tuple[int, int, int]:
+    """Return the counter increment for one status category."""
+    if status in TEXT_UNFINISHED_STATUSES:
+        return count, 0, 0
+    if status in TEXT_TRANSIENT_STATUSES or status not in TEXT_DETERMINISTIC_STATUSES:
+        return 0, count, 0
+    return 0, 0, count
+
+
+def _priority_tier(unfinished: int, transient: int, deterministic: int) -> int:
+    """Rank unfinished, retryable, deterministic, and complete shards."""
     if unfinished:
-        tier = 0
-    elif transient:
-        tier = 1
-    elif deterministic:
-        tier = 3
-    else:
-        tier = 2
-    return tier, -total
+        return 0
+    if transient:
+        return 1
+    if deterministic:
+        return 3
+    return 2
 
 
 def _partial_enrichment_sources(run_dir: Path, sources: Collection[Path]) -> set[str]:
@@ -175,20 +203,30 @@ def prepare_resume_priorities(
         name = source.name
         if name not in retry_name_set:
             continue
-        entry = state.sources.get(name)
-        if entry is None:
-            continue
-        summary = coerce_enrichment_status_summary(entry.get("enrichment_status_counts"))
-        if summary is None:
-            shard = run_dir / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
-            if shard.is_file():
-                summary = summarize_enrichment_status(shard)
-                if summary:
-                    summaries_to_persist[name] = summary
+        summary, should_persist = _source_priority_summary(run_dir, state, source)
         if summary:
             priorities[name] = _retry_priority(summary)
+            if should_persist:
+                summaries_to_persist[name] = summary
     persist_enrichment_status_summaries(state, summaries_to_persist)
     return partial_names, priorities
+
+
+def _source_priority_summary(
+    run_dir: Path, state: RunState, source: Path
+) -> tuple[dict[str, dict[str, int]] | None, bool]:
+    """Load a persisted summary or build one from the source shard once."""
+    entry = state.sources.get(source.name)
+    if entry is None:
+        return None, False
+    summary = coerce_enrichment_status_summary(entry.get("enrichment_status_counts"))
+    if summary is not None:
+        return summary, False
+    shard = run_dir / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
+    if not shard.is_file():
+        return None, False
+    summary = summarize_enrichment_status(shard)
+    return (summary, bool(summary))
 
 
 __all__ = [

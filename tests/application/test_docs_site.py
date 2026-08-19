@@ -55,10 +55,12 @@ def test_cli_reference_covers_typer_commands_and_safe_defaults() -> None:
         "verify-results",
         "refresh-card",
         "finalize-run",
+        "finalize-snapshot",
         "publish-plan",
         "publish",
         "create-repo",
         "card-stats",
+        "publish-trackio",
         "run-all",
     ):
         assert f"`{command}`" in cli

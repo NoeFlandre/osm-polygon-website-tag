@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypedDict, cast
@@ -111,23 +111,30 @@ def _validate_global_bundle(value: object) -> _GlobalBundleStateV2:
         raise _invalid("global_bundle must be a JSON object")
     bundle: _GlobalBundleStateV2 = {}
     for key, val in value.items():
-        if not isinstance(key, str):
-            raise _invalid(f"global_bundle key {key!r} must be a string")
-        if key in _GLOBAL_BUNDLE_HASH_KEYS:
-            sha = _validate_hex_sha256(val, field=f"global_bundle[{key!r}]")
-            _set_typed_dict(bundle, key, sha)
-        elif key == "map_contract_version":
-            # Reject booleans explicitly; ``bool`` subclasses ``int`` in
-            # Python so an ``isinstance(val, int)`` check would otherwise
-            # let ``True`` masquerade as a contract version.
-            if isinstance(val, bool) or not isinstance(val, int):
-                raise _invalid(
-                    f"global_bundle[{key!r}] must be a non-bool integer, got {type(val).__name__}"
-                )
-            _set_typed_dict(bundle, key, val)
-        else:
-            raise _invalid(f"global_bundle has unknown field {key!r}")
+        _validate_global_item(bundle, key, val)
     return bundle
+
+
+def _validate_global_item(bundle: _GlobalBundleStateV2, key: object, value: object) -> None:
+    """Validate and add one global card-bundle checkpoint field."""
+    if not isinstance(key, str):
+        raise _invalid(f"global_bundle key {key!r} must be a string")
+    if key in _GLOBAL_BUNDLE_HASH_KEYS:
+        _set_typed_dict(bundle, key, _validate_hex_sha256(value, field=f"global_bundle[{key!r}]"))
+        return
+    if key == "map_contract_version":
+        _set_typed_dict(bundle, key, _validate_contract_version(key, value))
+        return
+    raise _invalid(f"global_bundle has unknown field {key!r}")
+
+
+def _validate_contract_version(key: str, value: object) -> int:
+    """Validate the non-boolean integer map contract version."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise _invalid(
+            f"global_bundle[{key!r}] must be a non-bool integer, got {type(value).__name__}"
+        )
+    return value
 
 
 def _validate_source_entry(source_name: str, value: object) -> _SourceCheckpointEntry:
@@ -166,20 +173,25 @@ def _validate_legacy_sources(raw: dict[object, object]) -> dict[str, _SourceChec
     """
     sources: dict[str, _SourceCheckpointEntry] = {}
     for key, value in raw.items():
-        if key == "schema_version":
-            raise _invalid("legacy checkpoint must omit schema_version")
-        if not isinstance(key, str):
-            raise _invalid(f"legacy sources key {key!r} must be a string")
-        if not key.endswith(_SOURCE_FILENAME_SUFFIX):
-            raise _invalid(f"legacy sources key {key!r} must end with '{_SOURCE_FILENAME_SUFFIX}'")
-        if not isinstance(value, dict):
-            raise _invalid(f"legacy sources[{key!r}] must be a JSON object")
-        sha = _validate_hex_sha256(
-            value.get("polygon_sha256"),
-            field=f"legacy sources[{key!r}].polygon_sha256",
-        )
-        sources[key] = {"polygon_sha256": sha}
+        source_name, entry = _validate_legacy_entry(key, value)
+        sources[source_name] = entry
     return sources
+
+
+def _validate_legacy_entry(key: object, value: object) -> tuple[str, _SourceCheckpointEntry]:
+    """Validate one pre-v2 flat checkpoint entry and return its migrated form."""
+    if key == "schema_version":
+        raise _invalid("legacy checkpoint must omit schema_version")
+    if not isinstance(key, str):
+        raise _invalid(f"legacy sources key {key!r} must be a string")
+    if not key.endswith(_SOURCE_FILENAME_SUFFIX):
+        raise _invalid(f"legacy sources key {key!r} must end with '{_SOURCE_FILENAME_SUFFIX}'")
+    if not isinstance(value, dict):
+        raise _invalid(f"legacy sources[{key!r}] must be a JSON object")
+    sha = _validate_hex_sha256(
+        value.get("polygon_sha256"), field=f"legacy sources[{key!r}].polygon_sha256"
+    )
+    return key, {"polygon_sha256": sha}
 
 
 def _parse_checkpoint(raw: object) -> CheckpointV2:
@@ -268,29 +280,40 @@ def reconcile_upload_checkpoint(
     """
     root = Path(run_dir)
     remote = remote_polygon_shard_hashes(repo_id=repo_id, token=token)
-    # Eagerly validate every remote hash so an in-flight HTTP retry never
-    # leaks a malformed value past the load boundary. Any failure here
-    # aborts before the existing checkpoint is touched.
-    validated_remote: dict[str, str] = {}
-    for filename, sha256 in remote.items():
-        if not isinstance(filename, str) or not filename.endswith(_SOURCE_FILENAME_SUFFIX):
-            raise _invalid(
-                f"remote source key {filename!r} must end with '{_SOURCE_FILENAME_SUFFIX}'"
-            )
-        validated_remote[filename] = _validate_hex_sha256(
-            sha256, field=f"remote shards[{filename!r}].sha256"
-        )
+    validated_remote = _validated_remote_hashes(remote)
     local_paths = {f"{path.stem}.osm.pbf": path for path in (root / "polygons").glob("*.parquet")}
-    sources: dict[str, _SourceCheckpointEntry] = {}
-    for filename, remote_sha256 in validated_remote.items():
-        local_path = local_paths.get(filename)
-        if local_path is not None and hash_shard(local_path) == remote_sha256:
-            sources[filename] = {"polygon_sha256": remote_sha256}
+    sources = _matching_local_sources(validated_remote, local_paths)
     checkpoint = load_upload_checkpoint(root)
     checkpoint["sources"] = sources
     _checkpoint_path(root).parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(_checkpoint_path(root), checkpoint)
     return checkpoint
+
+
+def _validated_remote_hashes(remote: dict[str, str]) -> dict[str, str]:
+    """Validate every remote shard identity before touching local state."""
+    validated: dict[str, str] = {}
+    for filename, sha256 in remote.items():
+        if not isinstance(filename, str) or not filename.endswith(_SOURCE_FILENAME_SUFFIX):
+            raise _invalid(
+                f"remote source key {filename!r} must end with '{_SOURCE_FILENAME_SUFFIX}'"
+            )
+        validated[filename] = _validate_hex_sha256(
+            sha256, field=f"remote shards[{filename!r}].sha256"
+        )
+    return validated
+
+
+def _matching_local_sources(
+    remote: dict[str, str], local_paths: dict[str, Path]
+) -> dict[str, _SourceCheckpointEntry]:
+    """Keep only remote shards whose local bytes have the same digest."""
+    matches: dict[str, _SourceCheckpointEntry] = {}
+    for filename, remote_sha256 in remote.items():
+        local_path = local_paths.get(filename)
+        if local_path is not None and hash_shard(local_path) == remote_sha256:
+            matches[filename] = {"polygon_sha256": remote_sha256}
+    return matches
 
 
 def remote_polygon_shard_hashes(*, repo_id: str, token: str) -> dict[str, str]:
@@ -306,7 +329,6 @@ def remote_polygon_shard_hashes(*, repo_id: str, token: str) -> dict[str, str]:
 
     if not token:
         raise ValueError("remote shard reconciliation requires a Hugging Face token")
-    hashes: dict[str, str] = {}
     api = HfApi(token=token)
     try:
         items = api.list_repo_tree(
@@ -316,18 +338,32 @@ def remote_polygon_shard_hashes(*, repo_id: str, token: str) -> dict[str, str]:
             expand=True,
             repo_type="dataset",
         )
-        for item in items:
-            path = getattr(item, "path", None)
-            if not isinstance(path, str) or not path.endswith(".parquet"):
-                continue
-            lfs = getattr(item, "lfs", None)
-            sha256 = getattr(lfs, "sha256", None)
-            if not isinstance(sha256, str):
-                raise ValueError(f"remote polygon shard has no SHA-256 metadata: {path}")
-            hashes[f"{Path(path).stem}.osm.pbf"] = sha256
     except EntryNotFoundError:
         return {}
+    return _remote_shard_hashes(items)
+
+
+def _remote_shard_hashes(items: Iterable[object]) -> dict[str, str]:
+    """Extract managed polygon shard hashes from a Hub tree response."""
+    hashes: dict[str, str] = {}
+    for item in items:
+        entry = _remote_shard_entry(item)
+        if entry is None:
+            continue
+        filename, sha256 = entry
+        hashes[filename] = sha256
     return hashes
+
+
+def _remote_shard_entry(item: object) -> tuple[str, str] | None:
+    """Return one remote shard identity, ignoring non-Parquet tree entries."""
+    path = getattr(item, "path", None)
+    if not isinstance(path, str) or not path.endswith(".parquet"):
+        return None
+    sha256 = getattr(getattr(item, "lfs", None), "sha256", None)
+    if not isinstance(sha256, str):
+        raise ValueError(f"remote polygon shard has no SHA-256 metadata: {path}")
+    return f"{Path(path).stem}.osm.pbf", sha256
 
 
 def _bundle_state(run_dir: Path) -> _GlobalBundleStateV2:
@@ -362,11 +398,7 @@ def incremental_publish_changed_shard(
     shard = root / "polygons" / f"{source_filename.removesuffix('.osm.pbf')}.parquet"
     if not shard.is_file():
         raise FileNotFoundError(shard)
-    for relative in ("README.md", "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH):
-        path = root / relative
-        if not path.is_file() or path.stat().st_size == 0:
-            raise ValueError(f"missing incremental artifact: {path}")
-
+    _validate_incremental_artifacts(root)
     checkpoint = load_upload_checkpoint(root)
     sources = checkpoint["sources"]
     global_bundle = checkpoint["global_bundle"]
@@ -374,18 +406,10 @@ def incremental_publish_changed_shard(
     current_shard_sha = hash_shard(shard)
     prior_source = sources.get(source_filename, {})
     shard_changed = prior_source.get("polygon_sha256") != current_shard_sha
-    bundle_changed = any(global_bundle.get(key) != value for key, value in current_bundle.items())
-    upload_paths: list[Path] = []
-    if shard_changed:
-        upload_paths.append(shard)
-    if bundle_changed:
-        upload_paths.extend(
-            [
-                root / "README.md",
-                root / "dataset.yaml",
-                root / POLYGON_DENSITY_ASSET_REL_PATH,
-            ]
-        )
+    bundle_changed = _bundle_changed(global_bundle, current_bundle)
+    upload_paths = _incremental_upload_paths(
+        root, shard, shard_changed=shard_changed, bundle_changed=bundle_changed
+    )
     plan = IncrementalPublishPlan(
         source_filename=source_filename,
         upload_paths=upload_paths,
@@ -394,6 +418,62 @@ def incremental_publish_changed_shard(
     )
     if dry_run or not upload_paths:
         return plan
+    _perform_incremental_upload(
+        root,
+        source_filename,
+        current_shard_sha,
+        current_bundle,
+        upload_paths,
+        checkpoint,
+        repo_id=repo_id,
+        repo_kind=repo_kind,
+        uploader=uploader,
+    )
+    return plan
+
+
+def _validate_incremental_artifacts(root: Path) -> None:
+    """Require non-empty card assets before computing an upload plan."""
+    for relative in ("README.md", "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH):
+        path = root / relative
+        if not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"missing incremental artifact: {path}")
+
+
+def _bundle_changed(previous: _GlobalBundleStateV2, current: _GlobalBundleStateV2) -> bool:
+    """Return whether any published global asset differs from its checkpoint."""
+    return any(previous.get(key) != value for key, value in current.items())
+
+
+def _incremental_upload_paths(
+    root: Path,
+    shard: Path,
+    *,
+    shard_changed: bool,
+    bundle_changed: bool,
+) -> list[Path]:
+    """Select only the changed source shard and/or global assets."""
+    paths = [shard] if shard_changed else []
+    if bundle_changed:
+        paths.extend(
+            [root / "README.md", root / "dataset.yaml", root / POLYGON_DENSITY_ASSET_REL_PATH]
+        )
+    return paths
+
+
+def _perform_incremental_upload(
+    root: Path,
+    source_filename: str,
+    current_shard_sha: str,
+    current_bundle: _GlobalBundleStateV2,
+    upload_paths: list[Path],
+    checkpoint: CheckpointV2,
+    *,
+    repo_id: str,
+    repo_kind: str,
+    uploader: Callable[..., None] | None,
+) -> None:
+    """Upload selected files and persist the checkpoint only after success."""
     upload = _upload_folder if uploader is None else uploader
     upload(
         root,
@@ -401,11 +481,10 @@ def incremental_publish_changed_shard(
         repo_kind=repo_kind,
         artifact_paths=upload_paths,
     )
-    sources[source_filename] = {"polygon_sha256": current_shard_sha}
+    checkpoint["sources"][source_filename] = {"polygon_sha256": current_shard_sha}
     checkpoint["global_bundle"] = current_bundle
     _checkpoint_path(root).parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(_checkpoint_path(root), checkpoint)
-    return plan
 
 
 def persist_successful_upload(run_dir: Path | str, source: Path) -> None:

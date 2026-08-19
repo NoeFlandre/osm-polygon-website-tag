@@ -38,6 +38,15 @@ def preflight_legacy_refresh(run_dir: Path | str) -> PreflightReport:
             False,
             [f"refresh-card requires card_built or complete state, got {status!r}"],
         )
+    errors = _missing_refresh_files(root)
+    errors.extend(_missing_refresh_directories(root))
+    errors.extend(_unreadable_refresh_shards(root))
+    errors.extend(_invalid_refresh_receipt(root))
+    return PreflightReport(not errors, errors)
+
+
+def _missing_refresh_files(root: Path) -> list[str]:
+    """Return missing manifest and card prerequisites."""
     errors: list[str] = []
     for relative in (
         "manifests/run.json",
@@ -48,23 +57,39 @@ def preflight_legacy_refresh(run_dir: Path | str) -> PreflightReport:
     ):
         if not (root / relative).is_file():
             errors.append(f"missing refresh prerequisite: {relative}")
-    for directory in ("polygons", "analysis_observations", "rejections", "analysis"):
-        if not (root / directory).is_dir():
-            errors.append(f"missing refresh directory: {directory}")
+    return errors
+
+
+def _missing_refresh_directories(root: Path) -> list[str]:
+    """Return missing source-artifact directories."""
+    return [
+        f"missing refresh directory: {directory}"
+        for directory in ("polygons", "analysis_observations", "rejections", "analysis")
+        if not (root / directory).is_dir()
+    ]
+
+
+def _unreadable_refresh_shards(root: Path) -> list[str]:
+    """Return errors for public shards that PyArrow cannot open."""
+    errors: list[str] = []
     for path in root.glob("polygons/*.parquet"):
         try:
             pq.ParquetFile(path)
         except Exception as exc:
             errors.append(f"unreadable public shard {path}: {exc}")
+    return errors
+
+
+def _invalid_refresh_receipt(root: Path) -> list[str]:
+    """Return errors for an optional malformed completion receipt."""
     receipt = root / "manifests" / "completion_receipt.json"
-    if receipt.is_file():
-        try:
-            payload = json.loads(receipt.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                errors.append("completion receipt is not a JSON object")
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            errors.append(f"invalid completion receipt: {exc}")
-    return PreflightReport(not errors, errors)
+    if not receipt.is_file():
+        return []
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return [f"invalid completion receipt: {exc}"]
+    return [] if isinstance(payload, dict) else ["completion receipt is not a JSON object"]
 
 
 def refresh_card_run(run_dir: Path | str) -> FinalizationReport:

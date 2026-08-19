@@ -91,79 +91,123 @@ def compute_card_stats(
     run_dir = Path(run_dir)
     stats = CardStats()
     stats.snapshot_status = _read_snapshot_status(run_dir)
+    _set_density_stats(stats, run_dir, summary=summary, source_names=source_names)
+    public_shards, observation_shards, rejection_shards, analysis_dir = _artifact_paths(
+        run_dir, source_names=source_names
+    )
+    _set_shard_counts(stats, public_shards, observation_shards, rejection_shards)
+    stats.expected_sources_count = _expected_source_count(run_dir, stats.sources_count)
+    _add_public_shard_stats(stats, public_shards)
+    if source_names is None and analysis_dir.exists():
+        _add_analysis_stats(stats, analysis_dir)
+    return stats
+
+
+def _set_density_stats(
+    stats: CardStats,
+    run_dir: Path,
+    *,
+    summary: PolygonDensitySummary | None,
+    source_names: Collection[str] | None,
+) -> None:
+    """Populate map totals from the extracted-text coordinate summary."""
     density = summary or compute_polygon_density_summary(
-        run_dir,
-        source_names=source_names,
-        extracted_text_only=True,
+        run_dir, source_names=source_names, extracted_text_only=True
     )
     stats.polygon_density_h3_resolution = density.h3_resolution
     stats.occupied_h3_cell_count = density.occupied_cell_count
     stats.polygon_density_row_count = density.polygon_row_count
 
-    polygons_dir = run_dir / "polygons"
-    obs_dir = run_dir / "analysis_observations"
-    rej_dir = run_dir / "rejections"
-    analysis_dir = run_dir / "analysis"
-    for d in (polygons_dir, obs_dir, rej_dir):
-        if not d.exists():
-            raise FileNotFoundError(f"missing {d}")
 
-    public_shards = _selected_parquets(polygons_dir, source_names)
-    observation_shards = _selected_parquets(obs_dir, source_names)
-    rejection_shards = _selected_parquets(rej_dir, source_names)
+def _artifact_paths(
+    run_dir: Path, *, source_names: Collection[str] | None
+) -> tuple[list[Path], list[Path], list[Path], Path]:
+    """Resolve and validate the source-scoped artifact directories."""
+    directories = tuple(
+        run_dir / name for name in ("polygons", "analysis_observations", "rejections")
+    )
+    for directory in directories:
+        if not directory.exists():
+            raise FileNotFoundError(f"missing {directory}")
+    public, observations, rejections = (
+        _selected_parquets(directory, source_names) for directory in directories
+    )
+    return public, observations, rejections, run_dir / "analysis"
+
+
+def _set_shard_counts(
+    stats: CardStats,
+    public_shards: Collection[Path],
+    observation_shards: Collection[Path],
+    rejection_shards: Collection[Path],
+) -> None:
+    """Populate row and source counts from selected Parquet metadata."""
     stats.public_row_count = _count_parquets(public_shards)
     stats.observation_count = _count_parquets(observation_shards)
     stats.rejection_count = _count_parquets(rejection_shards)
     stats.sources_count = len(public_shards)
-    expected_path = run_dir / "manifests" / "expected_sources.json"
-    if expected_path.is_file():
-        expected = json.loads(expected_path.read_text(encoding="utf-8"))
-        stats.expected_sources_count = len(expected)
-    else:
-        stats.expected_sources_count = stats.sources_count
 
+
+def _expected_source_count(run_dir: Path, fallback: int) -> int:
+    """Read expected source count when an inventory manifest is available."""
+    expected_path = run_dir / "manifests" / "expected_sources.json"
+    if not expected_path.is_file():
+        return fallback
+    return len(json.loads(expected_path.read_text(encoding="utf-8")))
+
+
+def _add_public_shard_stats(stats: CardStats, public_shards: Collection[Path]) -> None:
+    """Accumulate text totals and per-source row counts."""
     for shard in public_shards:
         _add_text_stats(stats, shard)
         stats.per_source_counts.append(
-            {
-                "source_pbf": f"{shard.stem}.osm.pbf",
-                "row_count": int(pq.ParquetFile(shard).metadata.num_rows),
-            }
+            {"source_pbf": f"{shard.stem}.osm.pbf", "row_count": _parquet_row_count(shard)}
         )
 
-    if source_names is None and analysis_dir.exists():
-        dup_path = analysis_dir / "duplicate_observations.parquet"
-        if dup_path.exists():
-            stats.duplicate_count = int(pq.ParquetFile(dup_path).metadata.num_rows)
-        conf_path = analysis_dir / "conflicting_snapshots.parquet"
-        if conf_path.exists():
-            stats.conflicting_snapshot_count = int(pq.ParquetFile(conf_path).metadata.num_rows)
-        cg_path = analysis_dir / "cells_global.parquet"
-        if cg_path.exists():
-            table = pq.read_table(cg_path).to_pylist()
-            for row in table:
-                level = row.get("level")
-                cell = row.get("cell")
-                count = int(row.get("row_count", 0))
-                if level == "observation":
-                    stats.eight_cell_observation[cell] = count
-                else:
-                    stats.eight_cell_canonical[cell] = count
-            stats.canonical_count = sum(stats.eight_cell_canonical.values())
-        for src_table, dst_attr, _key in (
-            ("top_hostnames_website.parquet", "top_hostnames_website", "website_hostname"),
-            (
-                "top_hostnames_contact_website.parquet",
-                "top_hostnames_contact_website",
-                "contact_website_hostname",
-            ),
-        ):
-            p = analysis_dir / src_table
-            if p.exists():
-                rows = pq.read_table(p).to_pylist()
-                setattr(stats, dst_attr, rows)
 
-    return stats
+def _parquet_row_count(path: Path) -> int:
+    """Read a shard row count without materialising its columns."""
+    return int(pq.ParquetFile(path).metadata.num_rows)
+
+
+def _add_analysis_stats(stats: CardStats, analysis_dir: Path) -> None:
+    """Load optional duplicate, cell, and hostname analysis tables."""
+    stats.duplicate_count = _optional_row_count(analysis_dir / "duplicate_observations.parquet")
+    stats.conflicting_snapshot_count = _optional_row_count(
+        analysis_dir / "conflicting_snapshots.parquet"
+    )
+    _add_cell_stats(stats, analysis_dir / "cells_global.parquet")
+    _add_hostname_stats(stats, analysis_dir)
+
+
+def _optional_row_count(path: Path) -> int:
+    """Return a table's row count, or zero when it was not published."""
+    return _parquet_row_count(path) if path.exists() else 0
+
+
+def _add_cell_stats(stats: CardStats, path: Path) -> None:
+    """Load global H3 counts into their observation/canonical buckets."""
+    if not path.exists():
+        return
+    for row in pq.read_table(path).to_pylist():
+        cell = row.get("cell")
+        count = int(row.get("row_count", 0))
+        if row.get("level") == "observation":
+            stats.eight_cell_observation[cell] = count
+        else:
+            stats.eight_cell_canonical[cell] = count
+    stats.canonical_count = sum(stats.eight_cell_canonical.values())
+
+
+def _add_hostname_stats(stats: CardStats, analysis_dir: Path) -> None:
+    """Load optional top-hostname tables into the card statistics."""
+    for filename, attribute in (
+        ("top_hostnames_website.parquet", "top_hostnames_website"),
+        ("top_hostnames_contact_website.parquet", "top_hostnames_contact_website"),
+    ):
+        path = analysis_dir / filename
+        if path.exists():
+            setattr(stats, attribute, pq.read_table(path).to_pylist())
 
 
 def _read_snapshot_status(run_dir: Path) -> str | None:
@@ -197,8 +241,19 @@ def _count_parquets(paths: Collection[Path]) -> int:
 
 def _add_text_stats(stats: CardStats, shard: Path) -> None:
     parquet = pq.ParquetFile(shard)
-    available = set(parquet.schema_arrow.names)
-    required = {
+    if not _has_text_columns(parquet):
+        return
+    has_retryable_status = False
+    columns = sorted(_required_text_columns())
+    for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
+        has_retryable_status = _add_text_batch(stats, batch) or has_retryable_status
+    if not has_retryable_status:
+        stats.enriched_sources_count += 1
+
+
+def _required_text_columns() -> set[str]:
+    """Return the text columns needed for artifact-derived counters."""
+    return {
         "website",
         "contact_website",
         "website_word_count",
@@ -206,42 +261,55 @@ def _add_text_stats(stats: CardStats, shard: Path) -> None:
         "contact_website_word_count",
         "contact_website_text_status",
     }
-    if not required.issubset(available):
-        return
-    has_retryable_status = False
-    columns = sorted(required)
-    for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
-        website = batch.column("website")
-        website_status = batch.column("website_text_status")
-        website_words = batch.column("website_word_count")
-        contact_website = batch.column("contact_website")
-        contact_status = batch.column("contact_website_text_status")
-        contact_words = batch.column("contact_website_word_count")
-        website_success = _arrow_kernel("equal", website_status, "success")
-        contact_success = _arrow_kernel("equal", contact_status, "success")
-        stats.website_urls_present += _count_true(_arrow_kernel("is_valid", website))
-        stats.contact_website_urls_present += _count_true(
-            _arrow_kernel("is_valid", contact_website)
-        )
-        stats.website_text_success_count += _count_true(website_success)
-        stats.contact_website_text_success_count += _count_true(contact_success)
-        stats.website_text_empty_count += _count_true(
-            _arrow_kernel("equal", website_status, "empty")
-        )
-        stats.contact_website_text_empty_count += _count_true(
-            _arrow_kernel("equal", contact_status, "empty")
-        )
-        stats.website_text_failure_count += _count_invalid_statuses(website_status)
-        stats.contact_website_text_failure_count += _count_invalid_statuses(contact_status)
-        stats.website_total_words += _sum_success_words(website_status, website_words)
-        stats.contact_website_total_words += _sum_success_words(contact_status, contact_words)
-        stats.polygons_with_any_text += _count_true(
-            _arrow_kernel("or_kleene", website_success, contact_success)
-        )
-        has_retryable_status = has_retryable_status or status_has_retryable_value(website_status)
-        has_retryable_status = has_retryable_status or status_has_retryable_value(contact_status)
-    if not has_retryable_status:
-        stats.enriched_sources_count += 1
+
+
+def _has_text_columns(parquet: pq.ParquetFile) -> bool:
+    """Return whether a shard contains the complete enrichment contract."""
+    return _required_text_columns().issubset(set(parquet.schema_arrow.names))
+
+
+def _add_text_batch(stats: CardStats, batch: Any) -> bool:
+    """Accumulate one Arrow batch and report whether it remains retryable."""
+    website = batch.column("website")
+    website_status = batch.column("website_text_status")
+    website_words = batch.column("website_word_count")
+    contact_website = batch.column("contact_website")
+    contact_status = batch.column("contact_website_text_status")
+    contact_words = batch.column("contact_website_word_count")
+    website_success = _arrow_kernel("equal", website_status, "success")
+    contact_success = _arrow_kernel("equal", contact_status, "success")
+    _add_url_counts(stats, website, contact_website)
+    _add_status_counts(stats, website_status, contact_status, website_success, contact_success)
+    stats.website_total_words += _sum_success_words(website_status, website_words)
+    stats.contact_website_total_words += _sum_success_words(contact_status, contact_words)
+    stats.polygons_with_any_text += _count_true(
+        _arrow_kernel("or_kleene", website_success, contact_success)
+    )
+    return status_has_retryable_value(website_status) or status_has_retryable_value(contact_status)
+
+
+def _add_url_counts(stats: CardStats, website: pa.Array, contact_website: pa.Array) -> None:
+    """Count rows carrying each URL field."""
+    stats.website_urls_present += _count_true(_arrow_kernel("is_valid", website))
+    stats.contact_website_urls_present += _count_true(_arrow_kernel("is_valid", contact_website))
+
+
+def _add_status_counts(
+    stats: CardStats,
+    website_status: pa.Array,
+    contact_status: pa.Array,
+    website_success: pa.Array,
+    contact_success: pa.Array,
+) -> None:
+    """Accumulate success, empty, and failure counts for both URL fields."""
+    stats.website_text_success_count += _count_true(website_success)
+    stats.contact_website_text_success_count += _count_true(contact_success)
+    stats.website_text_empty_count += _count_true(_arrow_kernel("equal", website_status, "empty"))
+    stats.contact_website_text_empty_count += _count_true(
+        _arrow_kernel("equal", contact_status, "empty")
+    )
+    stats.website_text_failure_count += _count_invalid_statuses(website_status)
+    stats.contact_website_text_failure_count += _count_invalid_statuses(contact_status)
 
 
 def _count_true(mask: pa.Array) -> int:

@@ -16,9 +16,19 @@ import os
 
 def resolve_hf_token() -> str | None:
     """Return the available HF token or ``None`` if none is configured."""
-    env_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    if env_token:
+    env_token = _environment_token()
+    if env_token is not None:
         return env_token
+    return _stored_token()
+
+
+def _environment_token() -> str | None:
+    """Return the first non-empty supported environment token."""
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+
+def _stored_token() -> str | None:
+    """Read the optional huggingface_hub local credential store."""
     try:
         from huggingface_hub import HfApi
 

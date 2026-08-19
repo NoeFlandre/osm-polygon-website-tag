@@ -57,30 +57,62 @@ def build_publish_plan(
     plan = PublishPlan(repo_id=repo_id, repo_kind=repo_kind)
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     if receipt_path.is_file():
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        plan.artifact_paths = [run_dir / entry["path"] for entry in receipt.get("artifacts", [])]
-        plan.artifact_paths.append(receipt_path)
-        readme = run_dir / "README.md"
-        plan.readme_path = readme if readme.is_file() else None
-        return plan
+        return _receipt_publish_plan(plan, run_dir, receipt_path)
+    _add_directory_artifacts(plan, run_dir)
+    _add_root_artifacts(plan, run_dir)
+    _add_map_artifact(plan, run_dir)
+    _sort_artifacts(plan, run_dir)
+    return plan
+
+
+def _receipt_publish_plan(plan: PublishPlan, run_dir: Path, receipt_path: Path) -> PublishPlan:
+    """Build the strictly receipt-bound artifact list for a final run."""
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    plan.artifact_paths = [run_dir / entry["path"] for entry in receipt.get("artifacts", [])]
+    plan.artifact_paths.append(receipt_path)
+    readme = run_dir / "README.md"
+    plan.readme_path = readme if readme.is_file() else None
+    return plan
+
+
+def _add_directory_artifacts(plan: PublishPlan, run_dir: Path) -> None:
+    """Add non-operational files from each publishable artifact directory."""
     for sub in ("polygons", "analysis_observations", "rejections", "analysis", "manifests"):
-        d = run_dir / sub
-        if not d.exists():
-            continue
-        for p in sorted(d.rglob("*")):
-            if p.is_file() and p.name not in OPERATIONAL_MANIFEST_NAMES:
-                plan.artifact_paths.append(p)
+        plan.artifact_paths.extend(_directory_artifacts(run_dir / sub))
+
+
+def _directory_artifacts(directory: Path) -> list[Path]:
+    """Return publishable files from one artifact directory."""
+    if not directory.exists():
+        return []
+    return [
+        path
+        for path in sorted(directory.rglob("*"))
+        if path.is_file() and path.name not in OPERATIONAL_MANIFEST_NAMES
+    ]
+
+
+def _add_root_artifacts(plan: PublishPlan, run_dir: Path) -> None:
+    """Add public root metadata and remember the README path."""
     for name in ("README.md", "dataset.yaml", "failures.jsonl"):
         path = run_dir / name
-        if path.is_file():
-            plan.artifact_paths.append(path)
-            if name == "README.md":
-                plan.readme_path = path
+        if not path.is_file():
+            continue
+        plan.artifact_paths.append(path)
+        if name == "README.md":
+            plan.readme_path = path
+
+
+def _add_map_artifact(plan: PublishPlan, run_dir: Path) -> None:
+    """Add the generated geographic map when it exists."""
     map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
     if map_path.is_file():
         plan.artifact_paths.append(map_path)
+
+
+def _sort_artifacts(plan: PublishPlan, run_dir: Path) -> None:
+    """Make upload ordering deterministic for reproducible plans."""
     plan.artifact_paths.sort(key=lambda path: path.relative_to(run_dir).as_posix())
-    return plan
 
 
 def publish_to_hf(

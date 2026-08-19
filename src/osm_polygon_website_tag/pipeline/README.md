@@ -64,7 +64,9 @@ transient fetch/extraction failures, then deterministic invalid/unsafe URL
 failures; a shard with durable checkpoint parts is always handled before an
 ordinary retry. Sources without an extraction bundle remain first. Missing
 summaries from older runs are backfilled once at the resume boundary without
-opening any PBF.
+opening any PBF. A completed run explicitly frozen with `snapshot_status: done`
+and a completion receipt is immutable; `run-all` returns without reopening
+sources or retrying enrichment.
 
 `enrich` owns row orchestration, URL resolution, cache use, and final shard
 promotion. `enrichment_checkpoint` owns the source-bound checkpoint metadata,

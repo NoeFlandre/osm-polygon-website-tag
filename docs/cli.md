@@ -16,10 +16,12 @@ development, recovery, and inspection of an existing run.
 | `verify-results` | Check schemas, counts, hashes, and required artifacts without changing the run. |
 | `refresh-card` | Rebuild the local map/card and refresh the completion receipt for an older run. |
 | `finalize-run` | Verify a card-built run and write its completion receipt. |
+| `finalize-snapshot` | Finish an explicitly frozen snapshot without retrying website enrichment. |
 | `publish-plan` | Show the receipt-bound files that would be uploaded. |
 | `publish` | Dry-run publication, or upload with explicit `--apply`. |
 | `create-repo` | Explicitly create a public Hugging Face dataset repository. |
 | `card-stats` | Recompute and print card statistics for a run. |
+| `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
 | `run-all` | Discover, extract, enrich, analyze, verify, and resume a complete inventory. |
 
 All `--run-dir` values point to an existing run directory. The commands that
@@ -66,6 +68,16 @@ enrichment phase is intentionally owned by `run-all`, because it coordinates
 the URL cache, retryable statuses, durable batch checkpoints, and per-source
 upload acknowledgements.
 
+If the owner has decided to stop retrying URL failures, first set
+`snapshot_status` to `done` in the run metadata through the reviewed project
+workflow, then use `finalize-snapshot`. It reuses the existing Parquet shards,
+requires that no text status is still `pending`, builds analysis/card/map
+artifacts, verifies them, and writes the receipt. It preserves recorded
+`fetch_error`, `empty`, `unsafe_url`, and other outcomes; it never calls the
+enrichment or web-fetch stages.
+Once that receipt exists, resuming `run-all` for the same run is an intentional
+no-op: the frozen snapshot is not reopened and no retry or upload is attempted.
+
 ## Publication commands
 
 Inspect a complete run without network writes:
@@ -85,3 +97,31 @@ Hugging Face credential supplied through the environment or local `hf auth
 login`; the CLI never accepts a token flag. `create-repo` is separate and
 explicit, and `--ensure-repo` is rejected unless `run-all` is also in apply
 mode.
+
+## Trackio metrics dashboard
+
+The generated dataset card links to the public
+[Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics).
+Metrics are derived from the same finalized Parquets as the card. The command
+is dry-run by default and does not require Trackio to be installed:
+
+```bash
+uv run --locked osm-polygon-website-tag publish-trackio \
+  --run-dir '<complete-run-dir>'
+```
+
+After separately reviewing the JSON metrics, install the optional Trackio
+client for the explicit remote action and rerun with `--apply`:
+
+```bash
+uv run --with trackio osm-polygon-website-tag publish-trackio \
+  --run-dir '<complete-run-dir>' \
+  --space-id 'NoeFlandre/osm-polygon-website-tag-metrics' \
+  --apply
+```
+
+Apply mode creates or refreshes a public, read-only static Space if needed,
+using Trackio's static SDK. It logs one stable receipt-derived run and sends
+only numeric dataset metrics plus a non-sensitive dataset revision digest.
+Credentials come from Trackio's normal Hugging Face environment/local
+credential resolution; no token flag exists.

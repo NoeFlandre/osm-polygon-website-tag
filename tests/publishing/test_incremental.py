@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import pytest
 
 from osm_polygon_website_tag.publishing.incremental import (
+    _validate_legacy_entry,
     incremental_publish_changed_shard,
     load_upload_checkpoint,
     reconcile_upload_checkpoint,
+    remote_polygon_shard_hashes,
 )
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 
@@ -170,6 +173,29 @@ def test_reconcile_checkpoint_uses_remote_shards_and_hashes(
     )
 
     assert checkpoint["sources"] == {"a.osm.pbf": {"polygon_sha256": remote_sha}}
+
+
+def test_remote_polygon_shard_hashes_reads_only_parquet_lfs_entries(monkeypatch) -> None:
+    import huggingface_hub
+
+    class Api:
+        def __init__(self, *, token: str) -> None:
+            assert token == "token"
+
+        def list_repo_tree(self, *_args, **_kwargs):
+            return [
+                SimpleNamespace(
+                    path="polygons/a.parquet",
+                    lfs=SimpleNamespace(sha256="a" * 64),
+                ),
+                SimpleNamespace(path="polygons/README.md", lfs=None),
+            ]
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+
+    assert remote_polygon_shard_hashes(repo_id="owner/dataset", token="token") == {
+        "a.osm.pbf": "a" * 64
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +448,20 @@ def test_load_upload_checkpoint_rejects_malformed_legacy_entry(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
         load_upload_checkpoint(run_dir)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("schema_version", {}),
+        (42, {}),
+        ("a-latest", {}),
+        ("a-latest.osm.pbf", "not-a-dict"),
+    ],
+)
+def test_validate_legacy_entry_rejects_invalid_shapes(key: object, value: object) -> None:
+    with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
+        _validate_legacy_entry(key, value)
 
 
 def test_incremental_publish_changed_shard_persists_deterministic_checkpoint(

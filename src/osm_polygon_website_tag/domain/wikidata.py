@@ -41,12 +41,9 @@ def classify_wikidata(value: str) -> WikidataClass:
     stripped = value.strip()
     if not stripped:
         return WikidataClass.MALFORMED
-
-    parts = [p for p in _SEP_RE.split(stripped) if p]
-    if len(parts) > 1:
+    if len(_split_values(stripped)) > 1:
         return WikidataClass.MULTIPLE
-
-    if _QID_RE.match(stripped):
+    if _is_qid(stripped):
         return WikidataClass.CANONICAL_QID
 
     return WikidataClass.MALFORMED
@@ -60,8 +57,17 @@ def extract_qid(value: str) -> str | None:
     stripped = value.strip()
     if not stripped:
         return None
-
-    for part in _SEP_RE.split(stripped):
-        if _QID_RE.match(part):
+    for part in _split_values(stripped):
+        if _is_qid(part):
             return part.upper()
     return None
+
+
+def _split_values(value: str) -> list[str]:
+    """Return non-empty Wikidata tokens in source order."""
+    return [part for part in _SEP_RE.split(value) if part]
+
+
+def _is_qid(value: str) -> bool:
+    """Return whether a token is a canonical case-insensitive QID."""
+    return _QID_RE.match(value) is not None

@@ -19,6 +19,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INITIALIZED,
     STATUS_VERIFIED,
     SourceFingerprint,
+    _validate_status_count,
     expected_source_inventory,
     initialise_run,
     load_run,
@@ -211,6 +212,18 @@ def test_update_source_enrichment_status_persists_deterministic_summary(tmp_path
         "contact_website": {"absent": 10},
         "website": {"fetch_error": 2, "success": 8},
     }
+
+
+@pytest.mark.parametrize(
+    ("status", "count"),
+    [(None, 1), ("success", True), ("success", -1), ("success", 1.5)],
+)
+def test_validate_status_count_rejects_malformed_values(
+    status: object,
+    count: object,
+) -> None:
+    with pytest.raises(ValueError, match="non-negative integers"):
+        _validate_status_count(status, count)
 
 
 def test_record_processed_source_dedupes_by_filename(tmp_path: Path) -> None:

@@ -27,11 +27,16 @@ def discover_sources(source_root: Path | str) -> list[Path]:
     sources = sorted(root.rglob("*.osm.pbf"), key=lambda path: path.relative_to(root).as_posix())
     if not sources:
         raise ValueError(f"no .osm.pbf files found below source root: {root}")
+    _reject_duplicate_filenames(sources)
+    return sources
+
+
+def _reject_duplicate_filenames(sources: list[Path]) -> None:
+    """Reject ambiguous basenames before a source inventory is persisted."""
     name_counts = Counter(source.name for source in sources)
     duplicates = sorted(name for name, count in name_counts.items() if count > 1)
     if duplicates:
         raise ValueError(f"duplicate source filenames are unsupported: {duplicates}")
-    return sources
 
 
 def source_inventory_matches_expected(
@@ -49,22 +54,38 @@ def source_bundle_is_complete(
     fingerprint: SourceFingerprint,
 ) -> bool:
     """Return whether one source's three output shards match their contracts."""
-    if manifest is None:
-        return False
-    if any(manifest.get(key) != value for key, value in asdict(fingerprint).items()):
+    if manifest is None or not _manifest_matches_fingerprint(manifest, fingerprint):
         return False
     stem = fingerprint.short_id()
     public_path = run_dir / "polygons" / f"{stem}.parquet"
-    if not public_path.is_file():
+    if not _public_shard_matches(public_path, manifest):
         return False
-    public_parquet = pq.ParquetFile(public_path)
-    if not is_supported_public_polygon_schema(public_parquet.schema_arrow):
-        return False
-    if public_parquet.metadata.num_rows != manifest.get("public_row_count"):
-        return False
-    if hash_shard(public_path) != manifest.get("public_shard_sha256"):
-        return False
+    return _auxiliary_shards_match(run_dir, stem, manifest)
 
+
+def _manifest_matches_fingerprint(
+    manifest: dict[str, Any] | None, fingerprint: SourceFingerprint
+) -> bool:
+    """Check the persisted source identity before opening any shard."""
+    return manifest is not None and all(
+        manifest.get(key) == value for key, value in asdict(fingerprint).items()
+    )
+
+
+def _public_shard_matches(path: Path, manifest: dict[str, Any]) -> bool:
+    """Validate the public shard schema, row count, and digest."""
+    if not path.is_file():
+        return False
+    parquet = pq.ParquetFile(path)
+    return (
+        is_supported_public_polygon_schema(parquet.schema_arrow)
+        and parquet.metadata.num_rows == manifest.get("public_row_count")
+        and hash_shard(path) == manifest.get("public_shard_sha256")
+    )
+
+
+def _auxiliary_shards_match(run_dir: Path, stem: str, manifest: dict[str, Any]) -> bool:
+    """Validate the comparison and rejection shards for one source."""
     paths_and_contracts = (
         (
             run_dir / "analysis_observations" / f"{stem}.parquet",
@@ -80,16 +101,27 @@ def source_bundle_is_complete(
         ),
     )
     for path, schema_contract, count_key, hash_key in paths_and_contracts:
-        if not path.is_file():
-            return False
-        parquet = pq.ParquetFile(path)
-        if not schema_matches(parquet.schema_arrow, schema_contract):
-            return False
-        if parquet.metadata.num_rows != manifest.get(count_key):
-            return False
-        if hash_shard(path) != manifest.get(hash_key):
+        if not _auxiliary_shard_matches(path, schema_contract, manifest, count_key, hash_key):
             return False
     return True
+
+
+def _auxiliary_shard_matches(
+    path: Path,
+    schema_contract: Any,
+    manifest: dict[str, Any],
+    count_key: str,
+    hash_key: str,
+) -> bool:
+    """Validate one non-public shard against its schema and manifest."""
+    if not path.is_file():
+        return False
+    parquet = pq.ParquetFile(path)
+    return (
+        schema_matches(parquet.schema_arrow, schema_contract)
+        and parquet.metadata.num_rows == manifest.get(count_key)
+        and hash_shard(path) == manifest.get(hash_key)
+    )
 
 
 __all__ = [

@@ -28,6 +28,10 @@ from osm_polygon_website_tag.reporting.geographic.layout import (
     POLYGON_DENSITY_ASSET_REL_PATH,
 )
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
+from osm_polygon_website_tag.runtime.config import (
+    DEFAULT_GITHUB_REPO,
+    TRACKIO_DASHBOARD_URL,
+)
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 
@@ -147,29 +151,8 @@ def _render_markdown(stats: CardStats) -> str:
     """Render a concise public-facing card from artifact-derived statistics."""
     combined_words = stats.website_total_words + stats.contact_website_total_words
     status_label = _dataset_status_label(stats)
-    hostname_sections: list[str] = []
-    if stats.top_hostnames_website:
-        hostname_sections.extend(
-            [
-                "",
-                _render_hostnames(
-                    "website",
-                    stats.top_hostnames_website,
-                    hostname_key="website_hostname",
-                ),
-            ]
-        )
-    if stats.top_hostnames_contact_website:
-        hostname_sections.extend(
-            [
-                "",
-                _render_hostnames(
-                    "contact:website",
-                    stats.top_hostnames_contact_website,
-                    hostname_key="contact_website_hostname",
-                ),
-            ]
-        )
+    enrichment_policy = _enrichment_policy(stats)
+    hostname_sections = _hostname_sections(stats)
     parts = [
         "# OSM Polygon Website Dataset",
         "",
@@ -212,16 +195,6 @@ def _render_markdown(stats: CardStats) -> str:
             "Candidate objects that did not produce a usable polygon row |"
         ),
         "",
-        (
-            "The regional PBF ratio is **published source shards / expected source PBFs**. "
-            "The published polygon split is globally canonicalized: at most one row "
-            "per OSM object, selected by version, timestamp, and a stable source-name "
-            "tie-breaker. Each selected row keeps its own website, geometry, and text; "
-            "comparison observations retain source-level records, so the same OSM object "
-            "can appear more than once there. Rejected candidates are excluded from both "
-            "the public and comparison files."
-        ),
-        "",
         "## Website text",
         "",
         "| Tag | URLs | Successful | Empty | Failed | Words |",
@@ -254,6 +227,17 @@ def _render_markdown(stats: CardStats) -> str:
             "1:110m land backdrop provides geographic context."
         ),
         "",
+        "## Links",
+        "",
+        (
+            f"Live metrics: [Trackio dashboard]({TRACKIO_DASHBOARD_URL}); "
+            "it shows this frozen dataset snapshot."
+        ),
+        (
+            "Code and README: "
+            f"[GitHub repository and README]({DEFAULT_GITHUB_REPO.removesuffix('.git')})."
+        ),
+        "",
         *hostname_sections,
         "## Methodology and quality",
         "",
@@ -265,9 +249,7 @@ def _render_markdown(stats: CardStats) -> str:
         "",
         (
             "Text statuses are `absent`, `pending`, `success`, `empty`, "
-            "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
-            "A source is enriched only when every status is `success` or `absent`. "
-            "Failed values retry on later resumptions; successful values are cached."
+            "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. " + enrichment_policy
         ),
         "",
         (
@@ -294,12 +276,7 @@ def _render_markdown(stats: CardStats) -> str:
         "| Column | Type | Nullable | Description |",
         "| --- | --- | :---: | --- |",
     ]
-    for field in POLYGON_PUBLIC_SCHEMA:
-        description = " ".join(column_doc(field.name).split()).replace("|", "\\|")
-        parts.append(
-            f"| `{field.name}` | `{field.type}` | "
-            f"{'yes' if field.nullable else 'no'} | {description} |"
-        )
+    parts.extend(_schema_rows())
     parts.extend(
         [
             "",
@@ -351,6 +328,44 @@ def _render_markdown(stats: CardStats) -> str:
         ]
     )
     return "\n".join(parts) + "\n"
+
+
+def _enrichment_policy(stats: CardStats) -> str:
+    """Describe whether later resumptions may retry failed text fetches."""
+    if stats.snapshot_status == "done":
+        return (
+            "A source is enriched only when every status is `success` or `absent`. "
+            "This snapshot is frozen: failed values remain as recorded and are not "
+            "retried. Successful values are cached."
+        )
+    return (
+        "A source is enriched only when every status is `success` or `absent`. "
+        "Failed values retry on later resumptions; successful values are cached."
+    )
+
+
+def _hostname_sections(stats: CardStats) -> list[str]:
+    """Render optional hostname sections without inventing empty sections."""
+    sections: list[str] = []
+    for label, rows, key in (
+        ("website", stats.top_hostnames_website, "website_hostname"),
+        ("contact:website", stats.top_hostnames_contact_website, "contact_website_hostname"),
+    ):
+        if rows:
+            sections.extend(["", _render_hostnames(label, rows, hostname_key=key)])
+    return sections
+
+
+def _schema_rows() -> list[str]:
+    """Render one Markdown row for every public polygon schema field."""
+    rows: list[str] = []
+    for field in POLYGON_PUBLIC_SCHEMA:
+        description = " ".join(column_doc(field.name).split()).replace("|", "\\|")
+        rows.append(
+            f"| `{field.name}` | `{field.type}` | "
+            f"{'yes' if field.nullable else 'no'} | {description} |"
+        )
+    return rows
 
 
 def _dataset_status_value(stats: CardStats) -> str:

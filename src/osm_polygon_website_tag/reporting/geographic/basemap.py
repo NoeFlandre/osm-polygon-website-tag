@@ -22,14 +22,32 @@ def draw_landmasses(axis: Any, geojson_path: Path = BUNDLED_LAND_PATH) -> None:
         raise FileNotFoundError(f"missing bundled land backdrop: {geojson_path}")
     data = json.loads(geojson_path.read_text(encoding="utf-8"))
     for feature in data.get("features", []):
-        geometry = feature.get("geometry", {})
-        geometry_type = geometry.get("type")
-        coordinates = geometry.get("coordinates")
-        if geometry_type == "Polygon" and coordinates:
-            _draw_polygon(axis, coordinates)
-        elif geometry_type == "MultiPolygon" and coordinates:
-            for polygon in coordinates:
-                _draw_polygon(axis, polygon)
+        _draw_feature(axis, feature)
+
+
+def _draw_feature(axis: Any, feature: dict[str, Any]) -> None:
+    """Draw one GeoJSON Polygon or MultiPolygon feature."""
+    geometry = feature.get("geometry", {})
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates")
+    if geometry_type == "Polygon":
+        _draw_polygon_feature(axis, coordinates)
+    elif geometry_type == "MultiPolygon":
+        _draw_multipolygon_feature(axis, coordinates)
+
+
+def _draw_polygon_feature(axis: Any, coordinates: Any) -> None:
+    """Draw a Polygon feature when it carries coordinate rings."""
+    if coordinates:
+        _draw_polygon(axis, coordinates)
+
+
+def _draw_multipolygon_feature(axis: Any, coordinates: Any) -> None:
+    """Draw every polygon in a MultiPolygon feature."""
+    if not coordinates:
+        return
+    for polygon in coordinates:
+        _draw_polygon(axis, polygon)
 
 
 def _draw_polygon(axis: Any, rings: list[list[list[float]]]) -> None:

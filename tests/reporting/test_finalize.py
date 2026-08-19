@@ -14,7 +14,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.card import build_card
-from osm_polygon_website_tag.reporting.finalize import finalize_run
+from osm_polygon_website_tag.reporting.finalize import finalize_run, finalize_snapshot
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
@@ -29,6 +29,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     record_processed_source,
     snapshot_source_fingerprint,
     transition_status,
+    upsert_run_metadata,
 )
 
 
@@ -128,6 +129,42 @@ def _setup(tmp_path: Path) -> tuple[Path, object]:
     return run_dir, state
 
 
+def _setup_frozen_extraction(
+    tmp_path: Path,
+    *,
+    website_status: str = "success",
+) -> tuple[Path, object]:
+    """Create a complete extracted bundle with an owner freeze marker."""
+    p = tmp_path / "monaco-latest.osm.pbf"
+    p.write_bytes(b"data")
+    fp = snapshot_source_fingerprint(p)
+    run_dir, state = initialise_run(tmp_path, run_id="frozen", expected_sources=[fp])
+    row = _row()
+    if website_status != "success":
+        row["website_text"] = None
+        row["website_word_count"] = None
+        row["website_text_status"] = website_status
+    pub = run_dir / "polygons" / "monaco-latest.parquet"
+    pq.write_table(pa.Table.from_pylist([row], schema=POLYGON_PUBLIC_SCHEMA), pub)
+    obs = run_dir / "analysis_observations" / "monaco-latest.parquet"
+    pq.write_table(pa.Table.from_pylist([], schema=COMPARISON_OBSERVATION_SCHEMA), obs)
+    rej = run_dir / "rejections" / "monaco-latest.parquet"
+    pq.write_table(pa.Table.from_pylist([], schema=REJECTION_SCHEMA), rej)
+    record_processed_source(
+        state,
+        fp,
+        public_row_count=1,
+        observation_row_count=0,
+        rejection_count=0,
+        public_shard_sha256=_sha(pub),
+        observation_shard_sha256=_sha(obs),
+        rejection_shard_sha256=_sha(rej),
+    )
+    transition_status(state, STATUS_EXTRACTING)
+    upsert_run_metadata(state, {"snapshot_status": "done"})
+    return run_dir, state
+
+
 def _sha(path: Path) -> str:
     import hashlib
 
@@ -149,6 +186,36 @@ def test_finalize_run_writes_receipt(tmp_path: Path) -> None:
     assert "polygons/monaco-latest.parquet" in paths
     assert receipt["card_contract_version"] == 1
     assert "assets/geographic_polygon_density.png" in paths
+
+
+def test_finalize_snapshot_finishes_existing_data_without_enrichment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    run_dir, _ = _setup_frozen_extraction(tmp_path, website_status="fetch_error")
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.pipeline.enrich.enrich_polygon_shard",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("enrichment ran")),
+    )
+
+    report = finalize_snapshot(run_dir)
+
+    assert report.ok is True, report.verification.errors
+    state = load_run(run_dir)
+    assert state.metadata["status"] == STATUS_COMPLETE
+    assert state.metadata["snapshot_status"] == "done"
+    assert (run_dir / "analysis" / "cells_global.parquet").is_file()
+    assert (run_dir / "manifests" / "completion_receipt.json").is_file()
+
+
+def test_finalize_snapshot_rejects_unfinished_text_rows(tmp_path: Path) -> None:
+    run_dir, _ = _setup_frozen_extraction(tmp_path, website_status="pending")
+
+    report = finalize_snapshot(run_dir)
+
+    assert report.ok is False
+    assert any("unfinished text statuses" in error for error in report.verification.errors)
+    assert not (run_dir / "manifests" / "completion_receipt.json").exists()
 
 
 def test_finalize_run_transitions_to_complete(tmp_path: Path) -> None:

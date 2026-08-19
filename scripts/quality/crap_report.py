@@ -66,17 +66,43 @@ def _coverage_functions(coverage: dict[str, Any]) -> dict[str, dict[int, float]]
 
 
 def _blocks(blocks: Iterable[Any]) -> Iterable[Any]:
-    """Yield Radon blocks, including methods nested in classes."""
+    """Yield each function or method block once, excluding class aggregates."""
+    seen: set[tuple[str, int]] = set()
     for block in blocks:
+        # ``cc_visit`` returns class aggregates and their methods as separate
+        # blocks.  Classes are not callable units and their methods are already
+        # present at the top level, so scoring both would double-count methods.
+        if block.__class__.__name__ == "Class":
+            continue
+        key = (str(block.name), int(block.lineno))
+        if key in seen:
+            continue
+        seen.add(key)
         yield block
-        yield from getattr(block, "methods", ())
+
+
+def _expand_paths(paths: Sequence[Path]) -> list[Path]:
+    """Expand directory inputs into deterministic Python source paths."""
+    expanded: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        candidates = sorted(path.rglob("*.py")) if path.is_dir() else [path]
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            expanded.append(candidate)
+    return expanded
 
 
 def score_paths(paths: Sequence[Path], coverage: dict[str, Any]) -> list[FunctionScore]:
     """Return deterministic function scores for ``paths``."""
     coverage_by_file = _coverage_functions(coverage)
     scores: list[FunctionScore] = []
-    for path in paths:
+    for path in _expand_paths(paths):
         resolved = path.resolve()
         by_line = coverage_by_file.get(_path_key(resolved), {})
         for block in _blocks(cc_visit(path.read_text(encoding="utf-8"))):

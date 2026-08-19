@@ -13,7 +13,17 @@ from osm_polygon_website_tag.web.text_cache import (
     DEFAULT_COMMIT_BATCH_SIZE,
     CachedText,
     TextCache,
+    _is_locked_error,
+    _retry_locked,
 )
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [("database is locked", True), ("database table is locked", True), ("other error", False)],
+)
+def test_is_locked_error_recognizes_sqlite_lock_messages(message: str, expected: bool) -> None:
+    assert _is_locked_error(sqlite3.OperationalError(message)) is expected
 
 
 def _result(
@@ -208,3 +218,27 @@ def test_record_retries_after_a_transient_writer_lock(tmp_path: Path) -> None:
 
     assert cache.get_reusable("https://example.org", invocation_id="run-2") is not None
     cache.close()
+
+
+def test_retry_locked_retries_with_bounded_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts = iter(
+        [
+            sqlite3.OperationalError("database is locked"),
+            sqlite3.OperationalError("database table is locked"),
+            "ok",
+        ]
+    )
+    delays: list[float] = []
+
+    monkeypatch.setattr("osm_polygon_website_tag.web.text_cache.time.sleep", delays.append)
+
+    def operation() -> str:
+        value = next(attempts)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    result = _retry_locked(operation)
+
+    assert result == "ok"
+    assert delays == [0.1, 0.2]

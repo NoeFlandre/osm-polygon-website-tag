@@ -41,14 +41,18 @@ def atomic_write_file(
     try:
         move(src, dst)
     except BaseException:
-        # Best-effort cleanup of the partial source.
-        try:
-            if src.exists():
-                src.unlink()
-        except OSError:
-            pass
+        _remove_if_present(src)
         raise
     return dst
+
+
+def _remove_if_present(path: Path) -> None:
+    """Best-effort removal used while unwinding an atomic operation."""
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
 
 
 def atomic_promote_bundle(
@@ -65,32 +69,58 @@ def atomic_promote_bundle(
     prevent restoration.
     """
     move = mover if mover is not None else _default_mover
+    token = uuid4().hex
+    _validate_promotions(promotions)
     backups: dict[Path, Path | None] = {}
     promoted: list[Path] = []
-    token = uuid4().hex
-    for staged, _target in promotions:
-        if not staged.is_file():
-            raise FileNotFoundError(staged)
     try:
-        for _staged, target in promotions:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                backup = target.with_name(f".{target.name}.{token}.backup")
-                backups[target] = backup
-                move(target, backup)
-            else:
-                backups[target] = None
+        _backup_targets(promotions, backups, move=move, token=token)
         for staged, target in promotions:
             move(staged, target)
             promoted.append(target)
     except BaseException:
-        for target in promoted:
-            target.unlink(missing_ok=True)
-        for target, backup_path in backups.items():
-            if backup_path is not None and backup_path.exists():
-                _default_mover(backup_path, target)
+        _rollback_promotions(promoted, backups)
         raise
     else:
-        for backup_path in backups.values():
-            if backup_path is not None:
-                backup_path.unlink(missing_ok=True)
+        _remove_backups(backups)
+
+
+def _validate_promotions(promotions: list[tuple[Path, Path]]) -> None:
+    """Reject missing staged files before modifying any target."""
+    for staged, _target in promotions:
+        if not staged.is_file():
+            raise FileNotFoundError(staged)
+
+
+def _backup_targets(
+    promotions: list[tuple[Path, Path]],
+    backups: dict[Path, Path | None],
+    *,
+    move: _Mover,
+    token: str,
+) -> None:
+    """Move existing targets aside and return their restore locations."""
+    for _staged, target in promotions:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            backups[target] = None
+            continue
+        backup = target.with_name(f".{target.name}.{token}.backup")
+        backups[target] = backup
+        move(target, backup)
+
+
+def _rollback_promotions(promoted: list[Path], backups: dict[Path, Path | None]) -> None:
+    """Restore old targets after a failed forward promotion."""
+    for target in promoted:
+        target.unlink(missing_ok=True)
+    for target, backup_path in backups.items():
+        if backup_path is not None and backup_path.exists():
+            _default_mover(backup_path, target)
+
+
+def _remove_backups(backups: dict[Path, Path | None]) -> None:
+    """Remove backups after every staged target has been promoted."""
+    for backup_path in backups.values():
+        if backup_path is not None:
+            backup_path.unlink(missing_ok=True)

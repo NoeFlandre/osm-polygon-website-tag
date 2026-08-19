@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import math
+from bisect import bisect_right
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -98,19 +99,17 @@ def _round_ring(ring_coords: list[list[float]]) -> list[list[float]]:
 
 
 def _area_bucket(area_m2: float) -> str:
-    if area_m2 < 10.0:
-        return "<10m2"
-    if area_m2 < 100.0:
-        return "10-100m2"
-    if area_m2 < 1_000_000.0:
-        return "100m2-1km2"
-    if area_m2 < 10_000_000.0:
-        return "1-10km2"
-    if area_m2 < 100_000_000.0:
-        return "10-100km2"
-    if area_m2 < 1_000_000_000.0:
-        return "100km2-1000km2"
-    return ">=1000km2"
+    limits = (10.0, 100.0, 1_000_000.0, 10_000_000.0, 100_000_000.0, 1_000_000_000.0)
+    labels = (
+        "<10m2",
+        "10-100m2",
+        "100m2-1km2",
+        "1-10km2",
+        "10-100km2",
+        "100km2-1000km2",
+        ">=1000km2",
+    )
+    return labels[bisect_right(limits, area_m2)]
 
 
 def _check_antimeridian(rings: list[list[list[float]]]) -> None:
@@ -129,15 +128,17 @@ def _shapely_to_rounded_multipoly_coords(
     shapely_geom: Polygon | MultiPolygon,
 ) -> list[list[list[list[float]]]]:
     """Walk the Shapely geometry and emit rounded multipolygon coords."""
-    out: list[list[list[list[float]]]] = []
     polys = shapely_geom.geoms if isinstance(shapely_geom, MultiPolygon) else [shapely_geom]
-    for p in polys:
-        rings: list[list[list[float]]] = []
-        rings.append(_round_ring([[x, y] for (x, y) in p.exterior.coords]))
-        for interior in p.interiors:
-            rings.append(_round_ring([[x, y] for (x, y) in interior.coords]))
-        out.append(rings)
-    return out
+    return [_rounded_polygon_rings(p) for p in polys]
+
+
+def _rounded_polygon_rings(polygon: Polygon) -> list[list[list[float]]]:
+    """Return one polygon's rounded exterior and interior rings."""
+    rings = [_round_ring([[x, y] for (x, y) in polygon.exterior.coords])]
+    rings.extend(
+        _round_ring([[x, y] for (x, y) in interior.coords]) for interior in polygon.interiors
+    )
+    return rings
 
 
 def _largest_polygon(mp: MultiPolygon) -> Polygon:
@@ -150,67 +151,98 @@ def _compute_geodesic_area_m2(shapely_geom: Polygon | MultiPolygon) -> float:
         raise GeometryRejection(kind="empty_geometry", message="empty geometry")
     geod = pyproj.Geod(ellps="WGS84")
     polys = shapely_geom.geoms if isinstance(shapely_geom, MultiPolygon) else [shapely_geom]
-    net_total = 0.0
-    for p in polys:
-        outer_area, _ = geod.geometry_area_perimeter(p.exterior)
-        if not math.isfinite(outer_area):
-            raise GeometryRejection(
-                kind="non_finite_area",
-                message=f"outer-ring geodesic area is not finite: {outer_area!r}",
-            )
-        inner_total = 0.0
-        for interior in p.interiors:
-            a, _ = geod.geometry_area_perimeter(interior)
-            if not math.isfinite(a):
-                raise GeometryRejection(
-                    kind="non_finite_area",
-                    message=f"inner-ring geodesic area is not finite: {a!r}",
-                )
-            inner_total += abs(a)
-        net = abs(outer_area) - inner_total
-        if not math.isfinite(net):
-            raise GeometryRejection(
-                kind="non_finite_area",
-                message=f"net geodesic area is not finite: {net!r}",
-            )
-        if net < 0.0:
-            raise GeometryRejection(
-                kind="degenerate_geometry",
-                message=f"net geodesic area is negative: {net!r}",
-            )
-        net_total += net
-    return float(net_total)
+    return float(sum(_polygon_geodesic_area(geod, polygon) for polygon in polys))
+
+
+def _polygon_geodesic_area(geod: pyproj.Geod, polygon: Polygon) -> float:
+    """Return one polygon's validated net geodesic area."""
+    outer_area = _checked_ring_area(geod, polygon.exterior, "outer-ring")
+    inner_total = sum(
+        abs(_checked_ring_area(geod, interior, "inner-ring")) for interior in polygon.interiors
+    )
+    net = abs(outer_area) - inner_total
+    if not math.isfinite(net):
+        raise GeometryRejection(
+            kind="non_finite_area",
+            message=f"net geodesic area is not finite: {net!r}",
+        )
+    if net < 0.0:
+        raise GeometryRejection(
+            kind="degenerate_geometry",
+            message=f"net geodesic area is negative: {net!r}",
+        )
+    return net
+
+
+def _checked_ring_area(geod: pyproj.Geod, ring: LinearRing, label: str) -> float:
+    """Compute one ring area and reject non-finite results."""
+    area, _ = geod.geometry_area_perimeter(ring)
+    if not math.isfinite(area):
+        raise GeometryRejection(
+            kind="non_finite_area",
+            message=f"{label} geodesic area is not finite: {area!r}",
+        )
+    return area
 
 
 def _compute_centroid_lonlat(shapely_geom: Polygon | MultiPolygon) -> tuple[float, float]:
     """Lambert-azimuthal-equal-area centroid of ``shapely_geom`` in WGS84."""
-    if isinstance(shapely_geom, MultiPolygon):
-        anchor_poly = _largest_polygon(shapely_geom)
-    else:
-        anchor_poly = shapely_geom
+    anchor_poly = _centroid_anchor(shapely_geom)
+    lon0, lat0 = _outer_ring_barycenter(anchor_poly)
+    return _projected_centroid(shapely_geom, lon0, lat0)
+
+
+def _centroid_anchor(shapely_geom: Polygon | MultiPolygon) -> Polygon:
+    """Choose and validate the polygon used to anchor the centroid projection."""
+    anchor_poly = (
+        _largest_polygon(shapely_geom) if isinstance(shapely_geom, MultiPolygon) else shapely_geom
+    )
     if anchor_poly.is_empty:
         raise GeometryRejection(kind="degenerate_geometry", message="anchor polygon is empty")
-    lons, lats = anchor_poly.exterior.coords.xy
-    if len(list(lons)) < 4:
+    if len(anchor_poly.exterior.coords) < 4:
         raise GeometryRejection(
             kind="degenerate_geometry", message="anchor outer ring has fewer than 4 coordinates"
         )
+    return anchor_poly
+
+
+def _outer_ring_barycenter(anchor_poly: Polygon) -> tuple[float, float]:
+    """Return the perimeter-weighted outer-ring barycenter."""
     geod = pyproj.Geod(ellps="WGS84")
-    outer_area_signed, _ = geod.geometry_area_perimeter(anchor_poly.exterior)
+    _validate_outer_ring_area(geod, anchor_poly)
+    pts = list(zip(*anchor_poly.exterior.coords.xy, strict=True))
+    sum_lon, sum_lat, sum_w = _weighted_ring_sums(geod, pts)
+    if sum_w == 0.0 or not math.isfinite(sum_w):
+        raise GeometryRejection(
+            kind="non_finite_area",
+            message="outer-ring barycenter weight sum is zero or non-finite",
+        )
+    return sum_lon / sum_w, sum_lat / sum_w
+
+
+def _validate_outer_ring_area(geod: pyproj.Geod, polygon: Polygon) -> None:
+    """Reject an empty, zero-area, or non-finite outer ring."""
+    outer_area_signed, _ = geod.geometry_area_perimeter(polygon.exterior)
     if outer_area_signed == 0.0 or not math.isfinite(outer_area_signed):
         raise GeometryRejection(
             kind="non_finite_area",
             message=f"outer-ring geodesic area is not finite: {outer_area_signed!r}",
         )
 
+
+def _weighted_ring_sums(
+    geod: pyproj.Geod,
+    points: list[tuple[float, float]],
+) -> tuple[float, float, float]:
+    """Return longitude, latitude, and perimeter-weight sums."""
+
     # Compute area-weighted outer-ring barycenter in WGS84.
-    pts = list(zip(lons, lats))  # noqa: B905
     sum_lon = 0.0
     sum_lat = 0.0
     sum_w = 0.0
-    for i in range(len(pts) - 1):
-        lon1, lat1 = pts[i]
-        lon2, lat2 = pts[i + 1]
+    for i in range(len(points) - 1):
+        lon1, lat1 = points[i]
+        lon2, lat2 = points[i + 1]
         _, _, dx = geod.inv(lon1, lat1, lon2, lat2)
         weight = abs(dx)
         if weight == 0.0 or not math.isfinite(weight):
@@ -218,13 +250,15 @@ def _compute_centroid_lonlat(shapely_geom: Polygon | MultiPolygon) -> tuple[floa
         sum_lon += (lon1 + lon2) / 2.0 * weight
         sum_lat += (lat1 + lat2) / 2.0 * weight
         sum_w += weight
-    if sum_w == 0.0 or not math.isfinite(sum_w):
-        raise GeometryRejection(
-            kind="non_finite_area",
-            message="outer-ring barycenter weight sum is zero or non-finite",
-        )
-    lon0 = sum_lon / sum_w
-    lat0 = sum_lat / sum_w
+    return sum_lon, sum_lat, sum_w
+
+
+def _projected_centroid(
+    shapely_geom: Polygon | MultiPolygon,
+    lon0: float,
+    lat0: float,
+) -> tuple[float, float]:
+    """Project a geometry to its local equal-area CRS and return its centroid."""
     proj_string = f"+proj=laea +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +ellps=WGS84"
     crs = pyproj.CRS.from_proj4(proj_string)
 
@@ -246,49 +280,13 @@ def _compute_centroid_lonlat(shapely_geom: Polygon | MultiPolygon) -> tuple[floa
 
 def geometry_from_geojson(raw_geojson: str) -> PolygonGeometry:
     """Build a :class:`PolygonGeometry` from serialized GeoJSON."""
-    parsed = json.loads(raw_geojson)
-
-    if parsed.get("type") == "Polygon":
-        rings = parsed["coordinates"]
-        _check_antimeridian(rings)
-        shapely_geom: Polygon | MultiPolygon = orient(Polygon(rings[0], rings[1:]), sign=1.0)
-    elif parsed.get("type") == "MultiPolygon":
-        for poly in parsed["coordinates"]:
-            _check_antimeridian(poly)
-        shapely_geom = orient(
-            MultiPolygon([Polygon(p[0], p[1:]) for p in parsed["coordinates"]]),
-            sign=1.0,
-        )
-    else:
-        raise GeometryRejection(
-            kind="unknown_geometry_type",
-            message=f"unsupported geometry type: {parsed.get('type')!r}",
-        )
-
-    if shapely_geom.is_empty:
-        raise GeometryRejection(kind="empty_geometry", message="empty geometry")
-    if not shapely_geom.is_valid:
-        repaired = shapely_geom.buffer(0)
-        if repaired.is_empty:
-            raise GeometryRejection(
-                kind="degenerate_geometry",
-                message="geometry could not be repaired",
-            )
-        shapely_geom = repaired
-
-    rebuilt = _shapely_to_rounded_multipoly_coords(shapely_geom)
-    if len(rebuilt) == 1:
-        geometry_obj: dict[str, Any] = {"type": "Polygon", "coordinates": rebuilt[0]}
-    else:
-        geometry_obj = {"type": "MultiPolygon", "coordinates": rebuilt}
-    geometry_str = json.dumps(geometry_obj, sort_keys=True, separators=(",", ":"))
-
+    shapely_geom = _parse_geojson_geometry(json.loads(raw_geojson))
+    shapely_geom = _repair_geometry(shapely_geom)
+    geometry_str = _serialise_geometry(shapely_geom)
     minx, miny, maxx, maxy = shapely_geom.bounds
     bbox = [_round_coord(minx), _round_coord(miny), _round_coord(maxx), _round_coord(maxy)]
-
     area_m2 = _compute_geodesic_area_m2(shapely_geom)
     area_km2 = area_m2 / 1_000_000.0
-
     centroid_lon, centroid_lat = _compute_centroid_lonlat(shapely_geom)
     centroid_lat_r = _round_coord(centroid_lat)
     centroid_lon_r = _round_coord(centroid_lon)
@@ -310,6 +308,48 @@ def geometry_from_geojson(raw_geojson: str) -> PolygonGeometry:
     )
 
 
+def _parse_geojson_geometry(parsed: Any) -> Polygon | MultiPolygon:
+    """Parse and orient a Polygon or MultiPolygon GeoJSON object."""
+    if parsed.get("type") == "Polygon":
+        rings = parsed["coordinates"]
+        _check_antimeridian(rings)
+        return orient(Polygon(rings[0], rings[1:]), sign=1.0)
+    if parsed.get("type") == "MultiPolygon":
+        coordinates = parsed["coordinates"]
+        for poly in coordinates:
+            _check_antimeridian(poly)
+        return orient(MultiPolygon([Polygon(p[0], p[1:]) for p in coordinates]), sign=1.0)
+    raise GeometryRejection(
+        kind="unknown_geometry_type",
+        message=f"unsupported geometry type: {parsed.get('type')!r}",
+    )
+
+
+def _repair_geometry(shapely_geom: Polygon | MultiPolygon) -> Polygon | MultiPolygon:
+    """Reject empty geometries and repair invalid ones with Shapely."""
+    if shapely_geom.is_empty:
+        raise GeometryRejection(kind="empty_geometry", message="empty geometry")
+    if not shapely_geom.is_valid:
+        repaired = shapely_geom.buffer(0)
+        if repaired.is_empty:
+            raise GeometryRejection(
+                kind="degenerate_geometry",
+                message="geometry could not be repaired",
+            )
+        shapely_geom = repaired
+    return shapely_geom
+
+
+def _serialise_geometry(shapely_geom: Polygon | MultiPolygon) -> str:
+    """Round and serialise a Shapely polygon geometry deterministically."""
+    rebuilt = _shapely_to_rounded_multipoly_coords(shapely_geom)
+    if len(rebuilt) == 1:
+        geometry_obj: dict[str, Any] = {"type": "Polygon", "coordinates": rebuilt[0]}
+    else:
+        geometry_obj = {"type": "MultiPolygon", "coordinates": rebuilt}
+    return json.dumps(geometry_obj, sort_keys=True, separators=(",", ":"))
+
+
 def geometry_from_area(area: osmium.osm.Area) -> PolygonGeometry:
     """Build a :class:`PolygonGeometry` from an osmium ``Area``."""
     factory = osmium.geom.GeoJSONFactory()
@@ -324,24 +364,33 @@ def compute_polygon_area_m2(ring: list[list[float]]) -> float:
     ``LinearRing``. Rings with fewer than three distinct points return
     ``0.0``. Non-finite results are coerced to ``0.0``.
     """
-    if len(ring) < 4:
-        return 0.0
-    if (
-        abs(ring[0][0] - ring[-1][0]) < 1e-12
-        and abs(ring[0][1] - ring[-1][1]) < 1e-12
-        and len(ring) > 1
-    ):
-        pts = ring[:-1]
-    else:
-        pts = ring
+    pts = _open_ring_points(ring)
     if len(pts) < 3:
         return 0.0
     shapely_ring = LinearRing([(p[0], p[1]) for p in pts])
     geod = pyproj.Geod(ellps="WGS84")
     try:
-        area, _ = geod.geometry_area_perimeter(shapely_ring)
+        return _finite_abs_area(geod, shapely_ring)
     except Exception:
         return 0.0
+
+
+def _open_ring_points(ring: list[list[float]]) -> list[list[float]]:
+    """Return a ring without its repeated closing point when present."""
+    if len(ring) < 4:
+        return []
+    if (
+        abs(ring[0][0] - ring[-1][0]) < 1e-12
+        and abs(ring[0][1] - ring[-1][1]) < 1e-12
+        and len(ring) > 1
+    ):
+        return ring[:-1]
+    return ring
+
+
+def _finite_abs_area(geod: pyproj.Geod, ring: LinearRing) -> float:
+    """Return a finite absolute geodesic ring area."""
+    area, _ = geod.geometry_area_perimeter(ring)
     if not math.isfinite(area):
         return 0.0
     return float(abs(area))

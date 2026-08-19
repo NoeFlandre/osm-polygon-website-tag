@@ -9,11 +9,14 @@ import tempfile
 import osmium
 import osmium.osm
 import pytest
+from shapely.geometry import Polygon
 
 import osm_polygon_website_tag.domain.geometry as geometry_module
 from osm_polygon_website_tag.domain.geometry import (
     CENTROID_KIND,
+    GeometryRejection,
     PolygonGeometry,
+    _repair_geometry,
     compute_polygon_area_m2,
     geometry_from_area,
 )
@@ -90,6 +93,16 @@ def test_geometry_from_geojson_returns_public_metrics() -> None:
     assert result.area_m2 > 0
     assert result.area_bucket == ">=1000km2"
     assert result.bbox == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_repair_geometry_rejects_empty_and_repairs_invalid_shapes() -> None:
+    with pytest.raises(GeometryRejection, match="empty geometry"):
+        _repair_geometry(Polygon())
+
+    repaired = _repair_geometry(Polygon([(0, 0), (1, 1), (0, 1), (1, 0), (0, 0)]))
+
+    assert repaired.is_valid
+    assert not repaired.is_empty
 
 
 def test_geometry_from_area_returns_polygon_for_single_polygon_relation() -> None:

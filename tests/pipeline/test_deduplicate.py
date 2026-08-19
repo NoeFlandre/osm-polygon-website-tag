@@ -7,11 +7,15 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from tests.fixtures.polygon_shards import legacy_polygon_row
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
-from osm_polygon_website_tag.pipeline.deduplicate import deduplicate_public_shards
+from osm_polygon_website_tag.pipeline.deduplicate import (
+    _validate_source_names,
+    deduplicate_public_shards,
+)
 
 SOURCE_NAMES = ("alpha-latest.osm.pbf", "beta-latest.osm.pbf")
 
@@ -139,3 +143,14 @@ def test_deduplicate_public_shards_uses_source_name_for_exact_ties(tmp_path: Pat
     assert pq.read_table(tmp_path / "canonical" / "beta-latest.parquet").num_rows == 0
     assert not (tmp_path / "canonical" / "partitions").exists()
     assert not (tmp_path / "canonical" / "duckdb-temp").exists()
+
+
+@pytest.mark.parametrize(
+    "names",
+    [(), ("alpha-latest.osm.pbf", "alpha-latest.osm.pbf"), ("alpha-latest.parquet",)],
+)
+def test_validate_source_names_rejects_invalid_inventories(
+    names: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValueError, match="source_names"):
+        _validate_source_names(names)

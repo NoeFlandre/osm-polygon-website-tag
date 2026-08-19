@@ -26,8 +26,9 @@ State machine
     INITIALIZED -> EXTRACTING -> EXTRACTED -> ENRICHING -> ENRICHED
         -> ANALYZED -> CARD_BUILT -> VERIFIED -> COMPLETE
 
-    COMPLETE -> ENRICHING is the sole migration path for an older public
-    schema or retryable website-text failures.
+    COMPLETE -> ENRICHING remains available for an older public schema or
+    retryable website-text failures. A completed run with
+    ``snapshot_status=done`` and a completion receipt is frozen instead.
 
 The run state is read from ``run.json`` via :func:`load_run`. Only
 explicit reviewed mutations advance the state. The read-only
@@ -163,21 +164,37 @@ def _validated_source_entries(raw: object, *, label: str) -> list[dict[str, Any]
     entries: list[dict[str, Any]] = []
     seen_filenames: set[str] = set()
     for index, raw_entry in enumerate(raw):
-        if not isinstance(raw_entry, dict):
-            raise ValueError(f"{label}[{index}] must be a JSON object")
-        entry = cast(dict[str, Any], raw_entry)
-        filename = entry.get("filename")
-        if not isinstance(filename, str) or not filename:
-            raise ValueError(f"{label}[{index}].filename must be a non-empty string")
+        entry = _validated_source_entry(raw_entry, label=label, index=index)
+        filename = str(entry["filename"])
         if filename in seen_filenames:
             raise ValueError(f"{label} contains duplicate filename: {filename!r}")
-        for field_name in ("size_bytes", "mtime_ns"):
-            value = entry.get(field_name)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"{label}[{index}].{field_name} must be a non-bool integer")
         seen_filenames.add(filename)
         entries.append(entry)
     return entries
+
+
+def _validated_source_entry(raw_entry: object, *, label: str, index: int) -> dict[str, Any]:
+    """Validate one source-manifest entry's required identity fields."""
+    if not isinstance(raw_entry, dict):
+        raise ValueError(f"{label}[{index}] must be a JSON object")
+    entry = cast(dict[str, Any], raw_entry)
+    _validate_source_filename(entry.get("filename"), label=label, index=index)
+    _validate_source_numeric_fields(entry, label=label, index=index)
+    return entry
+
+
+def _validate_source_filename(value: object, *, label: str, index: int) -> None:
+    """Validate a non-empty source filename field."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label}[{index}].filename must be a non-empty string")
+
+
+def _validate_source_numeric_fields(entry: dict[str, Any], *, label: str, index: int) -> None:
+    """Validate the lightweight source size and mtime fields."""
+    for field_name in ("size_bytes", "mtime_ns"):
+        value = entry.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{label}[{index}].{field_name} must be a non-bool integer")
 
 
 def _source_fingerprint_payload(fp: SourceFingerprint) -> dict[str, int | str]:
@@ -325,22 +342,38 @@ def record_processed_source(
     shards, never for the source PBF itself.
     """
     entry: dict[str, Any] = _source_fingerprint_payload(fp)
-    entry["public_row_count"] = public_row_count
-    entry["observation_row_count"] = observation_row_count
-    entry["rejection_count"] = rejection_count
-    entry["status"] = status
-    if started_at is not None:
-        entry["started_at"] = started_at
-    if finished_at is not None:
-        entry["finished_at"] = finished_at
-    if public_shard_sha256 is not None:
-        entry["public_shard_sha256"] = public_shard_sha256
-    if observation_shard_sha256 is not None:
-        entry["observation_shard_sha256"] = observation_shard_sha256
-    if rejection_shard_sha256 is not None:
-        entry["rejection_shard_sha256"] = rejection_shard_sha256
+    entry.update(
+        {
+            "public_row_count": public_row_count,
+            "observation_row_count": observation_row_count,
+            "rejection_count": rejection_count,
+            "status": status,
+        }
+    )
+    _add_optional_source_metadata(
+        entry,
+        started_at=started_at,
+        finished_at=finished_at,
+        public_shard_sha256=public_shard_sha256,
+        observation_shard_sha256=observation_shard_sha256,
+        rejection_shard_sha256=rejection_shard_sha256,
+    )
     state.sources[fp.filename] = entry
     _write_sources_manifest(state)
+
+
+def _add_optional_source_metadata(entry: dict[str, Any], **values: str | None) -> None:
+    """Add present timing and output-digest fields without writing nulls."""
+    key_map = {
+        "started_at": "started_at",
+        "finished_at": "finished_at",
+        "public_shard_sha256": "public_shard_sha256",
+        "observation_shard_sha256": "observation_shard_sha256",
+        "rejection_shard_sha256": "rejection_shard_sha256",
+    }
+    for name, value in values.items():
+        if value is not None:
+            entry[key_map[name]] = value
 
 
 def hash_shard(shard_path: Path) -> str:
@@ -418,20 +451,30 @@ def _normalise_enrichment_status_counts(
     """Return a validated, key-sorted copy of status counts."""
     normalised: dict[str, dict[str, int]] = {}
     for field_name, counts in sorted(status_counts.items()):
-        if not isinstance(field_name, str) or not isinstance(counts, Mapping):
-            raise ValueError("enrichment status counts must be string-keyed mappings")
-        field_counts: dict[str, int] = {}
-        for status, count in sorted(counts.items()):
-            if (
-                not isinstance(status, str)
-                or isinstance(count, bool)
-                or not isinstance(count, int)
-                or count < 0
-            ):
-                raise ValueError("enrichment status counts must contain non-negative integers")
-            field_counts[status] = count
-        normalised[field_name] = field_counts
+        normalised[field_name] = _normalise_status_field(field_name, counts)
     return normalised
+
+
+def _normalise_status_field(field_name: object, counts: object) -> dict[str, int]:
+    """Validate one enrichment field's status counter mapping."""
+    if not isinstance(field_name, str) or not isinstance(counts, Mapping):
+        raise ValueError("enrichment status counts must be string-keyed mappings")
+    field_counts: dict[str, int] = {}
+    for status, count in counts.items():
+        _validate_status_count(status, count)
+        field_counts[str(status)] = cast(int, count)
+    return dict(sorted(field_counts.items()))
+
+
+def _validate_status_count(status: object, count: object) -> None:
+    """Validate one non-negative integer status count."""
+    if (
+        not isinstance(status, str)
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count < 0
+    ):
+        raise ValueError("enrichment status counts must contain non-negative integers")
 
 
 def source_is_unchanged(state: RunState, fp: SourceFingerprint) -> bool:
@@ -469,16 +512,29 @@ def source_inventory_matches(run_dir: Path) -> bool:
         run_dir / "manifests" / "sources.json", label="sources manifest"
     )
     actual = _validated_source_entries(actual_raw, label="sources manifest")
+    return _source_inventory_entries_match(expected, actual)
+
+
+def _source_inventory_entries_match(
+    expected: list[dict[str, Any]], actual: list[dict[str, Any]]
+) -> bool:
+    """Compare source identity fields independent of enrichment metadata."""
     actual_by_name = {e["filename"]: e for e in actual}
-    if set(actual_by_name) != {e["filename"] for e in expected}:
+    expected_by_name = {e["filename"]: e for e in expected}
+    if set(actual_by_name) != set(expected_by_name):
         return False
-    for entry in expected:
-        a = actual_by_name[entry["filename"]]
-        if a["size_bytes"] != entry["size_bytes"]:
-            return False
-        if a["mtime_ns"] != entry["mtime_ns"]:
-            return False
-    return True
+    return all(
+        _source_identity_matches(actual_by_name[name], expected_by_name[name])
+        for name in expected_by_name
+    )
+
+
+def _source_identity_matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Compare filename-independent size and mtime identity fields."""
+    return (
+        actual["size_bytes"] == expected["size_bytes"]
+        and actual["mtime_ns"] == expected["mtime_ns"]
+    )
 
 
 __all__ = [

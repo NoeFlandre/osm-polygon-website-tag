@@ -146,6 +146,15 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
     assert "https://download.geofabrik.de/" in content
+    assert "Live metrics: [Trackio dashboard]" in content
+    assert "https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics" in content
+    assert "Live metrics: [Trackio dashboard](https://huggingface.co/spaces/" in content
+    assert "NoeFlandre/osm-polygon-website-tag-metrics);" in content
+    assert ".hf.space" not in content
+    assert (
+        "[GitHub repository and README](https://github.com/NoeFlandre/osm-polygon-website-tag)"
+        in content
+    )
     assert "Website text is third-party content" in content
     assert "grants no additional reuse rights" in content
     assert "Check the source site's terms or license" in content
@@ -202,8 +211,8 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     assert "| Comparison observations | 0 |" in content
     assert "| What it means |" in content
     assert "`website` OR `contact:website`" in content
-    assert "published polygon split is globally canonicalized" in content
-    assert "at most one row per OSM object" in content
+    assert "published polygon split is globally canonicalized" not in content
+    assert "at most one row per OSM object" not in content
     assert "`deduplication_summary.json`" in content
     assert "| `polygon_id` |" in content
     assert "| `contact_website` |" in content
@@ -226,6 +235,8 @@ def test_build_card_renders_done_snapshot_without_zero_canonical_metric(tmp_path
     assert "Regional PBFs included" in content
     assert "expected source PBFs" in content
     assert "globally routable public IP addresses" in content
+    assert "This snapshot is frozen" in content
+    assert "Failed values retry on later resumptions" not in content
 
 
 def test_build_card_links_detailed_analysis_instead_of_embedding_it(tmp_path: Path) -> None:

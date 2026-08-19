@@ -64,18 +64,47 @@ def deduplicate_public_shards(
     """
     source_dir = Path(source_dir)
     output_dir = Path(output_dir)
-    input_paths = sorted(source_dir.glob("*.parquet"))
-    if not input_paths:
-        raise FileNotFoundError(f"no public Parquet shards under {source_dir}")
-    if output_dir.exists():
-        raise FileExistsError(f"canonical output already exists: {output_dir}")
-
+    input_paths = _validate_dedup_inputs(source_dir, output_dir)
     names = _normalise_source_names(source_names, input_paths)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
     con: duckdb.DuckDBPyConnection | None = None
     try:
-        con = duckdb.connect()
+        con, temp_dir = _open_dedup_connection(source_dir, staging_dir)
+        _validate_source_names_in_data(con, names)
+        _create_canonical_view(con)
+        summary = _dedup_summary(con, names)
+        _write_canonical_shards(con, staging_dir, names)
+        _validate_canonical_shards(staging_dir, names)
+        con.close()
+        con = None
+        _remove_tree(temp_dir)
+        staging_dir.rename(output_dir)
+        return summary
+    finally:
+        if con is not None:
+            with contextlib.suppress(Exception):
+                con.close()
+        with contextlib.suppress(OSError):
+            _remove_tree(staging_dir)
+
+
+def _validate_dedup_inputs(source_dir: Path, output_dir: Path) -> list[Path]:
+    """Validate immutable input shards and fail closed on an existing output."""
+    input_paths = sorted(source_dir.glob("*.parquet"))
+    if not input_paths:
+        raise FileNotFoundError(f"no public Parquet shards under {source_dir}")
+    if output_dir.exists():
+        raise FileExistsError(f"canonical output already exists: {output_dir}")
+    return input_paths
+
+
+def _open_dedup_connection(
+    source_dir: Path, staging_dir: Path
+) -> tuple[duckdb.DuckDBPyConnection, Path]:
+    """Open a bounded DuckDB connection over the immutable input glob."""
+    con = duckdb.connect()
+    try:
         con.execute("PRAGMA threads=4")
         temp_dir = staging_dir / "duckdb-temp"
         temp_dir.mkdir()
@@ -88,100 +117,106 @@ def deduplicate_public_shards(
             SELECT * FROM read_parquet('{glob}')
             """  # noqa: S608
         )
-        actual_sources = {
-            str(row[0])
-            for row in con.execute("SELECT DISTINCT source_pbf FROM source_rows").fetchall()
-            if row[0] is not None
-        }
-        unknown_sources = actual_sources - set(names)
-        if unknown_sources:
-            raise ValueError(
-                "source shards contain unlisted source PBFs: " + ", ".join(sorted(unknown_sources))
-            )
-        con.execute(
-            """
-            CREATE TEMP VIEW canonical_rows AS
-            SELECT * EXCLUDE (row_number) FROM (
-              SELECT *, ROW_NUMBER() OVER (
-                PARTITION BY osm_type, osm_id
-                ORDER BY osm_version DESC, osm_timestamp DESC, source_pbf ASC, polygon_id ASC
-              ) AS row_number
-              FROM source_rows
-            )
-            WHERE row_number = 1
-            """
-        )
-
-        input_count = _scalar_count(con, "SELECT COUNT(*) FROM source_rows")
-        output_count = _scalar_count(con, "SELECT COUNT(*) FROM canonical_rows")
-        duplicate_group_count = _scalar_count(
-            con,
-            """
-            SELECT COUNT(*) FROM (
-              SELECT osm_type, osm_id FROM source_rows
-              GROUP BY osm_type, osm_id HAVING COUNT(*) > 1
-            )
-            """,
-        )
-        website_conflict_group_count = _scalar_count(
-            con,
-            _conflict_query("website"),
-        )
-        contact_conflict_group_count = _scalar_count(
-            con,
-            _conflict_query("contact_website"),
-        )
-        output_counts = {
-            str(source): int(count)
-            for source, count in con.execute(
-                """
-                SELECT source_pbf, COUNT(*)::BIGINT
-                FROM canonical_rows
-                GROUP BY source_pbf
-                ORDER BY source_pbf
-                """
-            ).fetchall()
-        }
-
-        partition_dir = staging_dir / "partitions"
-        escaped_partition_dir = str(partition_dir).replace("'", "''")
-        con.execute(
-            f"""
-            COPY (
-              SELECT * FROM canonical_rows
-              ORDER BY osm_type, osm_id
-            ) TO '{escaped_partition_dir}'
-            (FORMAT PARQUET, COMPRESSION 'snappy', PARTITION_BY (source_pbf),
-             WRITE_PARTITION_COLUMNS TRUE)
-            """  # noqa: S608
-        )
-        _materialise_partitions(partition_dir, staging_dir, names)
-        for source_name in names:
-            destination = staging_dir / _parquet_name(source_name)
-            schema = pq.read_schema(destination)
-            if not schema_matches(schema, POLYGON_PUBLIC_SCHEMA):
-                raise ValueError(f"canonical shard has unexpected schema: {destination}")
-
+    except BaseException:
         con.close()
-        con = None
-        _remove_tree(temp_dir)
-        staging_dir.rename(output_dir)
-        return DeduplicationSummary(
-            input_row_count=input_count,
-            output_row_count=output_count,
-            duplicate_group_count=duplicate_group_count,
-            duplicate_extra_row_count=input_count - output_count,
-            website_conflict_group_count=website_conflict_group_count,
-            contact_website_conflict_group_count=contact_conflict_group_count,
-            source_count=len(names),
-            output_counts_by_source={source: output_counts.get(source, 0) for source in names},
+        raise
+    return con, temp_dir
+
+
+def _validate_source_names_in_data(con: duckdb.DuckDBPyConnection, names: Collection[str]) -> None:
+    """Reject source rows whose source field is outside the expected inventory."""
+    actual_sources = {
+        str(row[0])
+        for row in con.execute("SELECT DISTINCT source_pbf FROM source_rows").fetchall()
+        if row[0] is not None
+    }
+    unknown_sources = actual_sources - set(names)
+    if unknown_sources:
+        raise ValueError(
+            "source shards contain unlisted source PBFs: " + ", ".join(sorted(unknown_sources))
         )
-    finally:
-        if con is not None:
-            with contextlib.suppress(Exception):
-                con.close()
-        with contextlib.suppress(OSError):
-            _remove_tree(staging_dir)
+
+
+def _create_canonical_view(con: duckdb.DuckDBPyConnection) -> None:
+    """Create the deterministic one-row-per-OSM-object view."""
+    con.execute(
+        """
+        CREATE TEMP VIEW canonical_rows AS
+        SELECT * EXCLUDE (row_number) FROM (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY osm_type, osm_id
+            ORDER BY osm_version DESC, osm_timestamp DESC, source_pbf ASC, polygon_id ASC
+          ) AS row_number
+          FROM source_rows
+        )
+        WHERE row_number = 1
+        """
+    )
+
+
+def _dedup_summary(con: duckdb.DuckDBPyConnection, names: Collection[str]) -> DeduplicationSummary:
+    """Compute canonicalization counts before writing any output shards."""
+    input_count = _scalar_count(con, "SELECT COUNT(*) FROM source_rows")
+    output_count = _scalar_count(con, "SELECT COUNT(*) FROM canonical_rows")
+    duplicate_group_count = _scalar_count(
+        con,
+        """
+        SELECT COUNT(*) FROM (
+          SELECT osm_type, osm_id FROM source_rows
+          GROUP BY osm_type, osm_id HAVING COUNT(*) > 1
+        )
+        """,
+    )
+    website_conflict_group_count = _scalar_count(con, _conflict_query("website"))
+    contact_conflict_group_count = _scalar_count(con, _conflict_query("contact_website"))
+    output_counts = {
+        str(source): int(count)
+        for source, count in con.execute(
+            """
+            SELECT source_pbf, COUNT(*)::BIGINT
+            FROM canonical_rows
+            GROUP BY source_pbf
+            ORDER BY source_pbf
+            """
+        ).fetchall()
+    }
+    return DeduplicationSummary(
+        input_row_count=input_count,
+        output_row_count=output_count,
+        duplicate_group_count=duplicate_group_count,
+        duplicate_extra_row_count=input_count - output_count,
+        website_conflict_group_count=website_conflict_group_count,
+        contact_website_conflict_group_count=contact_conflict_group_count,
+        source_count=len(names),
+        output_counts_by_source={source: output_counts.get(source, 0) for source in names},
+    )
+
+
+def _write_canonical_shards(
+    con: duckdb.DuckDBPyConnection, staging_dir: Path, names: Collection[str]
+) -> None:
+    """Write canonical rows to source-partitioned Parquet files."""
+    partition_dir = staging_dir / "partitions"
+    escaped_partition_dir = str(partition_dir).replace("'", "''")
+    con.execute(
+        f"""
+        COPY (
+          SELECT * FROM canonical_rows
+          ORDER BY osm_type, osm_id
+        ) TO '{escaped_partition_dir}'
+        (FORMAT PARQUET, COMPRESSION 'snappy', PARTITION_BY (source_pbf),
+         WRITE_PARTITION_COLUMNS TRUE)
+        """  # noqa: S608
+    )
+    _materialise_partitions(partition_dir, staging_dir, names)
+
+
+def _validate_canonical_shards(staging_dir: Path, names: Collection[str]) -> None:
+    """Validate every canonical output schema before promotion."""
+    for source_name in names:
+        destination = staging_dir / _parquet_name(source_name)
+        if not schema_matches(pq.read_schema(destination), POLYGON_PUBLIC_SCHEMA):
+            raise ValueError(f"canonical shard has unexpected schema: {destination}")
 
 
 def _normalise_source_names(
@@ -192,11 +227,16 @@ def _normalise_source_names(
         names = tuple(f"{path.stem}{_SOURCE_SUFFIX}" for path in input_paths)
     else:
         names = tuple(sorted(source_names))
+    _validate_source_names(names)
+    return names
+
+
+def _validate_source_names(names: tuple[str, ...]) -> None:
+    """Validate canonicalization's expected source-name inventory."""
     if not names or len(set(names)) != len(names):
         raise ValueError("source_names must contain at least one unique source PBF name")
     if any(not name.endswith(_SOURCE_SUFFIX) for name in names):
         raise ValueError("source_names must end with '.osm.pbf'")
-    return names
 
 
 def _parquet_name(source_name: str) -> str:

@@ -23,12 +23,20 @@ from osm_polygon_website_tag.publishing.publish import (
     create_repo,
     publish_to_hf,
 )
+from osm_polygon_website_tag.publishing.trackio import (
+    build_trackio_snapshot,
+    publish_trackio_snapshot,
+)
 from osm_polygon_website_tag.reporting.card import build_card
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
-from osm_polygon_website_tag.reporting.finalize import finalize_run
+from osm_polygon_website_tag.reporting.finalize import finalize_run, finalize_snapshot
 from osm_polygon_website_tag.reporting.repair import refresh_card_run
 from osm_polygon_website_tag.reporting.verify import verify_results
-from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
+from osm_polygon_website_tag.runtime.config import (
+    DEFAULT_HF_DATASET,
+    DEFAULT_TRACKIO_PROJECT,
+    DEFAULT_TRACKIO_SPACE,
+)
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -116,18 +124,8 @@ def extract_command(
         raise ValueError("extract requires a run created by the init command")
     state = load_run(run_dir)
     fingerprint = snapshot_source_fingerprint(pbf_path)
-    expected = expected_source_inventory(run_dir)
-    if {
-        "filename": fingerprint.filename,
-        "size_bytes": fingerprint.size_bytes,
-        "mtime_ns": fingerprint.mtime_ns,
-    } not in expected:
-        raise ValueError(f"source is not in exact expected inventory: {pbf_path.name}")
-    status = state.metadata.get("status")
-    if status == STATUS_INITIALIZED:
-        transition_status(state, STATUS_EXTRACTING)
-    elif status != STATUS_EXTRACTING:
-        raise ValueError(f"extract requires initialized/extracting state, got {status!r}")
+    _validate_expected_extract_source(run_dir, fingerprint, pbf_path)
+    _prepare_extract_status(state)
     extract_pbf(
         pbf_path,
         run_dir,
@@ -138,6 +136,27 @@ def extract_command(
     if source_inventory_matches(run_dir):
         transition_status(state, STATUS_EXTRACTED)
     return 0
+
+
+def _validate_expected_extract_source(run_dir: Path, fingerprint: Any, pbf_path: Path) -> None:
+    """Require the exact source identity recorded during run initialization."""
+    expected = expected_source_inventory(run_dir)
+    candidate = {
+        "filename": fingerprint.filename,
+        "size_bytes": fingerprint.size_bytes,
+        "mtime_ns": fingerprint.mtime_ns,
+    }
+    if candidate not in expected:
+        raise ValueError(f"source is not in exact expected inventory: {pbf_path.name}")
+
+
+def _prepare_extract_status(state: Any) -> None:
+    """Transition an initialized run into extraction or reject other states."""
+    status = state.metadata.get("status")
+    if status == STATUS_INITIALIZED:
+        transition_status(state, STATUS_EXTRACTING)
+    elif status != STATUS_EXTRACTING:
+        raise ValueError(f"extract requires initialized/extracting state, got {status!r}")
 
 
 @app.command("analyze-results")
@@ -194,6 +213,22 @@ def finalize_command(run_dir: RunDir) -> int:
     return 0
 
 
+@app.command("finalize-snapshot")
+def finalize_snapshot_command(run_dir: RunDir) -> int:
+    """Finalize a user-frozen snapshot without website enrichment."""
+    report = finalize_snapshot(run_dir)
+    _json(
+        {
+            "digest": report.receipt.get("manifest_digest"),
+            "errors": report.verification.errors,
+            "ok": report.ok,
+        }
+    )
+    if not report.ok:
+        raise typer.Exit(code=1)
+    return 0
+
+
 @app.command("publish-plan")
 def publish_plan_command(
     run_dir: RunDir,
@@ -242,6 +277,46 @@ def card_stats_command(run_dir: RunDir) -> int:
     """Recompute and print dataset-card statistics."""
     stats = compute_card_stats(run_dir)
     _json(stats.__dict__)
+    return 0
+
+
+@app.command("publish-trackio")
+def publish_trackio_command(
+    run_dir: RunDir,
+    space_id: Annotated[
+        str,
+        typer.Option("--space-id", help="Public Hugging Face Trackio Space."),
+    ] = DEFAULT_TRACKIO_SPACE,
+    project: Annotated[
+        str,
+        typer.Option("--project", help="Trackio project name."),
+    ] = DEFAULT_TRACKIO_PROJECT,
+    dataset_repo: Annotated[
+        str,
+        typer.Option("--dataset-repo", help="Dataset repository represented by the metrics."),
+    ] = DEFAULT_HF_DATASET,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Actually create/update the public Trackio Space."),
+    ] = False,
+) -> int:
+    """Preview or publish metrics for one finalized dataset snapshot."""
+    snapshot = build_trackio_snapshot(run_dir, dataset_repo=dataset_repo)
+    remote = (
+        publish_trackio_snapshot(snapshot, space_id=space_id, project=project) if apply else None
+    )
+    _json(
+        {
+            "dry_run": not apply,
+            "space_id": space_id,
+            "project": project,
+            "run_name": snapshot.run_name,
+            "manifest_digest": snapshot.manifest_digest,
+            "metrics": snapshot.metrics,
+            "remote": remote,
+        },
+        sort_keys=True,
+    )
     return 0
 
 
