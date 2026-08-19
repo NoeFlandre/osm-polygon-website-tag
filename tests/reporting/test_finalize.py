@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
@@ -202,3 +203,24 @@ def test_complete_verification_rejects_analysis_mutation(tmp_path: Path) -> None
 
     assert not report.ok
     assert any("analysis" in error or "receipt-bound" in error for error in report.errors)
+
+
+@pytest.mark.parametrize("remove_map", [False, True])
+def test_complete_verification_requires_card_contract(
+    tmp_path: Path,
+    *,
+    remove_map: bool,
+) -> None:
+    run_dir, _ = _setup(tmp_path)
+    assert finalize_run(run_dir).ok
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt.pop("card_contract_version")
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    if remove_map:
+        (run_dir / "assets" / "geographic_polygon_density.png").unlink()
+
+    report = verify_results(run_dir)
+
+    assert not report.ok
+    assert any("card_contract_version" in error for error in report.errors)

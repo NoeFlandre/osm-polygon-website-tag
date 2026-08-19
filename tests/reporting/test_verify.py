@@ -18,6 +18,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     initialise_run,
     record_processed_source,
     snapshot_source_fingerprint,
+    update_public_shard_metadata,
 )
 
 
@@ -193,6 +194,36 @@ def test_verify_rejects_incorrect_website_word_count(tmp_path: Path) -> None:
 
     assert not report.ok
     assert any("word count" in error for error in report.errors)
+
+
+@pytest.mark.parametrize(
+    ("text", "word_count", "valid"),
+    [("", 0, True), ("not empty", 0, False), ("", 1, False)],
+)
+def test_verify_empty_text_status_requires_empty_text_and_zero_words(
+    tmp_path: Path,
+    *,
+    text: str,
+    word_count: int,
+    valid: bool,
+) -> None:
+    run_dir, state = _setup_minimal_run(tmp_path)
+    shard = run_dir / "polygons" / "monaco-latest.parquet"
+    rows = pq.read_table(shard).to_pylist()
+    rows[0]["website_text"] = text
+    rows[0]["website_word_count"] = word_count
+    rows[0]["website_text_status"] = "empty"
+    pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA), shard)
+    update_public_shard_metadata(
+        state,
+        filename="monaco-latest.osm.pbf",
+        row_count=1,
+        shard_sha256=_sha256(shard),
+    )
+
+    report = verify_results(run_dir)
+
+    assert report.ok is valid
 
 
 def test_verify_results_rejects_modified_shard(tmp_path: Path) -> None:

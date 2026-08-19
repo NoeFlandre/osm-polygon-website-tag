@@ -24,6 +24,8 @@ Builds and validates public-facing local artifacts.
 - `artifact_inventory` is the shared source of truth for deterministic
   publishable paths and bounded SHA-256 hashing used by both finalization and
   receipt verification.
+- `verify` is the stable verification entry point; its internal section
+  validators live under `verification/` and are not public API.
 - Entry points: `compute_card_stats`, `build_card`, `verify_results`,
   `finalize_run`, and `refresh_card_run`.
 - Excludes: extraction, HTTP fetching, remote upload, and CLI dispatch.
