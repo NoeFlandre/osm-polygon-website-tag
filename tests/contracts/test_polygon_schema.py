@@ -12,6 +12,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     SCHEMA_VERSION,
     PublicRowInvariantError,
     column_doc,
+    column_documentation,
     is_supported_public_polygon_schema,
     polygon_column_names,
     schema_matches,
@@ -170,8 +171,16 @@ def test_column_doc_returns_string_per_column() -> None:
 
 
 def test_column_doc_unknown_raises() -> None:
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError) as exc_info:
         column_doc("not_a_real_column")
+    assert exc_info.value.args == ("no documentation for column 'not_a_real_column'",)
+
+
+def test_column_documentation_returns_an_independent_copy() -> None:
+    docs = column_documentation()
+    docs.pop("geometry")
+
+    assert "geometry" in column_documentation()
 
 
 def _valid_row() -> dict[str, object]:
@@ -242,8 +251,9 @@ def test_validate_public_row_rejects_neither_website_key() -> None:
     row["has_website"] = False
     row["has_contact_website"] = False
     row["has_any_website"] = False
-    with pytest.raises(PublicRowInvariantError):
+    with pytest.raises(PublicRowInvariantError) as exc_info:
         validate_public_row(row)
+    assert str(exc_info.value) == "row has neither website nor contact:website; rejected"
 
 
 def test_validate_public_row_rejects_has_flag_mismatch() -> None:
@@ -251,3 +261,36 @@ def test_validate_public_row_rejects_has_flag_mismatch() -> None:
     row["has_website"] = False  # but website is present
     with pytest.raises(PublicRowInvariantError):
         validate_public_row(row)
+
+
+def test_validate_public_row_rejects_present_flag_with_no_value() -> None:
+    row = _valid_row()
+    row["website"] = None
+    row["contact_website"] = None
+    row["has_website"] = True
+    row["has_contact_website"] = False
+    with pytest.raises(PublicRowInvariantError) as exc_info:
+        validate_public_row(row)
+    assert str(exc_info.value) == "has_* flags claim a website key but the trimmed value is missing"
+
+
+def test_validate_public_row_rejects_website_flag_without_website_value() -> None:
+    row = _valid_row()
+    row["website"] = ""
+    row["contact_website"] = "https://contact.example"
+    row["has_website"] = True
+    row["has_contact_website"] = True
+    with pytest.raises(PublicRowInvariantError) as exc_info:
+        validate_public_row(row)
+    assert str(exc_info.value) == "has_website is true but website value is null/empty"
+
+
+def test_validate_public_row_rejects_contact_flag_without_contact_value() -> None:
+    row = _valid_row()
+    row["contact_website"] = ""
+    row["has_contact_website"] = True
+    with pytest.raises(PublicRowInvariantError) as exc_info:
+        validate_public_row(row)
+    assert (
+        str(exc_info.value) == "has_contact_website is true but contact_website value is null/empty"
+    )

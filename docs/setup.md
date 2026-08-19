@@ -115,11 +115,24 @@ smoke checks before changing `Dockerfile`.
 | Pre-commit hooks | `just pre-commit` |
 | Pre-push hook | `just pre-push` |
 | Build distributions | `just build` |
+| Coverage gate | `just coverage` |
+| CRAP complexity gate | `just crap` |
+| Targeted mutation gate | `just mutation` |
+| Full test-quality pass | `just quality` |
 | Strict docs build | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
 
 All Python tools run inside the locked `uv` environment. If a hook fails, run
 the named recipe directly, fix the reported issue, and retry; do not bypass
 hooks with `--no-verify`.
+
+The test-quality pass keeps the deterministic tag and public-schema contracts
+under a 75% project-wide coverage floor, reports CRAP scores for those two
+high-value modules, and runs Mutmut against them with their focused tests. Every
+selected function must have a CRAP score strictly below 6; the mutation gate
+fails on any surviving or timed-out mutant. Mutation testing is intentionally separate from `just check` because
+it is substantially slower. Both commands are read-only with respect to PBFs,
+run artifacts, and remote services; Mutmut's temporary `mutants/` directory is
+local scratch state and may be removed after the run.
 
 ## Public documentation
 

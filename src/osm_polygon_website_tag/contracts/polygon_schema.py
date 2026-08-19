@@ -291,6 +291,39 @@ def column_documentation() -> dict[str, str]:
     return dict(_COLUMN_DOCS)
 
 
+def _is_non_empty_string(value: object) -> bool:
+    """Return whether ``value`` is a non-empty string."""
+    return isinstance(value, str) and value != ""
+
+
+def _require_website_flag(has_website: bool, has_contact_website: bool) -> None:
+    """Require at least one website-presence flag."""
+    if not (has_website or has_contact_website):
+        raise PublicRowInvariantError("row has neither website nor contact:website; rejected")
+
+
+def _require_any_website_value(website_present: bool, contact_present: bool) -> None:
+    """Require at least one non-empty website value."""
+    if not (website_present or contact_present):
+        raise PublicRowInvariantError(
+            "has_* flags claim a website key but the trimmed value is missing"
+        )
+
+
+def _require_website_value(has_website: bool, website_present: bool) -> None:
+    """Require a non-empty website when its presence flag is set."""
+    if has_website and not website_present:
+        raise PublicRowInvariantError("has_website is true but website value is null/empty")
+
+
+def _require_contact_website_value(has_contact_website: bool, contact_present: bool) -> None:
+    """Require a non-empty contact website when its presence flag is set."""
+    if has_contact_website and not contact_present:
+        raise PublicRowInvariantError(
+            "has_contact_website is true but contact_website value is null/empty"
+        )
+
+
 def validate_public_row(row: dict[str, object]) -> None:
     """Validate that ``row`` satisfies the public-shard invariants.
 
@@ -307,23 +340,12 @@ def validate_public_row(row: dict[str, object]) -> None:
     """
     has_ws = bool(row.get("has_website"))
     has_cw = bool(row.get("has_contact_website"))
-    if not (has_ws or has_cw):
-        raise PublicRowInvariantError("row has neither website nor contact:website; rejected")
-
-    website = row.get("website")
-    contact = row.get("contact_website")
-    website_present = isinstance(website, str) and website != ""
-    contact_present = isinstance(contact, str) and contact != ""
-    if not (website_present or contact_present):
-        raise PublicRowInvariantError(
-            "has_* flags claim a website key but the trimmed value is missing"
-        )
-    if has_ws and not website_present:
-        raise PublicRowInvariantError("has_website is true but website value is null/empty")
-    if has_cw and not contact_present:
-        raise PublicRowInvariantError(
-            "has_contact_website is true but contact_website value is null/empty"
-        )
+    _require_website_flag(has_ws, has_cw)
+    website_present = _is_non_empty_string(row.get("website"))
+    contact_present = _is_non_empty_string(row.get("contact_website"))
+    _require_any_website_value(website_present, contact_present)
+    _require_website_value(has_ws, website_present)
+    _require_contact_website_value(has_cw, contact_present)
 
 
 __all__ = [

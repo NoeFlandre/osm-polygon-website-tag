@@ -43,6 +43,10 @@ def test_normalize_value_collapses_truthy_to_empty(value: str) -> None:
     assert normalize_value(value) == ""
 
 
+def test_normalize_value_treats_none_as_absent() -> None:
+    assert normalize_value(None) == ""
+
+
 @pytest.mark.parametrize(
     ("tags", "expected"),
     [

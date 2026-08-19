@@ -58,6 +58,8 @@ dev = [
     "ruff>=0.5",
     "ty>=0.0.65",
     "mkdocs-material>=9.6,<10",
+    "mutmut>=3,<4",
+    "radon>=6,<7",
 ]
 
 [tool.ruff]
@@ -103,3 +105,17 @@ addopts = [
     "--strict-markers",
     "--strict-config",
 ]
+
+[tool.mutmut]
+source_paths = [
+    "src/osm_polygon_website_tag/domain/tags.py",
+    "src/osm_polygon_website_tag/contracts/polygon_schema.py",
+]
+also_copy = ["src/osm_polygon_website_tag/"]
+pytest_add_cli_args = ["-q"]
+pytest_add_cli_args_test_selection = [
+    "tests/domain/test_tags.py",
+    "tests/contracts/test_polygon_schema.py",
+]
+mutate_only_covered_lines = true
+max_stack_depth = 3
