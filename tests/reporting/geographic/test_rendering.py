@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.reporting.geographic.basemap import (
+    _draw_feature,
+    _draw_multipolygon_feature,
+    _draw_polygon,
+    _draw_polygon_feature,
+)
 from osm_polygon_website_tag.reporting.geographic.polygon_density import (
     build_polygon_density_map,
 )
@@ -50,3 +57,21 @@ def test_map_is_a_deterministic_png(tmp_path: Path) -> None:
     assert first.occupied_cell_count == 2
     assert first_bytes == output.read_bytes()
     assert first_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_basemap_private_draw_helpers_handle_polygon_shapes() -> None:
+    figure, axis = plt.subplots()
+    try:
+        polygon = [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]]
+        _draw_polygon(axis, polygon)
+        _draw_polygon(axis, [])
+        _draw_polygon_feature(axis, polygon)
+        _draw_polygon_feature(axis, [])
+        _draw_multipolygon_feature(axis, [polygon, polygon])
+        _draw_multipolygon_feature(axis, [])
+        _draw_feature(axis, {"geometry": {"type": "Polygon", "coordinates": polygon}})
+        _draw_feature(axis, {"geometry": {"type": "MultiPolygon", "coordinates": [polygon]}})
+        _draw_feature(axis, {"geometry": {"type": "LineString", "coordinates": []}})
+        assert len(axis.patches) == 6
+    finally:
+        plt.close(figure)

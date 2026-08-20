@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -819,6 +820,280 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     # completion.
     assert final_uploads == [run_dir]
     assert load_run(run_dir).metadata["status"] == STATUS_COMPLETE
+
+
+def test_private_workflow_decisions_and_checkpoint_helpers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the small orchestration decision boundaries directly.
+
+    The public workflow tests cover these paths end to end; direct calls keep
+    mutation testing honest for the intentionally small private helpers.
+    """
+    from osm_polygon_website_tag.application import workflow
+
+    state: Any = type("State", (), {})()
+    sources: Any = {
+        "a.osm.pbf": {"enrichment_pending": False},
+        "b.osm.pbf": {"enrichment_pending": True},
+    }
+    state.sources = sources
+    acknowledged = {"a.osm.pbf", "b.osm.pbf", "missing.osm.pbf"}
+    processed = workflow._acknowledged_processed_names(state, acknowledged)
+    assert processed == {"a.osm.pbf"}
+    assert workflow._acknowledged_retry_names(state, acknowledged, processed) == {"b.osm.pbf"}
+
+    source = Path("a.osm.pbf")
+    checkpoint: Any = {"schema_version": "v2", "global_bundle": {}, "sources": {}}
+    context: Any = type("Context", (), {})()
+    context.apply = False
+    context.upload_checkpoint = checkpoint
+    context.state = state
+    context.progress = None
+    context.run_dir = tmp_path
+    context.repo_id = "owner/dataset"
+    context.invocation_id = "run"
+    context.area_workers = None
+    context.max_in_flight_areas = None
+    context.fetch_workers = None
+    assert workflow._published_source_names(context, source) is None
+    context.apply = True
+    assert workflow._published_source_names(context, source) == {"a.osm.pbf"}
+    assert workflow._source_requires_publication(
+        context=context, migration_changed=False, needs_enrichment=False
+    )
+    assert workflow._source_requires_publication(
+        context=context, migration_changed=True, needs_enrichment=False
+    )
+    assert (
+        workflow._source_requires_publication(
+            context=cast(Any, type("Context", (), {"apply": False})()),
+            migration_changed=False,
+            needs_enrichment=False,
+        )
+        is False
+    )
+
+    manifest_entry: Any = {"public_shard_sha256": "a" * 64}
+    sources["a.osm.pbf"] = manifest_entry
+    checkpoint["sources"] = {"a.osm.pbf": {"polygon_sha256": "a" * 64}}
+    assert workflow._source_upload_is_current(manifest_entry, "a.osm.pbf", checkpoint)
+    assert not workflow._source_upload_is_current(manifest_entry, "b.osm.pbf", checkpoint)
+    progress: list[str] = []
+    context.progress = progress.append
+    assert workflow._source_upload_is_current_for_context(
+        source=source,
+        context=context,
+        index=1,
+        total=2,
+        migration_changed=False,
+        needs_enrichment=False,
+    )
+    assert progress
+    workflow._record_source_upload(source, context, uploaded=True)
+    assert checkpoint["sources"]["a.osm.pbf"]["polygon_sha256"] == "a" * 64
+
+    assert workflow._should_recheck_enrichment(
+        marker=None, status_summary=None, migration_changed=False
+    )
+    assert not workflow._should_recheck_enrichment(
+        marker=False, status_summary={"success": {"count": 1}}, migration_changed=False
+    )
+    monkeypatch.setattr(workflow, "_shard_needs_enrichment", lambda _path: True)
+    decision = workflow._initial_enrichment_decision(
+        tmp_path / "a.parquet",
+        marker=None,
+        status_summary=None,
+        migration_changed=False,
+    )
+    assert decision.needs_enrichment
+
+
+def test_private_workflow_source_phase_helpers_are_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    context: Any = type("Context", (), {})()
+    context.run_dir = tmp_path
+    context.state = type("State", (), {"sources": {"a.osm.pbf": {}}})()
+    context.progress = None
+    context.repo_id = "owner/dataset"
+    context.apply = False
+    context.invocation_id = "run"
+    context.area_workers = 2
+    context.max_in_flight_areas = 3
+    context.fetch_workers = 4
+    fingerprint: Any = type("Fingerprint", (), {})()
+    source = Path("a.osm.pbf")
+
+    extracted: list[tuple[Path, dict[str, object]]] = []
+    monkeypatch.setattr(
+        workflow,
+        "extract_pbf",
+        lambda path, run, **kwargs: extracted.append((path, kwargs)),
+    )
+    workflow._extract_with_options(source, context)
+    assert extracted[0][0] == source
+    assert extracted[0][1]["area_workers"] == 2
+
+    enrichment_calls: list[tuple[Path, dict[str, object]]] = []
+    monkeypatch.setattr(
+        workflow,
+        "enrich_polygon_shard",
+        lambda path, **kwargs: enrichment_calls.append((path, kwargs)) or "enriched",
+    )
+    assert workflow._enrich_shard(tmp_path / "a.parquet", context) == "enriched"
+    assert enrichment_calls[0][1]["fetch_workers"] == 4
+
+    monkeypatch.setattr(workflow, "source_bundle_is_complete", lambda *_args: True)
+    bundle = workflow._ensure_source_bundle(
+        source=source,
+        fingerprint=fingerprint,
+        context=context,
+        index=1,
+        total=1,
+        allow_extraction=True,
+    )
+    assert bundle.reused and not bundle.extracted
+
+    monkeypatch.setattr(workflow, "source_bundle_is_complete", lambda *_args: False)
+    monkeypatch.setattr(workflow, "_extract_with_options", lambda *_args: None)
+    calls = iter([False, True])
+    monkeypatch.setattr(workflow, "source_bundle_is_complete", lambda *_args: next(calls))
+    bundle = workflow._ensure_source_bundle(
+        source=source,
+        fingerprint=fingerprint,
+        context=context,
+        index=1,
+        total=1,
+        allow_extraction=True,
+    )
+    assert bundle.extracted and not bundle.reused
+
+    original_process_source = workflow._process_source
+    monkeypatch.setattr(
+        workflow,
+        "_process_source",
+        lambda **_kwargs: workflow._SourceTransactionResult(True, False, True),
+    )
+    counts = workflow._process_source_batch(
+        [source],
+        [source],
+        {source.name: fingerprint},
+        context,
+        allow_extraction=True,
+    )
+    assert counts == workflow._PhaseCounts(extracted=1, uploaded=1)
+    assert workflow._add_phase_counts(
+        counts, workflow._PhaseCounts(reused=2)
+    ) == workflow._PhaseCounts(extracted=1, reused=2, uploaded=1)
+
+    monkeypatch.setattr(workflow, "_process_source", original_process_source)
+    monkeypatch.setattr(workflow.pq, "read_schema", lambda _path: object())
+    monkeypatch.setattr(workflow, "schema_matches", lambda *_args: False)
+    assert not workflow._migrate_public_shard_if_needed(
+        source, tmp_path / "a.parquet", context, 1, 1
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_initial_enrichment_decision",
+        lambda *_args, **_kwargs: workflow._EnrichmentDecision(False, {"success": {"count": 1}}),
+    )
+    monkeypatch.setattr(workflow, "update_source_enrichment_status", lambda *_args, **_kwargs: None)
+    context.state.sources[source.name] = {"enrichment_pending": False}
+    decision = workflow._enrich_source_shard_if_needed(
+        source=source,
+        shard=tmp_path / "a.parquet",
+        context=context,
+        index=1,
+        total=1,
+        migration_changed=False,
+    )
+    assert not decision.needs_enrichment
+    monkeypatch.setattr(
+        workflow,
+        "_ensure_source_bundle",
+        lambda **_kwargs: workflow._SourceBundleResult(tmp_path / "a.parquet", False, True),
+    )
+    monkeypatch.setattr(workflow, "_migrate_public_shard_if_needed", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        workflow,
+        "_enrich_source_shard_if_needed",
+        lambda **_kwargs: workflow._EnrichmentDecision(False, None),
+    )
+    monkeypatch.setattr(workflow, "_publish_source_if_needed", lambda **_kwargs: True)
+    transaction = workflow._process_source(
+        source=source,
+        fingerprint=fingerprint,
+        context=context,
+        index=1,
+        total=1,
+        allow_extraction=True,
+    )
+    assert transaction == workflow._SourceTransactionResult(False, True, True)
+
+
+def test_private_workflow_publication_and_card_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    context: Any = type("Context", (), {})()
+    context.run_dir = tmp_path
+    context.state = type(
+        "State", (), {"sources": {"a.osm.pbf": {"public_shard_sha256": "a" * 64}}}
+    )()
+    context.repo_id = "owner/dataset"
+    context.apply = False
+    context.progress = None
+    context.upload_checkpoint = {"schema_version": "v2", "global_bundle": {}, "sources": {}}
+    source = Path("a.osm.pbf")
+
+    monkeypatch.setattr(workflow, "_source_upload_is_current_for_context", lambda **_kwargs: True)
+    assert not workflow._publish_source_if_needed(
+        source=source,
+        context=context,
+        index=1,
+        total=1,
+        reused=False,
+        migration_changed=False,
+        needs_enrichment=False,
+    )
+    monkeypatch.setattr(workflow, "_source_upload_is_current_for_context", lambda **_kwargs: False)
+    monkeypatch.setattr(workflow, "_source_requires_publication", lambda **_kwargs: False)
+    assert not workflow._publish_source_if_needed(
+        source=source,
+        context=context,
+        index=1,
+        total=1,
+        reused=False,
+        migration_changed=False,
+        needs_enrichment=False,
+    )
+
+    monkeypatch.setattr(workflow, "build_card", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        workflow,
+        "incremental_publish_changed_shard",
+        lambda *_args, **_kwargs: type(
+            "Plan", (), {"shard_changed": True, "upload_paths": [source]}
+        )(),
+    )
+    assert not workflow._maybe_publish_enriched_shard(
+        run_dir=tmp_path,
+        source=source,
+        repo_id="owner/dataset",
+        apply=False,
+        progress=None,
+        index=1,
+        total=1,
+    )
+    assert workflow._run_needs_enrichment(tmp_path) is False
+    assert workflow._card_refresh_needed(tmp_path) is True
 
 
 def test_workflow_resume_after_acknowledged_shard_is_skipped(

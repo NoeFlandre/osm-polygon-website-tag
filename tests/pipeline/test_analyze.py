@@ -9,6 +9,7 @@ import os
 import tempfile as tempfile_module
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -18,11 +19,21 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import (
     ANALYSIS_FILES,
+    _close_analysis_connection,
+    _duckdb_extract_hostname,
+    _global_cell_rows,
+    _parquet_row_count,
+    _public_row_count,
+    _rejection_count,
     _validate_analysis_inputs,
+    _write_arrow_table,
+    _write_cells_per_group,
+    _write_class_count,
     analyze_results,
 )
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.runtime.run_state import initialise_run
+from osm_polygon_website_tag.storage.duckdb_engine import EIGHT_CELL_LABELS
 
 
 def _write_comparison_shard(
@@ -73,6 +84,75 @@ def _ts() -> object:
     import pyarrow as pa
 
     return pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py()
+
+
+def test_analyze_private_scalar_and_table_helpers(tmp_path: Path) -> None:
+    assert _duckdb_extract_hostname("https://Example.org/path") == "example.org"
+    assert _duckdb_extract_hostname(None) is None
+    rows = _global_cell_rows({"cell_000_w0_c0_d0": 2}, {})
+    assert len(rows) == len(EIGHT_CELL_LABELS) * 2
+    assert rows[0] == {
+        "cell": EIGHT_CELL_LABELS[0][0],
+        "level": "observation",
+        "row_count": 2,
+    }
+    output = tmp_path / "table.parquet"
+    schema = pa.schema([pa.field("value", pa.int64(), nullable=False)])
+    _write_arrow_table(output, [{"value": 3}], schema)
+    assert pq.read_table(output).to_pylist() == [{"value": 3}]
+    _write_arrow_table(tmp_path / "empty.parquet", [], schema)
+    assert pq.read_table(tmp_path / "empty.parquet").num_rows == 0
+
+
+def test_analyze_private_count_and_input_helpers(tmp_path: Path) -> None:
+    run_dir = _make_minimal_run(tmp_path)
+    _write_public_shard(run_dir, stem="a", rows=[])
+    _write_rejection_shard(run_dir, stem="a", rows=[])
+    assert _public_row_count(run_dir / "polygons") == 0
+    assert _rejection_count(run_dir / "rejections") == 0
+    empty = tmp_path / "empty.parquet"
+    pq.write_table(pa.table({"value": pa.array([], type=pa.int64())}), empty)
+    assert _parquet_row_count(empty) == 0
+    _validate_analysis_inputs(
+        run_dir,
+        run_dir / "polygons",
+        run_dir / "analysis_observations",
+        run_dir / "rejections",
+    )
+    with pytest.raises(FileNotFoundError, match="missing one"):
+        _validate_analysis_inputs(
+            run_dir, tmp_path / "missing", run_dir / "analysis_observations", run_dir / "rejections"
+        )
+
+
+def test_analyze_private_duckdb_writers_validate_allowed_queries(tmp_path: Path) -> None:
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute(
+            "CREATE TABLE observations (source_pbf VARCHAR, region VARCHAR, primary_category VARCHAR, osm_type VARCHAR, has_website BOOLEAN, has_contact_website BOOLEAN, has_wikidata BOOLEAN)"
+        )
+        con.execute(
+            "INSERT INTO observations VALUES ('a.osm.pbf', 'r', 'building', 'way', true, false, false)"
+        )
+        out = tmp_path / "cells.parquet"
+        _write_cells_per_group(con, tmp_path, out)
+        assert out.exists()
+        class_out = tmp_path / "classes.parquet"
+        con.execute(
+            "CREATE VIEW public_polygons AS SELECT 'absolute_url' AS website_class, 'bare_hostname' AS contact_website_class"
+        )
+        _write_class_count(con, class_out, column="website_class", view="public_polygons")
+        assert pq.read_table(class_out).to_pylist() == [
+            {"class_value": "absolute_url", "row_count": 1}
+        ]
+        with pytest.raises(ValueError, match="unsupported group"):
+            _write_cells_per_group(con, tmp_path, tmp_path / "bad.parquet", group_column="bad")
+        with pytest.raises(ValueError, match="unsupported class"):
+            _write_class_count(
+                con, tmp_path / "bad-class.parquet", column="bad", view="public_polygons"
+            )
+    finally:
+        _close_analysis_connection(con)
 
 
 def _row_obs(

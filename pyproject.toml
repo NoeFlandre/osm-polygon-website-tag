@@ -110,7 +110,19 @@ addopts = [
 source_paths = [
     "src/osm_polygon_website_tag",
 ]
-also_copy = ["src/osm_polygon_website_tag/"]
-pytest_add_cli_args = ["-q"]
+also_copy = [
+    "src/osm_polygon_website_tag/",
+    ".github",
+    ".pre-commit-config.yaml",
+    ".dockerignore",
+    "Dockerfile",
+    "LICENSE",
+    "README.md",
+    "docs",
+    "justfile",
+    "mkdocs.yml",
+    "scripts",
+]
+pytest_add_cli_args = ["-q", "--ignore=tests/architecture"]
 mutate_only_covered_lines = true
 max_stack_depth = 3

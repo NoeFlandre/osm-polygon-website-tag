@@ -8,7 +8,7 @@ import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import osmium
 import osmium.osm
@@ -68,6 +68,75 @@ def _pbf_path(src_dir: Path, name: str = "monaco-latest.osm.pbf") -> Path:
     return src_dir / name
 
 
+def test_extraction_private_helpers_validate_osm_metadata() -> None:
+    assert extraction_module._as_utc(dt.datetime(2024, 1, 1, tzinfo=dt.UTC)).tzinfo is dt.UTC
+    naive = extraction_module._as_utc(dt.datetime(2024, 1, 1))
+    assert naive.tzinfo is dt.UTC
+    assert extraction_module._now_iso().endswith("+00:00")
+    way: Any = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(ref=1),
+            SimpleNamespace(ref=2),
+            SimpleNamespace(ref=3),
+            SimpleNamespace(ref=1),
+        ]
+    )
+    open_way: Any = SimpleNamespace(
+        nodes=[SimpleNamespace(ref=1), SimpleNamespace(ref=2), SimpleNamespace(ref=3)]
+    )
+    duplicate_way: Any = SimpleNamespace(
+        nodes=[
+            SimpleNamespace(ref=1),
+            SimpleNamespace(ref=2),
+            SimpleNamespace(ref=2),
+            SimpleNamespace(ref=1),
+        ]
+    )
+    assert extraction_handler_module._is_closed_way(way)
+    assert not extraction_handler_module._is_closed_way(open_way)
+    assert not extraction_handler_module._is_closed_way(duplicate_way)
+    relation: Any = SimpleNamespace(tags=[("type", "multipolygon")])
+    boundary: Any = SimpleNamespace(tags=[("type", "boundary")])
+    unsupported: Any = SimpleNamespace(tags=[("type", "route")])
+    assert extraction_handler_module._is_supported_polygon_relation(relation)
+    assert extraction_handler_module._is_supported_polygon_relation(boundary)
+    assert not extraction_handler_module._is_supported_polygon_relation(unsupported)
+    tagged: Any = SimpleNamespace(tags=[("website", "x"), ("name", "n")])
+    assert extraction_handler_module._tags_dict(tagged) == {
+        "website": "x",
+        "name": "n",
+    }
+    way_area: Any = SimpleNamespace(from_way=lambda: True, orig_id=lambda: 7)
+    relation_area: Any = SimpleNamespace(from_way=lambda: False, orig_id=lambda: 8)
+    assert extraction_handler_module._area_identity(way_area) == ("way", 7)
+    assert extraction_handler_module._area_identity(relation_area) == ("relation", 8)
+
+
+def test_extraction_handler_emits_and_records_area_results() -> None:
+    emitted: list[dict[str, object]] = []
+    coordinator_results = [
+        AreaResult(public_row={"kind": "public"}, observation_row={"kind": "obs"})
+    ]
+    handler: Any = object.__new__(_ExtractionHandler)
+    handler.public_sink = SimpleNamespace(add=lambda row: emitted.append({"public": row}))
+    handler.obs_sink = SimpleNamespace(add=lambda row: emitted.append({"observation": row}))
+    handler.rej_sink = SimpleNamespace(add=lambda row: emitted.append({"rejection": row}))
+    handler._area_coordinator = SimpleNamespace(
+        drain=lambda: coordinator_results,
+        submit=lambda _payload: None,
+    )
+    handler._emit_area_result(
+        AreaResult(public_row={"p": 1}, observation_row={"o": 2}, rejection_row={"r": 3})
+    )
+    assert emitted == [{"public": {"p": 1}}, {"observation": {"o": 2}}, {"rejection": {"r": 3}}]
+    handler._drain_area_work()
+    assert emitted[-1] == {"observation": {"kind": "obs"}}
+    seen: list[tuple[object, ...]] = []
+    handler.ledger = SimpleNamespace(upsert=lambda *args: seen.append(args))
+    handler._record_candidate("way", 1, {"website": "x"}, 2, dt.datetime(2024, 1, 1), "closed_way")
+    assert seen[0][0:2] == ("way", 1)
+
+
 @pytest.fixture()
 def synthetic_source_simple(make_pbf) -> Path:
     return _pbf_path(make_pbf(_SIMPLE_XML))
@@ -118,11 +187,11 @@ def test_handler_has_no_source_sized_python_collections(tmp_path: Path) -> None:
 
 def test_geometry_rejection_is_written_with_candidate_metadata() -> None:
     rows: list[dict[str, object]] = []
-    handler = object.__new__(_ExtractionHandler)
+    handler: Any = object.__new__(_ExtractionHandler)
     handler._source_pbf = "monaco-latest.osm.pbf"
     handler._region = "monaco"
     handler.rej_sink = cast(BatchParquetSink, SimpleNamespace(add=rows.append))
-    area = SimpleNamespace(
+    area: Any = SimpleNamespace(
         tags=[("website", "https://example.org"), ("building", "yes")],
         from_way=lambda: True,
         orig_id=lambda: 42,
@@ -137,6 +206,42 @@ def test_geometry_rejection_is_written_with_candidate_metadata() -> None:
     assert rows[0]["rejection_kind"] == "antimeridian"
     assert rows[0]["osm_type"] == "way"
     assert rows[0]["osm_id"] == 42
+
+
+def test_extraction_handler_payload_and_callback_rejection_helpers() -> None:
+    rows: list[dict[str, object]] = []
+    handler: Any = object.__new__(_ExtractionHandler)
+    handler._source_pbf = "synthetic-latest.osm.pbf"
+    handler._region = "synthetic"
+    handler._area_sequence = 7
+    handler.rej_sink = cast(BatchParquetSink, SimpleNamespace(add=rows.append))
+    handler._serialize_area_geometry = lambda _area: '{"type":"Polygon"}'
+    handler._area_coordinator = SimpleNamespace(submit=lambda _payload: None)
+    area: Any = SimpleNamespace(
+        version=2,
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
+        tags=[("website", "https://example.org"), ("building", "yes")],
+        from_way=lambda: True,
+        orig_id=lambda: 1,
+    )
+    derived = _website_payload("unused").derived_tags
+    candidate = {
+        "tags": {"website": "https://example.org", "building": "yes"},
+        "candidate_kind": "closed_way",
+    }
+    payload = handler._build_area_payload(cast(osmium.osm.Area, area), "way", 1, candidate, derived)
+    assert payload is not None
+    assert payload.sequence == 7
+    handler._serialize_area_geometry = lambda _area: None
+    assert (
+        handler._build_area_payload(cast(osmium.osm.Area, area), "way", 1, candidate, derived)
+        is None
+    )
+    handler._emit_area_rejection(
+        cast(osmium.osm.Area, area), "way", 1, "untracked_candidate", "not tracked"
+    )
+    assert rows[-1]["rejection_kind"] == "untracked_candidate"
+    handler._submit_candidate_area(cast(osmium.osm.Area, area), "way", 1, candidate)
 
 
 def _website_payload(raw_geojson: str) -> AreaPayload:

@@ -8,6 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.application.resume_planner import (
+    _coerce_status_field,
+    _valid_status_count,
     prepare_resume_priorities,
     prioritize_sources,
     summarize_enrichment_status,
@@ -99,6 +101,24 @@ def test_summarize_enrichment_status_counts_each_text_field() -> None:
         "website": {"__null__": 1, "fetch_error": 1, "success": 1},
         "contact_website": {"absent": 1, "success": 1, "unsafe_url": 1},
     }
+
+
+def test_coerce_status_field_rejects_invalid_counts_and_sorts_valid_values() -> None:
+    assert _coerce_status_field({"success": 2, "absent": 0}) == {
+        "absent": 0,
+        "success": 2,
+    }
+    assert _coerce_status_field({"success": True}) is None
+    assert _coerce_status_field({1: 2}) is None
+    assert _coerce_status_field([]) is None
+
+
+def test_valid_status_count_requires_nonnegative_nonbool_integer() -> None:
+    assert _valid_status_count("success", 0)
+    assert _valid_status_count("success", 3)
+    assert not _valid_status_count("success", -1)
+    assert not _valid_status_count("success", True)
+    assert not _valid_status_count(1, 0)
 
 
 def test_prepare_resume_priorities_backfills_legacy_status_summaries(tmp_path: Path) -> None:

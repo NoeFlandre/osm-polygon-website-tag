@@ -14,9 +14,12 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_2,
 )
 from osm_polygon_website_tag.pipeline.public_schema_migration import (
+    _validate_migrated_shard,
+    _write_migration_batch,
     migrate_public_shard,
 )
 from osm_polygon_website_tag.runtime.run_state import hash_shard
+from osm_polygon_website_tag.storage.batch_sink import BatchParquetSink
 
 
 def _v1_2_row() -> dict[str, object]:
@@ -125,3 +128,17 @@ def test_migrate_rejects_unknown_schema_without_changing_original(tmp_path: Path
         migrate_public_shard(shard)
 
     assert shard.read_bytes() == before
+
+
+def test_migration_private_batch_writer_sets_current_schema_version(tmp_path: Path) -> None:
+    source = tmp_path / "source.parquet"
+    staged = tmp_path / "staged.parquet"
+    pq.write_table(pa.Table.from_pylist([_v1_2_row()], schema=POLYGON_PUBLIC_SCHEMA_V1_2), source)
+    sink = BatchParquetSink(staged, POLYGON_PUBLIC_SCHEMA, batch_rows=1)
+    try:
+        _write_migration_batch(pq.ParquetFile(source).read_row_group(0), sink)
+        sink.close()
+        _validate_migrated_shard(staged, sink.row_count, 1)
+    finally:
+        sink.close()
+    assert pq.read_table(staged).to_pylist()[0]["schema_version"] == "v1.3"

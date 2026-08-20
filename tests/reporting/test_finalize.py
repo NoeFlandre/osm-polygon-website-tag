@@ -14,7 +14,13 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.card import build_card
-from osm_polygon_website_tag.reporting.finalize import finalize_run, finalize_snapshot
+from osm_polygon_website_tag.reporting.finalize import (
+    _column_has_unfinished_status,
+    _snapshot_preflight_error,
+    _unfinished_shard_error,
+    finalize_run,
+    finalize_snapshot,
+)
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
@@ -169,6 +175,28 @@ def _sha(path: Path) -> str:
     import hashlib
 
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_finalize_private_status_helpers_detect_pending_rows(tmp_path: Path) -> None:
+    path = tmp_path / "shard.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "website_text_status": pa.array(["success", "pending"]),
+                "contact_website_text_status": pa.array(["absent", "absent"]),
+            }
+        ),
+        path,
+    )
+    parquet = pq.ParquetFile(path)
+    assert _column_has_unfinished_status(parquet, "website_text_status")
+    assert not _column_has_unfinished_status(parquet, "contact_website_text_status")
+    assert _unfinished_shard_error(path) == "shard.parquet contains unfinished text statuses"
+    assert _snapshot_preflight_error({"snapshot_status": "done"}, "card_built") is None
+    assert (
+        _snapshot_preflight_error({}, "initialized")
+        == "snapshot finalization requires snapshot_status='done'"
+    )
 
 
 def test_finalize_run_writes_receipt(tmp_path: Path) -> None:

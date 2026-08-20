@@ -125,15 +125,18 @@ All Python tools run inside the locked `uv` environment. If a hook fails, run
 the named recipe directly, fix the reported issue, and retry; do not bypass
 hooks with `--no-verify`.
 
-The test-quality pass keeps the deterministic tag and public-schema contracts
-under a 75% project-wide coverage floor, reports CRAP scores for those
-contracts and the end-to-end workflow orchestration, and runs Mutmut against
-the deterministic tag/schema contracts with their focused tests. Every
-selected function must have a CRAP score strictly below 6; the mutation gate
-fails on any surviving or timed-out mutant. Mutation testing is intentionally separate from `just check` because
-it is substantially slower. Both commands are read-only with respect to PBFs,
-run artifacts, and remote services; Mutmut's temporary `mutants/` directory is
-local scratch state and may be removed after the run.
+The test-quality pass keeps the project-wide coverage floor at 75%, reports
+CRAP scores for every production function (strictly below 6), and runs Mutmut
+over the complete package. The mutation adapter runs coverage once and each
+mutant's tests in fresh Python processes, which avoids native-extension reload
+failures on macOS while preserving Mutmut's normal test selection. The
+architecture-only tests are excluded from mutation runs because they inspect
+the source tree itself; they still run in `just check`. The mutation gate fails
+on any surviving or timed-out mutant. Mutation testing is intentionally
+separate from `just check` because it is substantially slower. Both commands
+are read-only with respect to PBFs, run artifacts, and remote services;
+Mutmut's temporary `mutants/` directory is local scratch state and may be
+removed after the run.
 
 ## Public documentation
 

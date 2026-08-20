@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import pyarrow as pa
@@ -20,6 +21,25 @@ from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.pipeline.enrich import (
     DEFAULT_FETCH_WORKERS,
     MAX_FETCH_WORKERS,
+    _apply_cached_results,
+    _apply_result,
+    _completed_fetch,
+    _drain_interrupted_fetches,
+    _extract_fetched,
+    _fetch,
+    _finalize_batch,
+    _has_complete_text,
+    _mark_absent,
+    _mark_invalid_url,
+    _prepare_batch,
+    _queue_tag,
+    _record_fetched,
+    _record_fetches,
+    _record_one_fetch,
+    _resolve_pending,
+    _skip_checkpointed_rows,
+    _submit_fetches,
+    _validate_enrichment_settings,
     enrich_polygon_shard,
 )
 from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
@@ -53,6 +73,145 @@ def _current_row(index: int) -> dict[str, object]:
 def _extract(html: bytes, *, url: str) -> TextExtraction:
     text = html.decode()
     return TextExtraction("success", text, len(text.split()), None, "2.1.0")
+
+
+def test_private_enrichment_state_helpers_are_deterministic(tmp_path: Path) -> None:
+    _validate_enrichment_settings(1, 1)
+    with pytest.raises(ValueError, match="fetch_workers"):
+        _validate_enrichment_settings(0, 1)
+    with pytest.raises(ValueError, match="batch_rows"):
+        _validate_enrichment_settings(1, 0)
+    rows: list[dict[str, object]] = [{"id": 1}, {"id": 2}, {"id": 3}]
+    assert _skip_checkpointed_rows(rows, 1) == ([{"id": 2}, {"id": 3}], 0)
+    assert _skip_checkpointed_rows(rows, 5) == ([], 2)
+    assert _skip_checkpointed_rows(rows, 0) == (rows, 0)
+
+    row: dict[str, object] = {}
+    _mark_absent(row, "website")
+    assert row == {
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "absent",
+    }
+    assert not _has_complete_text(row, "website")
+    _apply_result(
+        row,
+        "website",
+        CachedText("https://example.org", "success", "text", 1, None, None, 0, "", None, "run"),
+    )
+    assert _has_complete_text(row, "website")
+    _mark_invalid_url(row, "website", "ftp://example.org", "run")
+    assert row["website_text_status"] == "invalid_url"
+
+
+def test_private_enrichment_url_queue_and_fetch_helpers(tmp_path: Path) -> None:
+    row: dict[str, object] = {
+        "website": "https://example.org",
+        "website_text_status": "pending",
+    }
+    pending: dict[str, list[tuple[dict[str, object], str]]] = {}
+    lookup: set[str] = set()
+    _queue_tag(
+        row,
+        value_column="website",
+        field_prefix="website",
+        invocation_id="run",
+        pending=pending,
+        lookup_urls=lookup,
+    )
+    assert lookup == {"https://example.org"}
+    assert pending == {"https://example.org": [(row, "website")]}
+    assert (
+        _fetch("https://example.org", fetcher=lambda url: FetchResult("fetch_error", url)).status
+        == "fetch_error"
+    )
+    fetched = FetchResult("ok", "https://example.org", final_url=None, body=b"hello world")
+    cached = _extract_fetched(
+        "https://example.org", fetched, invocation_id="run", extractor=_extract
+    )
+    assert cached.status == "success"
+    assert cached.word_count == 2
+    failed_future: Future[FetchResult] = Future()
+    failed_future.set_exception(RuntimeError("worker failed"))
+    assert _completed_fetch(failed_future) is None
+    cache = TextCache(tmp_path / "cache.sqlite3")
+    try:
+        unresolved = _apply_cached_results(
+            pending,
+            lookup,
+            cache=cache,
+            invocation_id="run",
+        )
+        assert unresolved == pending
+        _record_fetched(
+            "https://example.org",
+            fetched,
+            pending["https://example.org"],
+            cache=cache,
+            invocation_id="run",
+            extractor=_extract,
+        )
+        assert row["website_text"] == "hello world"
+        cache.flush()
+    finally:
+        cache.close()
+
+
+def test_private_enrichment_batch_and_future_helpers(tmp_path: Path) -> None:
+    original = _current_row(1)
+    original["website_text"] = None
+    original["website_word_count"] = None
+    original["website_text_status"] = "pending"
+    states, pending, urls = _prepare_batch(
+        [original],
+        source_schema=POLYGON_PUBLIC_SCHEMA,
+        invocation_id="run",
+    )
+    assert len(states) == 1
+    assert urls == {"https://example.org"}
+    assert pending["https://example.org"]
+    assert _finalize_batch(states)[0]["schema_version"] == "v1.3"
+    cache = TextCache(tmp_path / "cache.sqlite3")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            futures = _submit_fetches(
+                pending,
+                fetch_pool=pool,
+                fetcher=lambda url: FetchResult("ok", url, final_url=url, body=b"text"),
+            )
+            _record_fetches(
+                pending,
+                futures,
+                cache=cache,
+                invocation_id="run",
+                extractor=_extract,
+            )
+            assert states[0].row["website_text"] == "text"
+            direct_future: Future[FetchResult] = Future()
+            direct_future.set_result(
+                FetchResult(
+                    "ok", "https://example.org", final_url="https://example.org", body=b"direct"
+                )
+            )
+            _record_one_fetch(
+                "https://example.org",
+                direct_future,
+                pending["https://example.org"],
+                cache=cache,
+                invocation_id="run-direct",
+                extractor=_extract,
+            )
+            _resolve_pending(
+                {},
+                cache=cache,
+                invocation_id="run",
+                fetcher=lambda _url: pytest.fail("empty pending must not fetch"),
+                extractor=_extract,
+                fetch_pool=pool,
+            )
+            _drain_interrupted_fetches({}, {}, cache=cache, invocation_id="run", extractor=_extract)
+    finally:
+        cache.close()
 
 
 def test_assemble_checkpoint_streams_arrow_batches(
@@ -116,7 +275,8 @@ def test_legacy_shard_migrates_both_tags_without_pbf_access(tmp_path: Path) -> N
     assert row["contact_website_text"] == "text from https://contact.example.org"
     assert row["website_word_count"] == 3
     assert row["contact_website_word_count"] == 3
-    assert fetched == ["https://example.org", "https://contact.example.org"]
+    assert len(fetched) == 2
+    assert set(fetched) == {"https://example.org", "https://contact.example.org"}
     assert result.changed
     assert result.max_batch_rows == 1
 

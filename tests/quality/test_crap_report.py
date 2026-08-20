@@ -9,9 +9,6 @@ from pathlib import Path
 
 REPORT = Path(__file__).parents[2] / "scripts" / "quality" / "crap_report.py"
 TARGET = Path(__file__).parents[2] / "src" / "osm_polygon_website_tag" / "domain" / "tags.py"
-PROGRESS_TARGET = (
-    Path(__file__).parents[2] / "src" / "osm_polygon_website_tag" / "application" / "progress.py"
-)
 
 
 def _coverage_file(tmp_path: Path, percent: float) -> Path:
@@ -124,9 +121,14 @@ def test_crap_report_expands_a_directory_in_deterministic_order(tmp_path: Path) 
 
 
 def test_crap_report_counts_class_methods_once_not_as_classes(tmp_path: Path) -> None:
+    source = tmp_path / "progress.py"
+    source.write_text(
+        "class ProgressReporter:\n    def __call__(self) -> None:\n        return None\n",
+        encoding="utf-8",
+    )
     coverage = _coverage_file(tmp_path, 100.0)
     result = _run_report_for(
-        PROGRESS_TARGET,
+        source,
         "--coverage-json",
         str(coverage),
         "--max-crap",

@@ -19,7 +19,14 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INITIALIZED,
     STATUS_VERIFIED,
     SourceFingerprint,
+    _read_json_document,
+    _source_fingerprint_payload,
+    _source_identity_matches,
+    _source_inventory_entries_match,
+    _validate_source_filename,
+    _validate_source_numeric_fields,
     _validate_status_count,
+    _validated_source_entry,
     expected_source_inventory,
     initialise_run,
     load_run,
@@ -41,6 +48,51 @@ def _write_pbf_with_size(path: Path, content: bytes) -> Path:
 def test_run_id_format(tmp_path: Path) -> None:
     run_dir, _ = initialise_run(tmp_path, run_id="test-run-id-format")
     assert run_dir.name == "test-run-id-format"
+
+
+def test_run_state_private_source_validation_helpers() -> None:
+    fp = SourceFingerprint(filename="a.osm.pbf", size_bytes=2, mtime_ns=3)
+    assert _source_fingerprint_payload(fp) == {
+        "filename": "a.osm.pbf",
+        "size_bytes": 2,
+        "mtime_ns": 3,
+    }
+    assert (
+        _validated_source_entry(
+            {"filename": "a.osm.pbf", "size_bytes": 2, "mtime_ns": 3},
+            label="sources",
+            index=0,
+        )["filename"]
+        == "a.osm.pbf"
+    )
+    _validate_source_filename("a.osm.pbf", label="sources", index=0)
+    _validate_source_numeric_fields({"size_bytes": 2, "mtime_ns": 3}, label="sources", index=0)
+    with pytest.raises(ValueError, match="filename"):
+        _validate_source_filename("", label="sources", index=0)
+    with pytest.raises(ValueError, match="size_bytes"):
+        _validate_source_numeric_fields(
+            {"size_bytes": True, "mtime_ns": 3}, label="sources", index=0
+        )
+    assert _source_identity_matches(
+        {"size_bytes": 2, "mtime_ns": 3}, {"size_bytes": 2, "mtime_ns": 3}
+    )
+    assert not _source_identity_matches(
+        {"size_bytes": 2, "mtime_ns": 4}, {"size_bytes": 2, "mtime_ns": 3}
+    )
+    assert _source_inventory_entries_match(
+        [{"filename": "a", "size_bytes": 1, "mtime_ns": 2}],
+        [{"filename": "a", "size_bytes": 1, "mtime_ns": 2, "extra": 1}],
+    )
+
+
+def test_read_json_document_normalizes_corruption(tmp_path: Path) -> None:
+    valid = tmp_path / "valid.json"
+    valid.write_text('{"ok": true}', encoding="utf-8")
+    assert _read_json_document(valid, label="document") == {"ok": True}
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid document JSON"):
+        _read_json_document(invalid, label="document")
 
 
 def test_initialise_run_creates_layout(tmp_path: Path) -> None:

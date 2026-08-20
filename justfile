@@ -42,9 +42,9 @@ crap: coverage
     uv run --locked python scripts/quality/crap_report.py --coverage-json /tmp/osm-polygon-website-tag-coverage.json --path src/osm_polygon_website_tag --max-crap 6
 
 mutation:
-    uv run --locked mutmut run --max-children 2
+    uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
     uv run --locked mutmut results --all true | tee /tmp/osm-polygon-website-tag-mutmut-results.txt
-    if rg -q ': (survived|timeout)' /tmp/osm-polygon-website-tag-mutmut-results.txt; then printf '%s\n' 'Mutation gate failed: surviving or timed-out mutants remain.' >&2; exit 1; fi
+    if rg -q ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)' /tmp/osm-polygon-website-tag-mutmut-results.txt; then printf '%s\n' 'Mutation gate failed: an unverified mutant remains.' >&2; exit 1; fi
 
 quality: crap mutation
 

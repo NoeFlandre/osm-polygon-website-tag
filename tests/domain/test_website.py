@@ -6,6 +6,7 @@ import pytest
 
 from osm_polygon_website_tag.domain.website import (
     WebsiteClass,
+    _is_bare_hostname,
     classify_contact_website,
     classify_website,
     extract_contact_hostname,
@@ -108,6 +109,19 @@ def test_is_redacted(value: str, expected: bool) -> None:
 def test_classify_website_is_pure() -> None:
     v = "https://example.com"
     assert classify_website(v) == classify_website(v) == WebsiteClass.ABSOLUTE_URL
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("example.org", True),
+        ("sub.example.org", True),
+        ("localhost", False),
+        ("bad host.org", False),
+    ],
+)
+def test_bare_hostname_contract(value: str, expected: bool) -> None:
+    assert _is_bare_hostname(value) is expected
 
 
 def test_extract_hostname_strips_path_and_query() -> None:

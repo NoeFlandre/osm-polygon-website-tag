@@ -5,13 +5,28 @@ from __future__ import annotations
 import json
 
 import pyarrow as pa
+import pytest
 
 from osm_polygon_website_tag.pipeline.partition_aggregate import (
     ShardAggregate,
+    _overlap_bucket,
     aggregate_shard,
     count_duplicate_ids,
     merge_aggregates,
 )
+
+
+@pytest.mark.parametrize(
+    ("has_website", "has_wikidata", "expected"),
+    [
+        (True, True, "both_count"),
+        (True, False, "website_only_count"),
+        (False, True, "wikidata_only_count"),
+        (False, False, "neither_count"),
+    ],
+)
+def test_overlap_bucket_is_exact(has_website: bool, has_wikidata: bool, expected: str) -> None:
+    assert _overlap_bucket(has_website, has_wikidata) == expected
 
 
 def _row(

@@ -78,14 +78,28 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     assert "--max-crap 6" in justfile
     assert "--path src/osm_polygon_website_tag" in justfile
     assert "--path src/osm_polygon_website_tag/application/workflow.py" not in justfile
+    assert "python scripts/quality/mutation_runner.py" in justfile
 
 
-def test_mutation_gate_covers_the_whole_package_and_test_suite() -> None:
+def test_mutation_gate_covers_the_whole_package_and_behavior_suite() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     config = project["tool"]["mutmut"]
 
     assert config["source_paths"] == ["src/osm_polygon_website_tag"]
     assert "pytest_add_cli_args_test_selection" not in config
+    assert "--ignore=tests/architecture" in config["pytest_add_cli_args"]
+    assert {
+        ".github",
+        ".pre-commit-config.yaml",
+        ".dockerignore",
+        "Dockerfile",
+        "LICENSE",
+        "README.md",
+        "docs",
+        "justfile",
+        "mkdocs.yml",
+        "scripts",
+    } <= set(config["also_copy"])
 
 
 def test_pre_commit_uses_uv_locked_project_tools() -> None:

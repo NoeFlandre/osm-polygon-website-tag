@@ -5,14 +5,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 
 from osm_polygon_website_tag.publishing.incremental import (
+    _bundle_changed,
+    _bundle_state,
+    _incremental_upload_paths,
+    _matching_local_sources,
+    _remote_shard_entry,
+    _remote_shard_hashes,
+    _set_typed_dict,
+    _validate_contract_version,
+    _validate_global_item,
+    _validate_hex_sha256,
+    _validate_incremental_artifacts,
     _validate_legacy_entry,
+    _validate_source_entry,
+    _validated_remote_hashes,
     incremental_publish_changed_shard,
     load_upload_checkpoint,
+    persist_successful_upload,
     reconcile_upload_checkpoint,
     remote_polygon_shard_hashes,
 )
@@ -53,6 +67,16 @@ def test_incremental_uploads_changed_shard_and_bundle(tmp_path: Path, monkeypatc
     checkpoint = json.loads((run_dir / "manifests" / "uploaded_polygons.json").read_text())
     assert checkpoint["schema_version"] == "v2"
     assert checkpoint["sources"]["a.osm.pbf"]["polygon_sha256"]
+
+
+def test_persist_successful_upload_records_source_and_bundle(tmp_path: Path) -> None:
+    run_dir, shard = _run(tmp_path)
+
+    persist_successful_upload(run_dir, Path("a.osm.pbf"))
+
+    checkpoint = load_upload_checkpoint(run_dir)
+    assert checkpoint["sources"] == {"a.osm.pbf": {"polygon_sha256": hash_shard(shard)}}
+    assert checkpoint["global_bundle"]["map_contract_version"] >= 1
 
 
 def test_incremental_bundle_only_upload_does_not_upload_shard(tmp_path: Path, monkeypatch) -> None:
@@ -614,6 +638,52 @@ def test_load_upload_checkpoint_rejects_string_map_contract_version(
 
     with pytest.raises(ValueError, match="invalid uploaded polygon checkpoint"):
         load_upload_checkpoint(run_dir)
+
+
+def test_incremental_private_validation_and_selection_helpers() -> None:
+    bundle: Any = {}
+    _set_typed_dict(bundle, "map_contract_version", 2)
+    assert bundle == {"map_contract_version": 2}
+    assert _validate_hex_sha256("a" * 64, field="field") == "a" * 64
+    assert _validate_contract_version("version", 3) == 3
+    _validate_global_item(bundle, "readme_sha256", "b" * 64)
+    assert bundle["readme_sha256"] == "b" * 64
+    assert _validate_source_entry("a.osm.pbf", {"polygon_sha256": "c" * 64}) == {
+        "polygon_sha256": "c" * 64
+    }
+    assert _validated_remote_hashes({"a.osm.pbf": "d" * 64}) == {"a.osm.pbf": "d" * 64}
+    assert (
+        _matching_local_sources(
+            {"a.osm.pbf": "d" * 64},
+            {},
+        )
+        == {}
+    )
+
+
+def test_incremental_private_remote_and_bundle_helpers(tmp_path: Path) -> None:
+    run_dir, shard = _run(tmp_path)
+    with pytest.raises(ValueError, match="no SHA-256"):
+        _remote_shard_entry(SimpleNamespace(path="polygons/a.parquet", lfs=None))
+    assert _remote_shard_entry(SimpleNamespace(path="README.md", lfs=None)) is None
+    item = SimpleNamespace(path="polygons/a.parquet", lfs=SimpleNamespace(sha256="a" * 64))
+    assert _remote_shard_entry(item) == ("a.osm.pbf", "a" * 64)
+    assert _remote_shard_hashes([item, SimpleNamespace(path="README.md", lfs=None)]) == {
+        "a.osm.pbf": "a" * 64
+    }
+    with pytest.raises(ValueError, match="remote source key"):
+        _validated_remote_hashes({"a.parquet": "a" * 64})
+    with pytest.raises(ValueError, match="missing incremental artifact"):
+        _validate_incremental_artifacts(tmp_path / "missing")
+    current = _bundle_state(run_dir)
+    assert current["map_contract_version"] >= 1
+    assert not _bundle_changed(current, current)
+    changed: Any = dict(current)
+    changed["map_contract_version"] = current["map_contract_version"] + 1
+    assert _bundle_changed(current, changed)
+    assert _incremental_upload_paths(run_dir, shard, shard_changed=True, bundle_changed=False) == [
+        shard
+    ]
 
 
 def test_load_upload_checkpoint_rejects_unknown_source_field(tmp_path: Path) -> None:

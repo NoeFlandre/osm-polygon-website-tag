@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 
 import osmium
 import osmium.osm
+import pyproj
 import pytest
 from shapely.geometry import Polygon
 
@@ -16,10 +18,39 @@ from osm_polygon_website_tag.domain.geometry import (
     CENTROID_KIND,
     GeometryRejection,
     PolygonGeometry,
+    _checked_ring_area,
+    _largest_polygon,
+    _polygon_geodesic_area,
     _repair_geometry,
+    _round_ring,
+    _rounded_polygon_rings,
+    _validate_outer_ring_area,
+    _weighted_ring_sums,
     compute_polygon_area_m2,
     geometry_from_area,
 )
+
+
+def test_private_geometry_helpers_preserve_rounding_and_component_selection() -> None:
+    ring = _round_ring([[0.123456789, 1.987654321], [2.0, 3.0]])
+    assert ring == [[0.1234568, 1.9876543], [2.0, 3.0]]
+
+    polygon = Polygon([(0, 0), (2, 0), (2, 2), (0, 0)])
+    larger = Polygon([(0, 0), (3, 0), (3, 3), (0, 0)])
+    multipolygon = geometry_module.MultiPolygon([polygon, larger])
+    assert _largest_polygon(multipolygon).area == pytest.approx(larger.area)
+    assert _rounded_polygon_rings(polygon)[0][0] == [0.0, 0.0]
+
+
+def test_private_geometry_helpers_validate_geodesic_ring_and_weighted_sums() -> None:
+    geod = pyproj.Geod(ellps="WGS84")
+    polygon = Polygon([(0, 0), (1, 0), (1, 1), (0, 0)])
+    outer = _checked_ring_area(geod, geometry_module.LinearRing(polygon.exterior.coords), "outer")
+    assert math.isfinite(outer)
+    assert _polygon_geodesic_area(geod, polygon) > 0
+    _validate_outer_ring_area(geod, polygon)
+    sums = _weighted_ring_sums(geod, list(zip(*polygon.exterior.coords.xy, strict=True)))
+    assert sums[2] > 0
 
 
 def _write_synthetic_osm(xml: str) -> str:

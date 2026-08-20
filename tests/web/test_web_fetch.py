@@ -8,6 +8,7 @@ import pytest
 
 import osm_polygon_website_tag.web.web_fetch as web_fetch_module
 from osm_polygon_website_tag.web.web_fetch import (
+    FetchResult,
     HttpResponse,
     UnsafeUrlError,
     fetch_html,
@@ -158,3 +159,69 @@ def test_download_once_reads_response_without_following_redirects(monkeypatch) -
     result = web_fetch_module._download_once("https://example.org", 3.0, 10)
 
     assert result == HttpResponse(200, {"Content-Type": "text/plain"}, b"hello")
+
+
+def test_private_fetch_classifiers_and_redirect_helpers_are_deterministic() -> None:
+    response = HttpResponse(200, {"Content-Type": "text/html"}, b"body")
+    assert web_fetch_module._header(response.headers, "content-type") == "text/html"
+    assert web_fetch_module._header(response.headers, "missing") is None
+    assert web_fetch_module._status_error(response, "https://example.org", "requested", 10) is None
+    assert web_fetch_module._size_error(response, "https://example.org", "requested", 3)
+    assert web_fetch_module._content_type_error(
+        HttpResponse(200, {"Content-Type": "image/png"}, b"x"),
+        "https://example.org",
+        "requested",
+        10,
+    )
+    next_url, terminal = web_fetch_module._redirect_step(
+        HttpResponse(302, {"location": "/next"}, b""),
+        "https://example.org",
+        "requested",
+        0,
+        2,
+    )
+    assert next_url == "https://example.org/next"
+    assert terminal is None
+    _, no_location = web_fetch_module._redirect_step(
+        HttpResponse(302, {}, b""), "https://example.org", "requested", 0, 2
+    )
+    assert isinstance(no_location, FetchResult)
+    assert no_location.message == "redirect_without_location"
+    _, limit = web_fetch_module._redirect_step(
+        HttpResponse(302, {"location": "/next"}, b""),
+        "https://example.org",
+        "requested",
+        2,
+        2,
+    )
+    assert isinstance(limit, FetchResult)
+    assert limit.message == "redirect_limit"
+    assert (
+        web_fetch_module._terminal_response(response, "https://example.org", "requested", 10).status
+        == "ok"
+    )
+
+    def resolver(_host: str, _port: int):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+
+    assert (
+        web_fetch_module._safe_request(
+            "https://example.org",
+            "requested",
+            lambda *_args: response,
+            resolver,
+            1.0,
+            10,
+        )
+        == response
+    )
+    failed = web_fetch_module._safe_request(
+        "https://example.org",
+        "requested",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("hidden")),
+        resolver,
+        1.0,
+        10,
+    )
+    assert isinstance(failed, FetchResult)
+    assert failed.status == "fetch_error"

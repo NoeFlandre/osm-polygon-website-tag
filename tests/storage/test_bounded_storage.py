@@ -15,6 +15,13 @@ from osm_polygon_website_tag.storage.candidate_ledger import (
     DEFAULT_COMMIT_BATCH_SIZE,
     CandidateLedger,
 )
+from osm_polygon_website_tag.storage.duckdb_engine import (
+    _make_connection,
+    canonical_observations,
+    cells_global_canonical,
+    cells_global_observation,
+    copy_query_atomic,
+)
 
 _TS = dt.datetime(2024, 1, 1, tzinfo=dt.UTC)
 
@@ -94,6 +101,26 @@ def test_candidate_ledger_retry_discards_stale_temporary_database(tmp_path: Path
 
 def test_default_commit_batch_size_is_bounded() -> None:
     assert DEFAULT_COMMIT_BATCH_SIZE == 4096
+
+
+def test_duckdb_private_helpers_configure_and_copy_atomically(tmp_path: Path) -> None:
+    connection = _make_connection(tmp_path / "duckdb", memory_limit="64MB")
+    try:
+        connection.execute(
+            "CREATE TABLE observations (osm_type VARCHAR, osm_id BIGINT, osm_version INTEGER, osm_timestamp TIMESTAMP, source_pbf VARCHAR, has_website BOOLEAN, has_contact_website BOOLEAN, has_wikidata BOOLEAN)"
+        )
+        connection.execute(
+            "INSERT INTO observations VALUES ('way', 1, 1, TIMESTAMP '2024-01-01', 'a.osm.pbf', true, false, false)"
+        )
+        assert cells_global_observation(connection)[0]["cell_100_w1_c0_d0"] == 1
+        canonical_observations(connection)
+        assert cells_global_canonical(connection)[0]["cell_100_w1_c0_d0"] == 1
+        destination = tmp_path / "result.parquet"
+        copy_query_atomic(connection, "SELECT 1 AS value", destination)
+        assert destination.exists()
+        assert pq.read_table(destination).to_pylist() == [{"value": 1}]
+    finally:
+        connection.close()
 
 
 @pytest.mark.parametrize("bad_batch_size", [0, -1, -4096])

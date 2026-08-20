@@ -23,6 +23,23 @@ def _ts():
     return pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py()
 
 
+def test_card_stats_private_arrow_helpers_count_invalid_values_and_select_sources(
+    tmp_path: Path,
+) -> None:
+    assert (
+        card_stats_module._count_invalid_statuses(pa.array(["success", "unknown", None, "absent"]))
+        == 2
+    )
+    directory = tmp_path / "polygons"
+    directory.mkdir()
+    first = directory / "a.parquet"
+    second = directory / "b.parquet"
+    pq.write_table(pa.table({"value": [1]}), first)
+    pq.write_table(pa.table({"value": [2]}), second)
+    assert card_stats_module._selected_parquets(directory, None) == [first, second]
+    assert card_stats_module._selected_parquets(directory, {"b.osm.pbf"}) == [second]
+
+
 def _public_row(*, polygon_id: str = "p1", source_pbf: str = "monaco-latest.osm.pbf"):
     return {
         "polygon_id": polygon_id,

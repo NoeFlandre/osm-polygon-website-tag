@@ -16,6 +16,7 @@ from osm_polygon_website_tag.pipeline.area_work import (
     AreaPayload,
     AreaResult,
     AreaWorkCoordinator,
+    validate_area_settings,
 )
 from osm_polygon_website_tag.pipeline.area_work import (
     __all__ as area_work_exports,
@@ -123,3 +124,21 @@ def test_area_worker_settings_reject_unsafe_bounds() -> None:
             max_in_flight_areas=MAX_IN_FLIGHT_AREAS + 1,
             processor=process,
         )
+
+
+def test_validate_area_settings_and_abort_are_idempotent() -> None:
+    validate_area_settings(1, 1)
+    with pytest.raises(ValueError, match="area_workers"):
+        validate_area_settings(0, 1)
+    with pytest.raises(ValueError, match="max_in_flight_areas"):
+        validate_area_settings(1, 0)
+    coordinator = AreaWorkCoordinator(
+        area_workers=1,
+        max_in_flight_areas=1,
+        processor=lambda payload: AreaResult(public_row={"sequence": payload.sequence}),
+    )
+    coordinator.submit(_payload(1))
+    coordinator.abort()
+    coordinator.abort()
+    with pytest.raises(RuntimeError, match="closed"):
+        coordinator.submit(_payload(2))
