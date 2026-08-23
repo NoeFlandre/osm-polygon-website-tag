@@ -171,6 +171,18 @@ def _sha256(p: Path) -> str:
     return h.hexdigest()
 
 
+def test_shared_json_loader_reports_parse_errors_once(tmp_path: Path) -> None:
+    read_json_value = getattr(verify_module, "_read_json_value", None)
+    assert callable(read_json_value)
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{not-json", encoding="utf-8")
+    errors: list[str] = []
+    ok, value = read_json_value(invalid, errors, label="array")
+    assert ok is False
+    assert value is None
+    assert errors and errors[0].startswith("invalid JSON array")
+
+
 def test_reporting_manifest_consumers_use_typed_entries() -> None:
     assert (
         get_type_hints(verify_module._verify_expected_inventory)["manifest"]
