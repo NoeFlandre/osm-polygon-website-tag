@@ -44,6 +44,8 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_EXTRACTED,
     STATUS_EXTRACTING,
     STATUS_INITIALIZED,
+    RunState,
+    SourceFingerprint,
     expected_source_inventory,
     initialise_run,
     load_run,
@@ -138,7 +140,9 @@ def extract_command(
     return 0
 
 
-def _validate_expected_extract_source(run_dir: Path, fingerprint: Any, pbf_path: Path) -> None:
+def _validate_expected_extract_source(
+    run_dir: Path, fingerprint: SourceFingerprint, pbf_path: Path
+) -> None:
     """Require the exact source identity recorded during run initialization."""
     expected = expected_source_inventory(run_dir)
     candidate = {
@@ -150,7 +154,7 @@ def _validate_expected_extract_source(run_dir: Path, fingerprint: Any, pbf_path:
         raise ValueError(f"source is not in exact expected inventory: {pbf_path.name}")
 
 
-def _prepare_extract_status(state: Any) -> None:
+def _prepare_extract_status(state: RunState) -> None:
     """Transition an initialized run into extraction or reject other states."""
     status = state.metadata.get("status")
     if status == STATUS_INITIALIZED:

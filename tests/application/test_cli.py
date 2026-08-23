@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_type_hints
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -16,6 +17,8 @@ from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSER
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.runtime.run_state import (
+    RunState,
+    SourceFingerprint,
     hash_shard,
     initialise_run,
     record_processed_source,
@@ -114,6 +117,11 @@ def test_cli_help_exits_2() -> None:
 
 def test_cli_exposes_explicit_typer_app() -> None:
     assert hasattr(cli, "app")
+
+
+def test_cli_extract_helpers_expose_concrete_state_types() -> None:
+    assert get_type_hints(cli._validate_expected_extract_source)["fingerprint"] is SourceFingerprint
+    assert get_type_hints(cli._prepare_extract_status)["state"] is RunState
 
 
 def test_typer_help_lists_every_public_command() -> None:
