@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast, get_type_hints
 
 import pytest
 
+from osm_polygon_website_tag.runtime import run_state as run_state_module
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -19,6 +21,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INITIALIZED,
     STATUS_VERIFIED,
     SourceFingerprint,
+    SourceManifestEntry,
     _read_json_document,
     _source_fingerprint_payload,
     _source_identity_matches,
@@ -43,6 +46,12 @@ from osm_polygon_website_tag.runtime.run_state import (
 def _write_pbf_with_size(path: Path, content: bytes) -> Path:
     path.write_bytes(content)
     return path
+
+
+def test_run_state_uses_typed_source_manifest_entries() -> None:
+    entry_type = getattr(run_state_module, "SourceManifestEntry", None)
+    assert entry_type is not None
+    assert get_type_hints(run_state_module.RunState)["sources"] == dict[str, entry_type]
 
 
 def test_run_id_format(tmp_path: Path) -> None:
@@ -81,7 +90,12 @@ def test_run_state_private_source_validation_helpers() -> None:
     )
     assert _source_inventory_entries_match(
         [{"filename": "a", "size_bytes": 1, "mtime_ns": 2}],
-        [{"filename": "a", "size_bytes": 1, "mtime_ns": 2, "extra": 1}],
+        [
+            cast(
+                SourceManifestEntry,
+                {"filename": "a", "size_bytes": 1, "mtime_ns": 2, "extra": 1},
+            )
+        ],
     )
 
 

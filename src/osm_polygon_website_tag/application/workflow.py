@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict, cast
@@ -957,7 +957,7 @@ def _progress(callback: Callable[[str], None] | None, message: str) -> None:
 
 
 def _source_upload_is_current(
-    manifest_entry: dict[str, object],
+    manifest_entry: Mapping[str, object],
     filename: str,
     checkpoint: CheckpointV2,
 ) -> bool:

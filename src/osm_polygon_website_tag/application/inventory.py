@@ -15,7 +15,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
-from osm_polygon_website_tag.runtime.run_state import SourceFingerprint, hash_shard
+from osm_polygon_website_tag.runtime.run_state import (
+    SourceFingerprint,
+    SourceManifestEntry,
+    hash_shard,
+)
 from osm_polygon_website_tag.runtime.safety import normalize_path
 
 
@@ -40,7 +44,7 @@ def _reject_duplicate_filenames(sources: list[Path]) -> None:
 
 
 def source_inventory_matches_expected(
-    expected: list[dict[str, Any]],
+    expected: list[SourceManifestEntry],
     fingerprints: list[SourceFingerprint],
 ) -> bool:
     """Return whether current fingerprints exactly match persisted inventory."""
@@ -50,7 +54,7 @@ def source_inventory_matches_expected(
 
 def source_bundle_is_complete(
     run_dir: Path,
-    manifest: dict[str, Any] | None,
+    manifest: SourceManifestEntry | None,
     fingerprint: SourceFingerprint,
 ) -> bool:
     """Return whether one source's three output shards match their contracts."""
@@ -64,7 +68,7 @@ def source_bundle_is_complete(
 
 
 def _manifest_matches_fingerprint(
-    manifest: dict[str, Any] | None, fingerprint: SourceFingerprint
+    manifest: SourceManifestEntry | None, fingerprint: SourceFingerprint
 ) -> bool:
     """Check the persisted source identity before opening any shard."""
     return manifest is not None and all(
@@ -72,7 +76,7 @@ def _manifest_matches_fingerprint(
     )
 
 
-def _public_shard_matches(path: Path, manifest: dict[str, Any]) -> bool:
+def _public_shard_matches(path: Path, manifest: SourceManifestEntry) -> bool:
     """Validate the public shard schema, row count, and digest."""
     if not path.is_file():
         return False
@@ -84,7 +88,7 @@ def _public_shard_matches(path: Path, manifest: dict[str, Any]) -> bool:
     )
 
 
-def _auxiliary_shards_match(run_dir: Path, stem: str, manifest: dict[str, Any]) -> bool:
+def _auxiliary_shards_match(run_dir: Path, stem: str, manifest: SourceManifestEntry) -> bool:
     """Validate the comparison and rejection shards for one source."""
     paths_and_contracts = (
         (
@@ -109,7 +113,7 @@ def _auxiliary_shards_match(run_dir: Path, stem: str, manifest: dict[str, Any]) 
 def _auxiliary_shard_matches(
     path: Path,
     schema_contract: Any,
-    manifest: dict[str, Any],
+    manifest: SourceManifestEntry,
     count_key: str,
     hash_key: str,
 ) -> bool:

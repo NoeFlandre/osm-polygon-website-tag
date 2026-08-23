@@ -55,7 +55,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Required, TypedDict, cast
 
 # Run state names. Transitions are documented in the module docstring.
 STATUS_INITIALIZED = "initialized"
@@ -124,6 +124,25 @@ class SourceFingerprint:
         return self.filename.removesuffix(".osm.pbf")
 
 
+class SourceManifestEntry(TypedDict, total=False):
+    """Persisted identity, output, and resume fields for one source PBF."""
+
+    filename: Required[str]
+    size_bytes: Required[int]
+    mtime_ns: Required[int]
+    public_row_count: int
+    observation_row_count: int
+    rejection_count: int
+    status: str
+    started_at: str
+    finished_at: str
+    public_shard_sha256: str
+    observation_shard_sha256: str
+    rejection_shard_sha256: str
+    enrichment_pending: bool
+    enrichment_status_counts: dict[str, dict[str, int]]
+
+
 @dataclass
 class RunState:
     """Mutable handle to a run directory on disk."""
@@ -131,7 +150,7 @@ class RunState:
     run_dir: Path
     run_id: str
     metadata: dict[str, Any] = field(default_factory=dict)
-    sources: dict[str, dict[str, Any]] = field(default_factory=dict)
+    sources: dict[str, SourceManifestEntry] = field(default_factory=dict)
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
@@ -156,12 +175,12 @@ def _read_json_document(path: Path, *, label: str) -> Any:
         raise ValueError(f"invalid {label} encoding: {path}") from exc
 
 
-def _validated_source_entries(raw: object, *, label: str) -> list[dict[str, Any]]:
+def _validated_source_entries(raw: object, *, label: str) -> list[SourceManifestEntry]:
     """Validate the structural contract shared by source manifests."""
     if not isinstance(raw, list):
         raise ValueError(f"{label} must be a JSON array")
 
-    entries: list[dict[str, Any]] = []
+    entries: list[SourceManifestEntry] = []
     seen_filenames: set[str] = set()
     for index, raw_entry in enumerate(raw):
         entry = _validated_source_entry(raw_entry, label=label, index=index)
@@ -173,11 +192,11 @@ def _validated_source_entries(raw: object, *, label: str) -> list[dict[str, Any]
     return entries
 
 
-def _validated_source_entry(raw_entry: object, *, label: str, index: int) -> dict[str, Any]:
+def _validated_source_entry(raw_entry: object, *, label: str, index: int) -> SourceManifestEntry:
     """Validate one source-manifest entry's required identity fields."""
     if not isinstance(raw_entry, dict):
         raise ValueError(f"{label}[{index}] must be a JSON object")
-    entry = cast(dict[str, Any], raw_entry)
+    entry = cast(SourceManifestEntry, raw_entry)
     _validate_source_filename(entry.get("filename"), label=label, index=index)
     _validate_source_numeric_fields(entry, label=label, index=index)
     return entry
@@ -189,7 +208,7 @@ def _validate_source_filename(value: object, *, label: str, index: int) -> None:
         raise ValueError(f"{label}[{index}].filename must be a non-empty string")
 
 
-def _validate_source_numeric_fields(entry: dict[str, Any], *, label: str, index: int) -> None:
+def _validate_source_numeric_fields(entry: Mapping[str, object], *, label: str, index: int) -> None:
     """Validate the lightweight source size and mtime fields."""
     for field_name in ("size_bytes", "mtime_ns"):
         value = entry.get(field_name)
@@ -197,7 +216,7 @@ def _validate_source_numeric_fields(entry: dict[str, Any], *, label: str, index:
             raise ValueError(f"{label}[{index}].{field_name} must be a non-bool integer")
 
 
-def _source_fingerprint_payload(fp: SourceFingerprint) -> dict[str, int | str]:
+def _source_fingerprint_payload(fp: SourceFingerprint) -> SourceManifestEntry:
     return {
         "filename": fp.filename,
         "size_bytes": fp.size_bytes,
@@ -341,15 +360,11 @@ def record_processed_source(
     Counts are mandatory; shard SHA-256 hashes are for the *output*
     shards, never for the source PBF itself.
     """
-    entry: dict[str, Any] = _source_fingerprint_payload(fp)
-    entry.update(
-        {
-            "public_row_count": public_row_count,
-            "observation_row_count": observation_row_count,
-            "rejection_count": rejection_count,
-            "status": status,
-        }
-    )
+    entry: SourceManifestEntry = _source_fingerprint_payload(fp)
+    entry["public_row_count"] = public_row_count
+    entry["observation_row_count"] = observation_row_count
+    entry["rejection_count"] = rejection_count
+    entry["status"] = status
     _add_optional_source_metadata(
         entry,
         started_at=started_at,
@@ -362,8 +377,9 @@ def record_processed_source(
     _write_sources_manifest(state)
 
 
-def _add_optional_source_metadata(entry: dict[str, Any], **values: str | None) -> None:
+def _add_optional_source_metadata(entry: SourceManifestEntry, **values: str | None) -> None:
     """Add present timing and output-digest fields without writing nulls."""
+    entry_data = cast(dict[str, object], entry)
     key_map = {
         "started_at": "started_at",
         "finished_at": "finished_at",
@@ -373,7 +389,7 @@ def _add_optional_source_metadata(entry: dict[str, Any], **values: str | None) -
     }
     for name, value in values.items():
         if value is not None:
-            entry[key_map[name]] = value
+            entry_data[key_map[name]] = value
 
 
 def hash_shard(shard_path: Path) -> str:
@@ -488,7 +504,7 @@ def source_is_unchanged(state: RunState, fp: SourceFingerprint) -> bool:
     return prior.get("size_bytes") == fp.size_bytes and prior.get("mtime_ns") == fp.mtime_ns
 
 
-def expected_source_inventory(run_dir: Path) -> list[dict[str, Any]]:
+def expected_source_inventory(run_dir: Path) -> list[SourceManifestEntry]:
     """Return the parsed ``expected_sources.json`` content.
 
     Raises :class:`FileNotFoundError` if the inventory has not been
@@ -516,7 +532,7 @@ def source_inventory_matches(run_dir: Path) -> bool:
 
 
 def _source_inventory_entries_match(
-    expected: list[dict[str, Any]], actual: list[dict[str, Any]]
+    expected: list[SourceManifestEntry], actual: list[SourceManifestEntry]
 ) -> bool:
     """Compare source identity fields independent of enrichment metadata."""
     actual_by_name = {e["filename"]: e for e in actual}
@@ -529,7 +545,7 @@ def _source_inventory_entries_match(
     )
 
 
-def _source_identity_matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
+def _source_identity_matches(actual: Mapping[str, object], expected: Mapping[str, object]) -> bool:
     """Compare filename-independent size and mtime identity fields."""
     return (
         actual["size_bytes"] == expected["size_bytes"]
@@ -552,6 +568,7 @@ __all__ = [
     "STATUS_VERIFIED",
     "RunState",
     "SourceFingerprint",
+    "SourceManifestEntry",
     "atomic_write_json",
     "default_run_id",
     "expected_source_inventory",

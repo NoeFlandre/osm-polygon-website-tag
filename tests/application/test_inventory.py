@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -21,6 +22,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.runtime.run_state import (
     SourceFingerprint,
+    SourceManifestEntry,
     hash_shard,
     snapshot_source_fingerprint,
 )
@@ -77,7 +79,7 @@ def test_discover_sources_reports_sorted_duplicate_basenames(tmp_path: Path) -> 
 
 def _complete_bundle(
     tmp_path: Path,
-) -> tuple[Path, SourceFingerprint, dict[str, object], dict[str, Path]]:
+) -> tuple[Path, SourceFingerprint, SourceManifestEntry, dict[str, Path]]:
     source = tmp_path / "source-latest.osm.pbf"
     source.write_bytes(b"source")
     fingerprint = snapshot_source_fingerprint(source)
@@ -95,15 +97,18 @@ def _complete_bundle(
         path.parent.mkdir(parents=True, exist_ok=True)
         pq.write_table(pa.Table.from_pylist([], schema=schema), path)
 
-    manifest: dict[str, object] = {
-        **asdict(fingerprint),
-        "public_row_count": 0,
-        "observation_row_count": 0,
-        "rejection_count": 0,
-        "public_shard_sha256": hash_shard(shard_paths["public"]),
-        "observation_shard_sha256": hash_shard(shard_paths["observation"]),
-        "rejection_shard_sha256": hash_shard(shard_paths["rejection"]),
-    }
+    manifest = cast(
+        SourceManifestEntry,
+        {
+            **asdict(fingerprint),
+            "public_row_count": 0,
+            "observation_row_count": 0,
+            "rejection_count": 0,
+            "public_shard_sha256": hash_shard(shard_paths["public"]),
+            "observation_shard_sha256": hash_shard(shard_paths["observation"]),
+            "rejection_shard_sha256": hash_shard(shard_paths["rejection"]),
+        },
+    )
     return run_dir, fingerprint, manifest, shard_paths
 
 
@@ -129,7 +134,7 @@ def test_source_bundle_is_complete_fails_closed(
     failure: str,
 ) -> None:
     run_dir, fingerprint, manifest, paths = _complete_bundle(tmp_path)
-    candidate: dict[str, object] | None = manifest
+    candidate: SourceManifestEntry | None = manifest
     if failure == "missing_manifest":
         candidate = None
     elif failure == "fingerprint":
@@ -152,14 +157,14 @@ def test_source_bundle_is_complete_fails_closed(
 def test_source_inventory_matches_expected_is_order_independent_for_current_sources() -> None:
     fp_a = SourceFingerprint("a-latest.osm.pbf", size_bytes=1, mtime_ns=2)
     fp_b = SourceFingerprint("b-latest.osm.pbf", size_bytes=3, mtime_ns=4)
-    expected = [asdict(fp_a), asdict(fp_b)]
+    expected = [cast(SourceManifestEntry, asdict(fp_a)), cast(SourceManifestEntry, asdict(fp_b))]
 
     assert source_inventory_matches_expected(expected, [fp_b, fp_a]) is True
 
 
 def test_source_inventory_matches_expected_rejects_any_identity_change() -> None:
     fingerprint = SourceFingerprint("a-latest.osm.pbf", size_bytes=1, mtime_ns=2)
-    expected = [asdict(fingerprint)]
+    expected = [cast(SourceManifestEntry, asdict(fingerprint))]
     changed = SourceFingerprint("a-latest.osm.pbf", size_bytes=1, mtime_ns=3)
 
     assert source_inventory_matches_expected(expected, [changed]) is False
