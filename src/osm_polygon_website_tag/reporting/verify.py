@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from osm_polygon_website_tag.reporting.verification.analysis import (
     verify_analysis_and_card as _verify_analysis_and_card,
@@ -18,6 +18,7 @@ from osm_polygon_website_tag.reporting.verification.shards import verify_shards 
 from osm_polygon_website_tag.reporting.verification.text import (
     verify_text_invariants as _verify_text_invariants,
 )
+from osm_polygon_website_tag.runtime.run_state import SourceManifestEntry
 
 
 @dataclass
@@ -43,7 +44,7 @@ def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
     errors: list[str] = []
     checked: list[str] = []
     metadata = _read_json_object(root / "manifests" / "run.json", errors)
-    manifest = _read_json_array(root / "manifests" / "sources.json", errors)
+    manifest = _read_source_manifest(root / "manifests" / "sources.json", errors)
     if not manifest:
         errors.append("sources manifest is empty")
 
@@ -72,15 +73,15 @@ def _verify_status_artifacts(
 
 def _verify_expected_inventory(
     root: Path,
-    manifest: list[dict[str, Any]],
+    manifest: list[SourceManifestEntry],
     errors: list[str],
 ) -> None:
     path = root / "manifests" / "expected_sources.json"
     if not path.exists():
         return
-    expected = _read_json_array(path, errors)
+    expected = _read_source_manifest(path, errors)
 
-    def identity(entry: dict[str, Any]) -> tuple[Any, Any, Any]:
+    def identity(entry: SourceManifestEntry) -> tuple[str | int | None, ...]:
         return (
             entry.get("filename"),
             entry.get("size_bytes"),
@@ -89,6 +90,11 @@ def _verify_expected_inventory(
 
     if sorted(map(identity, expected)) != sorted(map(identity, manifest)):
         errors.append("processed sources do not exactly match expected source inventory")
+
+
+def _read_source_manifest(path: Path, errors: list[str]) -> list[SourceManifestEntry]:
+    """Read a structurally valid JSON array at the typed manifest boundary."""
+    return cast(list[SourceManifestEntry], _read_json_array(path, errors))
 
 
 def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,6 +13,7 @@ from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSER
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, schema_matches
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
+from osm_polygon_website_tag.runtime.run_state import SourceManifestEntry
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ SHARD_CONTRACTS: tuple[ShardContract, ...] = (
 
 def verify_shards(
     root: Path,
-    manifest: list[dict[str, Any]],
+    manifest: list[SourceManifestEntry],
     errors: list[str],
     checked: list[str],
 ) -> set[str]:
@@ -68,7 +69,7 @@ def verify_shards(
 
 def _verify_manifest_entry(
     root: Path,
-    entry: dict[str, Any],
+    entry: Mapping[str, object],
     errors: list[str],
     checked: list[str],
     declared: set[str],
@@ -88,7 +89,7 @@ def _verify_shard(
     root: Path,
     stem: str,
     filename: str,
-    entry: dict[str, Any],
+    entry: Mapping[str, object],
     contract: ShardContract,
     errors: list[str],
 ) -> None:
@@ -113,7 +114,7 @@ def _verify_row_count(
     actual_count: int,
     filename: str,
     contract: ShardContract,
-    entry: dict[str, Any],
+    entry: Mapping[str, object],
     errors: list[str],
 ) -> None:
     expected_count = entry.get(contract.count_key)
@@ -130,7 +131,7 @@ def _verify_shard_hash(
     path: Path,
     filename: str,
     contract: ShardContract,
-    entry: dict[str, Any],
+    entry: Mapping[str, object],
     errors: list[str],
 ) -> None:
     expected_hash = entry.get(contract.hash_key)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import get_type_hints
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -13,8 +14,11 @@ import pytest
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+from osm_polygon_website_tag.reporting import verify as verify_module
+from osm_polygon_website_tag.reporting.verification import shards as shards_module
 from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
 from osm_polygon_website_tag.runtime.run_state import (
+    SourceManifestEntry,
     initialise_run,
     record_processed_source,
     snapshot_source_fingerprint,
@@ -165,6 +169,14 @@ def _sha256(p: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def test_reporting_manifest_consumers_use_typed_entries() -> None:
+    assert (
+        get_type_hints(verify_module._verify_expected_inventory)["manifest"]
+        == list[SourceManifestEntry]
+    )
+    assert get_type_hints(shards_module.verify_shards)["manifest"] == list[SourceManifestEntry]
 
 
 def test_verify_results_happy_path(tmp_path: Path) -> None:
