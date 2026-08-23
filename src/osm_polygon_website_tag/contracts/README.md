@@ -1,8 +1,10 @@
 # Contracts
 
-Defines the exact public, comparison, rejection, and text Arrow schemas.
+Defines the exact public, comparison, rejection, and text Arrow schemas plus
+the shared dynamic compute-kernel adapter.
 
-- Modules: `polygon_schema`, `comparison_schema`, `rejection_schema`, `text_schema`.
+- Modules: `arrow`, `polygon_schema`, `comparison_schema`, `rejection_schema`,
+  `text_schema`.
 - Dependencies: no other project package.
 - Entry points: schema constants, column documentation, row validation, text statuses.
 - `polygon_schema.schema_matches` is the single exact Arrow-schema comparison
@@ -14,4 +16,6 @@ Defines the exact public, comparison, rejection, and text Arrow schemas.
 - `TEXT_UNFINISHED_STATUSES`, `TEXT_TRANSIENT_STATUSES`, and
   `TEXT_DETERMINISTIC_STATUSES` are the canonical resume-priority categories;
   `TEXT_NULL_STATUS` is the persisted summary sentinel for null Arrow values.
+- `arrow.call_arrow_kernel` is the single dynamic dispatch boundary for
+  named PyArrow compute kernels used by schema and reporting code.
 - Excludes: pipeline behavior, persistence, and remote adapters.

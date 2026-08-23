@@ -7,8 +7,8 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
 from osm_polygon_website_tag.reporting.geographic.inputs import (
-    _arrow_kernel,
     _coordinate_value,
     _path_columns,
     _row_is_eligible,
@@ -59,4 +59,4 @@ def test_input_helpers_build_null_safe_text_mask_and_coordinate_iterator() -> No
         (Path("a.parquet"), 10, 1.0, 4.0),
         (Path("a.parquet"), 12, 3.0, 6.0),
     ]
-    assert _arrow_kernel("equal", pa.array(["success"]), "success").to_pylist() == [True]
+    assert call_arrow_kernel("equal", pa.array(["success"]), "success").to_pylist() == [True]

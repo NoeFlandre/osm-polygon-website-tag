@@ -25,6 +25,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
 from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
@@ -276,22 +277,24 @@ def _add_text_batch(stats: CardStats, batch: Any) -> bool:
     contact_website = batch.column("contact_website")
     contact_status = batch.column("contact_website_text_status")
     contact_words = batch.column("contact_website_word_count")
-    website_success = _arrow_kernel("equal", website_status, "success")
-    contact_success = _arrow_kernel("equal", contact_status, "success")
+    website_success = call_arrow_kernel("equal", website_status, "success")
+    contact_success = call_arrow_kernel("equal", contact_status, "success")
     _add_url_counts(stats, website, contact_website)
     _add_status_counts(stats, website_status, contact_status, website_success, contact_success)
     stats.website_total_words += _sum_success_words(website_status, website_words)
     stats.contact_website_total_words += _sum_success_words(contact_status, contact_words)
     stats.polygons_with_any_text += _count_true(
-        _arrow_kernel("or_kleene", website_success, contact_success)
+        call_arrow_kernel("or_kleene", website_success, contact_success)
     )
     return status_has_retryable_value(website_status) or status_has_retryable_value(contact_status)
 
 
 def _add_url_counts(stats: CardStats, website: pa.Array, contact_website: pa.Array) -> None:
     """Count rows carrying each URL field."""
-    stats.website_urls_present += _count_true(_arrow_kernel("is_valid", website))
-    stats.contact_website_urls_present += _count_true(_arrow_kernel("is_valid", contact_website))
+    stats.website_urls_present += _count_true(call_arrow_kernel("is_valid", website))
+    stats.contact_website_urls_present += _count_true(
+        call_arrow_kernel("is_valid", contact_website)
+    )
 
 
 def _add_status_counts(
@@ -304,9 +307,11 @@ def _add_status_counts(
     """Accumulate success, empty, and failure counts for both URL fields."""
     stats.website_text_success_count += _count_true(website_success)
     stats.contact_website_text_success_count += _count_true(contact_success)
-    stats.website_text_empty_count += _count_true(_arrow_kernel("equal", website_status, "empty"))
+    stats.website_text_empty_count += _count_true(
+        call_arrow_kernel("equal", website_status, "empty")
+    )
     stats.contact_website_text_empty_count += _count_true(
-        _arrow_kernel("equal", contact_status, "empty")
+        call_arrow_kernel("equal", contact_status, "empty")
     )
     stats.website_text_failure_count += _count_invalid_statuses(website_status)
     stats.contact_website_text_failure_count += _count_invalid_statuses(contact_status)
@@ -314,27 +319,24 @@ def _add_status_counts(
 
 def _count_true(mask: pa.Array) -> int:
     """Count true values in an Arrow boolean array, ignoring nulls."""
-    value = _arrow_kernel("sum", pc.cast(mask, pa.int64())).as_py()
+    value = call_arrow_kernel("sum", pc.cast(mask, pa.int64())).as_py()
     return int(value or 0)
 
 
 def _count_invalid_statuses(status: pa.Array) -> int:
     """Count null or unknown statuses exactly as the former row loop did."""
-    known = _arrow_kernel("equal", status, "absent")
+    known = call_arrow_kernel("equal", status, "absent")
     for expected in ("pending", "success", "empty"):
-        known = _arrow_kernel("or_kleene", known, _arrow_kernel("equal", status, expected))
-    return _count_true(pc.fill_null(_arrow_kernel("invert", known), True))
+        known = call_arrow_kernel("or_kleene", known, call_arrow_kernel("equal", status, expected))
+    return _count_true(pc.fill_null(call_arrow_kernel("invert", known), True))
 
 
 def _sum_success_words(status: pa.Array, word_counts: pa.Array) -> int:
     """Sum word counts for successful rows while retaining null failures."""
-    selected = _arrow_kernel("filter", word_counts, _arrow_kernel("equal", status, "success"))
+    selected = call_arrow_kernel(
+        "filter", word_counts, call_arrow_kernel("equal", status, "success")
+    )
     if selected.null_count:
         raise TypeError("successful text row has no word count")
-    value = _arrow_kernel("sum", selected).as_py()
+    value = call_arrow_kernel("sum", selected).as_py()
     return int(value or 0)
-
-
-def _arrow_kernel(name: str, *args: Any) -> Any:
-    """Call a dynamically registered Arrow kernel while keeping ty strict."""
-    return pc.call_function(name, list(args))

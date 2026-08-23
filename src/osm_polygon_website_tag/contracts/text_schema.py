@@ -8,6 +8,8 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+
 TEXT_STATUSES = frozenset(
     {
         "absent",
@@ -81,15 +83,10 @@ def status_has_retryable_value(status: pa.Array) -> bool:
     """
     terminal: Any = None
     for expected in sorted(TEXT_TERMINAL_STATUSES):
-        match = _arrow_kernel("equal", status, expected)
-        terminal = match if terminal is None else _arrow_kernel("or_kleene", terminal, match)
-    retryable = pc.fill_null(_arrow_kernel("invert", terminal), True)
-    return bool(_arrow_kernel("any", retryable).as_py() or False)
-
-
-def _arrow_kernel(name: str, *args: Any) -> Any:
-    """Call a dynamically registered Arrow kernel while keeping ty strict."""
-    return pc.call_function(name, list(args))
+        match = call_arrow_kernel("equal", status, expected)
+        terminal = match if terminal is None else call_arrow_kernel("or_kleene", terminal, match)
+    retryable = pc.fill_null(call_arrow_kernel("invert", terminal), True)
+    return bool(call_arrow_kernel("any", retryable).as_py() or False)
 
 
 __all__ = [

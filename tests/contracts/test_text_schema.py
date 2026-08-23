@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
 from osm_polygon_website_tag.contracts.text_schema import (
     TEXT_COLUMN_NAMES,
     TEXT_DETERMINISTIC_STATUSES,
@@ -52,6 +53,11 @@ def test_terminal_status_contract_matches_resume_semantics() -> None:
     assert not status_has_retryable_value(pa.array(["success", "absent"]))
     assert status_has_retryable_value(pa.array(["success", "fetch_error"]))
     assert status_has_retryable_value(pa.array([None], type=pa.string()))
+
+
+def test_shared_arrow_kernel_dispatches_registered_function() -> None:
+    result = call_arrow_kernel("equal", pa.array([1, 2]), 2)
+    assert result.to_pylist() == [False, True]
 
 
 def test_status_priority_categories_cover_nonterminal_statuses() -> None:

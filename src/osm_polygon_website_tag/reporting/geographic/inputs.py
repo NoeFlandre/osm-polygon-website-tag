@@ -9,6 +9,8 @@ from typing import Any
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+
 _TEXT_STATUS_COLUMNS = ("website_text_status", "contact_website_text_status")
 
 
@@ -136,13 +138,10 @@ def _coordinate_value(
 
 def _text_success_mask(batch: Any) -> Any:
     """Return a null-safe mask for rows with text in either field."""
-    website_success = _arrow_kernel("equal", batch.column("website_text_status"), "success")
-    contact_success = _arrow_kernel("equal", batch.column("contact_website_text_status"), "success")
+    website_success = call_arrow_kernel("equal", batch.column("website_text_status"), "success")
+    contact_success = call_arrow_kernel(
+        "equal", batch.column("contact_website_text_status"), "success"
+    )
     return pc.fill_null(
-        _arrow_kernel("or_kleene", website_success, contact_success), False
+        call_arrow_kernel("or_kleene", website_success, contact_success), False
     ).to_numpy(zero_copy_only=False)
-
-
-def _arrow_kernel(name: str, *args: Any) -> Any:
-    """Call a dynamically registered Arrow kernel while keeping ty strict."""
-    return pc.call_function(name, list(args))
