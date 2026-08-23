@@ -36,6 +36,7 @@ from osm_polygon_website_tag.pipeline.public_schema_migration import migrate_pub
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.publishing.incremental import (
     CheckpointV2,
+    IncrementalPublishPlan,
     incremental_publish_changed_shard,
     load_upload_checkpoint,
     persist_successful_upload,
@@ -973,8 +974,23 @@ def _public_shard_path(run_dir: Path, source: Path) -> Path:
     return run_dir / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
 
 
-def _upload_public_shard(run_dir: Path, source: Path, repo_id: str) -> None:
+def _upload_public_shard(
+    run_dir: Path,
+    source: Path,
+    repo_id: str,
+    plan: IncrementalPublishPlan | None = None,
+) -> None:
+    if plan is not None and plan.source_filename != source.name:
+        raise ValueError("incremental publish plan does not match source")
     map_path = run_dir / "assets" / "geographic_polygon_density.png"
+    if plan is not None:
+        _upload_folder(
+            run_dir,
+            repo_id=repo_id,
+            repo_kind="dataset",
+            artifact_paths=plan.upload_paths,
+        )
+        return
     if not map_path.is_file():
         shard = _public_shard_path(run_dir, source)
         _upload_folder(
@@ -1026,8 +1042,13 @@ def _maybe_publish_enriched_shard(
         progress,
         f"[{index}/{total}] Uploading enriched shard and recomputed card",
     )
-    _upload_public_shard(run_dir, source, repo_id)
-    persist_successful_upload(run_dir, source)
+    _upload_public_shard(run_dir, source, repo_id, preview)
+    persist_successful_upload(
+        run_dir,
+        source,
+        shard_sha256=preview.shard_sha256,
+        bundle_state=preview.bundle_state,
+    )
     return bool(preview.upload_paths)
 
 

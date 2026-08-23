@@ -79,6 +79,39 @@ def test_persist_successful_upload_records_source_and_bundle(tmp_path: Path) -> 
     assert checkpoint["global_bundle"]["map_contract_version"] >= 1
 
 
+def test_incremental_plan_exposes_reusable_digest_and_bundle(tmp_path: Path) -> None:
+    run_dir, shard = _run(tmp_path)
+
+    plan = incremental_publish_changed_shard(run_dir, Path("a.osm.pbf"), dry_run=True)
+
+    assert plan.shard_sha256 == hash_shard(shard)
+    assert plan.bundle_state["readme_sha256"] == hash_shard(run_dir / "README.md")
+    assert plan.bundle_state["map_contract_version"] >= 1
+
+
+def test_persist_successful_upload_reuses_plan_digests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir, _ = _run(tmp_path)
+    plan = incremental_publish_changed_shard(run_dir, Path("a.osm.pbf"), dry_run=True)
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.publishing.incremental.hash_shard",
+        lambda _path: pytest.fail("persisting a plan must not rehash artifacts"),
+    )
+
+    persist_successful_upload(
+        run_dir,
+        Path("a.osm.pbf"),
+        shard_sha256=plan.shard_sha256,
+        bundle_state=plan.bundle_state,
+    )
+
+    checkpoint = load_upload_checkpoint(run_dir)
+    assert checkpoint["sources"]["a.osm.pbf"]["polygon_sha256"] == plan.shard_sha256
+    assert checkpoint["global_bundle"] == plan.bundle_state
+
+
 def test_incremental_bundle_only_upload_does_not_upload_shard(tmp_path: Path, monkeypatch) -> None:
     run_dir, shard = _run(tmp_path)
     monkeypatch.setattr(
@@ -659,6 +692,26 @@ def test_incremental_private_validation_and_selection_helpers() -> None:
         )
         == {}
     )
+
+
+def test_incremental_global_bundle_validation_preserves_field_contract() -> None:
+    bundle: Any = {}
+    _validate_global_item(bundle, "readme_sha256", "a" * 64)
+    _validate_global_item(bundle, "map_contract_version", 2)
+    assert bundle == {"readme_sha256": "a" * 64, "map_contract_version": 2}
+
+    with pytest.raises(
+        ValueError,
+        match=r"global_bundle\['readme_sha256'\] must be a 64-character lowercase hex SHA-256 string",
+    ):
+        _validate_global_item(bundle, "readme_sha256", "not-a-hash")
+    with pytest.raises(
+        ValueError,
+        match=r"global_bundle\['map_contract_version'\] must be a non-bool integer, got str",
+    ):
+        _validate_global_item(bundle, "map_contract_version", "2")
+    with pytest.raises(ValueError, match=r"global_bundle has unknown field 'future'"):
+        _validate_global_item(bundle, "future", "value")
 
 
 def test_incremental_private_remote_and_bundle_helpers(tmp_path: Path) -> None:

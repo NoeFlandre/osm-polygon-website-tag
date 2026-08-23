@@ -230,6 +230,8 @@ class IncrementalPublishPlan:
     upload_paths: list[Path]
     shard_changed: bool
     bundle_changed: bool
+    shard_sha256: str
+    bundle_state: _GlobalBundleStateV2
 
 
 def _checkpoint_path(run_dir: Path) -> Path:
@@ -415,6 +417,8 @@ def incremental_publish_changed_shard(
         upload_paths=upload_paths,
         shard_changed=shard_changed,
         bundle_changed=bundle_changed,
+        shard_sha256=current_shard_sha,
+        bundle_state=current_bundle,
     )
     if dry_run or not upload_paths:
         return plan
@@ -487,13 +491,31 @@ def _perform_incremental_upload(
     atomic_write_json(_checkpoint_path(root), checkpoint)
 
 
-def persist_successful_upload(run_dir: Path | str, source: Path) -> None:
-    """Persist the v2 checkpoint after an externally wrapped upload succeeds."""
+def persist_successful_upload(
+    run_dir: Path | str,
+    source: Path,
+    *,
+    shard_sha256: str | None = None,
+    bundle_state: _GlobalBundleStateV2 | None = None,
+) -> None:
+    """Persist the v2 checkpoint after an externally wrapped upload succeeds.
+
+    Callers that already built an :class:`IncrementalPublishPlan` may pass its
+    digest and bundle state to avoid rereading the same artifacts. The default
+    path retains the original standalone behavior.
+    """
     root = Path(run_dir)
     checkpoint = load_upload_checkpoint(root)
-    shard = root / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
-    checkpoint["sources"][source.name] = {"polygon_sha256": hash_shard(shard)}
-    checkpoint["global_bundle"] = _bundle_state(root)
+    if shard_sha256 is None:
+        shard = root / "polygons" / f"{source.name.removesuffix('.osm.pbf')}.parquet"
+        current_shard_sha = hash_shard(shard)
+    else:
+        current_shard_sha = _validate_hex_sha256(shard_sha256, field="shard_sha256")
+    current_bundle = (
+        _bundle_state(root) if bundle_state is None else _validate_global_bundle(bundle_state)
+    )
+    checkpoint["sources"][source.name] = {"polygon_sha256": current_shard_sha}
+    checkpoint["global_bundle"] = current_bundle
     _checkpoint_path(root).parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(_checkpoint_path(root), checkpoint)
 

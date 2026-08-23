@@ -8,6 +8,10 @@ Adapts verified artifacts to Hugging Face publication.
   README/YAML/map bundle. It uploads only changed files and atomically records
   `manifests/uploaded_polygons.json` (schema v2), which is operational state
   and is intentionally excluded from the completion receipt.
+- `IncrementalPublishPlan` retains the computed shard and bundle hashes. The
+  pipeline reuses that plan for the upload and checkpoint write, so each
+  publication decision scans its managed artifacts once; standalone checkpoint
+  calls still compute their own hashes when no plan is supplied.
 - Entry points: `resolve_hf_token`, `build_publish_plan`, `publish_to_hf`, and
   `incremental_publish_changed_shard`.
 - `trackio` is an optional, explicit publisher for the public dataset metrics
