@@ -6,6 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.language_schema import (
@@ -171,24 +172,35 @@ def _validate_text_statuses(parquet: pq.ParquetFile, shard: Path) -> None:
     if missing:
         raise ValueError(f"missing text status columns for language detection: {sorted(missing)}")
     for batch in parquet.iter_batches(columns=list(_TEXT_STATUS_COLUMNS), batch_size=8_192):
-        for column_name in _TEXT_STATUS_COLUMNS:
-            for status in batch.column(column_name).to_pylist():
-                if status not in TEXT_TERMINAL_STATUSES:
-                    raise ValueError(
-                        f"{shard.name} text statuses must be terminal before language detection"
-                    )
+        _validate_status_batch(batch, shard)
+
+
+def _validate_status_batch(batch: pa.RecordBatch, shard: Path) -> None:
+    """Reject every non-terminal status in one bounded Arrow batch."""
+    for column_name in _TEXT_STATUS_COLUMNS:
+        _validate_status_values(batch.column(column_name).to_pylist(), shard)
+
+
+def _validate_status_values(statuses: list[object], shard: Path) -> None:
+    """Reject a status sequence containing a non-terminal value."""
+    if any(status not in TEXT_TERMINAL_STATUSES for status in statuses):
+        raise ValueError(f"{shard.name} text statuses must be terminal before language detection")
 
 
 def _row_needs_language_detection(row: dict[str, object]) -> bool:
-    for prefix in ("website", "contact_website"):
-        status = row[f"{prefix}_text_status"]
-        label = row.get(f"{prefix}_language")
-        probability = row.get(f"{prefix}_language_probability")
-        if status == "success" and not _complete_language_pair(label, probability):
-            return True
-        if status != "success" and (label is not None or probability is not None):
-            return True
-    return False
+    return any(
+        _language_pair_needs_detection(row, prefix) for prefix in ("website", "contact_website")
+    )
+
+
+def _language_pair_needs_detection(row: dict[str, object], prefix: str) -> bool:
+    """Return whether one text field lacks a valid language result."""
+    status = row[f"{prefix}_text_status"]
+    label = row.get(f"{prefix}_language")
+    probability = row.get(f"{prefix}_language_probability")
+    if status == "success":
+        return not _complete_language_pair(label, probability)
+    return label is not None or probability is not None
 
 
 def _process_detection_batches(
@@ -238,29 +250,61 @@ def _skip_checkpointed_rows(
 def _detect_batch(
     originals: list[dict[str, object]], detector: LanguageDetector
 ) -> list[dict[str, object]]:
+    rows, pending_by_prefix = _prepare_detection_batch(originals)
+    for prefix in ("website", "contact_website"):
+        _apply_pending_predictions(prefix, pending_by_prefix[prefix], detector)
+    return rows
+
+
+def _prepare_detection_batch(
+    originals: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], dict[str, list[tuple[dict[str, object], str]]]]:
+    """Prepare rows and collect successful texts by independent website field."""
     rows = [_prepare_row(original) for original in originals]
     pending_by_prefix: dict[str, list[tuple[dict[str, object], str]]] = {
-        "website": [],
-        "contact_website": [],
+        prefix: [] for prefix in _TEXT_COLUMNS
     }
     for row in rows:
-        for prefix in _TEXT_COLUMNS:
-            if row[f"{prefix}_text_status"] != "success":
-                continue
-            text = row.get(f"{prefix}_text")
-            if not isinstance(text, str):
-                raise ValueError(f"successful {prefix} text is not a string")
-            _queue_language_text(row, prefix, text, pending_by_prefix[prefix])
-    for prefix in ("website", "contact_website"):
-        pending = pending_by_prefix[prefix]
-        if not pending:
-            continue
-        predictions = detector.predict([text for _row, text in pending])
-        if len(predictions) != len(pending):
-            raise ValueError(f"language prediction count does not match {prefix} text count")
-        for (row, _text), prediction in zip(pending, predictions, strict=True):
-            _apply_prediction(row, prefix, prediction)
-    return rows
+        _queue_row_texts(row, pending_by_prefix)
+    return rows, pending_by_prefix
+
+
+def _queue_row_texts(
+    row: dict[str, object],
+    pending_by_prefix: dict[str, list[tuple[dict[str, object], str]]],
+) -> None:
+    """Queue successful texts from one row for detection."""
+    for prefix in _TEXT_COLUMNS:
+        _queue_successful_text(row, prefix, pending_by_prefix[prefix])
+
+
+def _queue_successful_text(
+    row: dict[str, object],
+    prefix: str,
+    pending: list[tuple[dict[str, object], str]],
+) -> None:
+    """Validate and queue one successful text field."""
+    if row[f"{prefix}_text_status"] != "success":
+        return
+    text = row.get(f"{prefix}_text")
+    if not isinstance(text, str):
+        raise ValueError(f"successful {prefix} text is not a string")
+    _queue_language_text(row, prefix, text, pending)
+
+
+def _apply_pending_predictions(
+    prefix: str,
+    pending: list[tuple[dict[str, object], str]],
+    detector: LanguageDetector,
+) -> None:
+    """Predict and apply one independent website field's pending texts."""
+    if not pending:
+        return
+    predictions = detector.predict([text for _row, text in pending])
+    if len(predictions) != len(pending):
+        raise ValueError(f"language prediction count does not match {prefix} text count")
+    for (row, _text), prediction in zip(pending, predictions, strict=True):
+        _apply_prediction(row, prefix, prediction)
 
 
 def _prepare_row(original: dict[str, object]) -> dict[str, object]:
@@ -285,13 +329,24 @@ def _queue_language_text(
     probability_name = f"{prefix}_language_probability"
     label = row.get(label_name)
     probability = row.get(probability_name)
-    if label is None and probability is None:
+    if _empty_language_pair(label, probability):
         pending.append((row, text))
         return
+    if _complete_language_pair(label, probability):
+        return
+    _raise_invalid_language_pair(prefix, label, probability)
+
+
+def _empty_language_pair(label: object, probability: object) -> bool:
+    """Return whether neither language result has been stored yet."""
+    return label is None and probability is None
+
+
+def _raise_invalid_language_pair(prefix: str, label: object, probability: object) -> None:
+    """Raise the specific error for an incomplete or invalid existing pair."""
     if label is None or probability is None:
         raise ValueError(f"incomplete {prefix} language pair")
-    if not isinstance(label, str) or not label or not _valid_probability(probability):
-        raise ValueError(f"invalid existing {prefix} language pair")
+    raise ValueError(f"invalid existing {prefix} language pair")
 
 
 def _complete_language_pair(label: object, probability: object) -> bool:

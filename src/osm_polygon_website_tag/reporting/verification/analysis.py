@@ -9,7 +9,11 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
-from osm_polygon_website_tag.reporting.card import _render_markdown, _render_yaml_front_matter
+from osm_polygon_website_tag.reporting.card import (
+    _public_schema_for_card,
+    _render_markdown,
+    _render_yaml_front_matter,
+)
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 
@@ -72,7 +76,9 @@ def _verify_card_statistics(root: Path, errors: list[str]) -> None:
     try:
         stats = compute_card_stats(root)
         expected_yaml = _render_yaml_front_matter(stats)
-        expected_readme = expected_yaml + "\n" + _render_markdown(stats)
+        expected_readme = (
+            expected_yaml + "\n" + _render_markdown(stats, schema=_public_schema_for_card(root))
+        )
         _compare_card_file(root / "dataset.yaml", expected_yaml, "dataset.yaml", errors)
         _compare_card_file(root / "README.md", expected_readme, "README.md", errors)
     except Exception as exc:

@@ -30,7 +30,11 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, schema_matches
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+    schema_matches,
+)
 
 _SOURCE_SUFFIX = ".osm.pbf"
 
@@ -66,6 +70,7 @@ def deduplicate_public_shards(
     output_dir = Path(output_dir)
     input_paths = _validate_dedup_inputs(source_dir, output_dir)
     names = _normalise_source_names(source_names, input_paths)
+    target_schema = _deduplication_schema(input_paths)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
     con: duckdb.DuckDBPyConnection | None = None
@@ -74,8 +79,8 @@ def deduplicate_public_shards(
         _validate_source_names_in_data(con, names)
         _create_canonical_view(con)
         summary = _dedup_summary(con, names)
-        _write_canonical_shards(con, staging_dir, names)
-        _validate_canonical_shards(staging_dir, names)
+        _write_canonical_shards(con, staging_dir, names, target_schema=target_schema)
+        _validate_canonical_shards(staging_dir, names, target_schema=target_schema)
         con.close()
         con = None
         _remove_tree(temp_dir)
@@ -114,7 +119,7 @@ def _open_dedup_connection(
         con.execute(
             f"""
             CREATE TEMP VIEW source_rows AS
-            SELECT * FROM read_parquet('{glob}')
+            SELECT * FROM read_parquet('{glob}', union_by_name=true)
             """  # noqa: S608
         )
     except BaseException:
@@ -193,7 +198,11 @@ def _dedup_summary(con: duckdb.DuckDBPyConnection, names: Collection[str]) -> De
 
 
 def _write_canonical_shards(
-    con: duckdb.DuckDBPyConnection, staging_dir: Path, names: Collection[str]
+    con: duckdb.DuckDBPyConnection,
+    staging_dir: Path,
+    names: Collection[str],
+    *,
+    target_schema: pa.Schema,
 ) -> None:
     """Write canonical rows to source-partitioned Parquet files."""
     partition_dir = staging_dir / "partitions"
@@ -208,14 +217,19 @@ def _write_canonical_shards(
          WRITE_PARTITION_COLUMNS TRUE)
         """  # noqa: S608
     )
-    _materialise_partitions(partition_dir, staging_dir, names)
+    _materialise_partitions(partition_dir, staging_dir, names, target_schema=target_schema)
 
 
-def _validate_canonical_shards(staging_dir: Path, names: Collection[str]) -> None:
+def _validate_canonical_shards(
+    staging_dir: Path,
+    names: Collection[str],
+    *,
+    target_schema: pa.Schema,
+) -> None:
     """Validate every canonical output schema before promotion."""
     for source_name in names:
         destination = staging_dir / _parquet_name(source_name)
-        if not schema_matches(pq.read_schema(destination), POLYGON_PUBLIC_SCHEMA):
+        if not schema_matches(pq.read_schema(destination), target_schema):
             raise ValueError(f"canonical shard has unexpected schema: {destination}")
 
 
@@ -243,6 +257,15 @@ def _parquet_name(source_name: str) -> str:
     return f"{source_name.removesuffix(_SOURCE_SUFFIX)}.parquet"
 
 
+def _deduplication_schema(input_paths: Collection[Path]) -> pa.Schema:
+    """Select the newest public contract present in immutable input shards."""
+    if any(
+        schema_matches(pq.read_schema(path), POLYGON_PUBLIC_SCHEMA_V1_4) for path in input_paths
+    ):
+        return POLYGON_PUBLIC_SCHEMA_V1_4
+    return POLYGON_PUBLIC_SCHEMA
+
+
 def _scalar_count(con: duckdb.DuckDBPyConnection, query: str) -> int:
     value = con.execute(query).fetchone()
     return int(value[0]) if value else 0
@@ -252,13 +275,15 @@ def _materialise_partitions(
     partition_dir: Path,
     staging_dir: Path,
     source_names: Collection[str],
+    *,
+    target_schema: pa.Schema,
 ) -> None:
     """Restore source filenames and the exact Arrow contract after one COPY."""
     for source_name in source_names:
         destination = staging_dir / _parquet_name(source_name)
         parts = sorted((partition_dir / f"source_pbf={source_name}").glob("*.parquet"))
         if not parts:
-            table = pa.Table.from_batches([], schema=POLYGON_PUBLIC_SCHEMA)
+            table = pa.Table.from_batches([], schema=target_schema)
         else:
             table = pa.concat_tables(
                 [pq.read_table(part) for part in parts],
@@ -266,7 +291,7 @@ def _materialise_partitions(
             )
             if table.num_rows > 1:
                 table = table.sort_by([("osm_type", "ascending"), ("osm_id", "ascending")])
-            table = table.cast(POLYGON_PUBLIC_SCHEMA)
+            table = table.cast(target_schema)
         pq.write_table(table, destination, compression="snappy")
     _remove_tree(partition_dir)
 

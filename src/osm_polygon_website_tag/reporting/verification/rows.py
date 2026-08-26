@@ -75,7 +75,7 @@ def _verify_row_contract(
         return
     paths = [str(path) for path in files]
     count = con.execute(
-        f"SELECT COUNT(*) FROM read_parquet(?) WHERE {predicate}",  # noqa: S608
+        f"SELECT COUNT(*) FROM read_parquet(?, union_by_name=true) WHERE {predicate}",  # noqa: S608
         [paths],
     ).fetchone()
     if count and int(count[0]) != 0:

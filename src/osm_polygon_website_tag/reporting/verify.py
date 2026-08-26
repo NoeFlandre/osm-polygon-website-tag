@@ -10,6 +10,9 @@ from typing import Any, cast
 from osm_polygon_website_tag.reporting.verification.analysis import (
     verify_analysis_and_card as _verify_analysis_and_card,
 )
+from osm_polygon_website_tag.reporting.verification.language import (
+    verify_language_invariants as _verify_language_invariants,
+)
 from osm_polygon_website_tag.reporting.verification.receipt import verify_receipt as _verify_receipt
 from osm_polygon_website_tag.reporting.verification.rows import (
     verify_row_invariants as _verify_row_invariants,
@@ -55,6 +58,7 @@ def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
         errors.append("run metadata is empty")
     status = metadata.get("status")
     _verify_text_invariants(root, status, errors)
+    _verify_language_invariants(root, errors)
     _verify_status_artifacts(root, status, include_receipt, errors)
     return VerificationReport(not errors, errors, checked)
 

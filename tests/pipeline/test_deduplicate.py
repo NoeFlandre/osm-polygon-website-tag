@@ -10,7 +10,10 @@ import pyarrow.parquet as pq
 import pytest
 from tests.fixtures.polygon_shards import legacy_polygon_row
 
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+)
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.pipeline.deduplicate import (
     _validate_source_names,
@@ -59,9 +62,14 @@ def _row(
     return {field.name: row[field.name] for field in POLYGON_PUBLIC_SCHEMA}
 
 
-def _write_shard(path: Path, rows: list[dict[str, object]]) -> None:
+def _write_shard(
+    path: Path,
+    rows: list[dict[str, object]],
+    *,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA), path)
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
 
 
 def test_deduplicate_public_shards_keeps_latest_row_and_empty_source_shards(
@@ -143,6 +151,36 @@ def test_deduplicate_public_shards_uses_source_name_for_exact_ties(tmp_path: Pat
     assert pq.read_table(tmp_path / "canonical" / "beta-latest.parquet").num_rows == 0
     assert not (tmp_path / "canonical" / "partitions").exists()
     assert not (tmp_path / "canonical" / "duckdb-temp").exists()
+
+
+def test_deduplicate_public_shards_preserves_v1_4_language_fields(tmp_path: Path) -> None:
+    source_dir = tmp_path / "polygons"
+    row = _row(
+        source_pbf=SOURCE_NAMES[0],
+        osm_id=11,
+        osm_version=1,
+        website="https://alpha.example",
+        timestamp_day=1,
+    )
+    row.update(
+        {
+            "website_language": "eng_Latn",
+            "website_language_probability": 0.9,
+            "contact_website_language": None,
+            "contact_website_language_probability": None,
+        }
+    )
+    _write_shard(source_dir / "alpha-latest.parquet", [row], schema=POLYGON_PUBLIC_SCHEMA_V1_4)
+
+    deduplicate_public_shards(
+        source_dir,
+        tmp_path / "canonical",
+        source_names=(SOURCE_NAMES[0],),
+    )
+
+    output = tmp_path / "canonical" / "alpha-latest.parquet"
+    assert pq.read_schema(output).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+    assert pq.read_table(output)["website_language"].to_pylist() == ["eng_Latn"]
 
 
 @pytest.mark.parametrize(

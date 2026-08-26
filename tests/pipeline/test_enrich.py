@@ -16,6 +16,7 @@ import osm_polygon_website_tag.pipeline.enrichment_checkpoint as checkpoint_modu
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.pipeline.enrich import (
@@ -591,3 +592,33 @@ def test_promotion_failure_preserves_prior_shard(
         )
 
     assert shard.read_bytes() == original
+
+
+def test_v1_4_enrichment_preserves_language_fields(tmp_path: Path) -> None:
+    row = _current_row(1)
+    row.update(
+        {
+            "website_text": None,
+            "website_word_count": None,
+            "website_text_status": "pending",
+            "website_language": "eng_Latn",
+            "website_language_probability": 0.93,
+            "contact_website_language": None,
+            "contact_website_language_probability": None,
+        }
+    )
+    shard = tmp_path / "source.parquet"
+    pq.write_table(pa.Table.from_pylist([row], schema=POLYGON_PUBLIC_SCHEMA_V1_4), shard)
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=tmp_path / "cache.sqlite3",
+        invocation_id="run",
+        fetcher=lambda url: FetchResult("ok", url, final_url=url, body=b"recovered text"),
+        extractor=_extract,
+    )
+
+    result = pq.read_table(shard).to_pylist()[0]
+    assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+    assert result["website_language"] == "eng_Latn"
+    assert result["website_language_probability"] == 0.93

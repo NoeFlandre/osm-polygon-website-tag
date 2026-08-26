@@ -11,7 +11,10 @@ import pytest
 
 import osm_polygon_website_tag.reporting.card_stats as card_stats_module
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+)
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.card import build_card
@@ -228,6 +231,26 @@ def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     assert "| Comparison observations | 0 |" in content
     assert "| What it means |" in content
     assert "`website` OR `contact:website`" in content
+
+
+def test_build_card_lists_language_columns_for_v1_4_runs(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    shard = run_dir / "polygons" / "monaco-latest.parquet"
+    rows = pq.read_table(shard).to_pylist()
+    rows[0].update(
+        {
+            "website_language": "eng_Latn",
+            "website_language_probability": 0.9,
+            "contact_website_language": None,
+            "contact_website_language_probability": None,
+        }
+    )
+    pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_4), shard)
+
+    content = build_card(run_dir).read_text()
+
+    assert "`website_language`" in content
+    assert "`website_language_probability`" in content
     assert "published polygon split is globally canonicalized" not in content
     assert "at most one row per OSM object" not in content
     assert "`deduplication_summary.json`" in content

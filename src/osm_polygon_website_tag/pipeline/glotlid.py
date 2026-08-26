@@ -57,12 +57,8 @@ class GlotLIDDetector:
         if not normalized:
             return []
         labels, probabilities = self.model.predict(normalized, k=1)
-        if len(labels) != len(normalized) or len(probabilities) != len(normalized):
-            raise ValueError("model prediction count does not match input count")
-        return [
-            _prediction_for_item(label_values, probability_values)
-            for label_values, probability_values in zip(labels, probabilities, strict=True)
-        ]
+        _validate_prediction_counts(labels, probabilities, expected=len(normalized))
+        return _normalise_predictions(labels, probabilities)
 
 
 def load_glotlid_detector(cache_dir: Path) -> GlotLIDDetector:
@@ -90,20 +86,40 @@ def _normalize_text(text: str) -> str:
     return text.replace("\r", " ").replace("\n", " ")
 
 
+def _validate_prediction_counts(labels: Any, probabilities: Any, *, expected: int) -> None:
+    """Reject model output that does not contain one result per input."""
+    if len(labels) != expected or len(probabilities) != expected:
+        raise ValueError("model prediction count does not match input count")
+
+
+def _normalise_predictions(labels: Any, probabilities: Any) -> list[LanguagePrediction]:
+    """Convert paired FastText top-1 results in input order."""
+    return [
+        _prediction_for_item(label_values, probability_values)
+        for label_values, probability_values in zip(labels, probabilities, strict=True)
+    ]
+
+
 def _prediction_for_item(label_values: Any, probability_values: Any) -> LanguagePrediction:
     """Validate and convert one FastText top-1 result."""
     if not _one_item_sequence(label_values) or not _one_item_sequence(probability_values):
         raise ValueError("model returned an invalid top-1 prediction")
     label = label_values[0]
-    probability = probability_values[0]
     if not isinstance(label, str) or not label:
         raise ValueError("model returned an invalid language label")
-    if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+    return LanguagePrediction(
+        label.removeprefix("__label__"), _validated_probability(probability_values[0])
+    )
+
+
+def _validated_probability(value: Any) -> float:
+    """Validate and convert one model probability."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("model returned an invalid language probability")
-    converted_probability = float(probability)
-    if not math.isfinite(converted_probability) or not 0 <= converted_probability <= 1:
+    converted = float(value)
+    if not math.isfinite(converted) or not 0 <= converted <= 1:
         raise ValueError("model returned an invalid language probability")
-    return LanguagePrediction(label.removeprefix("__label__"), converted_probability)
+    return converted
 
 
 def _one_item_sequence(value: Any) -> bool:

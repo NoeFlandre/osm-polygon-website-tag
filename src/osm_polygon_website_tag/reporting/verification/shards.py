@@ -10,7 +10,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, schema_matches
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    is_current_public_polygon_schema,
+    schema_matches,
+)
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
 from osm_polygon_website_tag.runtime.run_state import SourceManifestEntry
@@ -104,10 +108,17 @@ def _verify_shard(
     except Exception as exc:
         errors.append(f"unreadable {contract.kind} shard {path}: {exc}")
         return
-    if not schema_matches(actual_schema, contract.schema):
+    if not _schema_matches_contract(actual_schema, contract):
         errors.append(f"exact schema mismatch in {contract.kind} shard {path}")
     _verify_row_count(actual_count, filename, contract, entry, errors)
     _verify_shard_hash(path, filename, contract, entry, errors)
+
+
+def _schema_matches_contract(actual: pa.Schema, contract: ShardContract) -> bool:
+    """Accept both current public schemas while keeping other contracts exact."""
+    if contract.kind == "public":
+        return is_current_public_polygon_schema(actual)
+    return schema_matches(actual, contract.schema)
 
 
 def _verify_row_count(

@@ -154,7 +154,11 @@ def register_public_parquets(
               CAST(NULL AS VARCHAR) AS website_text_status,
               CAST(NULL AS VARCHAR) AS contact_website_text,
               CAST(NULL AS BIGINT) AS contact_website_word_count,
-              CAST(NULL AS VARCHAR) AS contact_website_text_status
+              CAST(NULL AS VARCHAR) AS contact_website_text_status,
+              CAST(NULL AS VARCHAR) AS website_language,
+              CAST(NULL AS DOUBLE) AS website_language_probability,
+              CAST(NULL AS VARCHAR) AS contact_website_language,
+              CAST(NULL AS DOUBLE) AS contact_website_language_probability
             WHERE FALSE
             """
         )
@@ -162,7 +166,7 @@ def register_public_parquets(
     con.execute(
         f"""
         CREATE OR REPLACE VIEW public_polygons AS
-        SELECT * FROM read_parquet('{glob}')
+        SELECT * FROM read_parquet('{glob}', union_by_name=true)
         """  # noqa: S608
     )
 

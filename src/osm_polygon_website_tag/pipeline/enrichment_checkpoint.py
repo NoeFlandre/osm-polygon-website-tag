@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -44,26 +45,31 @@ def _write_checkpoint_metadata(
     *,
     source_row_count: int,
     source_shard_sha256: str,
+    schema_version: str = SCHEMA_VERSION,
 ) -> None:
     atomic_write_json(
         directory / CHECKPOINT_METADATA_NAME,
         {
             "checkpoint_version": CHECKPOINT_VERSION,
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": schema_version,
             "source_row_count": source_row_count,
             "source_shard_sha256": source_shard_sha256,
         },
     )
 
 
-def checkpoint_parts(directory: Path) -> tuple[Path, ...]:
+def checkpoint_parts(
+    directory: Path,
+    *,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
+) -> tuple[Path, ...]:
     """Validate and return sequential durable checkpoint parts."""
     parts = sorted(directory.glob("part-*.parquet"), key=lambda path: path.name)
     for index, part in enumerate(parts):
         if part.name != _checkpoint_part_path(directory, index).name:
             raise ValueError(f"non-sequential enrichment checkpoint part: {part.name}")
         parquet = pq.ParquetFile(part)
-        if not schema_matches(parquet.schema_arrow, POLYGON_PUBLIC_SCHEMA):
+        if not schema_matches(parquet.schema_arrow, schema):
             raise ValueError(f"invalid enrichment checkpoint schema: {part.name}")
         if parquet.metadata.num_rows < 1:
             raise ValueError(f"empty enrichment checkpoint part: {part.name}")
@@ -75,6 +81,8 @@ def load_checkpoint(
     *,
     source_row_count: int,
     source_shard_sha256: str,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
+    schema_version: str = SCHEMA_VERSION,
 ) -> EnrichmentCheckpoint:
     """Load a source-bound checkpoint or create its empty durable directory."""
     directory = _checkpoint_directory(shard)
@@ -87,8 +95,9 @@ def load_checkpoint(
         shard=shard,
         source_row_count=source_row_count,
         source_shard_sha256=source_shard_sha256,
+        schema_version=schema_version,
     )
-    parts = checkpoint_parts(directory)
+    parts = checkpoint_parts(directory, schema=schema)
     _validate_checkpoint_contents(directory, parts)
     completed_rows = sum(pq.ParquetFile(part).metadata.num_rows for part in parts)
     if completed_rows > source_row_count:
@@ -110,11 +119,12 @@ def _ensure_checkpoint_metadata(
     shard: Path,
     source_row_count: int,
     source_shard_sha256: str,
+    schema_version: str = SCHEMA_VERSION,
 ) -> None:
     """Validate existing source identity or create a fresh metadata file."""
     expected = {
         "checkpoint_version": CHECKPOINT_VERSION,
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "source_row_count": source_row_count,
         "source_shard_sha256": source_shard_sha256,
     }
@@ -129,6 +139,7 @@ def _ensure_checkpoint_metadata(
         directory,
         source_row_count=source_row_count,
         source_shard_sha256=source_shard_sha256,
+        schema_version=schema_version,
     )
 
 
@@ -146,6 +157,7 @@ def write_checkpoint_part(
     rows: list[dict[str, object]],
     *,
     batch_rows: int,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
 ) -> None:
     """Write one completed enrichment batch and publish it atomically."""
     if not rows:
@@ -154,11 +166,11 @@ def write_checkpoint_part(
     if target.exists():
         raise ValueError(f"enrichment checkpoint part already exists: {target.name}")
     temporary = directory / f".{target.name}.writing"
-    sink = BatchParquetSink(temporary, POLYGON_PUBLIC_SCHEMA, batch_rows=batch_rows)
+    sink = BatchParquetSink(temporary, schema, batch_rows=batch_rows)
     try:
         _write_checkpoint_rows(sink, rows)
         sink.close()
-        _validate_checkpoint_part(temporary, sink.row_count, len(rows))
+        _validate_checkpoint_part(temporary, sink.row_count, len(rows), schema=schema)
         atomic_promote_bundle([(temporary, target)])
     finally:
         sink.close()
@@ -171,11 +183,17 @@ def _write_checkpoint_rows(sink: BatchParquetSink, rows: list[dict[str, object]]
         sink.add(row)
 
 
-def _validate_checkpoint_part(path: Path, actual_rows: int, expected_rows: int) -> None:
+def _validate_checkpoint_part(
+    path: Path,
+    actual_rows: int,
+    expected_rows: int,
+    *,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
+) -> None:
     """Validate one durable checkpoint part before promotion."""
     if actual_rows != expected_rows:
         raise ValueError("enrichment checkpoint row count changed")
-    if not schema_matches(pq.read_schema(path), POLYGON_PUBLIC_SCHEMA):
+    if not schema_matches(pq.read_schema(path), schema):
         raise ValueError("enrichment checkpoint schema mismatch")
 
 
@@ -185,6 +203,7 @@ def assemble_checkpoint(
     *,
     batch_rows: int,
     row_count: int,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
 ) -> int:
     """Stream durable parts into one final staged Parquet.
 
@@ -197,11 +216,11 @@ def assemble_checkpoint(
     assembled_rows = 0
     max_batch_rows = 0
     try:
-        with pq.ParquetWriter(staged, POLYGON_PUBLIC_SCHEMA, compression="snappy") as writer:
+        with pq.ParquetWriter(staged, schema, compression="snappy") as writer:
             assembled_rows, max_batch_rows = _write_checkpoint_parts(
                 writer, parts, batch_rows=batch_rows
             )
-        _validate_assembled_checkpoint(staged, assembled_rows, row_count)
+        _validate_assembled_checkpoint(staged, assembled_rows, row_count, schema=schema)
         return max_batch_rows
     except BaseException:
         staged.unlink(missing_ok=True)
@@ -223,11 +242,17 @@ def _write_checkpoint_parts(
     return assembled_rows, max_batch_rows
 
 
-def _validate_assembled_checkpoint(staged: Path, actual_rows: int, expected_rows: int) -> None:
+def _validate_assembled_checkpoint(
+    staged: Path,
+    actual_rows: int,
+    expected_rows: int,
+    *,
+    schema: pa.Schema,
+) -> None:
     """Validate final row count and schema before shard promotion."""
     if actual_rows != expected_rows:
         raise ValueError("enrichment row count changed while assembling checkpoint")
-    if not schema_matches(pq.read_schema(staged), POLYGON_PUBLIC_SCHEMA):
+    if not schema_matches(pq.read_schema(staged), schema):
         raise ValueError("assembled enrichment schema mismatch")
 
 

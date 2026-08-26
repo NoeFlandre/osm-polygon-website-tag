@@ -11,9 +11,11 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_SCHEMA_VERSION
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
     SCHEMA_VERSION,
     is_supported_public_polygon_schema,
     schema_matches,
@@ -70,6 +72,8 @@ class _EnrichmentContext:
     shard: Path
     parquet: pq.ParquetFile
     source_schema: pa.Schema
+    target_schema: pa.Schema
+    target_schema_version: str
     source_row_count: int
     checkpoint: EnrichmentCheckpoint
     cache: TextCache
@@ -101,6 +105,8 @@ def enrich_polygon_shard(
         changed_by_batches, max_batch_rows = _process_enrichment_batches(
             parquet=context.parquet,
             source_schema=context.source_schema,
+            target_schema=context.target_schema,
+            target_schema_version=context.target_schema_version,
             source_row_count=context.source_row_count,
             batch_rows=batch_rows,
             next_part_index=context.next_part_index,
@@ -120,6 +126,7 @@ def enrich_polygon_shard(
             batch_rows=batch_rows,
             source_row_count=context.source_row_count,
             max_batch_rows=max_batch_rows,
+            target_schema=context.target_schema,
         )
         shutil.rmtree(context.checkpoint.directory)
     except BaseException:
@@ -157,12 +164,15 @@ def _prepare_enrichment_context(
     source_row_count = parquet.metadata.num_rows
     if not is_supported_public_polygon_schema(source_schema):
         raise ValueError(f"unsupported polygon schema for enrichment: {shard.name}")
+    target_schema, target_schema_version = _enrichment_contract(source_schema)
     cache = TextCache(Path(cache_path))
     try:
         checkpoint = load_checkpoint(
             shard,
             source_row_count=source_row_count,
             source_shard_sha256=hash_shard(shard),
+            schema=target_schema,
+            schema_version=target_schema_version,
         )
     except BaseException:
         cache.close()
@@ -173,11 +183,13 @@ def _prepare_enrichment_context(
         shard=shard,
         parquet=parquet,
         source_schema=source_schema,
+        target_schema=target_schema,
+        target_schema_version=target_schema_version,
         source_row_count=source_row_count,
         checkpoint=checkpoint,
         cache=cache,
         staged=staged,
-        changed=not schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA) or bool(checkpoint.parts),
+        changed=not schema_matches(source_schema, target_schema) or bool(checkpoint.parts),
         next_part_index=len(checkpoint.parts),
     )
 
@@ -186,6 +198,8 @@ def _process_enrichment_batches(
     *,
     parquet: pq.ParquetFile,
     source_schema: pa.Schema,
+    target_schema: pa.Schema,
+    target_schema_version: str,
     source_row_count: int,
     batch_rows: int,
     next_part_index: int,
@@ -209,6 +223,7 @@ def _process_enrichment_batches(
             enriched_rows, batch_changed = _enrich_batch(
                 originals,
                 source_schema=source_schema,
+                target_schema_version=target_schema_version,
                 cache=cache,
                 invocation_id=invocation_id,
                 fetcher=fetcher,
@@ -222,6 +237,7 @@ def _process_enrichment_batches(
                 next_part_index,
                 enriched_rows,
                 batch_rows=batch_rows,
+                schema=target_schema,
             )
             next_part_index += 1
             processed_rows += len(enriched_rows)
@@ -247,6 +263,7 @@ def _enrich_batch(
     originals: list[dict[str, object]],
     *,
     source_schema: pa.Schema,
+    target_schema_version: str,
     cache: TextCache,
     invocation_id: str,
     fetcher: Fetcher,
@@ -273,9 +290,9 @@ def _enrich_batch(
         extractor=extractor,
         fetch_pool=fetch_pool,
     )
-    return _finalize_batch(states), any(
+    return _finalize_batch(states, schema_version=target_schema_version), any(
         state.before != tuple(state.row.get(name) for name in TEXT_COLUMN_NAMES)
-        or state.original.get("schema_version") != SCHEMA_VERSION
+        or state.original.get("schema_version") != target_schema_version
         for state in states
     )
 
@@ -339,11 +356,13 @@ def _apply_cached_results(
     return unresolved
 
 
-def _finalize_batch(states: list[_RowState]) -> list[dict[str, object]]:
+def _finalize_batch(
+    states: list[_RowState], *, schema_version: str = SCHEMA_VERSION
+) -> list[dict[str, object]]:
     """Set the current schema marker and return mutable rows."""
     rows: list[dict[str, object]] = []
     for state in states:
-        state.row["schema_version"] = SCHEMA_VERSION
+        state.row["schema_version"] = schema_version
         rows.append(state.row)
     return rows
 
@@ -357,23 +376,32 @@ def _promote_enriched_shard(
     batch_rows: int,
     source_row_count: int,
     max_batch_rows: int,
+    target_schema: pa.Schema,
 ) -> int:
     """Assemble checkpoint parts and atomically promote the enriched shard."""
-    parts = checkpoint_parts(checkpoint_directory)
+    parts = checkpoint_parts(checkpoint_directory, schema=target_schema)
     assembled_max_batch_rows = assemble_checkpoint(
         parts,
         staged,
         batch_rows=batch_rows,
         row_count=source_row_count,
+        schema=target_schema,
     )
     max_batch_rows = max(max_batch_rows, assembled_max_batch_rows)
     if not changed:
         staged.unlink(missing_ok=True)
         return max_batch_rows
-    if not schema_matches(pq.read_schema(staged), POLYGON_PUBLIC_SCHEMA):
+    if not schema_matches(pq.read_schema(staged), target_schema):
         raise ValueError("enriched shard schema mismatch")
     atomic_promote_bundle([(staged, shard)])
     return max_batch_rows
+
+
+def _enrichment_contract(source_schema: pa.Schema) -> tuple[pa.Schema, str]:
+    """Keep language columns while migrating older public schemas to v1.3."""
+    if schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA_V1_4):
+        return POLYGON_PUBLIC_SCHEMA_V1_4, LANGUAGE_SCHEMA_VERSION
+    return POLYGON_PUBLIC_SCHEMA, SCHEMA_VERSION
 
 
 def _queue_tag(

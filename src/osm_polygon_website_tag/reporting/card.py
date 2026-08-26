@@ -20,7 +20,14 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+    column_doc,
+)
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import compute_polygon_density_summary
 from osm_polygon_website_tag.reporting.geographic.layout import (
@@ -53,7 +60,7 @@ def build_card(
         extracted_text_only=True,
     )
     stats = compute_card_stats(run_dir, summary=summary, source_names=source_names)
-    body = _render_markdown(stats)
+    body = _render_markdown(stats, schema=_public_schema_for_card(run_dir, source_names))
     front_matter = _render_yaml_front_matter(stats)
     readme = front_matter + "\n" + body
     path = run_dir / "README.md"
@@ -147,7 +154,7 @@ def _size_category(row_count: int) -> str:
     return "n>1B"
 
 
-def _render_markdown(stats: CardStats) -> str:
+def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> str:
     """Render a concise public-facing card from artifact-derived statistics."""
     combined_words = stats.website_total_words + stats.contact_website_total_words
     status_label = _dataset_status_label(stats)
@@ -276,7 +283,7 @@ def _render_markdown(stats: CardStats) -> str:
         "| Column | Type | Nullable | Description |",
         "| --- | --- | :---: | --- |",
     ]
-    parts.extend(_schema_rows())
+    parts.extend(_schema_rows(schema))
     parts.extend(
         [
             "",
@@ -356,10 +363,39 @@ def _hostname_sections(stats: CardStats) -> list[str]:
     return sections
 
 
-def _schema_rows() -> list[str]:
+def _public_schema_for_card(
+    run_dir: Path, source_names: Collection[str] | None = None
+) -> pa.Schema:
+    """Return v1.4 when the selected public artifacts carry language fields."""
+    paths = _selected_public_paths(run_dir, source_names)
+    if _has_v1_4_schema(paths):
+        return POLYGON_PUBLIC_SCHEMA_V1_4
+    return POLYGON_PUBLIC_SCHEMA
+
+
+def _selected_public_paths(run_dir: Path, source_names: Collection[str] | None) -> list[Path]:
+    """Select public shards included in a card."""
+    paths = sorted((run_dir / "polygons").glob("*.parquet"))
+    if source_names is not None:
+        selected = {
+            f"{source_name.removesuffix('.osm.pbf')}.parquet" for source_name in source_names
+        }
+        paths = [path for path in paths if path.name in selected]
+    return paths
+
+
+def _has_v1_4_schema(paths: Collection[Path]) -> bool:
+    """Return whether any selected public shard has the language contract."""
+    return any(
+        pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+        for path in paths
+    )
+
+
+def _schema_rows(schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> list[str]:
     """Render one Markdown row for every public polygon schema field."""
     rows: list[str] = []
-    for field in POLYGON_PUBLIC_SCHEMA:
+    for field in schema:
         description = " ".join(column_doc(field.name).split()).replace("|", "\\|")
         rows.append(
             f"| `{field.name}` | `{field.type}` | "
