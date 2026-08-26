@@ -12,12 +12,17 @@ from rich.console import Console
 from osm_polygon_website_tag.application.progress import ProgressReporter
 from osm_polygon_website_tag.application.workflow import run_all
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
+from osm_polygon_website_tag.pipeline.detect_languages import (
+    detect_language_shard,
+    shard_needs_language_detection,
+)
 from osm_polygon_website_tag.pipeline.enrich import DEFAULT_FETCH_WORKERS
 from osm_polygon_website_tag.pipeline.extraction import (
     DEFAULT_AREA_WORKERS,
     DEFAULT_MAX_IN_FLIGHT_AREAS,
     extract_pbf,
 )
+from osm_polygon_website_tag.pipeline.glotlid import load_glotlid_detector
 from osm_polygon_website_tag.publishing.publish import (
     build_publish_plan,
     create_repo,
@@ -37,10 +42,13 @@ from osm_polygon_website_tag.runtime.config import (
     DEFAULT_TRACKIO_PROJECT,
     DEFAULT_TRACKIO_SPACE,
 )
+from osm_polygon_website_tag.runtime.paths import assert_seagate_path, glotlid_model_cache_dir
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
+    STATUS_COMPLETE,
     STATUS_ENRICHED,
+    STATUS_ENRICHING,
     STATUS_EXTRACTED,
     STATUS_EXTRACTING,
     STATUS_INITIALIZED,
@@ -52,6 +60,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     snapshot_source_fingerprint,
     source_inventory_matches,
     transition_status,
+    update_public_shard_metadata,
     upsert_run_metadata,
 )
 from osm_polygon_website_tag.runtime.safety import assert_path_safe_against, normalize_path
@@ -356,6 +365,10 @@ def run_all_command(
         int,
         typer.Option("--fetch-workers", help="Bounded concurrent URL fetch workers."),
     ] = DEFAULT_FETCH_WORKERS,
+    detect_languages: Annotated[
+        bool,
+        typer.Option("--detect-languages", help="Run the opt-in GlotLID language stage."),
+    ] = False,
 ) -> int:
     """Run or resume the complete PBF inventory."""
     if ensure_repo and not apply:
@@ -373,6 +386,7 @@ def run_all_command(
             area_workers=area_workers,
             max_in_flight_areas=max_in_flight_areas,
             fetch_workers=fetch_workers,
+            detect_languages=detect_languages,
         )
     except BaseException:
         progress.close(completed=False)
@@ -380,6 +394,70 @@ def run_all_command(
     progress.close(completed=result.complete)
     _json({**result.__dict__, "run_dir": str(result.run_dir)}, sort_keys=True)
     return 0
+
+
+@app.command("detect-languages")
+def detect_languages_command(run_dir: RunDir) -> int:
+    """Detect GlotLID languages for every completed text shard."""
+    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    state = load_run(normalized_run_dir)
+    paths = sorted((normalized_run_dir / "polygons").glob("*.parquet"))
+    _validate_language_shard_membership(state, paths)
+    _reject_frozen_language_run(state)
+    needed = [path for path in paths if shard_needs_language_detection(path)]
+    if not needed:
+        _json({"changed_shards": 0, "run_dir": str(normalized_run_dir)}, sort_keys=True)
+        return 0
+    _prepare_language_command_state(state)
+    model_cache = glotlid_model_cache_dir()
+    assert_seagate_path(model_cache, label="GlotLID model cache")
+    detector = load_glotlid_detector(model_cache)
+    changed = 0
+    for shard in needed:
+        result = detect_language_shard(shard, detector=detector)
+        update_public_shard_metadata(
+            state,
+            filename=f"{shard.stem}.osm.pbf",
+            row_count=result.row_count,
+            shard_sha256=result.shard_sha256,
+        )
+        changed += int(result.changed)
+    _finish_language_command_state(state)
+    _json({"changed_shards": changed, "run_dir": str(normalized_run_dir)}, sort_keys=True)
+    return 0
+
+
+def _validate_language_shard_membership(state: RunState, paths: list[Path]) -> None:
+    """Require every public shard to belong to the run's source manifest."""
+    for path in paths:
+        source_name = f"{path.stem}.osm.pbf"
+        if source_name not in state.sources:
+            raise ValueError(f"language shard is not in the source manifest: {path.name}")
+
+
+def _reject_frozen_language_run(state: RunState) -> None:
+    """Reject mutation of a snapshot explicitly frozen by the operator."""
+    if (
+        state.metadata.get("status") == STATUS_COMPLETE
+        and state.metadata.get("snapshot_status") == "done"
+    ):
+        raise ValueError("cannot add languages to a frozen snapshot")
+
+
+def _prepare_language_command_state(state: RunState) -> None:
+    """Enter the resumable language stage or reject an unsuitable run."""
+    _reject_frozen_language_run(state)
+    status = state.metadata.get("status")
+    if status in {STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}:
+        transition_status(state, STATUS_ENRICHING)
+    elif status not in {STATUS_ENRICHING, STATUS_ENRICHED}:
+        raise ValueError("detect-languages requires an extracted/enriched run")
+
+
+def _finish_language_command_state(state: RunState) -> None:
+    """Complete the language stage after every shard was promoted."""
+    if state.metadata.get("status") == STATUS_ENRICHING:
+        transition_status(state, STATUS_ENRICHED)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -10,19 +10,28 @@ from typing import get_type_hints
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from osm_polygon_website_tag.application import cli
 from osm_polygon_website_tag.application.cli import app, main
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+)
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
 from osm_polygon_website_tag.runtime.run_state import (
+    STATUS_COMPLETE,
     RunState,
     SourceFingerprint,
     hash_shard,
     initialise_run,
+    load_run,
     record_processed_source,
     snapshot_source_fingerprint,
+    transition_status,
+    upsert_run_metadata,
 )
 
 
@@ -145,6 +154,7 @@ def test_typer_help_lists_every_public_command() -> None:
         "card-stats",
         "publish-trackio",
         "run-all",
+        "detect-languages",
     ):
         assert command in result.stdout
 
@@ -181,6 +191,7 @@ def test_run_all_help_lists_bounded_worker_options() -> None:
     assert "--area-workers" in result.stdout
     assert "--max-in-flight-areas" in result.stdout
     assert "--fetch-workers" in result.stdout
+    assert "--detect-languages" in result.stdout
 
 
 def test_application_progress_adapter_module_exists() -> None:
@@ -327,6 +338,77 @@ def test_cli_verify_results_returns_nonzero_on_failure(tmp_path: Path) -> None:
     assert rc == 1
 
 
+def test_cli_detect_languages_rejects_non_seagate_before_model_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "load_glotlid_detector",
+        lambda *_args, **_kwargs: pytest.fail("unsafe run must not load GlotLID"),
+        raising=False,
+    )
+
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 2
+
+
+def test_cli_detect_languages_loads_one_model_and_updates_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    transition_status(state, "extracting")
+    transition_status(state, "extracted")
+    transition_status(state, "enriching")
+    transition_status(state, "enriched")
+    cache_dir = tmp_path / "model-cache"
+    detector = SimpleNamespace(
+        identity=ModelIdentity("repo", "model.bin", "revision", "a" * 64),
+        predict=lambda texts: [LanguagePrediction("eng_Latn", 0.9) for _text in texts],
+    )
+    loaded: list[Path] = []
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "glotlid_model_cache_dir", lambda: cache_dir)
+    monkeypatch.setattr(cli, "load_glotlid_detector", lambda path: loaded.append(path) or detector)
+
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output == {"changed_shards": 1, "run_dir": str(run_dir)}
+    assert loaded == [cache_dir]
+    assert pq.read_schema(run_dir / "polygons" / "monaco-latest.parquet").equals(
+        POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True
+    )
+    assert load_run(run_dir).metadata["status"] == "enriched"
+    assert load_run(run_dir).sources["monaco-latest.osm.pbf"]["public_shard_sha256"] == hash_shard(
+        run_dir / "polygons" / "monaco-latest.parquet"
+    )
+
+
+def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    for status in ("extracting", "extracted", "enriching", "enriched", "analyzed", "card_built"):
+        transition_status(state, status)
+    transition_status(state, "verified")
+    transition_status(state, STATUS_COMPLETE)
+    upsert_run_metadata(state, {"snapshot_status": "done"})
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(
+        cli,
+        "load_glotlid_detector",
+        lambda *_args, **_kwargs: pytest.fail("frozen snapshot must not load GlotLID"),
+    )
+
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 2
+
+
 def test_cli_card_stats_runs(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     rc = main(["card-stats", "--run-dir", str(run_dir)])
@@ -389,6 +471,7 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
     capsys,
 ) -> None:
     events: list[bool] = []
+    calls: list[dict[str, object]] = []
 
     class FakeProgress:
         def close(self, *, completed: bool) -> None:
@@ -398,7 +481,10 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
     monkeypatch.setattr(
         cli,
         "run_all",
-        lambda **_kwargs: SimpleNamespace(complete=True, run_dir=tmp_path / "run", sources=3),
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(complete=True, run_dir=tmp_path / "run", sources=3)
+        ),
     )
 
     assert (
@@ -412,8 +498,10 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
             area_workers=1,
             max_in_flight_areas=1,
             fetch_workers=1,
+            detect_languages=True,
         )
         == 0
     )
     assert events == [True]
+    assert calls[0]["detect_languages"] is True
     assert '"complete": true' in capsys.readouterr().out
