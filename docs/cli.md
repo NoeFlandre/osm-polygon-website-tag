@@ -22,6 +22,7 @@ development, recovery, and inspection of an existing run.
 | `create-repo` | Explicitly create a public Hugging Face dataset repository. |
 | `card-stats` | Recompute and print card statistics for a run. |
 | `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
+| `detect-languages` | Add resumable GlotLID language results to public polygon shards. |
 | `run-all` | Discover, extract, enrich, analyze, verify, and resume a complete inventory. |
 
 All `--run-dir` values point to an existing run directory. The commands that
@@ -55,6 +56,7 @@ apply-mode upload.
 | `--area-workers` | 4 | Bounded geometry workers per PBF. |
 | `--max-in-flight-areas` | 32 | Maximum queued geometry payloads per PBF. |
 | `--fetch-workers` | 8 | Bounded concurrent URL fetch workers per enrichment batch. |
+| `--detect-languages` | off | Load the pinned GlotLID model and add schema-v1.4 language fields. |
 
 For a manually staged run, the phase sequence is:
 
@@ -62,6 +64,22 @@ For a manually staged run, the phase sequence is:
 init -> extract -> run-all-owned enrichment -> analyze-results
      -> build-card -> verify-results -> finalize-run -> publish
 ```
+
+Language detection is optional. Add `--detect-languages` to `run-all` to run
+it after text enrichment, or run it separately on an enriched run:
+
+```bash
+uv run --locked osm-polygon-website-tag detect-languages \
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run-id>'
+```
+
+The standalone command loads one pinned GlotLID V3 model from the Seagate
+cache, processes public shards in sorted order, and changes the run from
+`enriching` to `enriched` after all shard promotions succeed. If the run was
+already analyzed or card-built, rerun `analyze-results`, `build-card`,
+`verify-results`, and `finalize-run` afterward. The model is never loaded when
+there are no unfinished language shards. A frozen snapshot is rejected before
+the model cache is opened.
 
 `extract` also accepts `--area-workers` and `--max-in-flight-areas`. The
 enrichment phase is intentionally owned by `run-all`, because it coordinates

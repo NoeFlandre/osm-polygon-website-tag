@@ -24,9 +24,12 @@ from closed ways and supported polygon relations. It then:
 - records text status, word counts, geometry, and source metadata; and
 - generates an artifact-derived dataset card and a text-only H3 geographic map.
 
-The public polygon schema is versioned (`v1.3`) and documented in
+The default public polygon schema is versioned (`v1.3`) and documented in
 [`contracts/polygon_schema.py`](src/osm_polygon_website_tag/contracts/polygon_schema.py).
-Full extracted text is retained without truncation. Current row, text, and word
+The opt-in `--detect-languages` stage adds GlotLID top-1 labels and
+probabilities as schema `v1.4`; it keeps its model cache and run artifacts on
+the Seagate data volume. Full extracted text is retained without truncation.
+Current row, text, and word
 totals are maintained in the [dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag),
 not duplicated here.
 
@@ -60,6 +63,27 @@ results, completed enrichment batches, and acknowledged uploads. PBF inputs are
 never modified; PBF processing stays sequential while extraction and fetching
 use bounded workers. See [Operations and resume](docs/operations.md) for the
 checkpoint and freeze rules.
+
+Language detection is opt-in and can be included in the same resumable run:
+
+```bash
+uv run --locked osm-polygon-website-tag run-all \
+  --source-root '/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw' \
+  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs' \
+  --run-id website-v1 \
+  --detect-languages
+```
+
+For an already enriched run, use the standalone stage instead:
+
+```bash
+uv run --locked osm-polygon-website-tag detect-languages \
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/website-v1'
+```
+
+The pinned [GlotLID model](https://huggingface.co/cis-lmu/glotlid) is downloaded
+under `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid/`.
+The default `run-all` path does not load or download it.
 
 For a reproducible container workflow, see [Getting started](docs/setup.md#docker-workflow).
 
@@ -119,6 +143,8 @@ boundaries.
   with OpenStreetMap and Geofabrik attribution in the dataset card.
 - **Website text:** fetched third-party content under the terms of its
   respective publishers; no additional reuse rights are granted here.
+- **Language model:** the GlotLID binary is local operational state on the
+  Seagate data volume; it is not committed to Git or included in the dataset.
 - **Source PBFs:** read-only inputs supplied explicitly by the operator; run
   artifacts are written to a separate output root and are not committed to Git.
 

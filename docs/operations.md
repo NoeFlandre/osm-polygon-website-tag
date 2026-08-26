@@ -14,7 +14,9 @@ rename, hash, or modify those PBFs.
 `--output-root` contains one run directory per `--run-id`. The default generated
 data root is `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`; set
 `OSM_POLY_DATA_DIR` when a different local or mounted volume is appropriate.
-Keep this root writable and outside the source tree.
+Keep this root writable and outside the source tree. The production GlotLID
+cache is `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid/`;
+language commands reject a run or model cache outside this Seagate data root.
 
 ## Resume `run-all`
 
@@ -46,6 +48,48 @@ starting the shard over. Existing schema-v1.2 shards are projected to v1.3
 locally without reopening the PBF or refetching text. The Parquet text-status
 columns are authoritative; a small status summary only helps choose resume
 order.
+
+## Optional GlotLID language detection
+
+The default `run-all` command remains schema v1.3 and does not load a model.
+Enable the stage explicitly:
+
+```bash
+uv run --locked osm-polygon-website-tag run-all \
+  --source-root '/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw' \
+  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs' \
+  --run-id 'geofabrik-website-v1' \
+  --detect-languages
+```
+
+Or run language detection after an existing run has reached `enriched`:
+
+```bash
+uv run --locked osm-polygon-website-tag detect-languages \
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/geofabrik-website-v1'
+```
+
+The stage uses the pinned [GlotLID model](https://huggingface.co/cis-lmu/glotlid)
+(`model_v3.bin` at a fixed Hub revision). It loads one model into one process,
+predicts bounded batches, and writes four nullable v1.4 fields:
+`website_language`, `website_language_probability`,
+`contact_website_language`, and `contact_website_language_probability`.
+Successful text receives the exact script-aware top-1 label (for example
+`eng_Latn`) and probability; absent or unsuccessful text remains null.
+
+Each public shard has source- and model-bound `.language.parts` checkpoints.
+After every completed batch is atomically written, the next batch can be
+processed. `Ctrl-C` is safe: the original shard stays valid, the completed
+prefix remains on Seagate, and repeating the command verifies identity and
+continues from the first unfinished batch. A changed shard or model fails
+closed. Once every shard is promoted, the source manifest hashes are updated.
+
+If the standalone stage is run on an analyzed, card-built, or non-frozen
+complete run, it reopens the stage as `enriching` and finishes at `enriched`.
+Rebuild analysis, card, verification, and finalization afterward. A snapshot
+with `status=complete` and `snapshot_status=done` is immutable and is rejected
+before model loading. Tests use injected fakes and `tmp_path`; they never
+download GlotLID or write production data.
 
 ## Dry run versus apply
 

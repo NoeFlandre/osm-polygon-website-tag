@@ -3,12 +3,13 @@
 Implements bounded data-processing stages.
 
 - Modules: `extraction`, `extraction_handler`, `area_work`, `extraction_records`,
-  `record_builders`, `enrich`, `enrichment_checkpoint`,
-  `public_schema_migration`, `analyze`,
-  `partition_aggregate`.
+  `record_builders`, `enrich`, `enrichment_checkpoint`, `glotlid`,
+  `language_detection_checkpoint`, `detect_languages`,
+  `public_schema_migration`, `analyze`, `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
-  `migrate_public_shard`, `analyze_results`, `deduplicate_public_shards`.
+  `migrate_public_shard`, `detect_language_shard`, `analyze_results`,
+  `deduplicate_public_shards`.
 - Excludes: full-run orchestration, card rendering, and remote publication.
 
 `deduplicate_public_shards` is a read-only derivative stage. It reads finalized
@@ -73,6 +74,21 @@ promotion. `enrichment_checkpoint` owns the source-bound checkpoint metadata,
 sequential part validation, atomic part writes, and bounded final assembly.
 This boundary keeps durable resume-state rules independently reviewable while
 leaving the `enrich_polygon_shard` entry point and on-disk contract unchanged.
+
+## Language detection
+
+`detect_language_shard` consumes a public v1.3 or v1.4 shard only after both
+text status columns are terminal. It calls the injected `LanguageDetector` for
+bounded, independent website and contact-text batches, preserves completed
+language pairs, and atomically promotes a validated v1.4 shard. Absent or
+unsuccessful text receives null language fields.
+
+`glotlid` owns the pinned FastText/GlotLID adapter, model hash, and explicit
+Seagate cache boundary. `language_detection_checkpoint` owns source/model
+identity metadata, sequential Parquet parts, and bounded final assembly. A
+`Ctrl-C` or ordinary exception leaves the source shard untouched and preserves
+durable parts for the next invocation. The model is loaded once by the
+application layer and is never copied to URL or geometry workers.
 
 ## Record builders
 

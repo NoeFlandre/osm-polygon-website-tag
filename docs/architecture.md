@@ -9,12 +9,12 @@ the lower-level packages keep their responsibilities independent.
 
 | Package | Responsibility |
 | --- | --- |
-| `contracts` | Versioned Arrow schemas and text-status contracts. |
+| `contracts` | Versioned Arrow schemas, language fields, and text-status contracts. |
 | `domain` | Deterministic OSM classification and geometry rules. |
 | `storage` | Bounded, transactional local persistence. |
 | `web` | Safe HTTP retrieval, Trafilatura extraction, and URL caching. |
 | `runtime` | Configuration, paths, source safety, and run lifecycle. |
-| `pipeline` | Extraction, enrichment, and analysis stages. |
+| `pipeline` | Extraction, enrichment, language detection, and analysis stages. |
 | `reporting` | Artifact-derived cards, verification, and finalization. |
 | `publishing` | Hugging Face credentials, checkpoints, and upload adapters. |
 | `application` | Workflow composition, resume planning, and the Typer CLI. |
@@ -40,18 +40,23 @@ import it.
    v1.3. A run-owned SQLite cache reuses successes and retries unresolved
    statuses. Completed batches are source-bound checkpoint parts, so an
    interruption resumes at the first unfinished batch.
-4. **Analysis.** `analyze-results` uses DuckDB with explicit memory and
+4. **Optional language detection.** When `--detect-languages` is enabled,
+   `run-all` or `detect-languages` loads one pinned GlotLID model from the
+   Seagate cache, predicts successful website texts in bounded batches, and
+   atomically upgrades each public shard to schema v1.4. The default workflow
+   does not load the model.
+5. **Analysis.** `analyze-results` uses DuckDB with explicit memory and
    run-owned spill space to write the analysis Parquets. Each invocation has a
    private staging directory and promotes the complete bundle atomically.
-5. **Card and map.** `build-card` recomputes the card from Parquet artifacts.
+6. **Card and map.** `build-card` recomputes the card from Parquet artifacts.
    The H3 resolution-3 density map counts each text-bearing public polygon
    centroid once and uses the bundled Natural Earth backdrop without network
    access.
-6. **Verification and finalization.** `verify-results` checks source
+7. **Verification and finalization.** `verify-results` checks source
    inventory, schemas, row invariants, independent counts and hashes, analysis
    files, card content, and map. `finalize-run` writes a SHA-256 completion
    receipt listing every publishable relative path, size, and hash.
-7. **Publication.** `publish` is a read-only plan by default. With `--apply`,
+8. **Publication.** `publish` is a read-only plan by default. With `--apply`,
    it re-verifies a complete run and uploads only receipt-bound artifacts to
    the configured Hugging Face dataset. `run-all --apply` may additionally
    upload each changed shard and refreshed card/map as progress; its final
@@ -71,6 +76,13 @@ legacy v1.2 shards are migrated without reopening PBFs, terminal text statuses
 again. `Ctrl-C` leaves an active run in a resumable state. Once a completed
 snapshot is explicitly frozen (`snapshot_status=done` plus a completion
 receipt), `run-all` treats it as immutable and performs no retry or upload.
+
+When language detection is enabled, each shard also has source/model-bound
+language checkpoint parts under `.language.parts`. The original shard is
+preserved until all language rows have been assembled and validated as v1.4;
+an interruption therefore resumes only the unfinished prefix. The standalone
+language command rejects frozen snapshots and skips model loading when all
+language pairs are already complete.
 
 The local `manifests/uploaded_polygons.json` file records acknowledged remote
 polygon hashes during apply mode. It is operational state, excluded from the
@@ -98,6 +110,10 @@ are not publishable.
   dataset.yaml
 ```
 
+The shared production data root also contains
+`models/glotlid/model_v3.bin` and its Hugging Face cache metadata. Language
+checkpoints are local operational state and are not receipt-bound or public.
+
 Every source PBF receives one public shard, including a schema-valid empty
 shard. The public Hugging Face split is `polygons/*.parquet`; comparison,
 rejection, analysis, card, map, and receipt files are supporting artifacts. A
@@ -114,6 +130,11 @@ exact Unicode `\w+` word counts independently for both website fields. It
 removes the redundant `preferred_website`, `preferred_website_source`,
 `wikidata`, `wikidata_qid`, `wikidata_class`, and `area_km2` columns; comparison
 observations retain Wikidata, and `tags` retains every original OSM tag.
+The opt-in v1.4 schema appends nullable `website_language` and
+`website_language_probability` fields plus the corresponding two
+`contact_website_*` fields. These contain the exact GlotLID script-aware label
+and top-1 probability for successful text, or null when no successful text is
+available.
 
 Card tables, combined word totals, hostname tables, and the map are derived
 from the Parquets on each incremental update. The card intentionally omits
@@ -129,6 +150,9 @@ generated card, not to this architecture overview.
 - Enrichment fetches at most eight distinct URL misses per batch by default
   (capped at 32). Cache commits and completed Parquet parts flush at each batch;
   row application remains ordered and single-threaded.
+- Language detection loads one model process-wide and predicts at most the
+  configured bounded row batch at once. Checkpoint parts and final assembly
+  stream through Parquet without loading a complete shard into memory.
 - Geographic aggregation reads only the needed columns in bounded batches.
   DuckDB uses one deterministic worker, an explicit memory limit, and a
   run-owned spill directory.
