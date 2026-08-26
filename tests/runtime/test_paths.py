@@ -7,6 +7,23 @@ from pathlib import Path
 import pytest
 
 from osm_polygon_website_tag.runtime import paths
+from osm_polygon_website_tag.runtime.paths import (
+    assert_seagate_path,
+    glotlid_model_cache_dir,
+)
+
+
+def test_glotlid_model_cache_is_under_the_default_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OSM_POLY_DATA_DIR", raising=False)
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path)
+    assert glotlid_model_cache_dir() == paths.DEFAULT_DATA_ROOT / "models" / "glotlid"
+
+
+def test_assert_seagate_path_rejects_paths_outside_the_data_root(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Seagate data root"):
+        assert_seagate_path(tmp_path, label="model cache")
 
 
 @pytest.fixture

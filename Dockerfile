@@ -30,6 +30,10 @@ FROM base AS builder
 COPY --from=uv /uv /uvx /usr/local/bin/
 COPY pyproject.toml uv.lock .python-version README.md LICENSE ./
 
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install third-party runtime dependencies before copying source for a stable
 # cache. The locked project is installed in the next layer.
 RUN uv sync --locked --no-dev --no-install-project

@@ -56,3 +56,18 @@ def exports_dir() -> Path:
     path = data_root() / EXPORTS_DIRNAME
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def glotlid_model_cache_dir() -> Path:
+    """Return the generated-data directory reserved for the GlotLID model cache."""
+    path = data_root() / "models" / "glotlid"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def assert_seagate_path(path: Path | str, *, label: str) -> Path:
+    """Require a production path to be inside the dedicated Seagate data root."""
+    normalized = Path(path).expanduser().resolve()
+    if not normalized.is_relative_to(DEFAULT_DATA_ROOT):
+        raise ValueError(f"{label} must be under the Seagate data root: {DEFAULT_DATA_ROOT}")
+    return normalized
