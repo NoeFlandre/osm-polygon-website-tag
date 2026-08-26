@@ -39,7 +39,8 @@ class LanguagePrediction:
 class LanguageDetector(Protocol):
     """Small prediction boundary consumed by the shard pipeline."""
 
-    identity: ModelIdentity
+    @property
+    def identity(self) -> ModelIdentity: ...
 
     def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]: ...
 

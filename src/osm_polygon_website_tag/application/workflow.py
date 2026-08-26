@@ -26,12 +26,18 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
+from osm_polygon_website_tag.pipeline.detect_languages import (
+    detect_language_shard,
+    shard_needs_language_detection,
+)
 from osm_polygon_website_tag.pipeline.enrich import EnrichmentResult, enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
+from osm_polygon_website_tag.pipeline.glotlid import LanguageDetector, load_glotlid_detector
 from osm_polygon_website_tag.pipeline.public_schema_migration import migrate_public_shard
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.publishing.incremental import (
@@ -48,6 +54,7 @@ from osm_polygon_website_tag.reporting.finalize import finalize_run
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.repair import refresh_card_run
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
+from osm_polygon_website_tag.runtime.paths import assert_seagate_path, glotlid_model_cache_dir
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -112,6 +119,8 @@ class _SourceRunContext:
     area_workers: int | None
     max_in_flight_areas: int | None
     fetch_workers: int | None
+    detect_languages: bool
+    language_detector: LanguageDetector | None
 
 
 @dataclass(frozen=True)
@@ -158,6 +167,8 @@ def run_all(
     area_workers: int | None = None,
     max_in_flight_areas: int | None = None,
     fetch_workers: int | None = None,
+    detect_languages: bool = False,
+    language_detector: LanguageDetector | None = None,
 ) -> WorkflowResult:
     """Process each PBF through upload, then analyze and finalize the full run.
 
@@ -169,7 +180,9 @@ def run_all(
     completion receipt is immutable; resuming it returns without source or
     enrichment work.
     Optional worker settings are forwarded to the extraction and enrichment
-    stages; ``None`` delegates to their bounded defaults.
+    stages; ``None`` delegates to their bounded defaults. Language detection
+    is opt-in; when enabled, a supplied detector is used for hermetic tests,
+    otherwise the pinned GlotLID model is loaded from the Seagate data root.
     """
     source_root_path = normalize_path(source_root)
     output_root_path = assert_path_safe_against(output_root, source_root_path)
@@ -186,6 +199,11 @@ def run_all(
         run_dir=run_dir,
         existing_state=existing_state,
         progress=progress,
+    )
+    detector = _prepare_language_detector(
+        detect_languages=detect_languages,
+        language_detector=language_detector,
+        run_dir=setup.run_dir,
     )
     upload_checkpoint = _prepare_upload_checkpoint(
         run_dir=setup.run_dir,
@@ -205,6 +223,8 @@ def run_all(
         area_workers=area_workers,
         max_in_flight_areas=max_in_flight_areas,
         fetch_workers=fetch_workers,
+        detect_languages=detect_languages,
+        language_detector=detector,
     )
     processed_names, retry_names = _resume_source_names(
         setup.state,
@@ -241,6 +261,23 @@ def run_all(
         complete=status == STATUS_COMPLETE,
         dry_run=not apply,
     )
+
+
+def _prepare_language_detector(
+    *,
+    detect_languages: bool,
+    language_detector: LanguageDetector | None,
+    run_dir: Path,
+) -> LanguageDetector | None:
+    """Resolve the opt-in detector without loading model resources by default."""
+    if not detect_languages:
+        return None
+    if language_detector is not None:
+        return language_detector
+    assert_seagate_path(run_dir, label="run directory")
+    model_cache = glotlid_model_cache_dir()
+    assert_seagate_path(model_cache, label="GlotLID model cache")
+    return load_glotlid_detector(model_cache)
 
 
 def _load_existing_state(run_dir: Path, source_root: Path) -> RunState | None:
@@ -518,7 +555,10 @@ def _run_source_phases(
 def _enter_enrichment_phase_if_needed(status: str, context: _SourceRunContext) -> str:
     if status == STATUS_EXTRACTED or (
         status in {STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}
-        and _run_needs_enrichment(context.run_dir)
+        and (
+            _run_needs_enrichment(context.run_dir)
+            or (context.detect_languages and _run_needs_language_detection(context.run_dir))
+        )
     ):
         transition_status(context.state, STATUS_ENRICHING)
         return STATUS_ENRICHING
@@ -675,6 +715,13 @@ def _process_source(
         total=total,
         migration_changed=migration_changed,
     )
+    language_changed = _detect_source_shard_if_needed(
+        source=source,
+        shard=bundle.shard,
+        context=context,
+        index=index,
+        total=total,
+    )
     uploaded = _publish_source_if_needed(
         source=source,
         context=context,
@@ -683,6 +730,7 @@ def _process_source(
         reused=bundle.reused,
         migration_changed=migration_changed,
         needs_enrichment=decision.needs_enrichment,
+        language_changed=language_changed,
     )
     return _SourceTransactionResult(
         extracted=bundle.extracted,
@@ -808,6 +856,31 @@ def _enrich_source_shard_if_needed(
     return decision
 
 
+def _detect_source_shard_if_needed(
+    *,
+    source: Path,
+    shard: Path,
+    context: _SourceRunContext,
+    index: int,
+    total: int,
+) -> bool:
+    """Detect languages for one completed text shard when opt-in is enabled."""
+    if not getattr(context, "detect_languages", False) or not shard_needs_language_detection(shard):
+        return False
+    detector = context.language_detector
+    if detector is None:
+        raise ValueError("language detection requested without a detector")
+    _progress(context.progress, f"[{index}/{total}] Detecting languages for {source.name}")
+    result = detect_language_shard(shard, detector=detector)
+    update_public_shard_metadata(
+        context.state,
+        filename=source.name,
+        row_count=result.row_count,
+        shard_sha256=result.shard_sha256,
+    )
+    return result.changed
+
+
 def _initial_enrichment_decision(
     shard: Path,
     *,
@@ -862,6 +935,7 @@ def _publish_source_if_needed(
     reused: bool,
     migration_changed: bool,
     needs_enrichment: bool,
+    language_changed: bool = False,
 ) -> bool:
     if _source_upload_is_current_for_context(
         source=source,
@@ -870,12 +944,14 @@ def _publish_source_if_needed(
         total=total,
         migration_changed=migration_changed,
         needs_enrichment=needs_enrichment,
+        language_changed=language_changed,
     ):
         return False
     if not _source_requires_publication(
         context=context,
         migration_changed=migration_changed,
         needs_enrichment=needs_enrichment,
+        language_changed=language_changed,
     ):
         return False
     uploaded = _maybe_publish_enriched_shard(
@@ -901,11 +977,13 @@ def _source_upload_is_current_for_context(
     total: int,
     migration_changed: bool,
     needs_enrichment: bool,
+    language_changed: bool = False,
 ) -> bool:
     if (
         not context.apply
         or migration_changed
         or needs_enrichment
+        or language_changed
         or not _source_upload_is_current(
             context.state.sources[source.name],
             source.name,
@@ -922,8 +1000,9 @@ def _source_requires_publication(
     context: _SourceRunContext,
     migration_changed: bool,
     needs_enrichment: bool,
+    language_changed: bool = False,
 ) -> bool:
-    return migration_changed or needs_enrichment or context.apply
+    return migration_changed or needs_enrichment or language_changed or context.apply
 
 
 def _record_source_upload(
@@ -1071,6 +1150,14 @@ def _run_needs_enrichment(run_dir: Path) -> bool:
     return False
 
 
+def _run_needs_language_detection(run_dir: Path) -> bool:
+    """Return whether any public shard lacks a complete language result."""
+    for shard in sorted((run_dir / "polygons").glob("*.parquet")):
+        if shard_needs_language_detection(shard):
+            return True
+    return False
+
+
 def _shard_needs_enrichment(shard: Path) -> bool:
     parquet = pq.ParquetFile(shard)
     if _schema_needs_enrichment(parquet):
@@ -1080,8 +1167,9 @@ def _shard_needs_enrichment(shard: Path) -> bool:
 
 def _schema_needs_enrichment(parquet: pq.ParquetFile) -> bool:
     schema = parquet.schema_arrow
-    return schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_1) or not schema_matches(
-        schema, POLYGON_PUBLIC_SCHEMA
+    return schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_1) or not (
+        schema_matches(schema, POLYGON_PUBLIC_SCHEMA)
+        or schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_4)
     )
 
 

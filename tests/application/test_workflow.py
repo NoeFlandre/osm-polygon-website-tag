@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,8 +24,10 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.contracts.text_schema import count_words
+from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
     STATUS_EXTRACTING,
@@ -53,6 +56,33 @@ _WEBSITE_OSM = """<?xml version="1.0" encoding="UTF-8"?>
   </way>
 </osm>
 """
+
+
+class RecordingLanguageDetector:
+    """Small deterministic detector for workflow tests."""
+
+    identity = ModelIdentity("repo", "model.bin", "revision", "a" * 64)
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]:
+        self.calls.append(list(texts))
+        return [LanguagePrediction("eng_Latn", 0.9) for _text in texts]
+
+
+class InterruptingLanguageDetector(RecordingLanguageDetector):
+    """Detector that interrupts after a selected prediction call."""
+
+    def __init__(self, *, interrupt_on_call: int) -> None:
+        super().__init__()
+        self.interrupt_on_call = interrupt_on_call
+
+    def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]:
+        result = super().predict(texts)
+        if len(self.calls) == self.interrupt_on_call:
+            raise KeyboardInterrupt
+        return result
 
 
 @pytest.fixture(autouse=True)
@@ -176,6 +206,135 @@ def test_run_all_dry_run_completes_without_remote_calls(
     assert result.extracted_count == 2
     assert result.uploaded_count == 0
     assert load_run(result.run_dir).metadata["status"] == STATUS_COMPLETE
+
+
+def test_run_all_default_does_not_load_language_model(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    monkeypatch.setattr(
+        workflow,
+        "load_glotlid_detector",
+        lambda *_args, **_kwargs: pytest.fail("default run-all must not load GlotLID"),
+        raising=False,
+    )
+
+    result = run_all(
+        source_root=_sources(make_pbf, tmp_path),
+        output_root=tmp_path / "runs",
+        run_id="plain",
+    )
+
+    assert result.complete
+    assert all(
+        pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
+        for path in (result.run_dir / "polygons").glob("*.parquet")
+    )
+
+
+def test_run_all_opt_in_detects_and_publishes_language_shards(
+    make_pbf,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from osm_polygon_website_tag.application import workflow
+
+    detector = RecordingLanguageDetector()
+    uploads: list[str] = []
+    monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
+    monkeypatch.setattr(
+        workflow,
+        "_upload_public_shard",
+        lambda _run, source, _repo, *_args: uploads.append(source.name),
+    )
+    monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
+
+    result = run_all(
+        source_root=_sources(make_pbf, tmp_path),
+        output_root=tmp_path / "runs",
+        run_id="language",
+        apply=True,
+        detect_languages=True,
+        language_detector=detector,
+    )
+
+    assert result.complete
+    assert detector.calls == [["text from https://example.org"]]
+    assert uploads == ["a-latest.osm.pbf", "b-latest.osm.pbf"]
+    for path in (result.run_dir / "polygons").glob("*.parquet"):
+        assert pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+        assert load_run(result.run_dir).sources[path.stem + ".osm.pbf"]["public_shard_sha256"] == (
+            hash_shard(path)
+        )
+
+
+def test_run_all_opt_in_does_not_downgrade_existing_v1_4_shards(
+    make_pbf,
+    tmp_path: Path,
+) -> None:
+    root = _sources(make_pbf, tmp_path)
+    first = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="language",
+        detect_languages=True,
+        language_detector=RecordingLanguageDetector(),
+    )
+    detector = RecordingLanguageDetector()
+
+    resumed = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="language",
+        detect_languages=True,
+        language_detector=detector,
+    )
+
+    assert resumed.complete
+    assert detector.calls == []
+    assert all(
+        pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+        for path in (first.run_dir / "polygons").glob("*.parquet")
+    )
+
+
+def test_run_all_language_detection_resumes_after_an_interrupted_shard(
+    make_pbf,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "sources"
+    root.mkdir()
+    for name in ("a-latest.osm.pbf", "b-latest.osm.pbf"):
+        generated = make_pbf(_WEBSITE_OSM, name=name)
+        (root / name).write_bytes((generated / name).read_bytes())
+
+    with pytest.raises(KeyboardInterrupt):
+        run_all(
+            source_root=root,
+            output_root=tmp_path / "runs",
+            run_id="language",
+            detect_languages=True,
+            language_detector=InterruptingLanguageDetector(interrupt_on_call=2),
+        )
+
+    resumed_detector = RecordingLanguageDetector()
+    result = run_all(
+        source_root=root,
+        output_root=tmp_path / "runs",
+        run_id="language",
+        detect_languages=True,
+        language_detector=resumed_detector,
+    )
+
+    assert result.complete
+    assert resumed_detector.calls == [["text from https://example.org"]]
+    assert all(
+        pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+        for path in (result.run_dir / "polygons").glob("*.parquet")
+    )
 
 
 def test_run_all_refreshes_legacy_complete_card_without_reprocessing_sources(
