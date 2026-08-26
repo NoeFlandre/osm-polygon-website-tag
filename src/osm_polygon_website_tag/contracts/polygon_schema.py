@@ -1,6 +1,6 @@
 """Public polygon schema and column documentation.
 
-Schema version: ``v1.3``.
+Default schema version: ``v1.3``; the opt-in language stage appends schema ``v1.4``.
 
 The schema is the contract for every Parquet file in the published
 ``polygons/`` directory. Every published row must satisfy the row-level
@@ -257,8 +257,9 @@ _COLUMN_DOCS: dict[str, str] = {
         '``"100km2-1000km2"``, ``">=1000km2"``.'
     ),
     "schema_version": (
-        "Schema version of the public polygon table. Equal to "
-        "``SCHEMA_VERSION`` for every row produced by this pipeline."
+        "Schema version of the public polygon table. Default extraction and "
+        "enrichment use ``SCHEMA_VERSION`` (``v1.3``); the opt-in language "
+        "stage writes ``v1.4``."
     ),
     "website_text": (
         "Full main text extracted from ``website`` with Trafilatura; null unless extraction "

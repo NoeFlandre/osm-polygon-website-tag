@@ -60,7 +60,14 @@ def exports_dir() -> Path:
 
 def glotlid_model_cache_dir() -> Path:
     """Return the generated-data directory reserved for the GlotLID model cache."""
-    path = data_root() / "models" / "glotlid"
+    configured = os.environ.get("OSM_POLY_DATA_DIR", "").strip()
+    root = Path(configured).expanduser() if configured else DEFAULT_DATA_ROOT
+    normalized_root = root.resolve()
+    if not normalized_root.is_relative_to(DEFAULT_DATA_ROOT.resolve()):
+        raise ValueError(
+            f"GlotLID model cache must be under the Seagate data root: {DEFAULT_DATA_ROOT}"
+        )
+    path = normalized_root / "models" / "glotlid"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

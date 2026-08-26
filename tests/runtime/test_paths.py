@@ -21,6 +21,18 @@ def test_glotlid_model_cache_is_under_the_default_data_root(
     assert glotlid_model_cache_dir() == paths.DEFAULT_DATA_ROOT / "models" / "glotlid"
 
 
+def test_glotlid_model_cache_rejects_external_override_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external_root = tmp_path / "external"
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(external_root))
+
+    with pytest.raises(ValueError, match="Seagate data root"):
+        glotlid_model_cache_dir()
+
+    assert not external_root.exists()
+
+
 def test_assert_seagate_path_rejects_paths_outside_the_data_root(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Seagate data root"):
         assert_seagate_path(tmp_path, label="model cache")
