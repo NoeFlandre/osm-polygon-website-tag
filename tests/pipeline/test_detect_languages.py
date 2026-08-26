@@ -93,6 +93,22 @@ def _write_v1_3_shard(tmp_path: Path, rows: list[dict[str, object]]) -> Path:
     return shard
 
 
+def _write_v1_4_pair_shard(tmp_path: Path, *, label: object, probability: object) -> Path:
+    row = _v1_3_text_row(0, website_text="English text")
+    row.update(
+        {
+            "website_language": label,
+            "website_language_probability": probability,
+            "contact_website_language": None,
+            "contact_website_language_probability": None,
+        }
+    )
+    shard = tmp_path / "polygons" / "source.parquet"
+    shard.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist([row], schema=POLYGON_PUBLIC_SCHEMA_V1_4), shard)
+    return shard
+
+
 def test_detect_language_shard_populates_website_and_contact_independently(
     tmp_path: Path,
 ) -> None:
@@ -179,3 +195,24 @@ def test_nonterminal_text_status_fails_before_promotion(tmp_path: Path) -> None:
         detection.detect_language_shard(shard, detector=RecordingDetector())
 
     assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
+
+
+@pytest.mark.parametrize(
+    ("label", "probability", "error"),
+    [
+        ("eng_Latn", None, "incomplete"),
+        ("eng_Latn", 1.1, "invalid"),
+    ],
+)
+def test_existing_incomplete_or_invalid_language_pair_fails_closed(
+    tmp_path: Path,
+    label: object,
+    probability: object,
+    error: str,
+) -> None:
+    shard = _write_v1_4_pair_shard(tmp_path, label=label, probability=probability)
+
+    with pytest.raises(ValueError, match=error):
+        detection.detect_language_shard(shard, detector=RecordingDetector())
+
+    assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
