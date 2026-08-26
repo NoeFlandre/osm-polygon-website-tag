@@ -553,16 +553,24 @@ def _run_source_phases(
 
 
 def _enter_enrichment_phase_if_needed(status: str, context: _SourceRunContext) -> str:
-    if status == STATUS_EXTRACTED or (
-        status in {STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}
-        and (
-            _run_needs_enrichment(context.run_dir)
-            or (context.detect_languages and _run_needs_language_detection(context.run_dir))
-        )
-    ):
-        transition_status(context.state, STATUS_ENRICHING)
-        return STATUS_ENRICHING
-    return status
+    if status == STATUS_EXTRACTED:
+        return _transition_to_enriching(context)
+    if status not in {STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}:
+        return status
+    if not _run_requires_enrichment(context):
+        return status
+    return _transition_to_enriching(context)
+
+
+def _run_requires_enrichment(context: _SourceRunContext) -> bool:
+    return _run_needs_enrichment(context.run_dir) or (
+        context.detect_languages and _run_needs_language_detection(context.run_dir)
+    )
+
+
+def _transition_to_enriching(context: _SourceRunContext) -> str:
+    transition_status(context.state, STATUS_ENRICHING)
+    return STATUS_ENRICHING
 
 
 def _run_extraction_phase(
@@ -979,16 +987,14 @@ def _source_upload_is_current_for_context(
     needs_enrichment: bool,
     language_changed: bool = False,
 ) -> bool:
-    if (
-        not context.apply
-        or migration_changed
-        or needs_enrichment
-        or language_changed
-        or not _source_upload_is_current(
-            context.state.sources[source.name],
-            source.name,
-            context.upload_checkpoint,
-        )
+    if not context.apply:
+        return False
+    if any((migration_changed, needs_enrichment, language_changed)):
+        return False
+    if not _source_upload_is_current(
+        context.state.sources[source.name],
+        source.name,
+        context.upload_checkpoint,
     ):
         return False
     _progress(context.progress, f"[{index}/{total}] Resuming: {source.name} is already uploaded")
