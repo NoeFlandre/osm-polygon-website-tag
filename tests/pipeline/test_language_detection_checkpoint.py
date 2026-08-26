@@ -60,7 +60,7 @@ def _row(index: int) -> dict[str, object]:
 
 
 def test_checkpoint_metadata_binds_source_and_model(tmp_path: Path) -> None:
-    shard = tmp_path / "region.parquet"
+    shard = tmp_path / "nested" / "region.parquet"
     checkpoint_state = checkpoint.load_language_checkpoint(
         shard,
         source_row_count=4,
@@ -80,6 +80,13 @@ def test_checkpoint_metadata_binds_source_and_model(tmp_path: Path) -> None:
         "model_revision": "85cd671",
         "model_sha256": "a" * 64,
     }
+    reloaded = checkpoint.load_language_checkpoint(
+        shard,
+        source_row_count=4,
+        source_shard_sha256="b" * 64,
+        model=_model(),
+    )
+    assert reloaded.completed_rows == 0
 
 
 def test_checkpoint_rejects_source_or_model_drift(tmp_path: Path) -> None:
@@ -121,6 +128,26 @@ def test_checkpoint_parts_are_sequential_and_v1_4_shaped(tmp_path: Path) -> None
         checkpoint.checkpoint_parts(directory)
 
 
+def test_checkpoint_allows_a_complete_durable_prefix(tmp_path: Path) -> None:
+    shard = tmp_path / "nested" / "region.parquet"
+    state = checkpoint.load_language_checkpoint(
+        shard,
+        source_row_count=1,
+        source_shard_sha256="b" * 64,
+        model=_model(),
+    )
+    checkpoint.write_language_checkpoint_part(state.directory, 0, [_row(0)], batch_rows=1)
+
+    loaded = checkpoint.load_language_checkpoint(
+        shard,
+        source_row_count=1,
+        source_shard_sha256="b" * 64,
+        model=_model(),
+    )
+
+    assert loaded.completed_rows == 1
+
+
 def test_checkpoint_assembly_preserves_part_order(tmp_path: Path) -> None:
     directory = tmp_path / "parts"
     directory.mkdir()
@@ -136,20 +163,80 @@ def test_checkpoint_assembly_preserves_part_order(tmp_path: Path) -> None:
     )
 
     assert max_batch_rows == 1
+    assert pq.ParquetFile(staged).metadata.row_group(0).column(0).compression == "SNAPPY"
     assert [row["polygon_id"] for row in pq.read_table(staged).to_pylist()] == [
         "source:way/0",
         "source:way/1",
     ]
 
 
+def test_checkpoint_assembly_requests_snappy_compression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "parts"
+    directory.mkdir()
+    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
+    original_writer = checkpoint.pq.ParquetWriter
+    compressions: list[object] = []
+
+    def recording_writer(*args: object, **kwargs: object) -> object:
+        compressions.append(kwargs.get("compression"))
+        return original_writer(*args, **kwargs)
+
+    monkeypatch.setattr(checkpoint.pq, "ParquetWriter", recording_writer)
+
+    checkpoint.assemble_language_checkpoint(
+        (directory / "part-00000000.parquet",),
+        tmp_path / "staged.parquet",
+        batch_rows=1,
+        row_count=1,
+    )
+
+    assert compressions == ["snappy"]
+
+
+def test_empty_checkpoint_assembly_reports_no_batch_rows(tmp_path: Path) -> None:
+    staged = tmp_path / "empty.parquet"
+
+    assert checkpoint.assemble_language_checkpoint((), staged, batch_rows=1, row_count=0) == 0
+    assert pq.read_table(staged).num_rows == 0
+
+
 def test_checkpoint_rejects_unknown_files_and_cleans_known_temps(tmp_path: Path) -> None:
     directory = tmp_path / "parts"
     directory.mkdir()
     metadata = directory / "checkpoint.json"
-    (directory / ".part-00000000.parquet.writing").write_bytes(b"stale")
+    temporary = directory / ".part-00000000.parquet.writing"
+    temporary.write_bytes(b"stale")
+    metadata_temporary = metadata.with_suffix(metadata.suffix + ".tmp")
+    metadata_temporary.write_text("stale")
     checkpoint._cleanup_checkpoint_temps(directory, metadata)
-    assert not (directory / ".part-00000000.parquet.writing").exists()
+    assert not temporary.exists()
+    assert not metadata_temporary.exists()
+    checkpoint._cleanup_checkpoint_temps(directory, metadata)
 
     (directory / "unexpected").write_text("x")
     with pytest.raises(ValueError, match="unrecognized"):
         checkpoint._validate_checkpoint_contents(directory, ())
+
+
+def test_checkpoint_cleanup_uses_missing_ok_for_known_temps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "parts"
+    directory.mkdir()
+    metadata = directory / "checkpoint.json"
+    temporary = directory / ".part-00000000.parquet.writing"
+    temporary.write_bytes(b"stale")
+    metadata_temporary = metadata.with_suffix(metadata.suffix + ".tmp")
+    metadata_temporary.write_text("stale")
+    calls: list[tuple[str, bool | None]] = []
+
+    def record_unlink(path: Path, *, missing_ok: bool | None = False) -> None:
+        calls.append((path.name, missing_ok))
+
+    monkeypatch.setattr(checkpoint.Path, "unlink", record_unlink)
+
+    checkpoint._cleanup_checkpoint_temps(directory, metadata)
+
+    assert calls == [(temporary.name, True), (metadata_temporary.name, True)]

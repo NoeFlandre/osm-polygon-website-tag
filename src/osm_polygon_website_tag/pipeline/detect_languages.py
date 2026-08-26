@@ -55,7 +55,6 @@ class _DetectionContext:
     source_row_count: int
     checkpoint: LanguageCheckpoint
     staged: Path
-    changed: bool
     next_part_index: int
 
 
@@ -84,7 +83,7 @@ def detect_language_shard(
     """Detect languages in bounded batches and atomically promote the result."""
     _validate_batch_rows(batch_rows)
     shard = Path(shard_path)
-    context = _prepare_detection_context(shard, detector, batch_rows)
+    context = _prepare_detection_context(shard, detector)
     if context is None:
         return LanguageDetectionResult(
             shard_path=shard,
@@ -94,7 +93,7 @@ def detect_language_shard(
             max_batch_rows=0,
         )
     try:
-        changed_by_batches, max_batch_rows = _process_detection_batches(
+        max_batch_rows = _process_detection_batches(
             context.parquet,
             context.source_row_count,
             context.checkpoint,
@@ -102,7 +101,6 @@ def detect_language_shard(
             detector=detector,
             batch_rows=batch_rows,
         )
-        context.changed = context.changed or changed_by_batches
         max_batch_rows = _promote_detected_shard(
             context=context,
             batch_rows=batch_rows,
@@ -115,7 +113,7 @@ def detect_language_shard(
     return LanguageDetectionResult(
         shard_path=shard,
         row_count=context.source_row_count,
-        changed=context.changed,
+        changed=True,
         shard_sha256=hash_shard(shard),
         max_batch_rows=max_batch_rows,
     )
@@ -129,7 +127,6 @@ def _validate_batch_rows(batch_rows: int) -> None:
 def _prepare_detection_context(
     shard: Path,
     detector: LanguageDetector,
-    batch_rows: int,
 ) -> _DetectionContext | None:
     parquet = pq.ParquetFile(shard)
     source_schema = parquet.schema_arrow
@@ -152,8 +149,6 @@ def _prepare_detection_context(
         source_row_count=source_row_count,
         checkpoint=checkpoint,
         staged=staged,
-        changed=not schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA_V1_4)
-        or bool(checkpoint.parts),
         next_part_index=len(checkpoint.parts),
     )
 
@@ -211,8 +206,7 @@ def _process_detection_batches(
     next_part_index: int,
     detector: LanguageDetector,
     batch_rows: int,
-) -> tuple[bool, int]:
-    changed = False
+) -> int:
     processed_rows = checkpoint.completed_rows
     rows_to_skip = checkpoint.completed_rows
     max_batch_rows = 0
@@ -230,17 +224,18 @@ def _process_detection_batches(
         next_part_index += 1
         processed_rows += len(detected_rows)
         max_batch_rows = max(max_batch_rows, len(detected_rows))
-        changed = True
     if processed_rows != source_row_count:
         raise ValueError("language detection row count changed")
-    return changed, max_batch_rows
+    return max_batch_rows
 
 
 def _skip_checkpointed_rows(
     originals: list[dict[str, object]],
     rows_to_skip: int,
 ) -> tuple[list[dict[str, object]], int]:
-    if rows_to_skip >= len(originals):
+    if rows_to_skip == len(originals):
+        return [], 0
+    if rows_to_skip > len(originals):
         return [], rows_to_skip - len(originals)
     if rows_to_skip:
         return originals[rows_to_skip:], 0
@@ -303,14 +298,15 @@ def _apply_pending_predictions(
     predictions = detector.predict([text for _row, text in pending])
     if len(predictions) != len(pending):
         raise ValueError(f"language prediction count does not match {prefix} text count")
-    for (row, _text), prediction in zip(pending, predictions, strict=True):
-        _apply_prediction(row, prefix, prediction)
+    for index, (row, _text) in enumerate(pending):
+        _apply_prediction(row, prefix, predictions[index])
 
 
 def _prepare_row(original: dict[str, object]) -> dict[str, object]:
     row = dict(original)
     for name in LANGUAGE_COLUMN_NAMES:
-        row.setdefault(name, None)
+        if name not in row:
+            row[name] = None
     for prefix in _TEXT_COLUMNS:
         if row[f"{prefix}_text_status"] != "success":
             row[f"{prefix}_language"] = None
@@ -379,9 +375,6 @@ def _promote_detected_shard(
         row_count=context.source_row_count,
     )
     max_batch_rows = max(max_batch_rows, assembled_max_batch_rows)
-    if not context.changed:
-        context.staged.unlink(missing_ok=True)
-        return max_batch_rows
     if not schema_matches(pq.read_schema(context.staged), POLYGON_PUBLIC_SCHEMA_V1_4):
         raise ValueError("detected language shard schema mismatch")
     atomic_promote_bundle([(context.staged, context.shard)])

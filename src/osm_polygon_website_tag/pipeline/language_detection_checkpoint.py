@@ -58,26 +58,9 @@ def _metadata(
     }
 
 
-def _write_checkpoint_metadata(
-    directory: Path,
-    *,
-    source_row_count: int,
-    source_shard_sha256: str,
-    model: ModelIdentity,
-) -> None:
-    atomic_write_json(
-        directory / CHECKPOINT_METADATA_NAME,
-        _metadata(
-            source_row_count=source_row_count,
-            source_shard_sha256=source_shard_sha256,
-            model=model,
-        ),
-    )
-
-
 def checkpoint_parts(directory: Path) -> tuple[Path, ...]:
     """Validate and return sequential durable language checkpoint parts."""
-    parts = sorted(directory.glob("part-*.parquet"), key=lambda path: path.name)
+    parts = sorted(directory.glob("part-*.parquet"))
     for index, part in enumerate(parts):
         if part.name != _checkpoint_part_path(directory, index).name:
             raise ValueError(f"non-sequential language checkpoint part: {part.name}")
@@ -140,7 +123,7 @@ def _ensure_checkpoint_metadata(
         model=model,
     )
     if metadata_path.exists():
-        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+        payload = json.loads(metadata_path.read_bytes())
         if payload != expected:
             raise ValueError(
                 f"language checkpoint does not match source or model identity: {shard.name}"
