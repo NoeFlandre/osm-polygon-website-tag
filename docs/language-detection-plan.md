@@ -110,9 +110,7 @@ POLYGON_PUBLIC_SCHEMA_V1_3: pa.Schema = pa.schema(
     field for field in POLYGON_PUBLIC_SCHEMA_V1_2 if field.name not in _REMOVED_V1_3_FIELDS
 )
 POLYGON_PUBLIC_SCHEMA = POLYGON_PUBLIC_SCHEMA_V1_3
-POLYGON_PUBLIC_SCHEMA_V1_4: pa.Schema = pa.schema(
-    [*POLYGON_PUBLIC_SCHEMA_V1_3, *LANGUAGE_FIELDS]
-)
+POLYGON_PUBLIC_SCHEMA_V1_4: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_3, *LANGUAGE_FIELDS])
 ```
 
 - [ ] **Step 4: Run the schema tests and verify GREEN.**
@@ -304,7 +302,9 @@ def test_checkpoint_rejects_model_drift(tmp_path: Path) -> None:
     shard = tmp_path / "region.parquet"
     load_language_checkpoint(shard, source_row_count=1, source_shard_sha256="b" * 64, model=first)
     with pytest.raises(ValueError, match="does not match"):
-        load_language_checkpoint(shard, source_row_count=1, source_shard_sha256="b" * 64, model=second)
+        load_language_checkpoint(
+            shard, source_row_count=1, source_shard_sha256="b" * 64, model=second
+        )
 ```
 
 - [ ] **Step 2: Run the checkpoint tests and verify RED.**
@@ -460,10 +460,13 @@ def checkpoint_part_count(shard: Path) -> int:
 def test_detect_language_shard_populates_website_and_contact_independently(
     tmp_path: Path,
 ) -> None:
-    shard = write_v1_3_text_shard(tmp_path, rows=[
-        v1_3_text_row(0, website_text="English text", contact_text="Texte français"),
-        v1_3_text_row(1, website_text="English only", contact_text=None),
-    ])
+    shard = write_v1_3_text_shard(
+        tmp_path,
+        rows=[
+            v1_3_text_row(0, website_text="English text", contact_text="Texte français"),
+            v1_3_text_row(1, website_text="English only", contact_text=None),
+        ],
+    )
     detector = FakeDetector()
 
     result = detect_language_shard(shard, detector=detector, batch_rows=1)
@@ -671,7 +674,9 @@ def test_run_all_default_does_not_load_language_model(
         "load_glotlid_detector",
         lambda *_args, **_kwargs: pytest.fail("default run-all must not load GlotLID"),
     )
-    result = run_all(source_root=_sources(make_pbf, tmp_path), output_root=tmp_path / "runs", run_id="plain")
+    result = run_all(
+        source_root=_sources(make_pbf, tmp_path), output_root=tmp_path / "runs", run_id="plain"
+    )
     assert result.complete
     assert all(
         pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
