@@ -35,6 +35,7 @@ env/
 
 # Local agent planning notes (never publish)
 docs/superpowers/
+.worktrees/
 
 # Environment / secrets
 .env
