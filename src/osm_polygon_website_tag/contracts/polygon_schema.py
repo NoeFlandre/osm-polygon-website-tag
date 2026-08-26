@@ -34,7 +34,7 @@ than a silent in-place change. The verifier rejects schema drift.
 
 The exact metadata-aware comparison is centralized in
 :func:`schema_matches`; :func:`is_supported_public_polygon_schema` is the
-compatibility predicate for the three public versions accepted during
+compatibility predicate for the four public versions accepted during
 resumption and migration.
 """
 
@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_FIELDS
 from osm_polygon_website_tag.contracts.text_schema import TEXT_FIELDS
 
 SCHEMA_VERSION = "v1.3"
@@ -110,14 +111,19 @@ _REMOVED_V1_3_FIELDS = frozenset(
     }
 )
 
-POLYGON_PUBLIC_SCHEMA: pa.Schema = pa.schema(
+POLYGON_PUBLIC_SCHEMA_V1_3: pa.Schema = pa.schema(
     field for field in POLYGON_PUBLIC_SCHEMA_V1_2 if field.name not in _REMOVED_V1_3_FIELDS
 )
+
+POLYGON_PUBLIC_SCHEMA = POLYGON_PUBLIC_SCHEMA_V1_3
+
+POLYGON_PUBLIC_SCHEMA_V1_4: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_3, *LANGUAGE_FIELDS])
 
 _SUPPORTED_PUBLIC_POLYGON_SCHEMAS: tuple[pa.Schema, ...] = (
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
-    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_3,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 
 
@@ -129,6 +135,13 @@ def schema_matches(actual: pa.Schema, expected: pa.Schema) -> bool:
 def is_supported_public_polygon_schema(schema: pa.Schema) -> bool:
     """Return whether ``schema`` is one of the supported public versions."""
     return any(schema_matches(schema, candidate) for candidate in _SUPPORTED_PUBLIC_POLYGON_SCHEMAS)
+
+
+def is_current_public_polygon_schema(schema: pa.Schema) -> bool:
+    """Return whether ``schema`` is a current v1.3 or v1.4 output schema."""
+    return schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_3) or schema_matches(
+        schema, POLYGON_PUBLIC_SCHEMA_V1_4
+    )
 
 
 _COLUMN_DOCS: dict[str, str] = {
@@ -267,6 +280,22 @@ _COLUMN_DOCS: dict[str, str] = {
     "contact_website_text_status": (
         "Contact website text enrichment status from the documented frozen vocabulary."
     ),
+    "website_language": (
+        "Exact script-aware GlotLID language label for ``website_text``; null unless text "
+        "was successfully extracted and detected."
+    ),
+    "website_language_probability": (
+        "Top-1 GlotLID probability for ``website_language``; null without a successful "
+        "language detection."
+    ),
+    "contact_website_language": (
+        "Exact script-aware GlotLID language label for ``contact_website_text``; null unless "
+        "text was successfully extracted and detected."
+    ),
+    "contact_website_language_probability": (
+        "Top-1 GlotLID probability for ``contact_website_language``; null without a successful "
+        "language detection."
+    ),
 }
 
 
@@ -352,11 +381,14 @@ __all__ = [
     "POLYGON_PUBLIC_SCHEMA",
     "POLYGON_PUBLIC_SCHEMA_V1_1",
     "POLYGON_PUBLIC_SCHEMA_V1_2",
+    "POLYGON_PUBLIC_SCHEMA_V1_3",
+    "POLYGON_PUBLIC_SCHEMA_V1_4",
     "PUBLIC_ROW_INVARIANT_ERROR",
     "SCHEMA_VERSION",
     "PublicRowInvariantError",
     "column_doc",
     "column_documentation",
+    "is_current_public_polygon_schema",
     "is_supported_public_polygon_schema",
     "polygon_column_names",
     "schema_matches",
