@@ -5,18 +5,17 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from tests.fixtures.polygon_shards import project_current_rows_to_legacy
 
+from osm_polygon_website_tag.application import source_processing
 from osm_polygon_website_tag.application.inventory import (
     discover_sources as inventory_discover_sources,
 )
 from osm_polygon_website_tag.application.workflow import (
-    _upload_public_shard,
     discover_sources,
     run_all,
 )
@@ -108,7 +107,6 @@ def test_shard_needs_enrichment_scans_status_columns_without_row_dicts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Resume checks should inspect Arrow columns, not materialize every row."""
-    from osm_polygon_website_tag.application import workflow
 
     class FakeBatch:
         def column(self, name: str) -> pa.Array:
@@ -127,9 +125,9 @@ def test_shard_needs_enrichment_scans_status_columns_without_row_dicts(
         def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
             yield FakeBatch()
 
-    monkeypatch.setattr(workflow.pq, "ParquetFile", lambda _path: FakeParquet())
+    monkeypatch.setattr(source_processing.pq, "ParquetFile", lambda _path: FakeParquet())
 
-    assert workflow._shard_needs_enrichment(tmp_path / "source.parquet") is True
+    assert source_processing._shard_needs_enrichment(tmp_path / "source.parquet") is True
 
 
 def _sources(make_pbf, tmp_path: Path) -> Path:
@@ -146,7 +144,6 @@ def _sources(make_pbf, tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _inject_static_text_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
-    from osm_polygon_website_tag.application import workflow
     from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard as real_enrich
 
     def enrich(shard, **kwargs):
@@ -163,7 +160,7 @@ def _inject_static_text_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         )
 
-    monkeypatch.setattr(workflow, "enrich_polygon_shard", enrich, raising=False)
+    monkeypatch.setattr(source_processing, "enrich_polygon_shard", enrich, raising=False)
 
 
 def test_discover_sources_is_recursive_sorted_and_rejects_duplicate_names(
@@ -188,7 +185,7 @@ def test_run_all_dry_run_completes_without_remote_calls(
 ) -> None:
     root = _sources(make_pbf, tmp_path)
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow._upload_public_shard",
+        "osm_polygon_website_tag.application.source_processing._upload_public_shard",
         lambda *_args: pytest.fail("dry-run must not upload"),
     )
     monkeypatch.setattr(
@@ -246,7 +243,7 @@ def test_run_all_opt_in_detects_and_publishes_language_shards(
     uploads: list[str] = []
     monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "_upload_public_shard",
         lambda _run, source, _repo, *_args: uploads.append(source.name),
     )
@@ -353,11 +350,11 @@ def test_run_all_refreshes_legacy_complete_card_without_reprocessing_sources(
     receipt_path.write_text(json.dumps(receipt))
 
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow.extract_pbf",
+        "osm_polygon_website_tag.application.source_processing.extract_pbf",
         lambda *_args, **_kwargs: pytest.fail("legacy card refresh must not read PBFs"),
     )
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow.enrich_polygon_shard",
+        "osm_polygon_website_tag.application.source_processing.enrich_polygon_shard",
         lambda *_args, **_kwargs: pytest.fail("legacy card refresh must not fetch websites"),
     )
 
@@ -387,7 +384,7 @@ def test_run_all_does_not_resume_a_finalized_frozen_snapshot(
         lambda _root: pytest.fail("frozen resume must not rediscover source PBFs"),
     )
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "enrich_polygon_shard",
         lambda *_args, **_kwargs: pytest.fail("frozen resume must not retry websites"),
     )
@@ -430,10 +427,8 @@ def test_run_all_resumes_after_ctrl_c(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from osm_polygon_website_tag.application import workflow
-
     root = _sources(make_pbf, tmp_path)
-    original = workflow.extract_pbf
+    original = source_processing.extract_pbf
     calls = 0
 
     def interrupt_second(source: Path, run_dir: Path, run_state=None):
@@ -443,14 +438,14 @@ def test_run_all_resumes_after_ctrl_c(
             raise KeyboardInterrupt
         return original(source, run_dir, run_state=run_state)
 
-    monkeypatch.setattr(workflow, "extract_pbf", interrupt_second)
+    monkeypatch.setattr(source_processing, "extract_pbf", interrupt_second)
     with pytest.raises(KeyboardInterrupt):
         run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
 
     run_dir = tmp_path / "runs" / "production"
     assert load_run(run_dir).metadata["status"] == STATUS_EXTRACTING
 
-    monkeypatch.setattr(workflow, "extract_pbf", original)
+    monkeypatch.setattr(source_processing, "extract_pbf", original)
     result = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
 
     assert result.complete
@@ -470,7 +465,7 @@ def test_run_all_apply_uploads_each_shard_then_complete_run(
         "osm_polygon_website_tag.application.workflow.resolve_hf_token", lambda: "available"
     )
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow._upload_public_shard",
+        "osm_polygon_website_tag.application.source_processing._upload_public_shard",
         lambda _run, source, _repo, *_args: shard_uploads.append(source.name),
     )
     monkeypatch.setattr(
@@ -499,8 +494,8 @@ def test_run_all_completes_each_source_before_extracting_the_next(
 
     root = _sources(make_pbf, tmp_path)
     events: list[str] = []
-    original_extract = workflow.extract_pbf
-    original_enrich = workflow.enrich_polygon_shard
+    original_extract = source_processing.extract_pbf
+    original_enrich = source_processing.enrich_polygon_shard
 
     def track_extract(source, *args, **kwargs):
         events.append(f"extract:{Path(source).name}")
@@ -510,11 +505,11 @@ def test_run_all_completes_each_source_before_extracting_the_next(
         events.append(f"enrich:{Path(shard).name}")
         return original_enrich(shard, *args, **kwargs)
 
-    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
-    monkeypatch.setattr(workflow, "enrich_polygon_shard", track_enrich)
+    monkeypatch.setattr(source_processing, "extract_pbf", track_extract)
+    monkeypatch.setattr(source_processing, "enrich_polygon_shard", track_enrich)
     monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "_upload_public_shard",
         lambda _run, source, _repo, *_args: events.append(f"upload:{source.name}"),
     )
@@ -541,13 +536,11 @@ def test_run_all_forwards_bounded_worker_configuration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from osm_polygon_website_tag.application import workflow
-
     root = _sources(make_pbf, tmp_path)
     extract_settings: list[dict[str, object]] = []
     enrich_settings: list[dict[str, object]] = []
-    original_extract = workflow.extract_pbf
-    original_enrich = workflow.enrich_polygon_shard
+    original_extract = source_processing.extract_pbf
+    original_enrich = source_processing.enrich_polygon_shard
 
     def track_extract(source, run_dir, **kwargs):  # type: ignore[no-untyped-def]
         extract_settings.append(dict(kwargs))
@@ -557,8 +550,8 @@ def test_run_all_forwards_bounded_worker_configuration(
         enrich_settings.append(dict(kwargs))
         return original_enrich(shard, **kwargs)
 
-    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
-    monkeypatch.setattr(workflow, "enrich_polygon_shard", track_enrich)
+    monkeypatch.setattr(source_processing, "extract_pbf", track_extract)
+    monkeypatch.setattr(source_processing, "enrich_polygon_shard", track_enrich)
 
     result = run_all(
         source_root=root,
@@ -593,18 +586,18 @@ def test_old_extracting_run_reuses_completed_source_before_continuing(
     )
     upsert_run_metadata(state, {"source_root": str(root.resolve())})
     transition_status(state, STATUS_EXTRACTING)
-    workflow.extract_pbf(sources[0], run_dir, run_state=state)
+    source_processing.extract_pbf(sources[0], run_dir, run_state=state)
 
     extracted_on_resume: list[str] = []
-    original_extract = workflow.extract_pbf
+    original_extract = source_processing.extract_pbf
 
     def track_extract(source, *args, **kwargs):
         extracted_on_resume.append(Path(source).name)
         return original_extract(source, *args, **kwargs)
 
-    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
+    monkeypatch.setattr(source_processing, "extract_pbf", track_extract)
     monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
-    monkeypatch.setattr(workflow, "_upload_public_shard", lambda *_args: None)
+    monkeypatch.setattr(source_processing, "_upload_public_shard", lambda *_args: None)
     monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
 
     result = run_all(
@@ -625,10 +618,8 @@ def test_resume_after_interruption_before_enrichment_does_not_reextract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from osm_polygon_website_tag.application import workflow
-
     root = _sources(make_pbf, tmp_path)
-    original_enrich = workflow.enrich_polygon_shard
+    original_enrich = source_processing.enrich_polygon_shard
     interrupted = False
 
     def interrupt_first_enrichment(*args, **kwargs):
@@ -638,7 +629,7 @@ def test_resume_after_interruption_before_enrichment_does_not_reextract(
             raise KeyboardInterrupt
         return original_enrich(*args, **kwargs)
 
-    monkeypatch.setattr(workflow, "enrich_polygon_shard", interrupt_first_enrichment)
+    monkeypatch.setattr(source_processing, "enrich_polygon_shard", interrupt_first_enrichment)
     with pytest.raises(KeyboardInterrupt):
         run_all(
             source_root=root,
@@ -651,13 +642,13 @@ def test_resume_after_interruption_before_enrichment_does_not_reextract(
     assert (run_dir / "polygons" / "a-latest.parquet").is_file()
 
     extracted_on_resume: list[str] = []
-    original_extract = workflow.extract_pbf
+    original_extract = source_processing.extract_pbf
 
     def track_extract(source, *args, **kwargs):
         extracted_on_resume.append(Path(source).name)
         return original_extract(source, *args, **kwargs)
 
-    monkeypatch.setattr(workflow, "extract_pbf", track_extract)
+    monkeypatch.setattr(source_processing, "extract_pbf", track_extract)
     result = run_all(
         source_root=root,
         output_root=tmp_path / "runs",
@@ -702,7 +693,7 @@ def test_complete_legacy_run_migrates_without_reextracting_pbf(
         shard_sha256=hash_shard(shard),
     )
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow.extract_pbf",
+        "osm_polygon_website_tag.application.source_processing.extract_pbf",
         lambda *_args, **_kwargs: pytest.fail("legacy migration must not read PBF"),
     )
 
@@ -724,7 +715,7 @@ def test_complete_v1_2_run_projects_and_reuploads_without_source_or_web_work(
     uploads: list[str] = []
     monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "_upload_public_shard",
         lambda _run, source, _repo, *_args: uploads.append(source.name),
     )
@@ -753,12 +744,12 @@ def test_complete_v1_2_run_projects_and_reuploads_without_source_or_web_work(
     checkpoint["sources"]["a-latest.osm.pbf"]["polygon_sha256"] = hash_shard(shard)
     checkpoint_path.write_text(json.dumps(checkpoint))
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "extract_pbf",
         lambda *_args, **_kwargs: pytest.fail("v1.2 migration must not read PBF"),
     )
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "enrich_polygon_shard",
         lambda *_args, **_kwargs: pytest.fail("v1.2 migration must not refetch websites"),
     )
@@ -787,11 +778,11 @@ def test_incremental_upload_includes_shard_and_recomputed_card(
     captured: list[Path] = []
 
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow._upload_folder",
+        "osm_polygon_website_tag.application.source_processing._upload_folder",
         lambda _run, **kwargs: captured.extend(kwargs["artifact_paths"]),
     )
 
-    _upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
+    source_processing._upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
 
     assert captured == [shard, run_dir / "README.md", run_dir / "dataset.yaml"]
 
@@ -812,11 +803,11 @@ def test_incremental_upload_includes_recomputed_map(
     captured: list[Path] = []
 
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow._upload_folder",
+        "osm_polygon_website_tag.application.source_processing._upload_folder",
         lambda _run, **kwargs: captured.extend(kwargs["artifact_paths"]),
     )
 
-    _upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
+    source_processing._upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
 
     assert captured == [shard, run_dir / "README.md", run_dir / "dataset.yaml", map_path]
 
@@ -826,8 +817,6 @@ def test_resume_enriches_only_shards_with_retryable_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from osm_polygon_website_tag.application import workflow
-
     root = _sources(make_pbf, tmp_path)
     first = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
     retry_shard = first.run_dir / "polygons" / "a-latest.parquet"
@@ -843,23 +832,23 @@ def test_resume_enriches_only_shards_with_retryable_text(
         row_count=len(rows),
         shard_sha256=hash_shard(retry_shard),
     )
-    original = workflow.enrich_polygon_shard
+    original = source_processing.enrich_polygon_shard
     enriched: list[str] = []
     bundle_checks: list[str] = []
 
-    original_bundle_check = workflow.source_bundle_is_complete
+    original_bundle_check = source_processing.source_bundle_is_complete
 
     def track_bundle_check(run_dir, manifest, fingerprint):
         bundle_checks.append(fingerprint.filename)
         return original_bundle_check(run_dir, manifest, fingerprint)
 
-    monkeypatch.setattr(workflow, "source_bundle_is_complete", track_bundle_check)
+    monkeypatch.setattr(source_processing, "source_bundle_is_complete", track_bundle_check)
 
     def track(shard, **kwargs):
         enriched.append(Path(shard).name)
         return original(shard, **kwargs)
 
-    monkeypatch.setattr(workflow, "enrich_polygon_shard", track)
+    monkeypatch.setattr(source_processing, "enrich_polygon_shard", track)
 
     run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
 
@@ -906,7 +895,7 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow._upload_public_shard", upload_shard
+        "osm_polygon_website_tag.application.source_processing._upload_public_shard", upload_shard
     )
     monkeypatch.setattr(
         "osm_polygon_website_tag.application.workflow.publish_to_hf",
@@ -941,16 +930,14 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     pre_resume_checkpoint = checkpoint_path.read_text()
 
     # Resume the same run.
-    from osm_polygon_website_tag.application import workflow
-
     resumed_source_calls: list[str] = []
-    original_publish = workflow._maybe_publish_enriched_shard
+    original_publish = source_processing._maybe_publish_enriched_shard
 
     def track_resume_publish(**kwargs):
         resumed_source_calls.append(Path(kwargs["source"]).name)
         return original_publish(**kwargs)
 
-    monkeypatch.setattr(workflow, "_maybe_publish_enriched_shard", track_resume_publish)
+    monkeypatch.setattr(source_processing, "_maybe_publish_enriched_shard", track_resume_publish)
     resumed = run_all(
         source_root=root,
         output_root=tmp_path / "runs",
@@ -981,537 +968,6 @@ def test_run_all_apply_resume_after_keyboard_interrupt_preserves_checkpoint(
     assert load_run(run_dir).metadata["status"] == STATUS_COMPLETE
 
 
-def test_private_workflow_decisions_and_checkpoint_helpers(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Exercise the small orchestration decision boundaries directly.
-
-    The public workflow tests cover these paths end to end; direct calls keep
-    mutation testing honest for the intentionally small private helpers.
-    """
-    from osm_polygon_website_tag.application import workflow
-
-    state: Any = type("State", (), {})()
-    sources: Any = {
-        "a.osm.pbf": {"enrichment_pending": False},
-        "b.osm.pbf": {"enrichment_pending": True},
-    }
-    state.sources = sources
-    acknowledged = {"a.osm.pbf", "b.osm.pbf", "missing.osm.pbf"}
-    processed = workflow._acknowledged_processed_names(state, acknowledged)
-    assert processed == {"a.osm.pbf"}
-    assert workflow._acknowledged_retry_names(state, acknowledged, processed) == {"b.osm.pbf"}
-
-    source = Path("a.osm.pbf")
-    checkpoint: Any = {"schema_version": "v2", "global_bundle": {}, "sources": {}}
-    context: Any = type("Context", (), {})()
-    context.apply = False
-    context.upload_checkpoint = checkpoint
-    context.state = state
-    context.progress = None
-    context.run_dir = tmp_path
-    context.repo_id = "owner/dataset"
-    context.invocation_id = "run"
-    context.area_workers = None
-    context.max_in_flight_areas = None
-    context.fetch_workers = None
-    assert workflow._published_source_names(context, source) is None
-    context.apply = True
-    assert workflow._published_source_names(context, source) == {"a.osm.pbf"}
-    assert workflow._source_requires_publication(
-        context=context, migration_changed=False, needs_enrichment=False
-    )
-    assert workflow._source_requires_publication(
-        context=context, migration_changed=True, needs_enrichment=False
-    )
-    assert (
-        workflow._source_requires_publication(
-            context=cast(Any, type("Context", (), {"apply": False})()),
-            migration_changed=False,
-            needs_enrichment=False,
-        )
-        is False
-    )
-
-    manifest_entry: Any = {"public_shard_sha256": "a" * 64}
-    sources["a.osm.pbf"] = manifest_entry
-    checkpoint["sources"] = {"a.osm.pbf": {"polygon_sha256": "a" * 64}}
-    assert workflow._source_upload_is_current(manifest_entry, "a.osm.pbf", checkpoint)
-    assert not workflow._source_upload_is_current(manifest_entry, "b.osm.pbf", checkpoint)
-    progress: list[str] = []
-    context.progress = progress.append
-    assert workflow._source_upload_is_current_for_context(
-        source=source,
-        context=context,
-        index=1,
-        total=2,
-        migration_changed=False,
-        needs_enrichment=False,
-    )
-    assert progress
-    workflow._record_source_upload(source, context, uploaded=True)
-    assert checkpoint["sources"]["a.osm.pbf"]["polygon_sha256"] == "a" * 64
-
-    assert workflow._should_recheck_enrichment(
-        marker=None, status_summary=None, migration_changed=False
-    )
-    assert not workflow._should_recheck_enrichment(
-        marker=False, status_summary={"success": {"count": 1}}, migration_changed=False
-    )
-    monkeypatch.setattr(workflow, "_shard_needs_enrichment", lambda _path: True)
-    decision = workflow._initial_enrichment_decision(
-        tmp_path / "a.parquet",
-        marker=None,
-        status_summary=None,
-        migration_changed=False,
-    )
-    assert decision.needs_enrichment
-
-
-def test_private_workflow_source_phase_helpers_are_bounded(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from osm_polygon_website_tag.application import workflow
-
-    context: Any = type("Context", (), {})()
-    context.run_dir = tmp_path
-    context.state = type("State", (), {"sources": {"a.osm.pbf": {}}})()
-    context.progress = None
-    context.repo_id = "owner/dataset"
-    context.apply = False
-    context.invocation_id = "run"
-    context.area_workers = 2
-    context.max_in_flight_areas = 3
-    context.fetch_workers = 4
-    fingerprint: Any = type("Fingerprint", (), {})()
-    source = Path("a.osm.pbf")
-
-    extracted: list[tuple[Path, dict[str, object]]] = []
-    monkeypatch.setattr(
-        workflow,
-        "extract_pbf",
-        lambda path, run, **kwargs: extracted.append((path, kwargs)),
-    )
-    workflow._extract_with_options(source, context)
-    assert extracted[0][0] == source
-    assert extracted[0][1]["area_workers"] == 2
-
-    enrichment_calls: list[tuple[Path, dict[str, object]]] = []
-    monkeypatch.setattr(
-        workflow,
-        "enrich_polygon_shard",
-        lambda path, **kwargs: enrichment_calls.append((path, kwargs)) or "enriched",
-    )
-    assert workflow._enrich_shard(tmp_path / "a.parquet", context) == "enriched"
-    assert enrichment_calls[0][1]["fetch_workers"] == 4
-
-    monkeypatch.setattr(workflow, "source_bundle_is_complete", lambda *_args: True)
-    bundle = workflow._ensure_source_bundle(
-        source=source,
-        fingerprint=fingerprint,
-        context=context,
-        index=1,
-        total=1,
-        allow_extraction=True,
-    )
-    assert bundle.reused and not bundle.extracted
-
-    monkeypatch.setattr(workflow, "source_bundle_is_complete", lambda *_args: False)
-    monkeypatch.setattr(workflow, "_extract_with_options", lambda *_args: None)
-    calls = iter([False, True])
-    monkeypatch.setattr(workflow, "source_bundle_is_complete", lambda *_args: next(calls))
-    bundle = workflow._ensure_source_bundle(
-        source=source,
-        fingerprint=fingerprint,
-        context=context,
-        index=1,
-        total=1,
-        allow_extraction=True,
-    )
-    assert bundle.extracted and not bundle.reused
-
-    original_process_source = workflow._process_source
-    monkeypatch.setattr(
-        workflow,
-        "_process_source",
-        lambda **_kwargs: workflow._SourceTransactionResult(True, False, True),
-    )
-    counts = workflow._process_source_batch(
-        [source],
-        [source],
-        {source.name: fingerprint},
-        context,
-        allow_extraction=True,
-    )
-    assert counts == workflow._PhaseCounts(extracted=1, uploaded=1)
-    assert workflow._add_phase_counts(
-        counts, workflow._PhaseCounts(reused=2)
-    ) == workflow._PhaseCounts(extracted=1, reused=2, uploaded=1)
-
-    monkeypatch.setattr(workflow, "_process_source", original_process_source)
-    monkeypatch.setattr(workflow.pq, "read_schema", lambda _path: object())
-    monkeypatch.setattr(workflow, "schema_matches", lambda *_args: False)
-    assert not workflow._migrate_public_shard_if_needed(
-        source, tmp_path / "a.parquet", context, 1, 1
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_initial_enrichment_decision",
-        lambda *_args, **_kwargs: workflow._EnrichmentDecision(False, {"success": {"count": 1}}),
-    )
-    monkeypatch.setattr(workflow, "update_source_enrichment_status", lambda *_args, **_kwargs: None)
-    context.state.sources[source.name] = {"enrichment_pending": False}
-    decision = workflow._enrich_source_shard_if_needed(
-        source=source,
-        shard=tmp_path / "a.parquet",
-        context=context,
-        index=1,
-        total=1,
-        migration_changed=False,
-    )
-    assert not decision.needs_enrichment
-    monkeypatch.setattr(
-        workflow,
-        "_ensure_source_bundle",
-        lambda **_kwargs: workflow._SourceBundleResult(tmp_path / "a.parquet", False, True),
-    )
-    monkeypatch.setattr(workflow, "_migrate_public_shard_if_needed", lambda **_kwargs: False)
-    monkeypatch.setattr(
-        workflow,
-        "_enrich_source_shard_if_needed",
-        lambda **_kwargs: workflow._EnrichmentDecision(False, None),
-    )
-    monkeypatch.setattr(workflow, "_publish_source_if_needed", lambda **_kwargs: True)
-    transaction = workflow._process_source(
-        source=source,
-        fingerprint=fingerprint,
-        context=context,
-        index=1,
-        total=1,
-        allow_extraction=True,
-    )
-    assert transaction == workflow._SourceTransactionResult(False, True, True)
-
-
-def test_private_workflow_publication_and_card_checks(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from osm_polygon_website_tag.application import workflow
-
-    context: Any = type("Context", (), {})()
-    context.run_dir = tmp_path
-    context.state = type(
-        "State", (), {"sources": {"a.osm.pbf": {"public_shard_sha256": "a" * 64}}}
-    )()
-    context.repo_id = "owner/dataset"
-    context.apply = False
-    context.progress = None
-    context.upload_checkpoint = {"schema_version": "v2", "global_bundle": {}, "sources": {}}
-    source = Path("a.osm.pbf")
-
-    monkeypatch.setattr(workflow, "_source_upload_is_current_for_context", lambda **_kwargs: True)
-    assert not workflow._publish_source_if_needed(
-        source=source,
-        context=context,
-        index=1,
-        total=1,
-        reused=False,
-        migration_changed=False,
-        needs_enrichment=False,
-    )
-    monkeypatch.setattr(workflow, "_source_upload_is_current_for_context", lambda **_kwargs: False)
-    monkeypatch.setattr(workflow, "_source_requires_publication", lambda **_kwargs: False)
-    assert not workflow._publish_source_if_needed(
-        source=source,
-        context=context,
-        index=1,
-        total=1,
-        reused=False,
-        migration_changed=False,
-        needs_enrichment=False,
-    )
-
-    monkeypatch.setattr(workflow, "build_card", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        workflow,
-        "incremental_publish_changed_shard",
-        lambda *_args, **_kwargs: type(
-            "Plan", (), {"shard_changed": True, "upload_paths": [source]}
-        )(),
-    )
-    assert not workflow._maybe_publish_enriched_shard(
-        run_dir=tmp_path,
-        source=source,
-        repo_id="owner/dataset",
-        apply=False,
-        progress=None,
-        index=1,
-        total=1,
-    )
-    assert workflow._run_needs_enrichment(tmp_path) is False
-    assert workflow._card_refresh_needed(tmp_path) is True
-
-
-def test_private_workflow_enrichment_branch_persists_result_and_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The enrichment branch records both shard metadata and retry status."""
-    from osm_polygon_website_tag.application import workflow
-
-    source = Path("a.osm.pbf")
-    state: Any = type("State", (), {"sources": {source.name: {"enrichment_pending": True}}})()
-    context: Any = type("Context", (), {})()
-    context.state = state
-    context.run_dir = tmp_path
-    progress: list[str] = []
-    context.progress = progress.append
-    context.invocation_id = "invocation"
-    context.fetch_workers = None
-
-    enrichment_calls: list[tuple[Path, Any]] = []
-    metadata_calls: list[dict[str, object]] = []
-    status_calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        workflow,
-        "_initial_enrichment_decision",
-        lambda *_args, **_kwargs: workflow._EnrichmentDecision(True, None),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_enrich_shard",
-        lambda shard, context: (
-            enrichment_calls.append((shard, context))
-            or type("Enrichment", (), {"row_count": 7, "shard_sha256": "b" * 64})()
-        ),
-    )
-    monkeypatch.setattr(workflow, "_shard_needs_enrichment", lambda _shard: False)
-    monkeypatch.setattr(
-        workflow,
-        "summarize_enrichment_status",
-        lambda _shard: {"success": {"count": 7}},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "update_public_shard_metadata",
-        lambda _state, **kwargs: metadata_calls.append(kwargs),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "update_source_enrichment_status",
-        lambda _state, **kwargs: status_calls.append(kwargs),
-    )
-
-    result = workflow._enrich_source_shard_if_needed(
-        source=source,
-        shard=tmp_path / "a.parquet",
-        context=context,
-        index=2,
-        total=3,
-        migration_changed=False,
-    )
-
-    assert result == workflow._EnrichmentDecision(False, {"success": {"count": 7}})
-    assert enrichment_calls == [(tmp_path / "a.parquet", context)]
-    assert metadata_calls == [{"filename": source.name, "row_count": 7, "shard_sha256": "b" * 64}]
-    assert status_calls == [
-        {
-            "filename": source.name,
-            "pending": False,
-            "status_counts": {"success": {"count": 7}},
-        }
-    ]
-    assert progress == ["[2/3] Enriching a.osm.pbf"]
-
-
-def test_private_workflow_enrichment_without_cached_summary_recomputes_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A legacy marker without counts is repaired without fetching again."""
-    from osm_polygon_website_tag.application import workflow
-
-    source = Path("a.osm.pbf")
-    state: Any = type("State", (), {"sources": {source.name: {"enrichment_pending": False}}})()
-    context: Any = type("Context", (), {})()
-    context.state = state
-    progress: list[str] = []
-    context.progress = progress.append
-    summaries: list[Path] = []
-    statuses: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        workflow,
-        "_initial_enrichment_decision",
-        lambda *_args, **_kwargs: workflow._EnrichmentDecision(False, None),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_enrich_shard",
-        lambda *_args, **_kwargs: pytest.fail("cached complete shard must not be enriched"),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "summarize_enrichment_status",
-        lambda shard: summaries.append(shard) or {"absent": {"count": 1}},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "update_source_enrichment_status",
-        lambda _state, **kwargs: statuses.append(kwargs),
-    )
-
-    result = workflow._enrich_source_shard_if_needed(
-        source=source,
-        shard=tmp_path / "a.parquet",
-        context=context,
-        index=1,
-        total=1,
-        migration_changed=False,
-    )
-
-    assert result == workflow._EnrichmentDecision(False, {"absent": {"count": 1}})
-    assert summaries == [tmp_path / "a.parquet"]
-    assert statuses == [
-        {
-            "filename": source.name,
-            "pending": False,
-            "status_counts": {"absent": {"count": 1}},
-        }
-    ]
-    assert progress == ["[1/1] Resuming: a.osm.pbf text is complete"]
-
-
-def test_private_workflow_publication_forwards_resume_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A required publication receives the correct resume and source set."""
-    from osm_polygon_website_tag.application import workflow
-
-    source = Path("a.osm.pbf")
-    context: Any = type("Context", (), {})()
-    context.run_dir = tmp_path
-    context.repo_id = "owner/dataset"
-    context.apply = True
-    context.progress = None
-    context.state = type(
-        "State", (), {"sources": {source.name: {"public_shard_sha256": "a" * 64}}}
-    )()
-    context.upload_checkpoint = {
-        "schema_version": "v2",
-        "global_bundle": {},
-        "sources": {"previous.osm.pbf": {"polygon_sha256": "c" * 64}},
-    }
-    calls: list[dict[str, object]] = []
-    recorded: list[tuple[Path, Any, bool]] = []
-    monkeypatch.setattr(workflow, "_source_upload_is_current_for_context", lambda **_kwargs: False)
-    monkeypatch.setattr(workflow, "_source_requires_publication", lambda **_kwargs: True)
-    monkeypatch.setattr(
-        workflow,
-        "_maybe_publish_enriched_shard",
-        lambda **kwargs: calls.append(kwargs) or True,
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_record_source_upload",
-        lambda source_value, context_value, uploaded: recorded.append(
-            (source_value, context_value, uploaded)
-        ),
-    )
-
-    result = workflow._publish_source_if_needed(
-        source=source,
-        context=context,
-        index=3,
-        total=4,
-        reused=True,
-        migration_changed=False,
-        needs_enrichment=True,
-    )
-
-    assert result is True
-    assert calls == [
-        {
-            "run_dir": tmp_path,
-            "source": source,
-            "repo_id": "owner/dataset",
-            "apply": True,
-            "progress": None,
-            "index": 3,
-            "total": 4,
-            "allow_bundle_only": False,
-            "published_source_names": {"previous.osm.pbf", "a.osm.pbf"},
-        }
-    ]
-    assert recorded == [(source, context, True)]
-
-
-def test_private_workflow_publication_reuses_incremental_plan_digests(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The upload and checkpoint use the already-computed incremental plan."""
-    from osm_polygon_website_tag.application import workflow
-    from osm_polygon_website_tag.publishing.incremental import IncrementalPublishPlan
-
-    source = Path("a.osm.pbf")
-    plan = IncrementalPublishPlan(
-        source_filename=source.name,
-        upload_paths=[tmp_path / "polygons" / "a.parquet"],
-        shard_changed=True,
-        bundle_changed=True,
-        shard_sha256="a" * 64,
-        bundle_state={
-            "readme_sha256": "b" * 64,
-            "dataset_yaml_sha256": "c" * 64,
-            "map_sha256": "d" * 64,
-            "map_contract_version": 1,
-        },
-    )
-    context: Any = type("Context", (), {})()
-    context.run_dir = tmp_path
-    context.repo_id = "owner/dataset"
-    context.apply = True
-    context.progress = None
-    uploads: list[tuple[tuple[object, ...], dict[str, object]]] = []
-    persisted: list[dict[str, object]] = []
-    monkeypatch.setattr(workflow, "build_card", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        workflow, "incremental_publish_changed_shard", lambda *_args, **_kwargs: plan
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_upload_public_shard",
-        lambda *args, **kwargs: uploads.append((args, kwargs)),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "persist_successful_upload",
-        lambda *_args, **kwargs: persisted.append(kwargs),
-    )
-
-    assert (
-        workflow._maybe_publish_enriched_shard(
-            run_dir=tmp_path,
-            source=source,
-            repo_id="owner/dataset",
-            apply=True,
-            progress=None,
-            index=1,
-            total=1,
-        )
-        is True
-    )
-
-    assert len(uploads) == 1
-    assert uploads[0][0][-1] is plan
-    assert uploads[0][1] == {}
-    assert persisted == [{"shard_sha256": plan.shard_sha256, "bundle_state": plan.bundle_state}]
-
-
 def test_workflow_resume_after_acknowledged_shard_is_skipped(
     make_pbf,
     tmp_path: Path,
@@ -1524,7 +980,7 @@ def test_workflow_resume_after_acknowledged_shard_is_skipped(
 
     root = _sources(make_pbf, tmp_path)
     monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
-    monkeypatch.setattr(workflow, "_upload_public_shard", lambda *_args: None)
+    monkeypatch.setattr(source_processing, "_upload_public_shard", lambda *_args: None)
     monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
 
     first = run_all(
@@ -1538,7 +994,7 @@ def test_workflow_resume_after_acknowledged_shard_is_skipped(
     uploaded_during_resume: list[str] = []
 
     monkeypatch.setattr(
-        workflow,
+        source_processing,
         "_upload_public_shard",
         lambda _run, source, _repo, *_args: uploaded_during_resume.append(source.name),
     )
@@ -1567,7 +1023,7 @@ def test_workflow_upload_checkpoint_persistence_is_deterministic(
 
     root = _sources(make_pbf, tmp_path)
     monkeypatch.setattr(workflow, "resolve_hf_token", lambda: "available")
-    monkeypatch.setattr(workflow, "_upload_public_shard", lambda *_args: None)
+    monkeypatch.setattr(source_processing, "_upload_public_shard", lambda *_args: None)
     monkeypatch.setattr(workflow, "publish_to_hf", lambda *_args, **_kwargs: None)
 
     first = run_all(

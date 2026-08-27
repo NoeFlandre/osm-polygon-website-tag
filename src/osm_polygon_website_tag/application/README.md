@@ -6,8 +6,12 @@ separate from workflow side effects.
 - Modules:
   - `inventory`: discovers source PBFs and verifies persisted source and shard
     inventories. It performs no writes.
-  - `workflow`: owns resumable per-source extraction, enrichment, upload
-    transactions, run-level state transitions, reporting, and final publication.
+  - `source_processing`: owns one ordered source phase, including resumable
+    extraction, enrichment, language detection, incremental publication, and
+    source-level metadata/checkpoint updates.
+  - `workflow`: owns run-level lifecycle orchestration, status transitions,
+    reporting, and final publication; it delegates source work to
+    `source_processing`.
   - `resume_planner`: owns deterministic source ordering, bounded text-status
     summaries, and durable partial-checkpoint discovery. It has no network or
     PBF side effects; `workflow` only composes its plan with the stage calls.
