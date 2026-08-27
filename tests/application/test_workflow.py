@@ -5,16 +5,18 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from tests.fixtures.polygon_shards import project_current_rows_to_legacy
 
-from osm_polygon_website_tag.application import source_processing
+from osm_polygon_website_tag.application import source_processing, workflow
 from osm_polygon_website_tag.application.inventory import (
     discover_sources as inventory_discover_sources,
 )
+from osm_polygon_website_tag.application.source_processing import SourceProcessingContext
 from osm_polygon_website_tag.application.workflow import (
     discover_sources,
     run_all,
@@ -27,9 +29,20 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 from osm_polygon_website_tag.contracts.text_schema import count_words
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
+from osm_polygon_website_tag.publishing.incremental import CheckpointV2
+from osm_polygon_website_tag.reporting.finalize import FinalizationReport
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.verify import VerificationReport
 from osm_polygon_website_tag.runtime.run_state import (
+    STATUS_ANALYZED,
+    STATUS_CARD_BUILT,
     STATUS_COMPLETE,
+    STATUS_ENRICHED,
+    STATUS_ENRICHING,
     STATUS_EXTRACTING,
+    STATUS_INITIALIZED,
+    RunState,
+    SourceFingerprint,
     hash_shard,
     initialise_run,
     load_run,
@@ -55,6 +68,10 @@ _WEBSITE_OSM = """<?xml version="1.0" encoding="UTF-8"?>
   </way>
 </osm>
 """
+
+
+def _noop_progress(_message: str) -> None:
+    return None
 
 
 class RecordingLanguageDetector:
@@ -128,6 +145,760 @@ def test_shard_needs_enrichment_scans_status_columns_without_row_dicts(
     monkeypatch.setattr(source_processing.pq, "ParquetFile", lambda _path: FakeParquet())
 
     assert source_processing._shard_needs_enrichment(tmp_path / "source.parquet") is True
+
+
+@pytest.mark.parametrize(
+    ("needs_enrichment", "detect_languages", "needs_language", "expected"),
+    [
+        (False, False, False, False),
+        (True, False, False, True),
+        (False, True, False, False),
+        (False, True, True, True),
+        (True, True, False, True),
+    ],
+)
+def test_run_requires_enrichment_combines_source_and_language_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    needs_enrichment: bool,
+    detect_languages: bool,
+    needs_language: bool,
+    expected: bool,
+) -> None:
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        workflow,
+        "_run_needs_enrichment",
+        lambda run_dir: calls.append(run_dir) or needs_enrichment,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_needs_language_detection",
+        lambda run_dir: calls.append(run_dir) or needs_language,
+    )
+    context = type("Context", (), {"run_dir": tmp_path, "detect_languages": detect_languages})()
+
+    assert workflow._run_requires_enrichment(cast(Any, context)) is expected
+    assert calls == [tmp_path] * (2 if not needs_enrichment and detect_languages else 1)
+
+
+def test_transition_to_enriching_updates_the_workflow_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = object()
+    context = type("Context", (), {"state": state})()
+    calls: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        workflow,
+        "transition_status",
+        lambda state_value, status: calls.append((state_value, status)),
+    )
+
+    assert workflow._transition_to_enriching(cast(Any, context)) == STATUS_ENRICHING
+    assert calls == [(state, STATUS_ENRICHING)]
+
+
+def _write_card_contract_fixture(run_dir: Path, receipt: object) -> None:
+    map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
+    map_path.parent.mkdir(parents=True)
+    map_path.write_bytes(b"map")
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(json.dumps(receipt))
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {"card_contract_version": 2},
+        {"other": "value"},
+        ["not", "a", "mapping"],
+        "not a mapping",
+    ],
+)
+def test_card_refresh_needed_rejects_every_non_current_receipt(
+    tmp_path: Path,
+    receipt: object,
+) -> None:
+    _write_card_contract_fixture(tmp_path, receipt)
+    assert workflow._card_refresh_needed(tmp_path)
+
+
+def test_card_refresh_needed_accepts_current_receipt(
+    tmp_path: Path,
+) -> None:
+    _write_card_contract_fixture(tmp_path, {"card_contract_version": 1})
+    assert not workflow._card_refresh_needed(tmp_path)
+
+
+def test_card_refresh_needed_requires_the_map_and_readable_receipt(tmp_path: Path) -> None:
+    assert workflow._card_refresh_needed(tmp_path)
+    _write_card_contract_fixture(tmp_path, {"card_contract_version": 1})
+    (tmp_path / "manifests" / "completion_receipt.json").unlink()
+    assert workflow._card_refresh_needed(tmp_path)
+    receipt_path = tmp_path / "manifests" / "completion_receipt.json"
+    receipt_path.write_text("{invalid json")
+    assert workflow._card_refresh_needed(tmp_path)
+
+
+def test_card_refresh_needed_uses_the_exact_contract_paths_and_encoding() -> None:
+    class PathSpy:
+        def __init__(self, parts: tuple[str, ...] = ()) -> None:
+            self.parts = parts
+
+        def __truediv__(self, part: object) -> PathSpy:
+            return PathSpy((*self.parts, str(part)))
+
+        def is_file(self) -> bool:
+            return self.parts == ("assets/geographic_polygon_density.png",)
+
+        def read_text(self, *, encoding: str) -> str:
+            assert self.parts == ("manifests", "completion_receipt.json")
+            assert encoding == "utf-8"
+            return '{"card_contract_version": 1}'
+
+    assert not workflow._card_refresh_needed(cast(Any, PathSpy()))
+
+
+def _checkpoint() -> CheckpointV2:
+    return {"schema_version": "v2", "global_bundle": {}, "sources": {}}
+
+
+def test_run_all_forwards_each_orchestration_boundary_exactly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "sources"
+    output_root = tmp_path / "runs"
+    run_dir = output_root / "refactor"
+    source = source_root / "source.osm.pbf"
+    sources = [source]
+    fingerprint = SourceFingerprint(source.name, 1, 2)
+    state = RunState(run_dir=run_dir, run_id="refactor", metadata={"status": STATUS_INITIALIZED})
+    setup = workflow._WorkflowSetup(
+        run_dir=run_dir,
+        state=state,
+        sources=sources,
+        fingerprints_by_name={source.name: fingerprint},
+        status=STATUS_INITIALIZED,
+    )
+    checkpoint = _checkpoint()
+    detector = RecordingLanguageDetector()
+    progress = _noop_progress
+    calls: dict[str, object] = {}
+
+    def prepare_setup(**kwargs: object) -> workflow._WorkflowSetup:
+        calls["setup"] = kwargs
+        return setup
+
+    def prepare_detector(**kwargs: object) -> RecordingLanguageDetector:
+        calls["detector"] = kwargs
+        return detector
+
+    def prepare_checkpoint(**kwargs: object) -> CheckpointV2:
+        calls["checkpoint"] = kwargs
+        return checkpoint
+
+    def resume_names(
+        state_value: RunState,
+        checkpoint_value: CheckpointV2,
+        *,
+        apply: bool,
+    ) -> tuple[set[str], set[str]]:
+        calls["resume"] = (state_value, checkpoint_value, apply)
+        return {source.name}, set()
+
+    def prepare_priorities(
+        run_dir_value: Path,
+        state_value: RunState,
+        sources_value: list[Path],
+        *,
+        retry_names: set[str],
+    ) -> tuple[set[str], dict[str, tuple[int, int]]]:
+        calls["partial"] = (run_dir_value, state_value, sources_value, retry_names)
+        return {source.name}, {source.name: (1, -1)}
+
+    def prioritize(
+        sources_value: list[Path],
+        processed_names: set[str],
+        *,
+        retry_names: set[str],
+        partial_names: set[str],
+        retry_priorities: dict[str, tuple[int, int]],
+    ) -> list[Path]:
+        calls["prioritize"] = (
+            sources_value,
+            processed_names,
+            retry_names,
+            partial_names,
+            retry_priorities,
+        )
+        return sources_value
+
+    counts = source_processing.SourcePhaseCounts(extracted=4, reused=5, uploaded=6)
+
+    def run_phases(
+        status: str,
+        source_values: list[Path],
+        ordered_values: list[Path],
+        fingerprints: dict[str, SourceFingerprint],
+        context: SourceProcessingContext,
+    ) -> tuple[str, source_processing.SourcePhaseCounts]:
+        calls["phases"] = (status, source_values, ordered_values, fingerprints, context)
+        return "finished", counts
+
+    def complete(status: str, context: SourceProcessingContext) -> str:
+        calls["complete"] = (status, context)
+        return STATUS_COMPLETE
+
+    monkeypatch.setattr(workflow, "_prepare_workflow_setup", prepare_setup)
+    monkeypatch.setattr(workflow, "_prepare_language_detector", prepare_detector)
+    monkeypatch.setattr(workflow, "_prepare_upload_checkpoint", prepare_checkpoint)
+    monkeypatch.setattr(workflow, "_resume_source_names", resume_names)
+    monkeypatch.setattr(workflow, "prepare_resume_priorities", prepare_priorities)
+    monkeypatch.setattr(workflow, "prioritize_sources", prioritize)
+    monkeypatch.setattr(workflow, "_run_source_phases", run_phases)
+    monkeypatch.setattr(workflow, "_complete_workflow", complete)
+
+    result = run_all(
+        source_root=source_root,
+        output_root=output_root,
+        run_id="refactor",
+        repo_id="owner/dataset",
+        apply=True,
+        ensure_repo=True,
+        progress=progress,
+        area_workers=3,
+        max_in_flight_areas=4,
+        fetch_workers=5,
+        detect_languages=True,
+        language_detector=detector,
+    )
+
+    assert calls["setup"] == {
+        "source_root": source_root.resolve(),
+        "output_root": output_root.resolve(),
+        "run_id": "refactor",
+        "run_dir": run_dir.resolve(),
+        "existing_state": None,
+        "progress": progress,
+    }
+    assert calls["detector"] == {
+        "detect_languages": True,
+        "language_detector": detector,
+        "run_dir": run_dir,
+    }
+    assert calls["checkpoint"] == {
+        "run_dir": run_dir,
+        "repo_id": "owner/dataset",
+        "apply": True,
+        "ensure_repo": True,
+        "progress": progress,
+    }
+    assert calls["resume"] == (state, checkpoint, True)
+    assert calls["partial"] == (run_dir, state, sources, set())
+    assert calls["prioritize"] == (
+        sources,
+        {source.name},
+        set(),
+        {source.name},
+        {source.name: (1, -1)},
+    )
+    phase_status, phase_sources, ordered, fingerprints, context = cast(
+        tuple[str, list[Path], list[Path], dict[str, SourceFingerprint], SourceProcessingContext],
+        calls["phases"],
+    )
+    assert (phase_status, phase_sources, ordered, fingerprints) == (
+        STATUS_INITIALIZED,
+        sources,
+        sources,
+        {source.name: fingerprint},
+    )
+    assert context.run_dir == run_dir
+    assert context.state is state
+    assert context.repo_id == "owner/dataset"
+    assert context.apply is True
+    assert context.progress is progress
+    assert context.area_workers == 3
+    assert context.max_in_flight_areas == 4
+    assert context.fetch_workers == 5
+    assert context.detect_languages is True
+    assert context.language_detector is detector
+    assert calls["complete"] == ("finished", context)
+    assert result.run_dir == run_dir
+    assert result.source_count == 1
+    assert result.extracted_count == 4
+    assert result.skipped_count == 5
+    assert result.uploaded_count == 6
+    assert result.complete is True
+    assert result.dry_run is False
+
+
+def test_frozen_snapshot_result_returns_the_exact_immutable_summary(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    receipt = run_dir / "manifests" / "completion_receipt.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text("{}")
+    state = RunState(
+        run_dir=run_dir,
+        run_id="run",
+        metadata={"status": STATUS_COMPLETE, "snapshot_status": "done"},
+        sources={"source.osm.pbf": {"filename": "source.osm.pbf", "size_bytes": 1, "mtime_ns": 2}},
+    )
+    progress: list[str] = []
+
+    result = workflow._frozen_snapshot_result(run_dir, state, apply=True, progress=progress.append)
+
+    assert result == workflow.WorkflowResult(run_dir, 1, 0, 0, 0, True, False)
+    assert progress == ["Frozen snapshot is already complete; skipping enrichment and uploads"]
+
+
+def test_frozen_snapshot_result_uses_the_exact_receipt_path() -> None:
+    class PathSpy:
+        def __init__(self, parts: tuple[str, ...] = ()) -> None:
+            self.parts = parts
+
+        def __truediv__(self, part: object) -> PathSpy:
+            return PathSpy((*self.parts, str(part)))
+
+        def is_file(self) -> bool:
+            assert self.parts == ("manifests", "completion_receipt.json")
+            return True
+
+    run_dir = PathSpy()
+    state = RunState(
+        run_dir=Path("/run"),
+        run_id="run",
+        metadata={"status": STATUS_COMPLETE, "snapshot_status": "done"},
+        sources={
+            "source.osm.pbf": {
+                "filename": "source.osm.pbf",
+                "size_bytes": 1,
+                "mtime_ns": 2,
+            }
+        },
+    )
+
+    result = workflow._frozen_snapshot_result(cast(Any, run_dir), state, True, None)
+
+    assert result is not None
+    assert result.run_dir is run_dir
+
+
+def test_prepare_workflow_setup_forwards_progress_and_builds_the_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "sources"
+    output_root = tmp_path / "runs"
+    requested_run_dir = output_root / "run"
+    source = source_root / "source.osm.pbf"
+    fingerprint = SourceFingerprint(source.name, 1, 2)
+    state = RunState(requested_run_dir, "run", metadata={"status": STATUS_INITIALIZED})
+    progress = _noop_progress
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        workflow, "discover_sources", lambda root: [source] if root == source_root else []
+    )
+    monkeypatch.setattr(workflow, "snapshot_source_fingerprint", lambda path: fingerprint)
+
+    def load_or_initialise(**kwargs: object) -> tuple[Path, RunState]:
+        calls.append(kwargs)
+        return requested_run_dir, state
+
+    monkeypatch.setattr(workflow, "_load_or_initialise_state", load_or_initialise)
+    monkeypatch.setattr(workflow, "_validated_status", lambda raw: "validated")
+    monkeypatch.setattr(workflow, "_reopen_snapshot_if_needed", lambda value: value)
+
+    def refresh(**kwargs: object) -> tuple[RunState, str]:
+        calls.append(kwargs)
+        return state, "refreshed"
+
+    monkeypatch.setattr(workflow, "_refresh_legacy_card_if_needed", refresh)
+
+    result = workflow._prepare_workflow_setup(
+        source_root=source_root,
+        output_root=output_root,
+        run_id="run",
+        run_dir=requested_run_dir,
+        existing_state=None,
+        progress=progress,
+    )
+
+    assert calls == [
+        {
+            "output_root": output_root,
+            "run_id": "run",
+            "run_dir": requested_run_dir,
+            "fingerprints": [fingerprint],
+            "source_root": source_root,
+            "existing_state": None,
+        },
+        {"run_dir": requested_run_dir, "state": state, "status": "validated", "progress": progress},
+    ]
+    assert result == workflow._WorkflowSetup(
+        requested_run_dir,
+        state,
+        [source],
+        {source.name: fingerprint},
+        "refreshed",
+    )
+
+
+def test_load_or_initialise_state_reports_the_exact_inventory_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = RunState(tmp_path / "run", "run", metadata={"status": STATUS_COMPLETE})
+    fingerprint = SourceFingerprint("source.osm.pbf", 1, 2)
+    monkeypatch.setattr(workflow, "expected_source_inventory", lambda _run_dir: [fingerprint])
+    monkeypatch.setattr(workflow, "source_inventory_matches_expected", lambda *_args: False)
+
+    with pytest.raises(
+        ValueError, match=r"^source inventory changed since this run was initialized$"
+    ):
+        workflow._load_or_initialise_state(
+            output_root=tmp_path,
+            run_id="run",
+            run_dir=existing.run_dir,
+            fingerprints=[fingerprint],
+            source_root=tmp_path / "sources",
+            existing_state=existing,
+        )
+
+
+@pytest.mark.parametrize(
+    ("snapshot_status", "expected_calls"),
+    [("done", [("snapshot_status", "in_progress")]), ("in_progress", [])],
+)
+def test_reopen_snapshot_only_reopens_a_done_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot_status: str,
+    expected_calls: list[tuple[str, str]],
+) -> None:
+    state = RunState(
+        tmp_path / "run",
+        "run",
+        metadata={"snapshot_status": snapshot_status},
+    )
+    calls: list[tuple[RunState, dict[str, str]]] = []
+    monkeypatch.setattr(
+        workflow,
+        "upsert_run_metadata",
+        lambda state_value, patch: calls.append((state_value, patch)),
+    )
+
+    assert workflow._reopen_snapshot_if_needed(state) is state
+    assert [(key, patch[key]) for _state, patch in calls for key in patch] == expected_calls
+    assert all(state_value is state for state_value, _patch in calls)
+
+
+def test_refresh_legacy_card_forwards_progress_and_reloads_the_refreshed_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = RunState(tmp_path / "run", "run", metadata={"status": STATUS_COMPLETE})
+    refreshed_state = RunState(tmp_path / "run", "run", metadata={"status": STATUS_COMPLETE})
+    progress: list[str] = []
+    calls: list[Path] = []
+    monkeypatch.setattr(workflow, "_card_refresh_needed", lambda _run_dir: True)
+    monkeypatch.setattr(
+        workflow,
+        "refresh_card_run",
+        lambda run_dir: (
+            calls.append(run_dir) or FinalizationReport(True, {}, VerificationReport(True))
+        ),
+    )
+    monkeypatch.setattr(workflow, "load_run", lambda run_dir: refreshed_state)
+
+    result = workflow._refresh_legacy_card_if_needed(
+        run_dir=state.run_dir,
+        state=state,
+        status=STATUS_COMPLETE,
+        progress=progress.append,
+    )
+
+    assert result == (refreshed_state, STATUS_COMPLETE)
+    assert calls == [state.run_dir]
+    assert progress == ["Refreshing the legacy dataset card and H3 density map"]
+
+
+def test_prepare_upload_checkpoint_forwards_all_upload_arguments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _checkpoint()
+    progress = _noop_progress
+    calls: list[object] = []
+
+    def require_token(apply: bool) -> str:
+        calls.append(("token", apply))
+        return "token"
+
+    def ensure_repo(repo_id: str, **kwargs: object) -> None:
+        calls.append(("repo", repo_id, kwargs))
+
+    def load_checkpoint(run_dir: Path) -> CheckpointV2:
+        calls.append(("load", run_dir))
+        return checkpoint
+
+    def reconcile(**kwargs: object) -> CheckpointV2:
+        calls.append(("reconcile", kwargs))
+        return checkpoint
+
+    monkeypatch.setattr(workflow, "_require_upload_token", require_token)
+    monkeypatch.setattr(workflow, "_ensure_dataset_repo", ensure_repo)
+    monkeypatch.setattr(workflow, "load_upload_checkpoint", load_checkpoint)
+    monkeypatch.setattr(workflow, "_reconcile_checkpoint", reconcile)
+
+    result = workflow._prepare_upload_checkpoint(
+        run_dir=tmp_path,
+        repo_id="owner/dataset",
+        apply=True,
+        ensure_repo=True,
+        progress=progress,
+    )
+
+    assert result is checkpoint
+    assert calls == [
+        ("token", True),
+        ("repo", "owner/dataset", {"apply": True, "ensure_repo": True, "progress": progress}),
+        ("load", tmp_path),
+        (
+            "reconcile",
+            {
+                "run_dir": tmp_path,
+                "repo_id": "owner/dataset",
+                "token": "token",
+                "checkpoint": checkpoint,
+                "apply": True,
+            },
+        ),
+    ]
+
+
+def test_reconcile_checkpoint_requires_apply_credentials_and_preserves_dry_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = _checkpoint()
+    calls: list[object] = []
+    monkeypatch.setattr(
+        workflow,
+        "reconcile_upload_checkpoint",
+        lambda run_dir, *, repo_id, token: calls.append((run_dir, repo_id, token)) or checkpoint,
+    )
+
+    assert (
+        workflow._reconcile_checkpoint(
+            run_dir=tmp_path,
+            repo_id="owner/dataset",
+            token=None,
+            checkpoint=checkpoint,
+            apply=False,
+        )
+        is checkpoint
+    )
+    assert calls == []
+    assert (
+        workflow._reconcile_checkpoint(
+            run_dir=tmp_path,
+            repo_id="owner/dataset",
+            token="token",
+            checkpoint=checkpoint,
+            apply=True,
+        )
+        is checkpoint
+    )
+    assert calls == [(tmp_path, "owner/dataset", "token")]
+    with pytest.raises(ValueError, match=r"^apply mode requires Hugging Face credentials$"):
+        workflow._reconcile_checkpoint(
+            run_dir=tmp_path,
+            repo_id="owner/dataset",
+            token=None,
+            checkpoint=checkpoint,
+            apply=True,
+        )
+
+
+def test_dry_run_resume_names_separates_completed_and_pending_sources(tmp_path: Path) -> None:
+    state = RunState(
+        tmp_path,
+        "run",
+        sources={
+            "done.osm.pbf": {
+                "filename": "done.osm.pbf",
+                "size_bytes": 1,
+                "mtime_ns": 2,
+                "enrichment_pending": False,
+            },
+            "pending.osm.pbf": {
+                "filename": "pending.osm.pbf",
+                "size_bytes": 1,
+                "mtime_ns": 2,
+                "enrichment_pending": True,
+            },
+            "legacy.osm.pbf": {"filename": "legacy.osm.pbf", "size_bytes": 1, "mtime_ns": 2},
+        },
+    )
+
+    assert workflow._dry_run_resume_names(state) == (
+        {"done.osm.pbf"},
+        {"pending.osm.pbf", "legacy.osm.pbf"},
+    )
+
+
+def test_run_enrichment_phase_disables_extraction_and_transitions_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources = [Path("source.osm.pbf")]
+    ordered_sources = [Path("source.osm.pbf")]
+    fingerprints: dict[str, SourceFingerprint] = {}
+    state = object()
+    context = cast(Any, type("Context", (), {"state": state})())
+    counts = source_processing.SourcePhaseCounts(extracted=1, reused=2, uploaded=3)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        workflow,
+        "process_sources",
+        lambda **kwargs: calls.append(kwargs) or counts,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "transition_status",
+        lambda state, status: calls.append((state, status)),
+    )
+
+    status, result = workflow._run_enrichment_phase(
+        sources,
+        ordered_sources,
+        fingerprints,
+        context,
+    )
+
+    assert status == STATUS_ENRICHED
+    assert result is counts
+    assert calls == [
+        {
+            "sources": sources,
+            "ordered_sources": ordered_sources,
+            "fingerprints_by_name": fingerprints,
+            "context": context,
+            "allow_extraction": False,
+        },
+        (state, STATUS_ENRICHED),
+    ]
+
+
+def test_add_phase_counts_adds_each_counter() -> None:
+    left = source_processing.SourcePhaseCounts(extracted=1, reused=2, uploaded=3)
+    right = source_processing.SourcePhaseCounts(extracted=4, reused=5, uploaded=6)
+
+    assert workflow._add_phase_counts(left, right) == source_processing.SourcePhaseCounts(5, 7, 9)
+
+
+def test_build_analysis_forwards_progress_and_transitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = object()
+    progress: list[str] = []
+    calls: list[object] = []
+    context = cast(
+        Any,
+        type("Context", (), {"run_dir": tmp_path, "state": state, "progress": progress.append})(),
+    )
+    monkeypatch.setattr(
+        workflow, "analyze_results", lambda run_dir: calls.append(("analyze", run_dir))
+    )
+    monkeypatch.setattr(
+        workflow,
+        "transition_status",
+        lambda state_value, status: calls.append(("transition", state_value, status)),
+    )
+
+    assert workflow._build_analysis_if_needed(STATUS_ENRICHED, context) == STATUS_ANALYZED
+    assert calls == [("analyze", tmp_path), ("transition", state, STATUS_ANALYZED)]
+    assert progress == ["Building aggregate analysis"]
+
+
+def test_build_card_forwards_progress_and_transitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = object()
+    progress: list[str] = []
+    calls: list[object] = []
+    context = cast(
+        Any,
+        type("Context", (), {"run_dir": tmp_path, "state": state, "progress": progress.append})(),
+    )
+    monkeypatch.setattr(workflow, "build_card", lambda run_dir: calls.append(("card", run_dir)))
+    monkeypatch.setattr(
+        workflow,
+        "transition_status",
+        lambda state_value, status: calls.append(("transition", state_value, status)),
+    )
+
+    assert workflow._build_card_if_needed(STATUS_ANALYZED, context) == STATUS_CARD_BUILT
+    assert calls == [("card", tmp_path), ("transition", state, STATUS_CARD_BUILT)]
+    assert progress == ["Building artifact-derived dataset card"]
+
+
+def test_finalize_forwards_progress_and_requires_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    progress: list[str] = []
+    calls: list[Path] = []
+    context = cast(
+        Any,
+        type("Context", (), {"run_dir": tmp_path, "progress": progress.append})(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "finalize_run",
+        lambda run_dir: (
+            calls.append(run_dir) or FinalizationReport(True, {}, VerificationReport(True))
+        ),
+    )
+
+    assert workflow._finalize_if_needed(STATUS_CARD_BUILT, context) == STATUS_COMPLETE
+    assert calls == [tmp_path]
+    assert progress == ["Verifying and finalizing the complete run"]
+
+
+def test_publish_complete_run_forwards_receipt_upload_arguments(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    progress: list[str] = []
+    calls: list[tuple[Path, str, bool]] = []
+    context = cast(
+        Any,
+        type(
+            "Context",
+            (),
+            {
+                "run_dir": tmp_path,
+                "repo_id": "owner/dataset",
+                "apply": True,
+                "progress": progress.append,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "publish_to_hf",
+        lambda run_dir, *, repo_id, dry_run: calls.append((run_dir, repo_id, dry_run)),
+    )
+
+    workflow._publish_complete_run(STATUS_COMPLETE, context)
+
+    assert calls == [(tmp_path, "owner/dataset", False)]
+    assert progress == ["Uploading the receipt-bound complete dataset"]
 
 
 def _sources(make_pbf, tmp_path: Path) -> Path:

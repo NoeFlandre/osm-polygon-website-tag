@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from osm_polygon_website_tag.reporting.verification.analysis import (
     verify_analysis_and_card as _verify_analysis_and_card,
@@ -98,7 +98,7 @@ def _verify_expected_inventory(
 
 def _read_source_manifest(path: Path, errors: list[str]) -> list[SourceManifestEntry]:
     """Read a structurally valid JSON array at the typed manifest boundary."""
-    return cast(list[SourceManifestEntry], _read_json_array(path, errors))
+    return _read_json_array(path, errors)
 
 
 def _read_json_value(
@@ -125,7 +125,7 @@ def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:
     return value
 
 
-def _read_json_array(path: Path, errors: list[str]) -> list[dict[str, Any]]:
+def _read_json_array(path: Path, errors: list[str]) -> list[SourceManifestEntry]:
     ok, value = _read_json_value(path, errors, label="array")
     if not ok:
         return []

@@ -38,6 +38,7 @@ from osm_polygon_website_tag.publishing.incremental import (
 )
 from osm_polygon_website_tag.publishing.publish import _upload_folder
 from osm_polygon_website_tag.reporting.card import build_card
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.runtime.run_state import (
     RunState,
     SourceFingerprint,
@@ -314,7 +315,7 @@ def _detect_source_shard_if_needed(
     total: int,
 ) -> bool:
     """Detect languages for one completed text shard when opt-in is enabled."""
-    if not getattr(context, "detect_languages", False) or not shard_needs_language_detection(shard):
+    if not context.detect_languages or not shard_needs_language_detection(shard):
         return False
     detector = context.language_detector
     if detector is None:
@@ -508,7 +509,7 @@ def _upload_public_shard(
 ) -> None:
     if plan is not None and plan.source_filename != source.name:
         raise ValueError("incremental publish plan does not match source")
-    map_path = run_dir / "assets" / "geographic_polygon_density.png"
+    map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
     if plan is not None:
         _upload_folder(
             run_dir,

@@ -6,7 +6,6 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 from uuid import uuid4
 
 from osm_polygon_website_tag.application.inventory import (
@@ -394,10 +393,12 @@ def _reconcile_checkpoint(
 ) -> CheckpointV2:
     if not apply:
         return checkpoint
+    if token is None:
+        raise ValueError("apply mode requires Hugging Face credentials")
     return reconcile_upload_checkpoint(
         run_dir,
         repo_id=repo_id,
-        token=cast(str, token),
+        token=token,
     )
 
 
