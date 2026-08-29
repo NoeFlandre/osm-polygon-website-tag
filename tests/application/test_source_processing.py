@@ -1102,18 +1102,33 @@ def test_detect_source_shard_handles_opt_in_boundaries(
     )
 
     context.detect_languages = True
-    inspected: list[Path] = []
-
-    def needs_detection(path: Path) -> bool:
-        inspected.append(path)
-        return False
-
-    monkeypatch.setattr(source_processing, "shard_needs_language_detection", needs_detection)
+    inspected_paths: list[Path] = []
+    monkeypatch.setattr(
+        source_processing,
+        "shard_needs_language_detection",
+        lambda path: inspected_paths.append(path) or False,
+    )
     assert not source_processing._detect_source_shard_if_needed(
         source=source, shard=shard, context=context, index=1, total=1
     )
-    assert inspected == [shard]
+    assert inspected_paths == [shard]
 
+    context.language_detector = object()
+    detector_calls: list[tuple[Path, object]] = []
+    monkeypatch.setattr(
+        source_processing,
+        "detect_language_shard",
+        lambda path, *, detector: (
+            detector_calls.append((path, detector))
+            or SimpleNamespace(changed=False, row_count=0, shard_sha256="a" * 64)
+        ),
+    )
+    assert not source_processing._detect_source_shard_if_needed(
+        source=source, shard=shard, context=context, index=1, total=1
+    )
+    assert detector_calls == [(shard, context.language_detector)]
+
+    context.language_detector = None
     monkeypatch.setattr(source_processing, "shard_needs_language_detection", lambda _path: True)
     with pytest.raises(ValueError) as error:
         source_processing._detect_source_shard_if_needed(
@@ -1137,13 +1152,6 @@ def test_detect_source_shard_persists_changed_result(
     metadata: list[tuple[object, dict[str, object]]] = []
     detector_calls: list[tuple[Path, object]] = []
 
-    inspected: list[Path] = []
-
-    def needs_detection(path: Path) -> bool:
-        inspected.append(path)
-        return True
-
-    monkeypatch.setattr(source_processing, "shard_needs_language_detection", needs_detection)
     monkeypatch.setattr(
         source_processing,
         "detect_language_shard",
@@ -1161,7 +1169,6 @@ def test_detect_source_shard_persists_changed_result(
     assert source_processing._detect_source_shard_if_needed(
         source=source, shard=shard, context=context, index=1, total=1
     )
-    assert inspected == [shard]
     assert detector_calls == [(shard, context.language_detector)]
     assert metadata == [
         (
@@ -1170,6 +1177,41 @@ def test_detect_source_shard_persists_changed_result(
         )
     ]
     assert progress == ["[1/1] Detecting languages for a.osm.pbf"]
+
+
+def test_detect_source_shard_delegates_readiness_to_detector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Path("a.osm.pbf")
+    shard = tmp_path / "a.parquet"
+    context: Any = type("Context", (), {})()
+    context.progress = None
+    context.state = object()
+    context.detect_languages = True
+    context.language_detector = object()
+    monkeypatch.setattr(
+        source_processing,
+        "shard_needs_language_detection",
+        lambda _path: pytest.fail("source processing must delegate readiness to detection"),
+    )
+    monkeypatch.setattr(
+        source_processing,
+        "detect_language_shard",
+        lambda path, *, detector: SimpleNamespace(
+            shard_path=path,
+            row_count=4,
+            shard_sha256="b" * 64,
+            changed=True,
+        ),
+    )
+    monkeypatch.setattr(
+        source_processing, "update_public_shard_metadata", lambda *_args, **_kwargs: None
+    )
+
+    assert source_processing._detect_source_shard_if_needed(
+        source=source, shard=shard, context=context, index=1, total=1
+    )
 
 
 @pytest.mark.parametrize(

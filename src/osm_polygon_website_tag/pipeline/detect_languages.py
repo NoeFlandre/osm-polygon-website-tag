@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
 from osm_polygon_website_tag.contracts.language_schema import (
     LANGUAGE_COLUMN_NAMES,
     LANGUAGE_SCHEMA_VERSION,
@@ -64,14 +66,7 @@ def shard_needs_language_detection(shard_path: Path | str) -> bool:
     parquet = pq.ParquetFile(shard)
     source_schema = parquet.schema_arrow
     _validate_source_schema(source_schema, shard)
-    if schema_matches(source_schema, POLYGON_PUBLIC_SCHEMA):
-        return True
-    columns = [*_TEXT_STATUS_COLUMNS, *LANGUAGE_COLUMN_NAMES]
-    for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
-        rows = batch.to_pylist()
-        if any(_row_needs_language_detection(row) for row in rows):
-            return True
-    return False
+    return _inspect_language_readiness(parquet, shard, validate_statuses=False)
 
 
 def detect_language_shard(
@@ -131,8 +126,7 @@ def _prepare_detection_context(
     parquet = pq.ParquetFile(shard)
     source_schema = parquet.schema_arrow
     _validate_source_schema(source_schema, shard)
-    _validate_text_statuses(parquet, shard)
-    if not shard_needs_language_detection(shard):
+    if not _inspect_language_readiness(parquet, shard, validate_statuses=True):
         return None
     source_row_count = parquet.metadata.num_rows
     checkpoint = load_language_checkpoint(
@@ -161,6 +155,42 @@ def _validate_source_schema(source_schema: object, shard: Path) -> None:
         raise ValueError(f"unsupported polygon schema for language detection: {shard.name}")
 
 
+def _inspect_language_readiness(
+    parquet: pq.ParquetFile,
+    shard: Path,
+    *,
+    validate_statuses: bool,
+) -> bool:
+    """Inspect one shard's readiness in bounded Arrow batches."""
+    names = set(parquet.schema_arrow.names)
+    missing = set(_TEXT_STATUS_COLUMNS) - names
+    if missing:
+        raise ValueError(f"missing text status columns for language detection: {sorted(missing)}")
+    if schema_matches(parquet.schema_arrow, POLYGON_PUBLIC_SCHEMA):
+        if validate_statuses:
+            _validate_text_statuses(parquet, shard)
+        return True
+    return _inspect_current_language_readiness(parquet, shard, validate_statuses)
+
+
+def _inspect_current_language_readiness(
+    parquet: pq.ParquetFile,
+    shard: Path,
+    validate_statuses: bool,
+) -> bool:
+    """Inspect a v1.4 shard while retaining bounded status validation."""
+    columns = [*_TEXT_STATUS_COLUMNS, *LANGUAGE_COLUMN_NAMES]
+    needs_detection = False
+    for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
+        if validate_statuses:
+            _validate_status_batch(batch, shard)
+        if _batch_needs_language_detection(batch):
+            needs_detection = True
+            if not validate_statuses:
+                return True
+    return needs_detection
+
+
 def _validate_text_statuses(parquet: pq.ParquetFile, shard: Path) -> None:
     names = set(parquet.schema_arrow.names)
     missing = set(_TEXT_STATUS_COLUMNS) - names
@@ -180,6 +210,49 @@ def _validate_status_values(statuses: list[object], shard: Path) -> None:
     """Reject a status sequence containing a non-terminal value."""
     if any(status not in TEXT_TERMINAL_STATUSES for status in statuses):
         raise ValueError(f"{shard.name} text statuses must be terminal before language detection")
+
+
+def _batch_needs_language_detection(batch: pa.RecordBatch) -> bool:
+    """Return whether either language pair is incomplete in an Arrow batch."""
+    return any(
+        _language_pair_needs_detection_arrow(batch, prefix)
+        for prefix in ("website", "contact_website")
+    )
+
+
+def _language_pair_needs_detection_arrow(batch: pa.RecordBatch, prefix: str) -> bool:
+    """Evaluate one language pair without materialising row dictionaries."""
+    status = batch.column(f"{prefix}_text_status")
+    label = batch.column(f"{prefix}_language")
+    probability = batch.column(f"{prefix}_language_probability")
+    is_success = call_arrow_kernel("equal", status, "success")
+    has_label = call_arrow_kernel(
+        "and_kleene",
+        call_arrow_kernel("is_valid", label),
+        call_arrow_kernel("not_equal", label, ""),
+    )
+    valid_probability = call_arrow_kernel(
+        "and_kleene",
+        call_arrow_kernel("is_valid", probability),
+        call_arrow_kernel(
+            "and_kleene",
+            call_arrow_kernel("greater_equal", probability, 0),
+            call_arrow_kernel("less_equal", probability, 1),
+        ),
+    )
+    complete = call_arrow_kernel("and_kleene", has_label, valid_probability)
+    incomplete_success = call_arrow_kernel(
+        "and_kleene", is_success, call_arrow_kernel("invert", complete)
+    )
+    has_result = call_arrow_kernel(
+        "or_kleene",
+        call_arrow_kernel("is_valid", label),
+        call_arrow_kernel("is_valid", probability),
+    )
+    non_successful = pc.fill_null(call_arrow_kernel("invert", is_success), True)
+    result_on_non_success = call_arrow_kernel("and_kleene", non_successful, has_result)
+    needs_detection = call_arrow_kernel("or_kleene", incomplete_success, result_on_non_success)
+    return bool(call_arrow_kernel("any", needs_detection).as_py() or False)
 
 
 def _row_needs_language_detection(row: dict[str, object]) -> bool:

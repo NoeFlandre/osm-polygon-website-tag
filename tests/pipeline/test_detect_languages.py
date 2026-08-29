@@ -215,6 +215,12 @@ def test_v1_4_shard_with_missing_language_pair_is_completed_in_place(tmp_path: P
     assert pq.read_table(shard)["website_language"].to_pylist() == ["eng_Latn"]
 
 
+def test_shard_needs_language_detection_detects_an_incomplete_pair(tmp_path: Path) -> None:
+    shard = _write_v1_4_pair_shard(tmp_path, label=None, probability=None)
+
+    assert detection.shard_needs_language_detection(shard) is True
+
+
 def test_invalid_batch_size_is_rejected_before_opening_the_shard(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="batch_rows must be positive"):
         detection.detect_language_shard(
@@ -239,6 +245,12 @@ def test_language_detection_rejects_missing_text_status_columns(tmp_path: Path) 
     with pytest.raises(ValueError, match="missing text status columns"):
         detection._validate_text_statuses(
             cast(pq.ParquetFile, MissingStatusParquet()), tmp_path / "shard.parquet"
+        )
+    with pytest.raises(ValueError, match="missing text status columns"):
+        detection._inspect_language_readiness(
+            cast(pq.ParquetFile, MissingStatusParquet()),
+            tmp_path / "shard.parquet",
+            validate_statuses=False,
         )
 
 
@@ -291,6 +303,7 @@ def test_shard_needs_detection_projects_language_columns_in_bounded_batches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, object]] = []
+    parquet_paths: list[object] = []
 
     class CompleteLanguageParquet:
         schema_arrow = POLYGON_PUBLIC_SCHEMA_V1_4
@@ -299,7 +312,11 @@ def test_shard_needs_detection_projects_language_columns_in_bounded_batches(
             calls.append(kwargs)
             return []
 
-    monkeypatch.setattr(detection.pq, "ParquetFile", lambda _path: CompleteLanguageParquet())
+    monkeypatch.setattr(
+        detection.pq,
+        "ParquetFile",
+        lambda path: parquet_paths.append(path) or CompleteLanguageParquet(),
+    )
 
     assert detection.shard_needs_language_detection("shard.parquet") is False
     assert calls == [
@@ -315,6 +332,220 @@ def test_shard_needs_detection_projects_language_columns_in_bounded_batches(
             "batch_size": 8_192,
         }
     ]
+    assert parquet_paths == [Path("shard.parquet")]
+
+
+def test_shard_needs_detection_passes_path_and_skips_status_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = Path("shard.parquet")
+    observed: dict[str, object] = {}
+
+    class CompleteLanguageParquet:
+        schema_arrow = POLYGON_PUBLIC_SCHEMA_V1_4
+
+    monkeypatch.setattr(detection.pq, "ParquetFile", lambda _path: CompleteLanguageParquet())
+    monkeypatch.setattr(
+        detection,
+        "_validate_source_schema",
+        lambda schema, shard: observed.update(schema=schema, shard=shard),
+    )
+    monkeypatch.setattr(
+        detection,
+        "_inspect_language_readiness",
+        lambda parquet, shard, *, validate_statuses: (
+            observed.update(parquet=parquet, shard=shard, validate_statuses=validate_statuses)
+            or False
+        ),
+    )
+
+    assert not detection.shard_needs_language_detection(source_path)
+    assert observed["shard"] == source_path
+    assert observed["validate_statuses"] is False
+
+
+def test_language_readiness_inspection_is_one_bounded_arrow_scan() -> None:
+    calls: list[dict[str, object]] = []
+
+    class CompleteShard:
+        schema_arrow = POLYGON_PUBLIC_SCHEMA_V1_4
+
+        def iter_batches(self, **kwargs: object):  # type: ignore[no-untyped-def]
+            calls.append(kwargs)
+            yield pa.RecordBatch.from_arrays(
+                [
+                    pa.array(["success"]),
+                    pa.array(["absent"]),
+                    pa.array(["eng_Latn"]),
+                    pa.array([0.9]),
+                    pa.array([None], type=pa.string()),
+                    pa.array([None], type=pa.float64()),
+                ],
+                [
+                    "website_text_status",
+                    "contact_website_text_status",
+                    "website_language",
+                    "website_language_probability",
+                    "contact_website_language",
+                    "contact_website_language_probability",
+                ],
+            )
+
+    assert (
+        detection._inspect_language_readiness(
+            cast(pq.ParquetFile, CompleteShard()),
+            Path("shard.parquet"),
+            validate_statuses=False,
+        )
+        is False
+    )
+    assert calls == [
+        {
+            "columns": [*detection._TEXT_STATUS_COLUMNS, *detection.LANGUAGE_COLUMN_NAMES],
+            "batch_size": 8_192,
+        }
+    ]
+
+
+def test_language_readiness_inspection_detects_missing_success_pair() -> None:
+    class IncompleteShard:
+        schema_arrow = POLYGON_PUBLIC_SCHEMA_V1_4
+
+        def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
+            yield pa.RecordBatch.from_arrays(
+                [
+                    pa.array(["success"]),
+                    pa.array(["absent"]),
+                    pa.array([None], type=pa.string()),
+                    pa.array([None], type=pa.float64()),
+                    pa.array([None], type=pa.string()),
+                    pa.array([None], type=pa.float64()),
+                ],
+                [
+                    "website_text_status",
+                    "contact_website_text_status",
+                    "website_language",
+                    "website_language_probability",
+                    "contact_website_language",
+                    "contact_website_language_probability",
+                ],
+            )
+
+    assert (
+        detection._inspect_language_readiness(
+            cast(pq.ParquetFile, IncompleteShard()),
+            Path("shard.parquet"),
+            validate_statuses=False,
+        )
+        is True
+    )
+
+
+def test_language_readiness_inspection_validates_later_batches() -> None:
+    class InvalidLaterBatchShard:
+        schema_arrow = POLYGON_PUBLIC_SCHEMA_V1_4
+
+        def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
+            for status in ("success", "pending"):
+                yield pa.RecordBatch.from_arrays(
+                    [
+                        pa.array([status]),
+                        pa.array(["absent"]),
+                        pa.array([None], type=pa.string()),
+                        pa.array([None], type=pa.float64()),
+                        pa.array([None], type=pa.string()),
+                        pa.array([None], type=pa.float64()),
+                    ],
+                    [
+                        "website_text_status",
+                        "contact_website_text_status",
+                        "website_language",
+                        "website_language_probability",
+                        "contact_website_language",
+                        "contact_website_language_probability",
+                    ],
+                )
+
+    with pytest.raises(ValueError, match="must be terminal"):
+        detection._inspect_language_readiness(
+            cast(pq.ParquetFile, InvalidLaterBatchShard()),
+            Path("shard.parquet"),
+            validate_statuses=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "label", "probability"),
+    [
+        ("success", "eng_Latn", 0.9),
+        ("success", None, None),
+        ("success", "", 0.9),
+        ("success", "eng_Latn", None),
+        ("success", "eng_Latn", -0.1),
+        ("success", "eng_Latn", 1.1),
+        ("absent", None, None),
+        ("absent", "eng_Latn", None),
+        ("failed", None, 0.5),
+        (None, "eng_Latn", None),
+    ],
+)
+def test_arrow_language_pair_readiness_matches_row_semantics(
+    status: object,
+    label: object,
+    probability: object,
+) -> None:
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array([status]),
+            pa.array([status]),
+            pa.array([label], type=pa.string()),
+            pa.array([probability], type=pa.float64()),
+            pa.array([None], type=pa.string()),
+            pa.array([None], type=pa.float64()),
+        ],
+        [
+            "website_text_status",
+            "contact_website_text_status",
+            "website_language",
+            "website_language_probability",
+            "contact_website_language",
+            "contact_website_language_probability",
+        ],
+    )
+
+    expected = detection._language_pair_needs_detection(
+        {
+            "website_text_status": status,
+            "website_language": label,
+            "website_language_probability": probability,
+        },
+        "website",
+    )
+
+    assert detection._language_pair_needs_detection_arrow(batch, "website") is expected
+
+
+def test_batch_language_readiness_checks_contact_pair() -> None:
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array(["absent"]),
+            pa.array(["success"]),
+            pa.array([None], type=pa.string()),
+            pa.array([None], type=pa.float64()),
+            pa.array([None], type=pa.string()),
+            pa.array([None], type=pa.float64()),
+        ],
+        [
+            "website_text_status",
+            "contact_website_text_status",
+            "website_language",
+            "website_language_probability",
+            "contact_website_language",
+            "contact_website_language_probability",
+        ],
+    )
+
+    assert detection._batch_needs_language_detection(batch)
 
 
 @pytest.mark.parametrize(

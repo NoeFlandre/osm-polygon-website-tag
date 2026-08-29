@@ -315,13 +315,17 @@ def _detect_source_shard_if_needed(
     total: int,
 ) -> bool:
     """Detect languages for one completed text shard when opt-in is enabled."""
-    if not context.detect_languages or not shard_needs_language_detection(shard):
+    if not context.detect_languages:
         return False
     detector = context.language_detector
     if detector is None:
+        if not shard_needs_language_detection(shard):
+            return False
         raise ValueError("language detection requested without a detector")
-    _progress(context.progress, f"[{index}/{total}] Detecting languages for {source.name}")
     result = detect_language_shard(shard, detector=detector)
+    if not result.changed:
+        return False
+    _progress(context.progress, f"[{index}/{total}] Detecting languages for {source.name}")
     update_public_shard_metadata(
         context.state,
         filename=source.name,
