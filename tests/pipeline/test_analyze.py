@@ -8,11 +8,13 @@ import json
 import os
 import tempfile as tempfile_module
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from _duckdb._func import FunctionNullHandling
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
@@ -29,6 +31,7 @@ from osm_polygon_website_tag.pipeline.analyze import (
     _write_arrow_table,
     _write_cells_per_group,
     _write_class_count,
+    _write_hostname_tables,
     analyze_results,
 )
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -445,6 +448,79 @@ def test_hostname_analysis_accepts_rows_without_a_hostname(tmp_path: Path) -> No
 
     website = pq.read_table(run_dir / "analysis" / "hostnames_exact_website.parquet").to_pylist()
     assert website == [{"website_hostname": "a.com", "row_count": 1}]
+
+
+def test_hostname_analysis_normalizes_each_field_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[str | None] = []
+    original = _duckdb_extract_hostname
+
+    def counting_normalizer(value: str | None) -> str | None:
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.pipeline.analyze._duckdb_extract_hostname",
+        counting_normalizer,
+    )
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.execute(
+            "CREATE TABLE canonical_observations (website VARCHAR, contact_website VARCHAR)"
+        )
+        con.executemany(
+            "INSERT INTO canonical_observations VALUES (?, ?)",
+            [
+                ("https://a.example/path", "https://b.example/path"),
+                ("https://c.example/path", "https://d.example/path"),
+            ],
+        )
+
+        _write_hostname_tables(con, tmp_path)
+
+        assert None not in calls
+        assert sorted(value for value in calls if value is not None) == sorted(
+            [
+                "https://a.example/path",
+                "https://b.example/path",
+                "https://c.example/path",
+                "https://d.example/path",
+            ]
+        )
+        assert pq.read_table(tmp_path / "hostnames_exact_website.parquet").to_pylist() == [
+            {"website_hostname": "a.example", "row_count": 1},
+            {"website_hostname": "c.example", "row_count": 1},
+        ]
+    finally:
+        _close_analysis_connection(con)
+
+
+def test_hostname_analysis_registers_nullable_typed_normalizer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    registrations: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class FakeConnection:
+        def create_function(self, *args: object, **kwargs: object) -> None:
+            registrations.append((args, kwargs))
+
+        def execute(self, query: str) -> None:
+            del query
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.storage.duckdb_engine.copy_query_atomic",
+        lambda con, query, out_path: None,
+    )
+
+    _write_hostname_tables(cast(duckdb.DuckDBPyConnection, FakeConnection()), tmp_path)
+
+    assert registrations == [
+        (
+            ("normalize_hostname", _duckdb_extract_hostname, ["VARCHAR"], "VARCHAR"),
+            {"null_handling": FunctionNullHandling.SPECIAL},
+        )
+    ]
 
 
 def test_analysis_orchestrator_does_not_fetch_unbounded_result_sets() -> None:

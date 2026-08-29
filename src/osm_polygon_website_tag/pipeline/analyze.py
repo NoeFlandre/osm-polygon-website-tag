@@ -376,15 +376,23 @@ def _write_hostname_tables(con: duckdb.DuckDBPyConnection, analysis_dir: Path) -
         "VARCHAR",
         null_handling=FunctionNullHandling.SPECIAL,
     )
+    con.execute(
+        """
+        CREATE OR REPLACE TEMP TABLE canonical_hostnames AS
+        SELECT normalize_hostname(website) AS website_hostname,
+               normalize_hostname(contact_website) AS contact_website_hostname
+        FROM canonical_observations
+        """
+    )
     for raw_column, output_column in (
         ("website", "website_hostname"),
         ("contact_website", "contact_website_hostname"),
     ):
         exact_query = f"""
-            SELECT normalize_hostname({raw_column}) AS {output_column},
+            SELECT {output_column},
                    COUNT(*)::BIGINT AS row_count
-            FROM canonical_observations
-            WHERE normalize_hostname({raw_column}) IS NOT NULL
+            FROM canonical_hostnames
+            WHERE {output_column} IS NOT NULL
             GROUP BY 1 ORDER BY row_count DESC, {output_column}
         """  # noqa: S608
         duckdb_engine.copy_query_atomic(

@@ -6,7 +6,7 @@ import datetime as dt
 import sqlite3
 import time
 from collections.abc import Callable, Collection
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -132,42 +132,45 @@ class TextCache:
         """
         if value.status not in TEXT_STATUSES - {"absent", "pending"}:
             raise ValueError(f"invalid cache status: {value.status!r}")
-        prior = self._get(value.url)
-        stored = replace(
-            value,
-            attempt_count=1 if prior is None else prior.attempt_count + 1,
-            last_attempt_at=dt.datetime.now(tz=dt.UTC).isoformat(),
-            invocation_id=invocation_id,
-        )
-        _retry_locked(
+        last_attempt_at = dt.datetime.now(tz=dt.UTC).isoformat()
+        row = _retry_locked(
             lambda: self._db.execute(
-                """INSERT INTO website_text VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(url) DO UPDATE SET
-                 status=excluded.status,
-                 text=excluded.text,
-                 word_count=excluded.word_count,
-                 final_url=excluded.final_url,
-                 message=excluded.message,
-                 attempt_count=excluded.attempt_count,
-                 last_attempt_at=excluded.last_attempt_at,
-                 trafilatura_version=excluded.trafilatura_version,
-                 invocation_id=excluded.invocation_id""",
+                """INSERT INTO website_text (
+                       url, status, text, word_count, final_url, message,
+                       attempt_count, last_attempt_at, trafilatura_version,
+                       invocation_id
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(url) DO UPDATE SET
+                       status=excluded.status,
+                       text=excluded.text,
+                       word_count=excluded.word_count,
+                       final_url=excluded.final_url,
+                       message=excluded.message,
+                       attempt_count=website_text.attempt_count + 1,
+                       last_attempt_at=excluded.last_attempt_at,
+                       trafilatura_version=excluded.trafilatura_version,
+                       invocation_id=excluded.invocation_id
+                   RETURNING url, status, text, word_count, final_url, message,
+                             attempt_count, last_attempt_at, trafilatura_version,
+                             invocation_id""",
                 (
-                    stored.url,
-                    stored.status,
-                    stored.text,
-                    stored.word_count,
-                    stored.final_url,
-                    stored.message,
-                    stored.attempt_count,
-                    stored.last_attempt_at,
-                    stored.trafilatura_version,
-                    stored.invocation_id,
+                    value.url,
+                    value.status,
+                    value.text,
+                    value.word_count,
+                    value.final_url,
+                    value.message,
+                    1,
+                    last_attempt_at,
+                    value.trafilatura_version,
+                    invocation_id,
                 ),
-            ),
+            ).fetchone()
         )
+        if row is None:
+            raise AssertionError("cache upsert did not return a row")
         self._note_mutation()
-        return stored
+        return _cached_text_from_row(row)
 
     def flush(self) -> None:
         """Durably commit cache mutations accumulated since the last flush."""

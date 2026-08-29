@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -171,6 +172,36 @@ def test_later_failure_attempt_increments_counter(tmp_path: Path) -> None:
     assert value is not None
     assert value.attempt_count == 2
     reopened.close()
+
+
+def test_record_uses_single_upsert_without_lookup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+    cache.record(_result(text="first", count=1), invocation_id="run-1")
+
+    def unexpected_lookup(url: str) -> CachedText | None:
+        raise AssertionError(f"record unexpectedly looked up {url}")
+
+    monkeypatch.setattr(cache, "_get", unexpected_lookup)
+    updated = cache.record(_result(text="second", count=2), invocation_id="run-2")
+
+    assert updated.text == "second"
+    assert updated.word_count == 2
+    assert updated.attempt_count == 2
+    assert updated.invocation_id == "run-2"
+    assert datetime.fromisoformat(updated.last_attempt_at).tzinfo is not None
+    cache.close()
+
+
+@pytest.mark.parametrize("status", ["absent", "pending"])
+def test_record_rejects_nonterminal_text_statuses(status: str, tmp_path: Path) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+
+    with pytest.raises(ValueError, match="invalid cache status"):
+        cache.record(_result(status=status, text=None, count=None), invocation_id="run-1")
+
+    cache.close()
 
 
 def test_full_text_is_persisted_without_truncation(tmp_path: Path) -> None:
