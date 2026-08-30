@@ -15,15 +15,31 @@ runner hooks that are stable in the supported mutmut 3.x range.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 
 MUTANTS_ROOT = Path("mutants")
 _COVERAGE_FILE = ".mutmut-coverage"
+_STATS_FILE = ".mutmut-stats-child.json"
+_MPLCONFIGDIR: Final = Path(tempfile.gettempdir()) / "osm-polygon-website-tag-mutmut-mplconfig"
+
+
+def _stats_output_path() -> Path:
+    """Return the temporary path used to transfer stats from the child."""
+    return (MUTANTS_ROOT / _STATS_FILE).resolve()
+
+
+def _with_isolated_caches(environment: dict[str, str]) -> dict[str, str]:
+    """Add writable, stable caches for subprocesses that load Matplotlib."""
+    _MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
+    environment["MPLCONFIGDIR"] = str(_MPLCONFIGDIR)
+    return environment
 
 
 def _mutant_environment() -> dict[str, str]:
@@ -32,7 +48,26 @@ def _mutant_environment() -> dict[str, str]:
     source_path = str((MUTANTS_ROOT / "src").resolve())
     root_path = str(MUTANTS_ROOT.resolve())
     environment["PYTHONPATH"] = os.pathsep.join((source_path, root_path))
-    return environment
+    return _with_isolated_caches(environment)
+
+
+def _coverage_environment(project_root: Path) -> dict[str, str]:
+    """Return an environment that collects coverage from the original source."""
+    environment = os.environ.copy()
+    forbidden = {
+        str((MUTANTS_ROOT / "src").resolve()),
+        str(MUTANTS_ROOT.resolve()),
+    }
+    existing = [
+        path
+        for path in environment.get("PYTHONPATH", "").split(os.pathsep)
+        if path and str(Path(path).resolve()) not in forbidden
+    ]
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str((project_root / "src").resolve()), str(project_root.resolve()), *existing)
+    )
+    environment["MUTANT_UNDER_TEST"] = ""
+    return _with_isolated_caches(environment)
 
 
 def _pytest_command(runner: Any, tests: Iterable[str]) -> list[str]:
@@ -47,6 +82,7 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
     """Collect source coverage in a fresh process and return mutmut's mapping."""
     import coverage
 
+    project_root = Path.cwd().resolve()
     data_path = (MUTANTS_ROOT / _COVERAGE_FILE).resolve()
     command = [
         sys.executable,
@@ -62,8 +98,8 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
     try:
         result = subprocess.run(  # noqa: S603
             command,
-            cwd=MUTANTS_ROOT,
-            env=_mutant_environment(),
+            cwd=project_root,
+            env=_coverage_environment(project_root),
             check=False,
             capture_output=True,
             text=True,
@@ -77,8 +113,9 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
         data = loaded.get_data()
         covered: dict[str, set[int]] = {}
         for source_file in source_files:
+            original = (project_root / source_file).resolve()
             target = (MUTANTS_ROOT / source_file).resolve()
-            covered[str(target)] = set(data.lines(str(target)) or [])
+            covered[str(target)] = set(data.lines(str(original)) or [])
         return covered
     finally:
         data_path.unlink(missing_ok=True)
@@ -103,8 +140,98 @@ def _run_tests(runner: Any, *, mutant_name: str | None, tests: Iterable[str]) ->
     return result.returncode
 
 
+def _run_stats(runner: Any, tests: Iterable[str]) -> int:
+    """Collect mutmut test associations in a fresh interpreter."""
+    del runner
+    output_path = _stats_output_path()
+    output_path.unlink(missing_ok=True)
+    command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--stats-child",
+        str(output_path),
+        json.dumps(list(tests)),
+    ]
+    environment = _mutant_environment()
+    environment["MUTANT_UNDER_TEST"] = "stats"
+    environment["PY_IGNORE_IMPORTMISMATCH"] = "1"
+    try:
+        result = subprocess.run(  # noqa: S603
+            command,
+            cwd=MUTANTS_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            _merge_stats(output_path)
+        else:
+            detail = (result.stdout + result.stderr).strip()
+            if detail:
+                print(detail[-2000:])
+        return result.returncode
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+def _merge_stats(output_path: Path) -> None:
+    """Merge a successful child stats payload into mutmut's parent state."""
+    import mutmut
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    for function_name, test_names in payload["tests_by_mangled_function_name"].items():
+        mutmut.tests_by_mangled_function_name[function_name].update(test_names)
+    for test_name, duration in payload["duration_by_test"].items():
+        mutmut.duration_by_test[test_name] = float(duration)
+
+
+def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
+    """Run pytest's mutmut stats collector and serialize its parent payload."""
+    import mutmut
+    import mutmut.__main__ as mutmut_main
+    from mutmut.utils.format_utils import strip_prefix
+
+    class StatsCollector:
+        def pytest_runtest_logstart(self, nodeid: str, location: Any) -> None:
+            del location
+            mutmut.duration_by_test[nodeid] = 0.0
+
+        def pytest_runtest_teardown(self, item: Any, nextitem: Any) -> None:
+            del nextitem
+            for function in mutmut._stats:
+                mutmut.tests_by_mangled_function_name[function].add(
+                    strip_prefix(item._nodeid, prefix="mutants/")
+                )
+            mutmut._stats.clear()
+
+        def pytest_runtest_makereport(self, item: Any, call: Any) -> None:
+            mutmut.duration_by_test[item.nodeid] += call.duration
+
+    runner = mutmut_main.PytestRunner()
+    exit_code = runner.execute_pytest(
+        runner._pytest_args_regular_run(tests), plugins=[StatsCollector()]
+    )
+    payload = {
+        "tests_by_mangled_function_name": {
+            name: sorted(test_names)
+            for name, test_names in mutmut.tests_by_mangled_function_name.items()
+        },
+        "duration_by_test": dict(mutmut.duration_by_test),
+    }
+    output_path.write_text(json.dumps(payload), encoding="utf-8")
+    return exit_code
+
+
 def main() -> None:
     """Install the isolated hooks and delegate argument parsing to mutmut."""
+    if len(sys.argv) == 4 and sys.argv[1] == "--stats-child":
+        output_path = Path(sys.argv[2])
+        tests = json.loads(sys.argv[3])
+        if not isinstance(tests, list) or not all(isinstance(test, str) for test in tests):
+            raise ValueError("stats child tests must be a JSON array of strings")
+        raise SystemExit(_run_stats_child(output_path, tests))
+
     import mutmut.__main__ as mutmut_main
 
     def gather_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
@@ -113,8 +240,12 @@ def main() -> None:
     def run_tests(self: Any, *, mutant_name: str | None, tests: Iterable[str]) -> int:
         return _run_tests(self, mutant_name=mutant_name, tests=tests)
 
+    def run_stats(self: Any, *, tests: Iterable[str]) -> int:
+        return _run_stats(self, tests)
+
     mutmut_main.gather_coverage = cast(Any, gather_coverage)
     mutmut_main.PytestRunner.run_tests = cast(Any, run_tests)
+    mutmut_main.PytestRunner.run_stats = cast(Any, run_stats)
     sys.argv[0] = "mutmut"
     mutmut_main.cli()
 
