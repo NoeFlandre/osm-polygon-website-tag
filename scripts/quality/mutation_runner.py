@@ -158,7 +158,7 @@ def _run_stats(runner: Any, tests: Iterable[str]) -> int:
     try:
         result = subprocess.run(  # noqa: S603
             command,
-            cwd=MUTANTS_ROOT,
+            cwd=Path.cwd().resolve(),
             env=environment,
             check=False,
             capture_output=True,
@@ -178,19 +178,26 @@ def _run_stats(runner: Any, tests: Iterable[str]) -> int:
 def _merge_stats(output_path: Path) -> None:
     """Merge a successful child stats payload into mutmut's parent state."""
     import mutmut
+    from mutmut.state import state
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     for function_name, test_names in payload["tests_by_mangled_function_name"].items():
         mutmut.tests_by_mangled_function_name[function_name].update(test_names)
     for test_name, duration in payload["duration_by_test"].items():
         mutmut.duration_by_test[test_name] = float(duration)
+    for function_name, callers in payload["function_dependencies"].items():
+        state().function_dependencies[function_name].update(callers)
 
 
 def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
     """Run pytest's mutmut stats collector and serialize its parent payload."""
     import mutmut
     import mutmut.__main__ as mutmut_main
+    from mutmut.state import state
+    from mutmut.utils.file_utils import change_cwd
     from mutmut.utils.format_utils import strip_prefix
+
+    mutmut._reset_globals()
 
     class StatsCollector:
         def pytest_runtest_logstart(self, nodeid: str, location: Any) -> None:
@@ -209,15 +216,19 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
             mutmut.duration_by_test[item.nodeid] += call.duration
 
     runner = mutmut_main.PytestRunner()
-    exit_code = runner.execute_pytest(
-        runner._pytest_args_regular_run(tests), plugins=[StatsCollector()]
-    )
+    with change_cwd("mutants"):
+        exit_code = runner.execute_pytest(
+            runner._pytest_args_regular_run(tests), plugins=[StatsCollector()]
+        )
     payload = {
         "tests_by_mangled_function_name": {
             name: sorted(test_names)
             for name, test_names in mutmut.tests_by_mangled_function_name.items()
         },
         "duration_by_test": dict(mutmut.duration_by_test),
+        "function_dependencies": {
+            name: sorted(callers) for name, callers in state().function_dependencies.items()
+        },
     }
     output_path.write_text(json.dumps(payload), encoding="utf-8")
     return exit_code
