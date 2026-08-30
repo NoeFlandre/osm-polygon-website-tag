@@ -27,7 +27,9 @@ from typing import Any, Final, cast
 MUTANTS_ROOT = Path("mutants")
 _COVERAGE_FILE = ".mutmut-coverage"
 _STATS_FILE = ".mutmut-stats-child.json"
-_MPLCONFIGDIR: Final = Path(tempfile.gettempdir()) / "osm-polygon-website-tag-mutmut-mplconfig"
+_MPLCONFIGDIR: Final = (
+    Path(tempfile.gettempdir()) / f"osm-polygon-website-tag-mutmut-mplconfig-{os.getpid()}"
+)
 
 
 def _stats_output_path() -> Path:
