@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pyarrow as pa
@@ -68,6 +69,9 @@ def test_checkpoint_metadata_binds_source_and_model(tmp_path: Path) -> None:
         model=_model(),
     )
 
+    assert checkpoint._checkpoint_directory(shard) == (
+        tmp_path / "nested" / ".region.parquet.language.parts"
+    )
     metadata = json.loads((checkpoint_state.directory / "checkpoint.json").read_text())
 
     assert metadata == {
@@ -98,14 +102,24 @@ def test_checkpoint_rejects_source_or_model_drift(tmp_path: Path) -> None:
         model=_model(),
     )
 
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "language checkpoint does not match source or model identity: region.parquet"
+        ),
+    ):
         checkpoint.load_language_checkpoint(
             shard,
             source_row_count=1,
             source_shard_sha256="c" * 64,
             model=_model(),
         )
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "language checkpoint does not match source or model identity: region.parquet"
+        ),
+    ):
         checkpoint.load_language_checkpoint(
             shard,
             source_row_count=1,
@@ -128,6 +142,20 @@ def test_checkpoint_parts_are_sequential_and_v1_4_shaped(tmp_path: Path) -> None
         checkpoint.checkpoint_parts(directory)
 
 
+def test_checkpoint_parts_preserve_language_error_identity(tmp_path: Path) -> None:
+    directory = tmp_path / "parts"
+    directory.mkdir()
+    wrong_schema = POLYGON_PUBLIC_SCHEMA_V1_4.append(pa.field("unexpected", pa.string()))
+    row = {**_row(0), "unexpected": "value"}
+    pq.write_table(
+        pa.Table.from_pylist([row], schema=wrong_schema),
+        directory / "part-00000000.parquet",
+    )
+
+    with pytest.raises(ValueError, match="invalid language checkpoint schema"):
+        checkpoint.checkpoint_parts(directory)
+
+
 def test_checkpoint_allows_a_complete_durable_prefix(tmp_path: Path) -> None:
     shard = tmp_path / "nested" / "region.parquet"
     state = checkpoint.load_language_checkpoint(
@@ -146,6 +174,35 @@ def test_checkpoint_allows_a_complete_durable_prefix(tmp_path: Path) -> None:
     )
 
     assert loaded.completed_rows == 1
+
+
+def test_checkpoint_part_writer_preserves_language_error_identity(tmp_path: Path) -> None:
+    directory = tmp_path / "parts"
+    directory.mkdir()
+    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
+
+    with pytest.raises(
+        ValueError,
+        match=re.escape("language checkpoint part already exists: part-00000000.parquet"),
+    ):
+        checkpoint.write_language_checkpoint_part(directory, 0, [_row(1)], batch_rows=1)
+
+
+def test_checkpoint_assembly_preserves_language_error_identity(tmp_path: Path) -> None:
+    directory = tmp_path / "parts"
+    directory.mkdir()
+    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
+
+    with pytest.raises(
+        ValueError,
+        match="language row count changed while assembling checkpoint",
+    ):
+        checkpoint.assemble_language_checkpoint(
+            (directory / "part-00000000.parquet",),
+            tmp_path / "staged.parquet",
+            batch_rows=1,
+            row_count=2,
+        )
 
 
 def test_checkpoint_assembly_preserves_part_order(tmp_path: Path) -> None:
@@ -216,7 +273,7 @@ def test_checkpoint_rejects_unknown_files_and_cleans_known_temps(tmp_path: Path)
     checkpoint._cleanup_checkpoint_temps(directory, metadata)
 
     (directory / "unexpected").write_text("x")
-    with pytest.raises(ValueError, match="unrecognized"):
+    with pytest.raises(ValueError, match="unrecognized language checkpoint contents"):
         checkpoint._validate_checkpoint_contents(directory, ())
 
 

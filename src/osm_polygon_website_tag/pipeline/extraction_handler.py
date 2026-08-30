@@ -159,11 +159,9 @@ def _geometry_rejection(payload: AreaPayload, derived, kind: str, message: str) 
 
 def _is_closed_way(way: osmium.osm.Way) -> bool:
     nodes = [n.ref for n in way.nodes]
-    if len(nodes) < MIN_DISTINCT_NODES + 1:
+    if not nodes or nodes[0] != nodes[-1]:
         return False
-    if nodes[0] != nodes[-1]:
-        return False
-    return not len(set(nodes[:-1])) < MIN_DISTINCT_NODES
+    return len(set(nodes[:-1])) >= MIN_DISTINCT_NODES
 
 
 def _is_supported_polygon_relation(relation: osmium.osm.Relation) -> bool:
@@ -178,6 +176,31 @@ def _tags_dict(obj: osmium.osm.Area | osmium.osm.Way | osmium.osm.Relation) -> d
     for k, v in obj.tags:
         out[k] = v
     return out
+
+
+def _area_rejection_record(
+    area: osmium.osm.Area,
+    *,
+    source_pbf: str,
+    region: str,
+    osm_type: str,
+    osm_id: int,
+    rejection_kind: str,
+    message: str,
+) -> dict[str, object]:
+    """Build a rejection row from callback metadata and an area identity."""
+    return _rejection_record(
+        source_pbf=source_pbf,
+        region=region,
+        tags_dict=_tags_dict(area),
+        osm_type=osm_type,
+        osm_id=osm_id,
+        osm_version=int(area.version),
+        osm_timestamp=_as_utc(area.timestamp),
+        candidate_kind="closed_way" if osm_type == "way" else "relation_polygon",
+        rejection_kind=rejection_kind,
+        message=message,
+    )
 
 
 class _ExtractionHandler(osmium.SimpleHandler):
@@ -209,10 +232,6 @@ class _ExtractionHandler(osmium.SimpleHandler):
         _validate_area_settings(area_workers, max_in_flight_areas)
         self._source_pbf = source_pbf
         self._region = region
-        self._stem = stem
-        self._polygons_dir = polygons_dir
-        self._obs_dir = obs_dir
-        self._rej_dir = rej_dir
         self.public_sink = BatchParquetSink(
             polygons_dir / f".{stem}.public.parquet",
             POLYGON_PUBLIC_SCHEMA,
@@ -272,18 +291,14 @@ class _ExtractionHandler(osmium.SimpleHandler):
         kind: str,
         message: str,
     ) -> None:
-        tags_dict = _tags_dict(area)
         osm_type = "relation" if area.from_way() is False else "way"
         self.rej_sink.add(
-            _rejection_record(
+            _area_rejection_record(
+                area,
                 source_pbf=self._source_pbf,
                 region=self._region,
-                tags_dict=tags_dict,
                 osm_type=osm_type,
                 osm_id=int(area.orig_id()),
-                osm_version=int(area.version),
-                osm_timestamp=_as_utc(area.timestamp),
-                candidate_kind="closed_way" if osm_type == "way" else "relation_polygon",
                 rejection_kind=kind,
                 message=message,
             )
@@ -331,15 +346,12 @@ class _ExtractionHandler(osmium.SimpleHandler):
     ) -> None:
         """Append one callback-level rejection using area metadata."""
         self.rej_sink.add(
-            _rejection_record(
+            _area_rejection_record(
+                area,
                 source_pbf=self._source_pbf,
                 region=self._region,
-                tags_dict=_tags_dict(area),
                 osm_type=osm_type,
                 osm_id=osm_id,
-                osm_version=int(area.version),
-                osm_timestamp=_as_utc(area.timestamp),
-                candidate_kind="closed_way" if osm_type == "way" else "relation_polygon",
                 rejection_kind=rejection_kind,
                 message=message,
             )
@@ -353,7 +365,7 @@ class _ExtractionHandler(osmium.SimpleHandler):
         candidate: dict[str, Any],
     ) -> None:
         """Build and submit one tracked candidate when it qualifies."""
-        tags_dict = cast(dict[str, str], candidate["tags"])
+        tags_dict: dict[str, str] = candidate["tags"]
         derived = derive_tags(tags_dict)
         if not (derived.has_any_website or has_wikidata(tags_dict)):
             return
@@ -381,7 +393,7 @@ class _ExtractionHandler(osmium.SimpleHandler):
             sequence=self._area_sequence,
             source_pbf=self._source_pbf,
             region=self._region,
-            tags_dict=cast(dict[str, str], dict(candidate["tags"])),
+            tags_dict=dict(candidate["tags"]),
             osm_type=osm_type,
             osm_id=osm_id,
             osm_version=int(area.version),

@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 from pathlib import Path
+from typing import cast
+from unittest.mock import Mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -14,6 +16,7 @@ from osm_polygon_website_tag.storage.batch_sink import BatchParquetSink
 from osm_polygon_website_tag.storage.candidate_ledger import (
     DEFAULT_COMMIT_BATCH_SIZE,
     CandidateLedger,
+    _candidate_payload,
 )
 from osm_polygon_website_tag.storage.duckdb_engine import (
     _make_connection,
@@ -103,6 +106,20 @@ def test_default_commit_batch_size_is_bounded() -> None:
     assert DEFAULT_COMMIT_BATCH_SIZE == 4096
 
 
+def test_candidate_payload_decodes_the_persisted_fields() -> None:
+    assert _candidate_payload(
+        '{"website":"https://example.org"}',
+        3,
+        "2024-01-01T00:00:00+00:00",
+        "closed_way",
+    ) == {
+        "tags": {"website": "https://example.org"},
+        "osm_version": 3,
+        "osm_timestamp": _TS,
+        "candidate_kind": "closed_way",
+    }
+
+
 def test_duckdb_private_helpers_configure_and_copy_atomically(tmp_path: Path) -> None:
     connection = _make_connection(tmp_path / "duckdb", memory_limit="64MB")
     try:
@@ -127,8 +144,46 @@ def test_duckdb_private_helpers_configure_and_copy_atomically(tmp_path: Path) ->
 def test_candidate_ledger_rejects_non_positive_batch_size(
     tmp_path: Path, bad_batch_size: int
 ) -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as error:
         CandidateLedger(tmp_path / "candidates.sqlite3", commit_batch_size=bad_batch_size)
+    assert str(error.value) == (
+        f"commit_batch_size must be a positive integer, got {bad_batch_size!r}"
+    )
+
+
+def test_candidate_ledger_accepts_batch_size_one_and_creates_nested_parent(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "nested" / "ledger" / "candidates.sqlite3"
+    ledger = CandidateLedger(path, commit_batch_size=1)
+
+    assert path.parent.is_dir()
+    assert ledger.path == path
+    assert ledger._closed is False
+    ledger.upsert("way", 1, {"website": "https://one.example"}, 1, _TS, "closed_way")
+
+    assert _externally_committed_candidate_count(path) == 1
+    ledger.close()
+
+
+def test_upsert_persists_canonical_json_encoding(tmp_path: Path) -> None:
+    path = tmp_path / "candidates.sqlite3"
+    ledger = CandidateLedger(path, commit_batch_size=1)
+    ledger.upsert(
+        "way",
+        1,
+        {"z": "last", "a": "first"},
+        1,
+        _TS,
+        "closed_way",
+    )
+    connection = sqlite3.connect(path)
+    try:
+        row = connection.execute("SELECT tags_json FROM candidates").fetchone()
+        assert row == ('{"a":"first","z":"last"}',)
+    finally:
+        connection.close()
+        ledger.close()
 
 
 def test_mutations_visible_to_same_connection_before_commit(tmp_path: Path) -> None:
@@ -145,9 +200,65 @@ def test_mutations_visible_to_same_connection_before_commit(tmp_path: Path) -> N
 
     candidate = ledger.get("way", 1)
 
-    assert candidate is not None
-    assert candidate["tags"] == {"website": "https://same-connection.example"}
+    assert candidate == {
+        "tags": {"website": "https://same-connection.example"},
+        "osm_version": 1,
+        "osm_timestamp": _TS,
+        "candidate_kind": "closed_way",
+    }
     ledger.close()
+
+
+def test_mark_area_seen_preserves_sql_contract_and_rejects_duplicates(tmp_path: Path) -> None:
+    ledger = CandidateLedger(tmp_path / "candidates.sqlite3", commit_batch_size=1)
+    ledger.upsert("way", 1, {"website": "https://example.org"}, 1, _TS, "closed_way")
+    statements: list[str] = []
+    ledger._db.set_trace_callback(statements.append)
+
+    assert ledger.mark_area_seen("way", 1)
+    assert "SELECT area_seen FROM candidates WHERE osm_type='way' AND osm_id=1" in statements
+    assert "UPDATE candidates SET area_seen=1 WHERE osm_type='way' AND osm_id=1" in statements
+    with pytest.raises(ValueError, match="duplicate_area_callback"):
+        ledger.mark_area_seen("way", 1)
+    ledger.close()
+
+
+def test_flush_only_commits_pending_mutations_and_resets_the_counter(
+    tmp_path: Path,
+) -> None:
+    ledger = CandidateLedger(tmp_path / "candidates.sqlite3", commit_batch_size=100)
+    statements: list[str] = []
+    ledger._db.set_trace_callback(statements.append)
+
+    ledger._flush()
+    assert "COMMIT" not in statements
+
+    ledger.upsert("way", 1, {"website": "https://example.org"}, 1, _TS, "closed_way")
+    ledger._flush()
+
+    assert "COMMIT" in statements
+    assert ledger._pending_mutations == 0
+    ledger.close()
+
+
+def test_flush_does_not_commit_when_no_mutations_are_pending() -> None:
+    ledger = object.__new__(CandidateLedger)
+    connection = Mock(spec=sqlite3.Connection)
+    ledger._db = cast(sqlite3.Connection, connection)
+    ledger._pending_mutations = 0
+
+    ledger._flush()
+
+    connection.commit.assert_not_called()
+
+
+def test_close_is_idempotent_and_marks_the_ledger_closed(tmp_path: Path) -> None:
+    ledger = CandidateLedger(tmp_path / "candidates.sqlite3")
+
+    ledger.close()
+    ledger.close()
+
+    assert ledger._closed is True
 
 
 def test_commit_occurs_at_configured_threshold(tmp_path: Path) -> None:

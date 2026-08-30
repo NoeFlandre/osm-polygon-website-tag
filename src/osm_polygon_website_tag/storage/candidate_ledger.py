@@ -23,6 +23,21 @@ from typing import Any
 DEFAULT_COMMIT_BATCH_SIZE = 4096
 
 
+def _candidate_payload(
+    tags_json: str,
+    osm_version: int,
+    osm_timestamp: str,
+    candidate_kind: str,
+) -> dict[str, Any]:
+    """Decode the candidate columns shared by ledger read queries."""
+    return {
+        "tags": json.loads(tags_json),
+        "osm_version": int(osm_version),
+        "osm_timestamp": dt.datetime.fromisoformat(osm_timestamp),
+        "candidate_kind": candidate_kind,
+    }
+
+
 class CandidateLedger:
     """Persist candidates and area callbacks without source-sized Python state."""
 
@@ -122,12 +137,7 @@ class CandidateLedger:
         ).fetchone()
         if row is None:
             return None
-        return {
-            "tags": json.loads(row[0]),
-            "osm_version": int(row[1]),
-            "osm_timestamp": dt.datetime.fromisoformat(row[2]),
-            "candidate_kind": row[3],
-        }
+        return _candidate_payload(row[0], row[1], row[2], row[3])
 
     def missing_areas(self) -> Iterator[tuple[str, int, dict[str, Any]]]:
         cursor = self._db.execute(
@@ -139,12 +149,7 @@ class CandidateLedger:
             yield (
                 row[0],
                 int(row[1]),
-                {
-                    "tags": json.loads(row[2]),
-                    "osm_version": int(row[3]),
-                    "osm_timestamp": dt.datetime.fromisoformat(row[4]),
-                    "candidate_kind": row[5],
-                },
+                _candidate_payload(row[2], row[3], row[4], row[5]),
             )
 
     def close(self) -> None:

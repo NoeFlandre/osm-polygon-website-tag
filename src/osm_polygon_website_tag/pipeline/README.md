@@ -3,7 +3,7 @@
 Implements bounded data-processing stages.
 
 - Modules: `extraction`, `extraction_handler`, `area_work`, `extraction_records`,
-  `record_builders`, `enrich`, `enrichment_checkpoint`, `glotlid`,
+  `record_builders`, `enrich`, `checkpoint_storage`, `enrichment_checkpoint`, `glotlid`,
   `language_detection_checkpoint`, `detect_languages`,
   `public_schema_migration`, `analyze`, `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
@@ -72,8 +72,11 @@ sources or retrying enrichment.
 `enrich` owns row orchestration, URL resolution, cache use, and final shard
 promotion. `enrichment_checkpoint` owns the source-bound checkpoint metadata,
 sequential part validation, atomic part writes, and bounded final assembly.
-This boundary keeps durable resume-state rules independently reviewable while
-leaving the `enrich_polygon_shard` entry point and on-disk contract unchanged.
+The shared `checkpoint_storage` module owns only the mechanics common to
+enrichment and language checkpoints; each stage retains its own identity
+metadata and schema-specific boundary. This keeps durable resume-state rules
+independently reviewable while leaving the `enrich_polygon_shard` entry point
+and on-disk contract unchanged.
 
 ## Language detection
 
@@ -85,10 +88,11 @@ unsuccessful text receives null language fields.
 
 `glotlid` owns the pinned FastText/GlotLID adapter, model hash, and explicit
 Seagate cache boundary. `language_detection_checkpoint` owns source/model
-identity metadata, sequential Parquet parts, and bounded final assembly. A
-`Ctrl-C` or ordinary exception leaves the source shard untouched and preserves
-durable parts for the next invocation. The model is loaded once by the
-application layer and is never copied to URL or geometry workers.
+identity metadata and the language-specific public boundary, while shared
+checkpoint mechanics live in `checkpoint_storage`. A `Ctrl-C` or ordinary
+exception leaves the source shard untouched and preserves durable parts for
+the next invocation. The model is loaded once by the application layer and is
+never copied to URL or geometry workers.
 
 ## Record builders
 

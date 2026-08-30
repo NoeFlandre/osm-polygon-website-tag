@@ -156,11 +156,25 @@ def _size_category(row_count: int) -> str:
 
 def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> str:
     """Render a concise public-facing card from artifact-derived statistics."""
-    combined_words = stats.website_total_words + stats.contact_website_total_words
-    status_label = _dataset_status_label(stats)
-    enrichment_policy = _enrichment_policy(stats)
-    hostname_sections = _hostname_sections(stats)
     parts = [
+        *_render_intro_section(),
+        *_render_snapshot_section(stats),
+        *_render_website_text_section(stats),
+        *_render_geographic_section(stats),
+        *_render_links_section(),
+        *_hostname_sections(stats),
+        *_render_methodology_section(stats),
+        *_render_dataset_contents_section(),
+        *_render_schema_section(schema),
+        *_render_provenance_section(),
+        *_render_citation_section(),
+    ]
+    return "\n".join(parts) + "\n"
+
+
+def _render_intro_section() -> list[str]:
+    """Render the card title, banner, and dataset description."""
+    return [
         "# OSM Polygon Website Dataset",
         "",
         f"![osm-polygon-website-tag hero banner]({HERO_ASSET_REL_PATH})",
@@ -172,11 +186,17 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
             "current upload-acknowledged Parquet artifacts."
         ),
         "",
+    ]
+
+
+def _render_snapshot_section(stats: CardStats) -> list[str]:
+    """Render snapshot status and artifact counts."""
+    return [
         "## Snapshot",
         "",
         "| Metric | Value | What it means |",
         "| --- | ---: | --- |",
-        f"| Snapshot status | {status_label} | Current published snapshot |",
+        f"| Snapshot status | {_dataset_status_label(stats)} | Current published snapshot |",
         (
             f"| Regional PBFs included | {stats.sources_count:,} / "
             f"{stats.expected_sources_count:,} | Published source shards / expected source PBFs |"
@@ -202,6 +222,13 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
             "Candidate objects that did not produce a usable polygon row |"
         ),
         "",
+    ]
+
+
+def _render_website_text_section(stats: CardStats) -> list[str]:
+    """Render extracted-text counts for both supported website tags."""
+    combined_words = stats.website_total_words + stats.contact_website_total_words
+    return [
         "## Website text",
         "",
         "| Tag | URLs | Successful | Empty | Failed | Words |",
@@ -222,6 +249,12 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
         f"Polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
         f"Combined extracted words: **{combined_words:,}**",
         "",
+    ]
+
+
+def _render_geographic_section(stats: CardStats) -> list[str]:
+    """Render the extracted-text polygon density summary."""
+    return [
         "## Geographic distribution",
         "",
         (
@@ -234,6 +267,12 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
             "1:110m land backdrop provides geographic context."
         ),
         "",
+    ]
+
+
+def _render_links_section() -> list[str]:
+    """Render links to the live metrics and source repository."""
+    return [
         "## Links",
         "",
         (
@@ -245,7 +284,12 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
             f"[GitHub repository and README]({DEFAULT_GITHUB_REPO.removesuffix('.git')})."
         ),
         "",
-        *hostname_sections,
+    ]
+
+
+def _render_methodology_section(stats: CardStats) -> list[str]:
+    """Render extraction, status, and URL-safety methodology."""
+    return [
         "## Methodology and quality",
         "",
         (
@@ -256,7 +300,8 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
         "",
         (
             "Text statuses are `absent`, `pending`, `success`, `empty`, "
-            "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. " + enrichment_policy
+            "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
+            + _enrichment_policy(stats)
         ),
         "",
         (
@@ -269,6 +314,12 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
             "types are recorded as `fetch_error`."
         ),
         "",
+    ]
+
+
+def _render_dataset_contents_section() -> list[str]:
+    """Render the public artifact inventory."""
+    return [
         "## Dataset contents",
         "",
         "- `polygons/*.parquet`: the public polygon split, one shard per source PBF.",
@@ -278,63 +329,76 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
         "canonicalization pass.",
         "- `manifests/`: source inventory, upload checkpoints, and completion receipt.",
         "",
+    ]
+
+
+def _render_schema_section(schema: pa.Schema) -> list[str]:
+    """Render the selected public polygon schema."""
+    return [
         "## Public polygon schema",
         "",
         "| Column | Type | Nullable | Description |",
         "| --- | --- | :---: | --- |",
+        *_schema_rows(schema),
+        "",
     ]
-    parts.extend(_schema_rows(schema))
-    parts.extend(
-        [
-            "",
-            "## Provenance and license",
-            "",
-            (
-                "Source filename, byte size, and nanosecond modification time are "
-                "recorded before processing. The completion receipt binds finalized "
-                "artifacts by relative path, byte size, and SHA-256."
-            ),
-            "",
-            (
-                "The map backdrop uses Natural Earth 1:110m Admin-0 country geography, "
-                "distributed in the source tree under its public-domain terms."
-            ),
-            "",
-            (
-                "© OpenStreetMap contributors. OpenStreetMap data is available under "
-                "the [Open Database License (ODbL) 1.0]"
-                "(https://opendatacommons.org/licenses/odbl/1-0/); see the "
-                "[OpenStreetMap copyright and attribution page]"
-                "(https://www.openstreetmap.org/copyright). Regional PBF extracts are "
-                "provided by [Geofabrik](https://download.geofabrik.de/)."
-            ),
-            "",
-            (
-                "Website text is third-party content, separate from the OSM data, and "
-                "is not covered by the ODbL. This dataset asserts no license for that "
-                "text and grants no additional reuse rights: copyright and licensing "
-                "conditions remain with each source website. Check the source site's "
-                "terms or license before using or redistributing extracted text."
-            ),
-            "",
-            "## Citation",
-            "",
-            (
-                "If you use this dataset, please cite it using the machine-readable "
-                "metadata in [`CITATION.cff`]"
-                "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/"
-                "blob/main/CITATION.cff). GitHub and the Hugging Face dataset page "
-                "can then display the citation directly."
-            ),
-            "",
-            (
-                "> Flandre, Noé. *OSM Polygon Website Tag Dataset*. "
-                "[Hugging Face dataset]"
-                "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)"
-            ),
-        ]
-    )
-    return "\n".join(parts) + "\n"
+
+
+def _render_provenance_section() -> list[str]:
+    """Render provenance and licensing terms."""
+    return [
+        "## Provenance and license",
+        "",
+        (
+            "Source filename, byte size, and nanosecond modification time are "
+            "recorded before processing. The completion receipt binds finalized "
+            "artifacts by relative path, byte size, and SHA-256."
+        ),
+        "",
+        (
+            "The map backdrop uses Natural Earth 1:110m Admin-0 country geography, "
+            "distributed in the source tree under its public-domain terms."
+        ),
+        "",
+        (
+            "© OpenStreetMap contributors. OpenStreetMap data is available under "
+            "the [Open Database License (ODbL) 1.0]"
+            "(https://opendatacommons.org/licenses/odbl/1-0/); see the "
+            "[OpenStreetMap copyright and attribution page]"
+            "(https://www.openstreetmap.org/copyright). Regional PBF extracts are "
+            "provided by [Geofabrik](https://download.geofabrik.de/)."
+        ),
+        "",
+        (
+            "Website text is third-party content, separate from the OSM data, and "
+            "is not covered by the ODbL. This dataset asserts no license for that "
+            "text and grants no additional reuse rights: copyright and licensing "
+            "conditions remain with each source website. Check the source site's "
+            "terms or license before using or redistributing extracted text."
+        ),
+        "",
+    ]
+
+
+def _render_citation_section() -> list[str]:
+    """Render the machine-readable citation reference."""
+    return [
+        "## Citation",
+        "",
+        (
+            "If you use this dataset, please cite it using the machine-readable "
+            "metadata in [`CITATION.cff`]"
+            "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/"
+            "blob/main/CITATION.cff). GitHub and the Hugging Face dataset page "
+            "can then display the citation directly."
+        ),
+        "",
+        (
+            "> Flandre, Noé. *OSM Polygon Website Tag Dataset*. "
+            "[Hugging Face dataset]"
+            "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)"
+        ),
+    ]
 
 
 def _enrichment_policy(stats: CardStats) -> str:

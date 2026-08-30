@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from pathlib import Path
+from textwrap import dedent
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import osm_polygon_website_tag.reporting.card as card_module
 import osm_polygon_website_tag.reporting.card_stats as card_stats_module
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -17,8 +20,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
-from osm_polygon_website_tag.reporting.card import build_card
-from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
+from osm_polygon_website_tag.reporting.card import (
+    _render_snapshot_section,
+    build_card,
+)
+from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.runtime.run_state import initialise_run, load_run, upsert_run_metadata
 
 
@@ -186,6 +192,439 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert content.index("## Methodology and quality") < content.index("## Public polygon schema")
     assert "Top `website` hostnames" not in content
     assert "Top `contact:website` hostnames" not in content
+
+
+def test_snapshot_section_renders_its_metrics_as_markdown_rows() -> None:
+    stats = CardStats(
+        snapshot_status="done",
+        sources_count=2,
+        expected_sources_count=3,
+        public_row_count=4,
+        observation_count=5,
+        duplicate_count=6,
+        conflicting_snapshot_count=7,
+        rejection_count=8,
+    )
+
+    assert _render_snapshot_section(stats) == [
+        "## Snapshot",
+        "",
+        "| Metric | Value | What it means |",
+        "| --- | ---: | --- |",
+        "| Snapshot status | Done | Current published snapshot |",
+        "| Regional PBFs included | 2 / 3 | Published source shards / expected source PBFs |",
+        "| Published polygon rows | 4 | Rows in the public `polygons/` files |",
+        "| Comparison observations | 5 | Source-level records with a website, contact:website, or Wikidata tag |",
+        "| Duplicate OSM objects | 6 | Objects observed in more than one source snapshot |",
+        "| Conflicting snapshot observations | 7 | Repeated observations whose tag values disagree with the selected version |",
+        "| Rejected polygon candidates | 8 | Candidate objects that did not produce a usable polygon row |",
+        "",
+    ]
+
+
+def _golden_card_stats() -> CardStats:
+    return CardStats(
+        snapshot_status="in_progress",
+        observation_count=2,
+        public_row_count=3,
+        rejection_count=4,
+        sources_count=5,
+        expected_sources_count=6,
+        duplicate_count=7,
+        conflicting_snapshot_count=8,
+        website_urls_present=9,
+        website_text_success_count=10,
+        website_text_empty_count=11,
+        website_text_failure_count=12,
+        website_total_words=13,
+        contact_website_urls_present=14,
+        contact_website_text_success_count=15,
+        contact_website_text_empty_count=16,
+        contact_website_text_failure_count=17,
+        contact_website_total_words=18,
+        polygons_with_any_text=19,
+        polygon_density_h3_resolution=20,
+        occupied_h3_cell_count=21,
+        polygon_density_row_count=22,
+        top_hostnames_website=[{"website_hostname": "example.org", "row_count": 23}],
+        top_hostnames_contact_website=[
+            {"contact_website_hostname": "contact.example", "row_count": 24}
+        ],
+    )
+
+
+def test_render_markdown_has_a_stable_complete_output_contract() -> None:
+    expected = dedent(
+        r"""
+        # OSM Polygon Website Dataset
+
+        ![osm-polygon-website-tag hero banner](assets/hero.png)
+
+        OpenStreetMap closed ways and polygon relations carrying a non-empty `website` OR `contact:website` tag, with full main-page text extracted using Trafilatura. Every statistic below is regenerated from the current upload-acknowledged Parquet artifacts.
+
+        ## Snapshot
+
+        | Metric | Value | What it means |
+        | --- | ---: | --- |
+        | Snapshot status | In progress | Current published snapshot |
+        | Regional PBFs included | 5 / 6 | Published source shards / expected source PBFs |
+        | Published polygon rows | 3 | Rows in the public `polygons/` files |
+        | Comparison observations | 2 | Source-level records with a website, contact:website, or Wikidata tag |
+        | Duplicate OSM objects | 7 | Objects observed in more than one source snapshot |
+        | Conflicting snapshot observations | 8 | Repeated observations whose tag values disagree with the selected version |
+        | Rejected polygon candidates | 4 | Candidate objects that did not produce a usable polygon row |
+
+        ## Website text
+
+        | Tag | URLs | Successful | Empty | Failed | Words |
+        | --- | ---: | ---: | ---: | ---: | ---: |
+        | `website` | 9 | 10 | 11 | 12 | 13 |
+        | `contact:website` | 14 | 15 | 16 | 17 | 18 |
+
+        Polygons with extracted text: **19**
+        Combined extracted words: **31**
+
+        ## Geographic distribution
+
+        ![H3 polygon density](assets/geographic_polygon_density.png)
+
+        H3 resolution 20 contains **21** occupied cells across **22** polygon centroids with at least one successfully extracted website text. The color scale is logarithmic, counts are absolute, and a Natural Earth 1:110m land backdrop provides geographic context.
+
+        ## Links
+
+        Live metrics: [Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics); it shows this frozen dataset snapshot.
+        Code and README: [GitHub repository and README](https://github.com/NoeFlandre/osm-polygon-website-tag).
+
+
+        ### Top `website` hostnames
+
+        | Hostname | Polygons |
+        | --- | ---: |
+        | `example.org` | 23 |
+
+        ### Top `contact:website` hostnames
+
+        | Hostname | Polygons |
+        | --- | ---: |
+        | `contact.example` | 24 |
+        ## Methodology and quality
+
+        Geometry is assembled with libosmium. Full main text is extracted independently for both website tags with Trafilatura and is not truncated. Word counts are Python Unicode `\w+` matches.
+
+        Text statuses are `absent`, `pending`, `success`, `empty`, `invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. A source is enriched only when every status is `success` or `absent`. Failed values retry on later resumptions; successful values are cached.
+
+        A URL is marked `unsafe_url` when its hostname, or any redirect target, does not resolve exclusively to globally routable public IP addresses. Localhost, private, reserved, multicast, and unspecified targets are blocked. Unsupported schemes and URLs containing credentials are classified as `invalid_url`; redirect limits, timeouts, oversized responses, and unsupported content types are recorded as `fetch_error`.
+
+        ## Dataset contents
+
+        - `polygons/*.parquet`: the public polygon split, one shard per source PBF.
+        - `analysis/*.parquet`: detailed overlap, provenance, hostname, duplicate, conflict, and per-source statistics.
+        - `deduplication_summary.json`: counts and tag-conflict totals from the global canonicalization pass.
+        - `manifests/`: source inventory, upload checkpoints, and completion receipt.
+
+        ## Public polygon schema
+
+        | Column | Type | Nullable | Description |
+        | --- | --- | :---: | --- |
+        | `polygon_id` | `string` | no | Deterministic source-scoped identifier of the form ``<source-stem>:<osm_type>/<osm_id>``. |
+
+        ## Provenance and license
+
+        Source filename, byte size, and nanosecond modification time are recorded before processing. The completion receipt binds finalized artifacts by relative path, byte size, and SHA-256.
+
+        The map backdrop uses Natural Earth 1:110m Admin-0 country geography, distributed in the source tree under its public-domain terms.
+
+        © OpenStreetMap contributors. OpenStreetMap data is available under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/); see the [OpenStreetMap copyright and attribution page](https://www.openstreetmap.org/copyright). Regional PBF extracts are provided by [Geofabrik](https://download.geofabrik.de/).
+
+        Website text is third-party content, separate from the OSM data, and is not covered by the ODbL. This dataset asserts no license for that text and grants no additional reuse rights: copyright and licensing conditions remain with each source website. Check the source site's terms or license before using or redistributing extracted text.
+
+        ## Citation
+
+        If you use this dataset, please cite it using the machine-readable metadata in [`CITATION.cff`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/blob/main/CITATION.cff). GitHub and the Hugging Face dataset page can then display the citation directly.
+
+        > Flandre, Noé. *OSM Polygon Website Tag Dataset*. [Hugging Face dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)
+        """
+    ).lstrip()
+
+    expected = expected.replace(
+        "Polygons with extracted text: **19**\n",
+        "Polygons with extracted text: **19**  \n",
+    )
+    schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
+    assert card_module._render_markdown(_golden_card_stats(), schema=schema) == expected
+
+
+def test_render_yaml_front_matter_has_a_stable_output_contract() -> None:
+    expected = (
+        dedent(
+            """
+        ---
+        license: odbl
+        tags:
+          - openstreetmap
+          - osm
+          - polygon
+          - website
+          - wikidata
+          - geographic-data
+        size_categories:
+          - n<1K
+        configs:
+          - config_name: default
+            data_files:
+              - split: polygons
+                path: polygons/*.parquet
+        observation_count: 2
+        public_row_count: 3
+        rejection_count: 4
+        duplicate_count: 7
+        conflicting_snapshot_count: 8
+        sources_count: 5
+        expected_sources_count: 6
+        enriched_sources_count: 0
+        dataset_status: in_progress
+        website_text_success_count: 10
+        website_total_words: 13
+        contact_website_text_success_count: 15
+        contact_website_total_words: 18
+        polygon_density_h3_resolution: 20
+        polygon_density_row_count: 22
+        occupied_h3_cell_count: 21
+        ---
+        """
+        )
+        .lstrip()
+        .rstrip("\n")
+    )
+
+    assert card_module._render_yaml_front_matter(_golden_card_stats()) == expected
+
+
+def test_build_card_preserves_collaborator_and_staging_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "card"
+    run_dir.mkdir()
+    source_names = {"monaco-latest.osm.pbf"}
+    summary = object()
+    stats = CardStats(public_row_count=3)
+    calls: list[tuple[str, object]] = []
+    writes: list[tuple[Path, str, str | None]] = []
+    mkdirs: list[tuple[Path, bool, bool]] = []
+    schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
+
+    def fake_summary(
+        path: Path,
+        *,
+        source_names: Collection[str] | None,
+        extracted_text_only: bool,
+    ) -> object:
+        calls.append(("summary", (path, source_names, extracted_text_only)))
+        return summary
+
+    def fake_stats(
+        path: Path,
+        *,
+        summary: object,
+        source_names: Collection[str] | None,
+    ) -> CardStats:
+        calls.append(("stats", (path, summary, source_names)))
+        return stats
+
+    def fake_map(
+        path: Path,
+        *,
+        summary: object,
+        output_path: Path,
+        source_names: Collection[str] | None,
+        extracted_text_only: bool,
+    ) -> None:
+        calls.append(("map", (path, summary, output_path, source_names, extracted_text_only)))
+
+    def fake_render_markdown(rendered_stats: CardStats, *, schema: pa.Schema) -> str:
+        calls.append(("markdown", (rendered_stats, schema)))
+        return "body"
+
+    def fake_public_schema(path: Path, names: Collection[str] | None) -> pa.Schema:
+        calls.append(("schema", (path, names)))
+        return schema
+
+    def fake_render_yaml(rendered_stats: CardStats) -> str:
+        calls.append(("yaml", rendered_stats))
+        return "front"
+
+    def fake_write_text(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        **_: object,
+    ) -> int:
+        writes.append((path, data, encoding))
+        return len(data)
+
+    def fake_mkdir(
+        path: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        del mode
+        mkdirs.append((path, parents, exist_ok))
+
+    promoted: list[list[tuple[Path, Path]]] = []
+
+    monkeypatch.setattr(card_module, "compute_polygon_density_summary", fake_summary)
+    monkeypatch.setattr(card_module, "compute_card_stats", fake_stats)
+    monkeypatch.setattr(card_module, "build_polygon_density_map", fake_map)
+    monkeypatch.setattr(card_module, "_render_markdown", fake_render_markdown)
+    monkeypatch.setattr(card_module, "_render_yaml_front_matter", fake_render_yaml)
+    monkeypatch.setattr(card_module, "_public_schema_for_card", fake_public_schema)
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
+    monkeypatch.setattr(card_module, "atomic_promote_bundle", promoted.append)
+
+    assert card_module.build_card(run_dir, source_names=source_names) == run_dir / "README.md"
+    assert calls[0] == ("summary", (run_dir, source_names, True))
+    assert calls[1] == ("stats", (run_dir, summary, source_names))
+    assert calls[2] == ("schema", (run_dir, source_names))
+    assert calls[3] == ("markdown", (stats, schema))
+    assert calls[4] == ("yaml", stats)
+    assert calls[5] == (
+        "map",
+        (
+            run_dir,
+            summary,
+            run_dir / ".assets" / "geographic_polygon_density.png.building",
+            source_names,
+            True,
+        ),
+    )
+    assert writes == [
+        (run_dir / ".README.md.building", "front\nbody", "utf-8"),
+        (run_dir / ".dataset.yaml.building", "front", "utf-8"),
+    ]
+    assert mkdirs == [(run_dir / ".assets", True, True)]
+    assert promoted == [
+        [
+            (
+                run_dir / ".assets" / "geographic_polygon_density.png.building",
+                run_dir / "assets" / "geographic_polygon_density.png",
+            ),
+            (run_dir / ".README.md.building", run_dir / "README.md"),
+            (run_dir / ".dataset.yaml.building", run_dir / "dataset.yaml"),
+        ]
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stats", "expected"),
+    [
+        (CardStats(snapshot_status="done"), "done"),
+        (CardStats(expected_sources_count=1, enriched_sources_count=1), "complete"),
+        (CardStats(), "in_progress"),
+    ],
+)
+def test_dataset_status_value_and_label_cover_all_states(stats: CardStats, expected: str) -> None:
+    assert card_module._dataset_status_value(stats) == expected
+    assert (
+        card_module._dataset_status_label(stats)
+        == {
+            "done": "Done",
+            "complete": "Complete",
+            "in_progress": "In progress",
+        }[expected]
+    )
+
+
+def test_enrichment_policy_covers_frozen_and_retryable_snapshots() -> None:
+    assert card_module._enrichment_policy(CardStats()) == (
+        "A source is enriched only when every status is `success` or `absent`. "
+        "Failed values retry on later resumptions; successful values are cached."
+    )
+    assert card_module._enrichment_policy(CardStats(snapshot_status="done")) == (
+        "A source is enriched only when every status is `success` or `absent`. "
+        "This snapshot is frozen: failed values remain as recorded and are not "
+        "retried. Successful values are cached."
+    )
+
+
+def test_render_hostnames_covers_empty_valid_and_invalid_rows() -> None:
+    assert (
+        card_module._render_hostnames("website", [], hostname_key="website_hostname")
+        == "### Top `website` hostnames\n\n_No hostnames observed._"
+    )
+    assert card_module._render_hostnames(
+        "website",
+        [{"website_hostname": "example.org", "row_count": 1_234}],
+        hostname_key="website_hostname",
+    ) == (
+        "### Top `website` hostnames\n\n"
+        "| Hostname | Polygons |\n| --- | ---: |\n| `example.org` | 1,234 |"
+    )
+    with pytest.raises(ValueError) as missing_hostname:
+        card_module._render_hostnames(
+            "website",
+            [{"website_hostname": None, "row_count": 1}],
+            hostname_key="website_hostname",
+        )
+    assert str(missing_hostname.value) == "invalid hostname analysis row"
+    with pytest.raises(ValueError) as invalid_count:
+        card_module._render_hostnames(
+            "website",
+            [{"website_hostname": "example.org", "row_count": "1"}],
+            hostname_key="website_hostname",
+        )
+    assert str(invalid_count.value) == "invalid hostname analysis row"
+
+
+def test_schema_rows_and_selected_public_paths_are_deterministic(tmp_path: Path) -> None:
+    schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
+    assert card_module._schema_rows(schema) == [
+        "| `polygon_id` | `string` | no | Deterministic source-scoped identifier of the form ``<source-stem>:<osm_type>/<osm_id>``. |"
+    ]
+
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    first = polygons / "a.parquet"
+    second = polygons / "b.parquet"
+    pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA), first)
+    pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA), second)
+    assert card_module._selected_public_paths(tmp_path, None) == [first, second]
+    assert card_module._selected_public_paths(tmp_path, {"b.osm.pbf"}) == [second]
+
+
+def test_schema_rows_escapes_descriptions_and_marks_nullable_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(card_module, "column_doc", lambda _name: " left   | right ")
+    schema = pa.schema([pa.field("name", pa.string(), nullable=True)])
+
+    assert card_module._schema_rows(schema) == ["| `name` | `string` | yes | left \\| right |"]
+
+
+def test_public_schema_selection_respects_source_filter_and_metadata_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    language_shard = polygons / "a.parquet"
+    legacy_shard = polygons / "b.parquet"
+    pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA_V1_4), language_shard)
+    pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA), legacy_shard)
+    assert card_module._public_schema_for_card(tmp_path, {"b.osm.pbf"}) is POLYGON_PUBLIC_SCHEMA
+
+    checks: list[bool | None] = []
+
+    class Schema:
+        def equals(self, _other: object, *, check_metadata: bool | None = None) -> bool:
+            checks.append(check_metadata)
+            return True
+
+    monkeypatch.setattr(card_module.pq, "read_schema", lambda _path: Schema())
+    assert card_module._has_v1_4_schema([language_shard])
+    assert checks == [True]
 
 
 def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> None:
