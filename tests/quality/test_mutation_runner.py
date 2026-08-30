@@ -208,6 +208,11 @@ def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> Non
     import mutmut.__main__ as mutmut_main
     from mutmut.state import state
 
+    mutmut.tests_by_mangled_function_name["stale"].add("old-test")
+    mutmut.duration_by_test["old-test"] = 1.0
+    state().function_dependencies["stale"].add("old-caller")
+    captured: dict[str, Path] = {}
+
     class FakeRunner:
         def _pytest_args_regular_run(self, tests):
             return [*tests]
@@ -215,6 +220,7 @@ def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> Non
         def execute_pytest(self, params, **kwargs):
             assert params == ["tests/test_one.py::test_one"]
             assert len(kwargs["plugins"]) == 1
+            captured["cwd"] = Path.cwd()
             mutmut.tests_by_mangled_function_name["function"].add(params[0])
             mutmut.duration_by_test[params[0]] = 0.25
             state().function_dependencies["function"].add("caller")
@@ -227,6 +233,7 @@ def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> Non
     output = tmp_path / "stats.json"
 
     assert mutation_runner._run_stats_child(output, ["tests/test_one.py::test_one"]) == 0
+    assert captured["cwd"] == (Path("mutants").resolve())
     assert json.loads(output.read_text(encoding="utf-8")) == {
         "tests_by_mangled_function_name": {"function": ["tests/test_one.py::test_one"]},
         "duration_by_test": {"tests/test_one.py::test_one": 0.25},
