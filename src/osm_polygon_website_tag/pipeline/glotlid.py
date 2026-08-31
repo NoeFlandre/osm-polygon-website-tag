@@ -6,6 +6,7 @@ import hashlib
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -16,6 +17,7 @@ MODEL_REPOSITORY = "cis-lmu/glotlid"
 MODEL_FILENAME = "model_v3.bin"
 MODEL_REVISION = "85cd671"
 _HASH_CHUNK_BYTES = 1024 * 1024
+_PROBABILITY_BOUND_TOLERANCE = 1e-5
 
 
 @dataclass(frozen=True)
@@ -73,13 +75,32 @@ def load_glotlid_detector(cache_dir: Path) -> GlotLIDDetector:
             cache_dir=str(cache_dir),
         )
     )
-    identity = ModelIdentity(
+    return load_glotlid_detector_from_path(model_path)
+
+
+def load_glotlid_detector_from_path(model_path: Path | str) -> GlotLIDDetector:
+    """Load the pinned GlotLID binary from a locally staged path."""
+    path = _require_model_file(model_path)
+    return GlotLIDDetector(fasttext.load_model(str(path)), model_identity_for_path(path))
+
+
+def model_identity_for_path(model_path: Path | str) -> ModelIdentity:
+    """Return the pinned model identity for a local binary without loading it."""
+    path = _require_model_file(model_path)
+    return ModelIdentity(
         repository=MODEL_REPOSITORY,
         filename=MODEL_FILENAME,
         revision=MODEL_REVISION,
-        sha256=_sha256_file(model_path),
+        sha256=_sha256_file(path),
     )
-    return GlotLIDDetector(fasttext.load_model(str(model_path)), identity)
+
+
+def _require_model_file(model_path: Path | str) -> Path:
+    """Require a local regular file at a model path."""
+    path = Path(model_path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return path
 
 
 def _normalize_text(text: str) -> str:
@@ -115,12 +136,23 @@ def _prediction_for_item(label_values: Any, probability_values: Any) -> Language
 
 def _validated_probability(value: Any) -> float:
     """Validate and convert one model probability."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if not _is_real_probability(value):
         raise ValueError("model returned an invalid language probability")
     converted = float(value)
-    if not math.isfinite(converted) or not 0 <= converted <= 1:
+    if not math.isfinite(converted):
         raise ValueError("model returned an invalid language probability")
-    return converted
+    if converted < -_PROBABILITY_BOUND_TOLERANCE:
+        raise ValueError("model returned an invalid language probability")
+    if converted > 1 + _PROBABILITY_BOUND_TOLERANCE:
+        raise ValueError("model returned an invalid language probability")
+    return min(1.0, max(0.0, converted))
+
+
+def _is_real_probability(value: Any) -> bool:
+    """Return whether a value is a real scalar rather than a boolean."""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, Real)
 
 
 def _one_item_sequence(value: Any) -> bool:
@@ -152,4 +184,6 @@ __all__ = [
     "LanguagePrediction",
     "ModelIdentity",
     "load_glotlid_detector",
+    "load_glotlid_detector_from_path",
+    "model_identity_for_path",
 ]

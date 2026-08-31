@@ -23,6 +23,9 @@ development, recovery, and inspection of an existing run.
 | `card-stats` | Recompute and print card statistics for a run. |
 | `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
 | `detect-languages` | Add resumable GlotLID language results to public polygon shards. |
+| `grid5000-prepare` | Stage one unfinished shard, checkpoint, and pinned model for an offline job. |
+| `grid5000-run` | Detect one staged bundle on a reserved node without network access. |
+| `grid5000-sync` | Validate and synchronize one paused or completed bundle into the canonical run. |
 | `run-all` | Discover, extract, enrich, analyze, verify, and resume a complete inventory. |
 
 All `--run-dir` values point to an existing run directory. The commands that
@@ -70,7 +73,7 @@ it after text enrichment, or run it separately on an enriched run:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run-id>'
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
 ```
 
 The standalone command loads one pinned GlotLID V3 model from the Seagate
@@ -80,6 +83,30 @@ already analyzed or card-built, rerun `analyze-results`, `build-card`,
 `verify-results`, and `finalize-run` afterward. The model is never loaded when
 there are no unfinished language shards. A frozen snapshot is rejected before
 the model cache is opened.
+
+For Grid'5000, the three bundle commands keep staging, execution, and
+synchronization explicit:
+
+```bash
+uv run --locked osm-polygon-website-tag grid5000-prepare \
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>' \
+  --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
+  --model-path '/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/<snapshot>/model_v3.bin' \
+  --commit "$(git rev-parse HEAD)"
+
+uv run --locked --offline osm-polygon-website-tag grid5000-run \
+  --bundle-dir '/path/to/staged/bundle' \
+  --time-budget-seconds 1500 --batch-rows 512
+
+uv run --locked osm-polygon-website-tag grid5000-sync \
+  --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+```
+
+`grid5000-prepare` and `grid5000-sync` reject paths outside the Seagate data
+root. `grid5000-run` accepts only a staged bundle and never calls Hugging Face
+or the website-fetching code. The shell wrappers add the OAR resource request
+and policy checks; see [Operations and resume](operations.md).
 
 `extract` also accepts `--area-workers` and `--max-in-flight-areas`. The
 enrichment phase is intentionally owned by `run-all`, because it coordinates

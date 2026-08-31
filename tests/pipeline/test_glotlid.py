@@ -60,6 +60,40 @@ def test_loader_downloads_only_the_pinned_model_into_the_requested_cache(
     )
 
 
+def test_loader_can_load_a_staged_model_without_hugging_face(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_file = tmp_path / "model_v3.bin"
+    model_file.write_bytes(b"staged model")
+    loaded_paths: list[object] = []
+
+    def fail_download(**_kwargs: object) -> str:
+        raise AssertionError("staged loading must not contact Hugging Face")
+
+    def load_model(path: object) -> FakeFastText:
+        loaded_paths.append(path)
+        return FakeFastText()
+
+    monkeypatch.setattr(glotlid, "hf_hub_download", fail_download)
+    monkeypatch.setattr(glotlid.fasttext, "load_model", load_model)
+
+    detector = glotlid.load_glotlid_detector_from_path(model_file)
+
+    assert loaded_paths == [str(model_file)]
+    assert detector.identity == glotlid.ModelIdentity(
+        "cis-lmu/glotlid",
+        "model_v3.bin",
+        "85cd671",
+        hashlib.sha256(b"staged model").hexdigest(),
+    )
+
+
+def test_staged_loader_rejects_a_missing_model(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError) as missing:
+        glotlid.load_glotlid_detector_from_path(tmp_path / "missing.bin")
+    assert missing.value.args == (tmp_path / "missing.bin",)
+
+
 def test_detector_returns_one_prediction_per_input_in_order() -> None:
     identity = glotlid.ModelIdentity("r", "f", "v", "h")
     detector = glotlid.GlotLIDDetector(FakeFastText(), identity)
@@ -138,6 +172,20 @@ def test_detector_reports_invalid_top_one_shape_precisely() -> None:
         detector.predict(["hello"])
 
 
+def test_detector_reports_invalid_language_label_precisely() -> None:
+    class EmptyLabelModel:
+        def predict(
+            self, _texts: list[str], *, k: int
+        ) -> tuple[list[list[str]], list[list[float]]]:
+            assert k == 1
+            return [[""]], [[0.9]]
+
+    detector = glotlid.GlotLIDDetector(EmptyLabelModel(), glotlid.ModelIdentity("r", "f", "v", "h"))
+
+    with pytest.raises(ValueError, match=r"^model returned an invalid language label$"):
+        detector.predict(["hello"])
+
+
 @pytest.mark.parametrize("probability", [float("nan"), -0.1, 1.1, None, "0.5", True])
 def test_detector_rejects_invalid_probabilities(probability: object) -> None:
     class InvalidProbabilityModel:
@@ -199,15 +247,58 @@ def test_probability_validation_accepts_the_closed_unit_interval(
     assert glotlid._validated_probability(value) == expected
 
 
+def test_probability_validation_accepts_fasttext_float32() -> None:
+    numpy = pytest.importorskip("numpy")
+
+    assert glotlid._validated_probability(numpy.float32(0.5)) == 0.5
+
+
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), float("-inf")],
+)
+def test_probability_validation_rejects_nonfinite_values_with_stable_message(
+    value: float,
+) -> None:
+    with pytest.raises(ValueError, match=r"^model returned an invalid language probability$"):
+        glotlid._validated_probability(value)
+
+
+@pytest.mark.parametrize("value, expected", [(1.000009, 1.0), (-0.000009, 0.0)])
+def test_probability_validation_clamps_fasttext_rounding_at_bounds(
+    value: float, expected: float
+) -> None:
+    assert glotlid._validated_probability(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (-glotlid._PROBABILITY_BOUND_TOLERANCE, 0.0),
+        (1 + glotlid._PROBABILITY_BOUND_TOLERANCE, 1.0),
+    ],
+)
+def test_probability_validation_accepts_tolerance_boundaries(value: float, expected: float) -> None:
+    assert glotlid._validated_probability(value) == expected
+
+
 @pytest.mark.parametrize("value", [True, False, None, "0.5"])
 def test_probability_validation_rejects_non_numeric_values(value: object) -> None:
     with pytest.raises(ValueError, match=r"^model returned an invalid language probability$"):
         glotlid._validated_probability(value)
 
 
-def test_probability_validation_reports_out_of_range_values() -> None:
+@pytest.mark.parametrize("value", [-0.1, 1.1])
+def test_probability_validation_rejects_out_of_range_values_with_stable_message(
+    value: float,
+) -> None:
     with pytest.raises(ValueError, match=r"^model returned an invalid language probability$"):
-        glotlid._validated_probability(1.1)
+        glotlid._validated_probability(value)
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_real_probability_check_rejects_booleans(value: bool) -> None:
+    assert glotlid._is_real_probability(value) is False
 
 
 def test_one_item_sequence_distinguishes_scalar_empty_and_single_values() -> None:

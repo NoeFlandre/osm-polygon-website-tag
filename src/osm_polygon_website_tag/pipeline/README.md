@@ -4,7 +4,7 @@ Implements bounded data-processing stages.
 
 - Modules: `extraction`, `extraction_handler`, `area_work`, `extraction_records`,
   `record_builders`, `enrich`, `checkpoint_storage`, `enrichment_checkpoint`, `glotlid`,
-  `language_detection_checkpoint`, `detect_languages`,
+  `language_detection_checkpoint`, `detect_languages`, `grid5000`,
   `public_schema_migration`, `analyze`, `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
@@ -93,6 +93,13 @@ checkpoint mechanics live in `checkpoint_storage`. A `Ctrl-C` or ordinary
 exception leaves the source shard untouched and preserves durable parts for
 the next invocation. The model is loaded once by the application layer and is
 never copied to URL or geometry workers.
+
+`grid5000` owns the portable bundle and result-receipt boundary. Preparation
+copies one unfinished shard, its validated checkpoint prefix, and the pinned
+model into a new Seagate bundle. The reserved-node runner reads only those
+files and stays offline; synchronization validates the receipt and atomically
+installs either the checkpoint prefix or the completed v1.4 shard back into
+the canonical run.
 
 ## Record builders
 

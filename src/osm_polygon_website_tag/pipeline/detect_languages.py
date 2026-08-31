@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -20,7 +23,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
     schema_matches,
 )
-from osm_polygon_website_tag.contracts.text_schema import TEXT_TERMINAL_STATUSES
+from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, TEXT_UNFINISHED_STATUSES
 from osm_polygon_website_tag.pipeline.glotlid import LanguageDetector, LanguagePrediction
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     LanguageCheckpoint,
@@ -46,6 +49,17 @@ class LanguageDetectionResult:
     changed: bool
     shard_sha256: str
     max_batch_rows: int
+    completed: bool = True
+    processed_rows: int = 0
+
+
+@dataclass(frozen=True)
+class _DetectionProgress:
+    """Progress produced while processing one bounded shard prefix."""
+
+    processed_rows: int
+    max_batch_rows: int
+    completed: bool
 
 
 @dataclass
@@ -74,49 +88,121 @@ def detect_language_shard(
     *,
     detector: LanguageDetector,
     batch_rows: int = DEFAULT_BATCH_ROWS,
+    time_budget_seconds: float | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> LanguageDetectionResult:
     """Detect languages in bounded batches and atomically promote the result."""
     _validate_batch_rows(batch_rows)
+    _validate_time_budget(time_budget_seconds)
+    clock_function = clock if clock is not None else monotonic
+    deadline = _detection_deadline(time_budget_seconds, clock_function)
     shard = Path(shard_path)
     context = _prepare_detection_context(shard, detector)
     if context is None:
-        return LanguageDetectionResult(
-            shard_path=shard,
-            row_count=pq.ParquetFile(shard).metadata.num_rows,
-            changed=False,
-            shard_sha256=hash_shard(shard),
-            max_batch_rows=0,
-        )
+        return _unchanged_detection_result(shard)
     try:
-        max_batch_rows = _process_detection_batches(
+        progress = _process_detection_batches_with_progress(
             context.parquet,
             context.source_row_count,
             context.checkpoint,
             next_part_index=context.next_part_index,
             detector=detector,
             batch_rows=batch_rows,
+            deadline=deadline,
+            clock=clock_function,
         )
+        if not progress.completed:
+            context.staged.unlink(missing_ok=True)
+            return _paused_detection_result(shard, context, progress)
         max_batch_rows = _promote_detected_shard(
             context=context,
             batch_rows=batch_rows,
-            max_batch_rows=max_batch_rows,
+            max_batch_rows=progress.max_batch_rows,
         )
         shutil.rmtree(context.checkpoint.directory)
     except BaseException:
         context.staged.unlink(missing_ok=True)
         raise
+    return _completed_detection_result(shard, context, max_batch_rows)
+
+
+def _validate_batch_rows(batch_rows: int) -> None:
+    if batch_rows < 1:
+        raise ValueError("batch_rows must be positive")
+
+
+def _validate_time_budget(time_budget_seconds: float | None) -> None:
+    if time_budget_seconds is None:
+        return
+    _validate_positive_time_value(time_budget_seconds)
+
+
+def _validate_positive_time_value(time_budget_seconds: object) -> None:
+    """Validate one positive finite numeric time budget."""
+    if isinstance(time_budget_seconds, bool):
+        raise ValueError("time_budget_seconds must be positive")
+    if not isinstance(time_budget_seconds, (int, float)):
+        raise ValueError("time_budget_seconds must be positive")
+    if not math.isfinite(time_budget_seconds):
+        raise ValueError("time_budget_seconds must be positive")
+    if time_budget_seconds <= 0:
+        raise ValueError("time_budget_seconds must be positive")
+
+
+def _detection_deadline(
+    time_budget_seconds: float | None,
+    clock: Callable[[], float],
+) -> float | None:
+    """Return a monotonic deadline for a bounded invocation."""
+    if time_budget_seconds is None:
+        return None
+    return clock() + time_budget_seconds
+
+
+def _unchanged_detection_result(shard: Path) -> LanguageDetectionResult:
+    """Build the result for a shard that already has complete languages."""
+    row_count = pq.ParquetFile(shard).metadata.num_rows
+    return LanguageDetectionResult(
+        shard_path=shard,
+        row_count=row_count,
+        changed=False,
+        shard_sha256=hash_shard(shard),
+        max_batch_rows=0,
+        processed_rows=row_count,
+    )
+
+
+def _paused_detection_result(
+    shard: Path,
+    context: _DetectionContext,
+    progress: _DetectionProgress,
+) -> LanguageDetectionResult:
+    """Build the result for a budget-exhausted shard."""
+    return LanguageDetectionResult(
+        shard_path=shard,
+        row_count=context.source_row_count,
+        changed=False,
+        shard_sha256=hash_shard(shard),
+        max_batch_rows=progress.max_batch_rows,
+        completed=False,
+        processed_rows=progress.processed_rows,
+    )
+
+
+def _completed_detection_result(
+    shard: Path,
+    context: _DetectionContext,
+    max_batch_rows: int,
+) -> LanguageDetectionResult:
+    """Build the result after atomically promoting a completed shard."""
     return LanguageDetectionResult(
         shard_path=shard,
         row_count=context.source_row_count,
         changed=True,
         shard_sha256=hash_shard(shard),
         max_batch_rows=max_batch_rows,
+        processed_rows=context.source_row_count,
     )
-
-
-def _validate_batch_rows(batch_rows: int) -> None:
-    if batch_rows < 1:
-        raise ValueError("batch_rows must be positive")
 
 
 def _prepare_detection_context(
@@ -201,15 +287,17 @@ def _validate_text_statuses(parquet: pq.ParquetFile, shard: Path) -> None:
 
 
 def _validate_status_batch(batch: pa.RecordBatch, shard: Path) -> None:
-    """Reject every non-terminal status in one bounded Arrow batch."""
+    """Reject every unknown or unfinished status in one bounded Arrow batch."""
     for column_name in _TEXT_STATUS_COLUMNS:
         _validate_status_values(batch.column(column_name).to_pylist(), shard)
 
 
 def _validate_status_values(statuses: list[object], shard: Path) -> None:
-    """Reject a status sequence containing a non-terminal value."""
-    if any(status not in TEXT_TERMINAL_STATUSES for status in statuses):
-        raise ValueError(f"{shard.name} text statuses must be terminal before language detection")
+    """Reject a status sequence containing an unknown or unfinished value."""
+    if any(
+        status not in TEXT_STATUSES or status in TEXT_UNFINISHED_STATUSES for status in statuses
+    ):
+        raise ValueError(f"{shard.name} text statuses must be resolved before language detection")
 
 
 def _batch_needs_language_detection(batch: pa.RecordBatch) -> bool:
@@ -279,7 +367,33 @@ def _process_detection_batches(
     next_part_index: int,
     detector: LanguageDetector,
     batch_rows: int,
+    deadline: float | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> int:
+    """Process batches and retain the historical maximum-batch return value."""
+    return _process_detection_batches_with_progress(
+        parquet,
+        source_row_count,
+        checkpoint,
+        next_part_index=next_part_index,
+        detector=detector,
+        batch_rows=batch_rows,
+        deadline=deadline,
+        clock=clock if clock is not None else monotonic,
+    ).max_batch_rows
+
+
+def _process_detection_batches_with_progress(
+    parquet: pq.ParquetFile,
+    source_row_count: int,
+    checkpoint: LanguageCheckpoint,
+    *,
+    next_part_index: int,
+    detector: LanguageDetector,
+    batch_rows: int,
+    deadline: float | None,
+    clock: Callable[[], float],
+) -> _DetectionProgress:
     processed_rows = checkpoint.completed_rows
     rows_to_skip = checkpoint.completed_rows
     max_batch_rows = 0
@@ -287,6 +401,8 @@ def _process_detection_batches(
         originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
         if not originals:
             continue
+        if _deadline_reached(deadline, clock):
+            return _DetectionProgress(processed_rows, max_batch_rows, completed=False)
         detected_rows = _detect_batch(originals, detector)
         write_language_checkpoint_part(
             checkpoint.directory,
@@ -299,19 +415,21 @@ def _process_detection_batches(
         max_batch_rows = max(max_batch_rows, len(detected_rows))
     if processed_rows != source_row_count:
         raise ValueError("language detection row count changed")
-    return max_batch_rows
+    return _DetectionProgress(processed_rows, max_batch_rows, completed=True)
+
+
+def _deadline_reached(deadline: float | None, clock: Callable[[], float]) -> bool:
+    """Return whether the next detector batch would exceed its budget."""
+    return deadline is not None and clock() >= deadline
 
 
 def _skip_checkpointed_rows(
     originals: list[dict[str, object]],
     rows_to_skip: int,
 ) -> tuple[list[dict[str, object]], int]:
-    if rows_to_skip == len(originals):
-        return [], 0
-    if rows_to_skip > len(originals):
-        return [], rows_to_skip - len(originals)
     if rows_to_skip:
-        return originals[rows_to_skip:], 0
+        skipped = min(rows_to_skip, len(originals))
+        return originals[skipped:], rows_to_skip - skipped
     return originals, 0
 
 

@@ -12,11 +12,13 @@ and refuses an output root that is equal to or inside it. It does not copy,
 rename, hash, or modify those PBFs.
 
 `--output-root` contains one run directory per `--run-id`. The default generated
-data root is `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data`; set
+data root is `/Volumes/Seagate M3/projects/osm-polygon-website-tag`; set
 `OSM_POLY_DATA_DIR` when a different local or mounted volume is appropriate.
 Keep this root writable and outside the source tree. The production GlotLID
-cache is `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid/`;
-language commands reject a run or model cache outside this Seagate data root.
+cache is `/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/`;
+language commands reject a run or model cache outside an approved Seagate root.
+The old `…-data` root remains accepted only to resume or inspect existing runs;
+new artifacts are written to the canonical project root.
 
 ## Resume `run-all`
 
@@ -25,7 +27,7 @@ Use the same source root, output root, run ID, and repository ID when resuming:
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
   --source-root '/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw' \
-  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs' \
+  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs' \
   --run-id 'geofabrik-website-v1'
 ```
 
@@ -57,7 +59,7 @@ Enable the stage explicitly:
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
   --source-root '/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw' \
-  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs' \
+  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs' \
   --run-id 'geofabrik-website-v1' \
   --detect-languages
 ```
@@ -66,7 +68,7 @@ Or run language detection after an existing run has reached `enriched`:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/geofabrik-website-v1'
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/geofabrik-website-v1'
 ```
 
 The stage uses the pinned [GlotLID model](https://huggingface.co/cis-lmu/glotlid)
@@ -90,6 +92,49 @@ Rebuild analysis, card, verification, and finalization afterward. A snapshot
 with `status=complete` and `snapshot_status=done` is immutable and is rejected
 before model loading. Tests use injected fakes and `tmp_path`; they never
 download GlotLID or write production data.
+
+## Run language detection on Grid'5000
+
+The repository includes wrappers in `scripts/grid5000/` for short, resumable
+jobs. They follow the Grid'5000 usage policy: the frontend is used only for
+checkout, transfer, submission, and monitoring; detection runs on one
+reserved node. Each job requests `host=1/core=2,walltime=0:30`, uses no GPU,
+and gives the detector a 1,500-second budget. The remaining five minutes are
+reserved for job cleanup and transfer.
+
+First download the pinned public model into the Seagate cache and prepare one
+new bundle. Preparation records the repository commit, source row count and
+hash, model revision and hash, and batch/budget settings. It copies exactly
+one unfinished public shard and any validated language checkpoint prefix:
+
+```bash
+hf download cis-lmu/glotlid model_v3.bin \
+  --revision 85cd671 \
+  --cache-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid'
+
+export OSM_POLY_RUN_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>'
+export OSM_POLY_MODEL_PATH='/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/<snapshot>/model_v3.bin'
+export OSM_POLY_COMMIT="$(git rev-parse HEAD)"
+scripts/grid5000/prepare_language_detection.sh
+```
+
+Copy the checkout and bundle to the selected site's frontend with `rsync`.
+Submit one job with `scripts/grid5000/submit_language_detection.sh`; it runs
+`usagepolicycheck -t` before and after `oarsub`, records the OAR job ID, and
+refuses to submit while its active marker exists. Monitor with `oarstat -u`.
+Do not run Python, model inference, compilation, or bulk processing on the
+frontend. The node runner sets `HF_HUB_OFFLINE=1`, uses only the staged model
+and shard, and never fetches website URLs or Hub weights.
+
+After completion, copy the bundle back to Seagate and run
+`scripts/grid5000/sync_language_detection.sh`. Checkpoint-only results leave
+the canonical shard byte-identical and can be resumed by preparing a fresh
+bundle. Completed results are checksum- and schema-validated before atomic
+promotion and manifest update. Retain the Seagate bundle and receipt as
+provenance; clean temporary Grid'5000 copies only after the receipt and
+checksums have been verified. Cancel an unneeded job with `oardel <job-id>` and
+clear its marker only after confirming that it is no longer running.
 
 ## Dry run versus apply
 

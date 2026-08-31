@@ -69,7 +69,7 @@ Language detection is opt-in and can be included in the same resumable run:
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
   --source-root '/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw' \
-  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs' \
+  --output-root '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs' \
   --run-id website-v1 \
   --detect-languages
 ```
@@ -78,12 +78,19 @@ For an already enriched run, use the standalone stage instead:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/website-v1'
+  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/website-v1'
 ```
 
 The pinned [GlotLID model](https://huggingface.co/cis-lmu/glotlid) is downloaded
-under `/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid/`.
+under `/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/`.
 The default `run-all` path does not load or download it.
+
+For short Grid'5000 jobs, use the policy-aware wrappers in
+`scripts/grid5000/`. They stage one shard and the pinned model on Seagate,
+request one two-core, 30-minute OAR job, run the detector offline for at most
+25 minutes, and synchronize a verified checkpoint or completed v1.4 shard
+back to Seagate. The frontend is used only for transfer, submission, and
+monitoring; see [Operations and resume](docs/operations.md#run-language-detection-on-grid5000).
 
 For a reproducible container workflow, see [Getting started](docs/setup.md#docker-workflow).
 
@@ -123,8 +130,12 @@ Useful commands:
 
 | Task | Command |
 | --- | --- |
-| Full quality suite | `just check` |
+| Full quality suite (fast) | `just check` |
+| Completion QA gauntlet | `just qa-gauntlet` |
 | Tests | `just test` |
+| Unit tests | `just unit` |
+| Acceptance tests | `just acceptance` |
+| Architecture checks | `just architecture` |
 | Lint and format | `just lint` / `just format-check` |
 | Type checking | `just typecheck` |
 | Hooks | `just pre-commit` / `just pre-push` |

@@ -16,12 +16,13 @@ under:
 Generated data defaults to:
 
 ```text
-/Volumes/Seagate M3/projects/osm-polygon-website-tag-data
+/Volumes/Seagate M3/projects/osm-polygon-website-tag
 ```
 
 Set `OSM_POLY_DATA_DIR` to override that generated-data root. The CLI's
 `--output-root` is explicit for each run and must remain outside the source
-root.
+root. The previous `…-data` root remains accepted when an existing run is
+addressed explicitly, but new output uses the canonical project root.
 
 ## Immutable source boundary
 

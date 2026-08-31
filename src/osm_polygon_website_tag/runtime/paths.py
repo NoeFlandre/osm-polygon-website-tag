@@ -1,6 +1,6 @@
 """Generated-data path resolution.
 
-Code lives on the Mac; generated run artifacts live on the Seagate data
+Code lives on the Mac; generated run artifacts live on the Seagate project
 volume. Immutable PBF sources are supplied explicitly to the CLI and are
 never represented as an output data root here.
 
@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag-data")
+DEFAULT_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag")
+LEGACY_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag-data")
 
 # Sub-directory layout under the data root. Add constants here as we grow
 # instead of inlining path joins across the codebase.
@@ -26,13 +27,11 @@ def data_root() -> Path:
 
     Order of resolution:
       1. ``OSM_POLY_DATA_DIR`` environment variable (if set and non-empty).
-      2. The dedicated Seagate generated-data directory.
+      2. The canonical Seagate project directory.
 
     The directory is created on first call so callers can treat it as always-present.
     """
-    configured = os.environ.get("OSM_POLY_DATA_DIR", "").strip()
-    root = Path(configured).expanduser() if configured else DEFAULT_DATA_ROOT
-
+    root = _configured_data_root()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -60,12 +59,10 @@ def exports_dir() -> Path:
 
 def glotlid_model_cache_dir() -> Path:
     """Return the generated-data directory reserved for the GlotLID model cache."""
-    configured = os.environ.get("OSM_POLY_DATA_DIR", "").strip()
-    root = Path(configured).expanduser() if configured else DEFAULT_DATA_ROOT
-    normalized_root = root.resolve()
-    if not normalized_root.is_relative_to(DEFAULT_DATA_ROOT.resolve()):
+    normalized_root = _configured_data_root().resolve()
+    if not _is_under_seagate_root(normalized_root):
         raise ValueError(
-            f"GlotLID model cache must be under the Seagate data root: {DEFAULT_DATA_ROOT}"
+            f"GlotLID model cache must be under a Seagate data root: {DEFAULT_DATA_ROOT}"
         )
     path = normalized_root / "models" / "glotlid"
     path.mkdir(parents=True, exist_ok=True)
@@ -73,8 +70,25 @@ def glotlid_model_cache_dir() -> Path:
 
 
 def assert_seagate_path(path: Path | str, *, label: str) -> Path:
-    """Require a production path to be inside the dedicated Seagate data root."""
+    """Require a production path to be inside an approved Seagate data root.
+
+    The canonical root receives new output. The legacy root remains approved so
+    callers can resume or inspect runs created before the storage-root change.
+    """
     normalized = Path(path).expanduser().resolve()
-    if not normalized.is_relative_to(DEFAULT_DATA_ROOT):
-        raise ValueError(f"{label} must be under the Seagate data root: {DEFAULT_DATA_ROOT}")
+    if not _is_under_seagate_root(normalized):
+        raise ValueError(f"{label} must be under a Seagate data root: {DEFAULT_DATA_ROOT}")
     return normalized
+
+
+def _configured_data_root() -> Path:
+    configured = os.environ.get("OSM_POLY_DATA_DIR", "").strip()
+    return Path(configured).expanduser() if configured else DEFAULT_DATA_ROOT
+
+
+def _is_under_seagate_root(path: Path) -> bool:
+    return any(path.is_relative_to(root) for root in _seagate_roots())
+
+
+def _seagate_roots() -> tuple[Path, ...]:
+    return tuple(root.resolve() for root in (DEFAULT_DATA_ROOT, LEGACY_DATA_ROOT))

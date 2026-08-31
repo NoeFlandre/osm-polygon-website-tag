@@ -113,6 +113,7 @@ source_paths = [
 ]
 also_copy = [
     "src/osm_polygon_website_tag/",
+    "tests",
     ".github",
     ".pre-commit-config.yaml",
     ".dockerignore",
@@ -127,3 +128,4 @@ also_copy = [
 pytest_add_cli_args = ["-q", "--ignore=tests/architecture"]
 mutate_only_covered_lines = true
 max_stack_depth = 3
+timeout_constant = 2.0

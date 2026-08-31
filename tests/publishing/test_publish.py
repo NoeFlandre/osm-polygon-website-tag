@@ -231,6 +231,35 @@ def test_upload_folder_targets_repository_root(tmp_path: Path, monkeypatch) -> N
     assert captured["allow_patterns"] == []
 
 
+def test_upload_folder_converts_receipt_paths_to_repository_patterns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_upload_folder(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(upload_large_folder=fake_upload_folder),
+    )
+    readme = tmp_path / "README.md"
+    shard = tmp_path / "polygons" / "a.parquet"
+
+    _upload_folder(
+        tmp_path,
+        repo_id="owner/dataset",
+        repo_kind="dataset",
+        artifact_paths=[readme, shard],
+    )
+
+    assert captured["repo_id"] == "owner/dataset"
+    assert captured["repo_type"] == "dataset"
+    assert captured["folder_path"] == str(tmp_path)
+    assert captured["allow_patterns"] == ["README.md", "polygons/a.parquet"]
+
+
 def test_create_repo_remote_requests_public_dataset(monkeypatch) -> None:
     from osm_polygon_website_tag.publishing.publish import _create_repo_remote
 
@@ -247,4 +276,9 @@ def test_create_repo_remote_requests_public_dataset(monkeypatch) -> None:
 
     _create_repo_remote(repo_id="owner/dataset", repo_kind="dataset", exist_ok=True)
 
-    assert captured["private"] is False
+    assert captured == {
+        "repo_id": "owner/dataset",
+        "repo_type": "dataset",
+        "exist_ok": True,
+        "private": False,
+    }

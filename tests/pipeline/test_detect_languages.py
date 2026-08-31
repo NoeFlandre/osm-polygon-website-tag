@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
@@ -51,6 +52,17 @@ class InterruptingDetector(RecordingDetector):
         if len(self.calls) == self.interrupt_on_call:
             raise KeyboardInterrupt
         return result
+
+
+class SequenceClock:
+    def __init__(self, values: list[float]) -> None:
+        self.values = values
+        self.index = 0
+
+    def __call__(self) -> float:
+        value = self.values[min(self.index, len(self.values) - 1)]
+        self.index += 1
+        return value
 
 
 def _v1_3_text_row(
@@ -141,6 +153,7 @@ def test_detect_language_shard_populates_website_and_contact_independently(
     assert result.changed is True
     assert result.shard_path == shard
     assert result.row_count == 2
+    assert result.processed_rows == 2
     assert result.max_batch_rows == 1
     assert result.shard_sha256 == hash_shard(shard)
 
@@ -191,6 +204,30 @@ def test_interrupt_leaves_original_and_resumes_only_after_durable_prefix(tmp_pat
     assert not checkpoint_dir.exists()
 
 
+def test_time_budget_pauses_between_batches(tmp_path: Path) -> None:
+    shard = _write_v1_3_shard(
+        tmp_path,
+        [_v1_3_text_row(index, website_text=f"English {index}") for index in range(2)],
+    )
+    clock = SequenceClock([0.0, 0.5, 1.1])
+
+    result = detection.detect_language_shard(
+        shard,
+        detector=RecordingDetector(),
+        batch_rows=1,
+        time_budget_seconds=1.0,
+        clock=clock,
+    )
+
+    assert result.completed is False
+    assert result.changed is False
+    assert result.shard_path == shard
+    assert result.processed_rows == 1
+    assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
+    checkpoint_dir = shard.parent / ".source.parquet.language.parts"
+    assert len(list(checkpoint_dir.glob("part-*.parquet"))) == 1
+
+
 def test_completed_v1_4_shard_is_not_reprocessed(tmp_path: Path) -> None:
     shard = _write_v1_3_shard(tmp_path, [_v1_3_text_row(0, website_text="English text")])
     detection.detect_language_shard(shard, detector=RecordingDetector())
@@ -202,6 +239,7 @@ def test_completed_v1_4_shard_is_not_reprocessed(tmp_path: Path) -> None:
     assert detector.calls == []
     assert result.shard_path == shard
     assert result.row_count == 1
+    assert result.processed_rows == 1
     assert result.max_batch_rows == 0
     assert result.shard_sha256 == hash_shard(shard)
 
@@ -222,10 +260,27 @@ def test_shard_needs_language_detection_detects_an_incomplete_pair(tmp_path: Pat
 
 
 def test_invalid_batch_size_is_rejected_before_opening_the_shard(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="batch_rows must be positive"):
+    with pytest.raises(ValueError, match=r"^batch_rows must be positive$"):
         detection.detect_language_shard(
             tmp_path / "missing.parquet", detector=RecordingDetector(), batch_rows=0
         )
+
+
+def test_invalid_time_budget_is_rejected_before_opening_the_shard(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^time_budget_seconds must be positive$"):
+        detection.detect_language_shard(
+            tmp_path / "missing.parquet",
+            detector=RecordingDetector(),
+            time_budget_seconds=0,
+        )
+
+
+@pytest.mark.parametrize("value", [True, None, float("nan"), float("inf"), 0, -1])
+def test_language_budget_validation_rejects_non_positive_or_non_finite_values(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match=r"^time_budget_seconds must be positive$"):
+        detection._validate_positive_time_value(value)
 
 
 def test_language_detection_rejects_an_unsupported_schema(tmp_path: Path) -> None:
@@ -254,14 +309,18 @@ def test_language_detection_rejects_missing_text_status_columns(tmp_path: Path) 
         )
 
 
-def test_status_validation_accepts_terminal_values_and_rejects_unknown_values(
+def test_status_validation_accepts_resolved_values_and_rejects_unfinished_values(
     tmp_path: Path,
 ) -> None:
     shard = tmp_path / "shard.parquet"
-    detection._validate_status_values(["absent", "success"], shard)
+    detection._validate_status_values(
+        ["absent", "success", "empty", "invalid_url", "unsafe_url", "fetch_error", "extract_error"],
+        shard,
+    )
 
-    with pytest.raises(ValueError, match="must be terminal"):
-        detection._validate_status_values(["pending"], shard)
+    for status in ("pending", None, "unknown"):
+        with pytest.raises(ValueError, match="must be resolved"):
+            detection._validate_status_values([status], shard)
 
 
 def test_status_batch_validates_both_website_columns(tmp_path: Path) -> None:
@@ -297,6 +356,27 @@ def test_status_validation_requests_only_status_columns_in_bounded_batches() -> 
     )
 
     assert calls == [{"columns": list(detection._TEXT_STATUS_COLUMNS), "batch_size": 8_192}]
+
+
+def test_status_validation_checks_values_from_each_batch(tmp_path: Path) -> None:
+    class InvalidStatusParquet:
+        schema_arrow = pa.schema(
+            [pa.field(name, pa.string()) for name in detection._TEXT_STATUS_COLUMNS]
+        )
+
+        def iter_batches(self, **_kwargs: object):  # type: ignore[no-untyped-def]
+            yield pa.RecordBatch.from_arrays(
+                [pa.array(["pending"]), pa.array(["absent"])],
+                list(detection._TEXT_STATUS_COLUMNS),
+            )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^shard\.parquet text statuses must be resolved before language detection$",
+    ):
+        detection._validate_text_statuses(
+            cast(pq.ParquetFile, InvalidStatusParquet()), tmp_path / "shard.parquet"
+        )
 
 
 def test_shard_needs_detection_projects_language_columns_in_bounded_batches(
@@ -435,10 +515,54 @@ def test_language_readiness_inspection_detects_missing_success_pair() -> None:
         detection._inspect_language_readiness(
             cast(pq.ParquetFile, IncompleteShard()),
             Path("shard.parquet"),
-            validate_statuses=False,
+            validate_statuses=True,
         )
         is True
     )
+
+
+def test_legacy_readiness_passes_shard_to_status_validation(tmp_path: Path) -> None:
+    row = _v1_3_text_row(0, website_text="English text")
+    row["website_text_status"] = "pending"
+    shard = _write_v1_3_shard(tmp_path, [row])
+
+    with pytest.raises(
+        ValueError,
+        match=r"^source\.parquet text statuses must be resolved before language detection$",
+    ):
+        detection._inspect_language_readiness(
+            pq.ParquetFile(shard),
+            shard,
+            validate_statuses=True,
+        )
+
+
+def test_prepare_detection_context_forwards_shard_and_status_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shard = _write_v1_3_shard(tmp_path, [_v1_3_text_row(0, website_text="English text")])
+    detector = RecordingDetector()
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        detection,
+        "_inspect_language_readiness",
+        lambda parquet, actual_shard, *, validate_statuses: (
+            observed.update(
+                parquet=parquet,
+                shard=actual_shard,
+                validate_statuses=validate_statuses,
+            )
+            or True
+        ),
+    )
+
+    context = detection._prepare_detection_context(shard, detector)
+
+    assert context is not None
+    assert observed["shard"] == shard
+    assert observed["validate_statuses"] is True
+    shutil.rmtree(context.checkpoint.directory)
 
 
 def test_language_readiness_inspection_validates_later_batches() -> None:
@@ -466,7 +590,7 @@ def test_language_readiness_inspection_validates_later_batches() -> None:
                     ],
                 )
 
-    with pytest.raises(ValueError, match="must be terminal"):
+    with pytest.raises(ValueError, match="must be resolved"):
         detection._inspect_language_readiness(
             cast(pq.ParquetFile, InvalidLaterBatchShard()),
             Path("shard.parquet"),
@@ -592,6 +716,89 @@ def test_skip_checkpointed_rows_preserves_remaining_skip_count() -> None:
     assert detection._skip_checkpointed_rows(originals, 0) == (originals, 0)
 
 
+def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+    parquet = cast(pq.ParquetFile, object())
+    checkpoint = LanguageCheckpoint(Path("parts"), (), 0)
+    detector = RecordingDetector()
+
+    def clock() -> float:
+        return 12.0
+
+    def fake_process(
+        actual_parquet: pq.ParquetFile,
+        source_row_count: int,
+        actual_checkpoint: LanguageCheckpoint,
+        *,
+        next_part_index: int,
+        detector: object,
+        batch_rows: int,
+        deadline: float | None,
+        clock: object,
+    ) -> detection._DetectionProgress:
+        observed.update(
+            parquet=actual_parquet,
+            source_row_count=source_row_count,
+            checkpoint=actual_checkpoint,
+            next_part_index=next_part_index,
+            detector=detector,
+            batch_rows=batch_rows,
+            deadline=deadline,
+            clock=clock,
+        )
+        return detection._DetectionProgress(0, 7, completed=True)
+
+    monkeypatch.setattr(detection, "_process_detection_batches_with_progress", fake_process)
+
+    assert (
+        detection._process_detection_batches(
+            parquet,
+            3,
+            checkpoint,
+            next_part_index=4,
+            detector=detector,
+            batch_rows=2,
+            deadline=10.0,
+            clock=clock,
+        )
+        == 7
+    )
+    assert observed == {
+        "parquet": parquet,
+        "source_row_count": 3,
+        "checkpoint": checkpoint,
+        "next_part_index": 4,
+        "detector": detector,
+        "batch_rows": 2,
+        "deadline": 10.0,
+        "clock": clock,
+    }
+
+
+def test_completed_process_progress_retains_rows_and_completion() -> None:
+    class EmptyParquet:
+        def iter_batches(self, *, batch_size: int) -> list[object]:
+            assert batch_size == 2
+            return []
+
+    progress = detection._process_detection_batches_with_progress(
+        cast(pq.ParquetFile, EmptyParquet()),
+        2,
+        LanguageCheckpoint(Path("parts"), (), 2),
+        next_part_index=0,
+        detector=RecordingDetector(),
+        batch_rows=2,
+        deadline=None,
+        clock=lambda: 0.0,
+    )
+
+    assert progress == detection._DetectionProgress(2, 0, completed=True)
+
+
+def test_deadline_is_reached_at_the_exact_boundary() -> None:
+    assert detection._deadline_reached(1.0, lambda: 1.0) is True
+
+
 def test_empty_detection_batch_reports_no_change() -> None:
     class EmptyParquet:
         def iter_batches(self, *, batch_size: int) -> list[object]:
@@ -611,6 +818,35 @@ def test_empty_detection_batch_reports_no_change() -> None:
         )
         == 0
     )
+
+
+def test_process_batches_reports_a_paused_progress_state_at_the_deadline() -> None:
+    class OneBatchParquet:
+        def iter_batches(self, *, batch_size: int) -> list[object]:
+            assert batch_size == 1
+            return [
+                pa.RecordBatch.from_pylist(
+                    [
+                        {
+                            "website_text_status": "absent",
+                            "contact_website_text_status": "absent",
+                        }
+                    ]
+                )
+            ]
+
+    progress = detection._process_detection_batches_with_progress(
+        cast(pq.ParquetFile, OneBatchParquet()),
+        1,
+        LanguageCheckpoint(Path("parts"), (), 0),
+        next_part_index=0,
+        detector=RecordingDetector(),
+        batch_rows=1,
+        deadline=1.0,
+        clock=lambda: 1.0,
+    )
+
+    assert progress.completed is False
 
 
 def test_prepare_row_resets_language_fields_for_absent_text() -> None:
@@ -778,16 +1014,24 @@ def test_valid_probability_rejects_invalid_values(value: object) -> None:
     assert detection._valid_probability(value) is False
 
 
-def test_nonterminal_text_status_fails_before_promotion(tmp_path: Path) -> None:
+def test_resolved_non_success_text_status_is_preserved_without_language(tmp_path: Path) -> None:
     shard = _write_v1_3_shard(tmp_path, [_v1_3_text_row(0, website_text="English text")])
     row = pq.read_table(shard).to_pylist()[0]
     row["website_text_status"] = "fetch_error"
+    row["website_text"] = None
+    row["website_word_count"] = None
     pq.write_table(pa.Table.from_pylist([row], schema=POLYGON_PUBLIC_SCHEMA), shard)
 
-    with pytest.raises(ValueError, match="terminal"):
-        detection.detect_language_shard(shard, detector=RecordingDetector())
+    detector = RecordingDetector()
+    result = detection.detect_language_shard(shard, detector=detector)
 
-    assert pq.read_schema(shard).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
+    assert result.completed is True
+    assert result.changed is True
+    assert detector.calls == []
+    output = pq.read_table(shard)
+    assert output.schema.equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
+    assert output["website_language"].to_pylist() == [None]
+    assert output["website_language_probability"].to_pylist() == [None]
 
 
 @pytest.mark.parametrize(

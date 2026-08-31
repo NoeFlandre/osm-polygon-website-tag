@@ -38,7 +38,9 @@ The implementation has one focused model adapter and one focused shard
 pipeline:
 
 1. `detect-languages --run-dir <run>` discovers public polygon shards and
-   validates that their text statuses are terminal before starting a shard.
+   validates that their text statuses are known and resolved before starting a
+   shard. Successful text is detected; resolved non-success outcomes remain
+   null because there is no text to detect.
 2. `run-all --detect-languages` invokes the same stage after text extraction
    and before incremental publication.
 3. A single process loads one GlotLID model and predicts a bounded list of
@@ -63,8 +65,8 @@ filename, and revision are recorded in the language checkpoint metadata.
 Production model-cache and run paths are on the mounted Seagate volume:
 
 ```text
-/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid/
-/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run-id>/
+/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/
+/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>/
 ```
 
 The CLI supplies the Seagate model-cache default explicitly to

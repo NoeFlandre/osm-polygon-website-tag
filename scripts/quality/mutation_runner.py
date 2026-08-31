@@ -32,9 +32,22 @@ _MPLCONFIGDIR: Final = (
 )
 
 
+def _project_root() -> Path:
+    """Return the original checkout root from either source copy."""
+    source_root = Path(__file__).resolve().parents[2]
+    if source_root.name == MUTANTS_ROOT.name:
+        return source_root.parent
+    return source_root
+
+
+def _mutants_directory() -> Path:
+    """Return the absolute mutmut checkout independent of the current directory."""
+    return _project_root() / MUTANTS_ROOT.name
+
+
 def _stats_output_path() -> Path:
     """Return the temporary path used to transfer stats from the child."""
-    return (MUTANTS_ROOT / _STATS_FILE).resolve()
+    return _mutants_directory() / _STATS_FILE
 
 
 def _with_isolated_caches(environment: dict[str, str]) -> dict[str, str]:
@@ -47,8 +60,9 @@ def _with_isolated_caches(environment: dict[str, str]) -> dict[str, str]:
 def _mutant_environment() -> dict[str, str]:
     """Return an environment that imports the isolated mutated source first."""
     environment = os.environ.copy()
-    source_path = str((MUTANTS_ROOT / "src").resolve())
-    root_path = str(MUTANTS_ROOT.resolve())
+    mutants_root = _mutants_directory()
+    source_path = str(mutants_root / "src")
+    root_path = str(mutants_root)
     environment["PYTHONPATH"] = os.pathsep.join((source_path, root_path))
     return _with_isolated_caches(environment)
 
@@ -56,9 +70,10 @@ def _mutant_environment() -> dict[str, str]:
 def _coverage_environment(project_root: Path) -> dict[str, str]:
     """Return an environment that collects coverage from the original source."""
     environment = os.environ.copy()
+    mutants_root = _mutants_directory()
     forbidden = {
-        str((MUTANTS_ROOT / "src").resolve()),
-        str(MUTANTS_ROOT.resolve()),
+        str(mutants_root / "src"),
+        str(mutants_root),
     }
     existing = [
         path
@@ -84,8 +99,8 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
     """Collect source coverage in a fresh process and return mutmut's mapping."""
     import coverage
 
-    project_root = Path.cwd().resolve()
-    data_path = (MUTANTS_ROOT / _COVERAGE_FILE).resolve()
+    project_root = _project_root()
+    data_path = _mutants_directory() / _COVERAGE_FILE
     command = [
         sys.executable,
         "-m",
@@ -100,7 +115,7 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
     try:
         result = subprocess.run(  # noqa: S603
             command,
-            cwd=project_root,
+            cwd=Path.cwd(),
             env=_coverage_environment(project_root),
             check=False,
             capture_output=True,
@@ -116,7 +131,7 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
         covered: dict[str, set[int]] = {}
         for source_file in source_files:
             original = (project_root / source_file).resolve()
-            target = (MUTANTS_ROOT / source_file).resolve()
+            target = _mutants_directory() / source_file
             covered[str(target)] = set(data.lines(str(original)) or [])
         return covered
     finally:
@@ -133,7 +148,7 @@ def _run_tests(runner: Any, *, mutant_name: str | None, tests: Iterable[str]) ->
     del mutant_name
     result = subprocess.run(  # noqa: S603
         _pytest_command(runner, tests),
-        cwd=MUTANTS_ROOT,
+        cwd=_mutants_directory(),
         env=_mutant_environment(),
         check=False,
         stdout=subprocess.DEVNULL,
@@ -218,7 +233,7 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
             mutmut.duration_by_test[item.nodeid] += call.duration
 
     runner = mutmut_main.PytestRunner()
-    with change_cwd("mutants"):
+    with change_cwd(_mutants_directory()):
         exit_code = runner.execute_pytest(
             runner._pytest_args_regular_run(tests), plugins=[StatsCollector()]
         )

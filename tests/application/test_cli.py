@@ -6,7 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import get_type_hints
+from typing import cast, get_type_hints
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -155,8 +155,75 @@ def test_typer_help_lists_every_public_command() -> None:
         "publish-trackio",
         "run-all",
         "detect-languages",
+        "grid5000-prepare",
+        "grid5000-run",
+        "grid5000-sync",
     ):
         assert command in result.stdout
+
+
+def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    bundle = SimpleNamespace(payload=lambda: {"source_shard": "source.parquet"})
+    result = SimpleNamespace(payload=lambda: {"completed": True, "shard_sha256": "a" * 64})
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(
+        cli,
+        "prepare_language_bundle",
+        lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or bundle,
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_language_bundle",
+        lambda *args, **kwargs: calls.append(("run", args, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        cli,
+        "sync_language_bundle",
+        lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
+    )
+
+    assert (
+        main(
+            [
+                "grid5000-prepare",
+                "--run-dir",
+                str(tmp_path / "run"),
+                "--bundle-dir",
+                str(tmp_path / "bundle"),
+                "--model-path",
+                str(tmp_path / "model.bin"),
+                "--commit",
+                "abc123",
+            ]
+        )
+        == 0
+    )
+    assert main(["grid5000-run", "--bundle-dir", str(tmp_path / "bundle")]) == 0
+    assert (
+        main(
+            [
+                "grid5000-sync",
+                "--bundle-dir",
+                str(tmp_path / "bundle"),
+                "--run-dir",
+                str(tmp_path / "run"),
+            ]
+        )
+        == 0
+    )
+
+    assert [name for name, _args, _kwargs in calls] == ["prepare", "run", "sync"]
+    assert calls[0][1] == (tmp_path / "run", tmp_path / "bundle")
+    assert calls[0][2]["model_path"] == tmp_path / "model.bin"
+    assert calls[1][1] == (tmp_path / "bundle",)
+    assert calls[2][1] == (tmp_path / "bundle", tmp_path / "run")
+    assert "source.parquet" in capsys.readouterr().out
 
 
 def test_cli_finalize_snapshot_reports_result(
@@ -386,6 +453,69 @@ def test_cli_detect_languages_loads_one_model_and_updates_run(
     assert load_run(run_dir).sources["monaco-latest.osm.pbf"]["public_shard_sha256"] == hash_shard(
         run_dir / "polygons" / "monaco-latest.parquet"
     )
+
+
+def test_cli_detect_languages_forwards_batch_and_time_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    transition_status(state, "extracting")
+    transition_status(state, "extracted")
+    transition_status(state, "enriching")
+    transition_status(state, "enriched")
+    detector = SimpleNamespace(identity=ModelIdentity("repo", "file", "revision", "a" * 64))
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "glotlid_model_cache_dir", lambda: tmp_path / "model-cache")
+    monkeypatch.setattr(cli, "load_glotlid_detector", lambda _path: detector)
+    monkeypatch.setattr(cli, "shard_needs_language_detection", lambda _path: True)
+
+    def detect(_path, *, detector, batch_rows, time_budget_seconds):
+        observed.update(
+            detector=detector,
+            batch_rows=batch_rows,
+            time_budget_seconds=time_budget_seconds,
+        )
+        return SimpleNamespace(
+            row_count=1,
+            shard_sha256="b" * 64,
+            changed=False,
+            completed=False,
+            processed_rows=1,
+        )
+
+    monkeypatch.setattr(cli, "detect_language_shard", detect)
+
+    assert (
+        main(
+            [
+                "detect-languages",
+                "--run-dir",
+                str(run_dir),
+                "--batch-rows",
+                "1",
+                "--time-budget-seconds",
+                "2",
+            ]
+        )
+        == 0
+    )
+
+    assert observed["detector"] is detector
+    assert observed["batch_rows"] == 1
+    time_budget = cast(float, observed["time_budget_seconds"])
+    assert 0 < time_budget <= 2.0
+
+
+@pytest.mark.parametrize("value", [True, None, float("nan"), float("inf"), 0, -1])
+def test_cli_language_budget_validation_rejects_non_positive_or_non_finite_values(
+    value: object,
+) -> None:
+    with pytest.raises(ValueError, match="time_budget_seconds must be positive"):
+        cli._validate_positive_language_time(value)
 
 
 def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(

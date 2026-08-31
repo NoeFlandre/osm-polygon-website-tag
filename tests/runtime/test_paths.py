@@ -13,6 +13,26 @@ from osm_polygon_website_tag.runtime.paths import (
 )
 
 
+def test_default_data_root_is_the_project_storage_root() -> None:
+    assert Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == paths.DEFAULT_DATA_ROOT
+
+
+def test_assert_seagate_path_accepts_the_project_storage_root() -> None:
+    path = paths.DEFAULT_DATA_ROOT / "runs" / "example"
+
+    assert assert_seagate_path(path, label="run") == path
+
+
+def test_assert_seagate_path_keeps_legacy_root_for_existing_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_root = tmp_path / "legacy-data"
+    monkeypatch.setattr(paths, "LEGACY_DATA_ROOT", legacy_root)
+    path = legacy_root / "runs" / "existing"
+
+    assert assert_seagate_path(path, label="run") == path
+
+
 def test_glotlid_model_cache_is_under_the_default_data_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

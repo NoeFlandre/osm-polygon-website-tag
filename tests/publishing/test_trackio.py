@@ -28,10 +28,16 @@ def test_build_snapshot_projects_card_stats_and_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_dir = _complete_run(tmp_path)
+    verification_roots: list[Path] = []
+
+    def verify(root: Path) -> SimpleNamespace:
+        verification_roots.append(root)
+        return SimpleNamespace(ok=True, errors=[])
+
     monkeypatch.setattr(
         trackio_module,
         "verify_results",
-        lambda _root: SimpleNamespace(ok=True, errors=[]),
+        verify,
     )
     monkeypatch.setattr(
         trackio_module,
@@ -59,6 +65,7 @@ def test_build_snapshot_projects_card_stats_and_receipt(
 
     snapshot = trackio_module.build_trackio_snapshot(run_dir)
 
+    assert verification_roots == [run_dir]
     assert snapshot.run_name == "dataset-" + "a" * 16
     assert snapshot.manifest_digest == "a" * 64
     assert snapshot.config == {

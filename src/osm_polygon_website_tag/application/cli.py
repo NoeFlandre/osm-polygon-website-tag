@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
+from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Annotated, Any
 
 import typer
@@ -13,6 +16,7 @@ from osm_polygon_website_tag.application.progress import ProgressReporter
 from osm_polygon_website_tag.application.workflow import run_all
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.detect_languages import (
+    DEFAULT_BATCH_ROWS,
     detect_language_shard,
     shard_needs_language_detection,
 )
@@ -23,6 +27,13 @@ from osm_polygon_website_tag.pipeline.extraction import (
     extract_pbf,
 )
 from osm_polygon_website_tag.pipeline.glotlid import load_glotlid_detector
+from osm_polygon_website_tag.pipeline.grid5000 import (
+    DEFAULT_GRID_BATCH_ROWS,
+    DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    prepare_language_bundle,
+    run_language_bundle,
+    sync_language_bundle,
+)
 from osm_polygon_website_tag.publishing.publish import (
     build_publish_plan,
     create_repo,
@@ -75,6 +86,15 @@ _error_console = Console(stderr=True, markup=False, highlight=False)
 
 RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
 RepoId = Annotated[str, typer.Option("--repo-id", help="Hugging Face dataset repository.")]
+
+
+@dataclass(frozen=True)
+class _LanguageRunProgress:
+    """Aggregate progress for one bounded language command."""
+
+    changed_shards: int
+    processed_rows: int
+    completed: bool
 
 
 def _json(payload: Any, *, sort_keys: bool = False) -> None:
@@ -397,34 +417,174 @@ def run_all_command(
 
 
 @app.command("detect-languages")
-def detect_languages_command(run_dir: RunDir) -> int:
+def detect_languages_command(
+    run_dir: RunDir,
+    batch_rows: Annotated[
+        int,
+        typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
+    ] = DEFAULT_BATCH_ROWS,
+    time_budget_seconds: Annotated[
+        float | None,
+        typer.Option("--time-budget-seconds", help="Stop cleanly after this detection budget."),
+    ] = None,
+) -> int:
     """Detect GlotLID languages for every completed text shard."""
+    _validate_language_options(batch_rows, time_budget_seconds)
     normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
     state = load_run(normalized_run_dir)
     paths = sorted((normalized_run_dir / "polygons").glob("*.parquet"))
     _validate_language_shard_membership(state, paths)
     _reject_frozen_language_run(state)
-    needed = [path for path in paths if shard_needs_language_detection(path)]
+    needed = _needed_language_shards(paths)
     if not needed:
-        _json({"changed_shards": 0, "run_dir": str(normalized_run_dir)}, sort_keys=True)
+        _json(
+            _language_command_payload(
+                normalized_run_dir,
+                changed_shards=0,
+                completed=True,
+                processed_rows=0,
+                bounded=time_budget_seconds is not None,
+            ),
+            sort_keys=True,
+        )
         return 0
     _prepare_language_command_state(state)
     model_cache = glotlid_model_cache_dir()
     assert_seagate_path(model_cache, label="GlotLID model cache")
     detector = load_glotlid_detector(model_cache)
-    changed = 0
-    for shard in needed:
-        result = detect_language_shard(shard, detector=detector)
-        update_public_shard_metadata(
-            state,
-            filename=f"{shard.stem}.osm.pbf",
-            row_count=result.row_count,
-            shard_sha256=result.shard_sha256,
-        )
-        changed += int(result.changed)
-    _finish_language_command_state(state)
-    _json({"changed_shards": changed, "run_dir": str(normalized_run_dir)}, sort_keys=True)
+    progress = _run_language_shards(
+        needed,
+        detector=detector,
+        state=state,
+        batch_rows=batch_rows,
+        time_budget_seconds=time_budget_seconds,
+    )
+    if progress.completed:
+        _finish_language_command_state(state)
+    _json(
+        _language_command_payload(
+            normalized_run_dir,
+            changed_shards=progress.changed_shards,
+            completed=progress.completed,
+            processed_rows=progress.processed_rows,
+            bounded=time_budget_seconds is not None,
+        ),
+        sort_keys=True,
+    )
     return 0
+
+
+def _validate_language_options(batch_rows: int, time_budget_seconds: float | None) -> None:
+    """Reject invalid bounded-run settings before reading run state."""
+    if batch_rows < 1:
+        raise ValueError("batch_rows must be positive")
+    if time_budget_seconds is None:
+        return
+    _validate_positive_language_time(time_budget_seconds)
+
+
+def _validate_positive_language_time(time_budget_seconds: object) -> None:
+    """Validate one positive finite CLI language budget."""
+    if isinstance(time_budget_seconds, bool):
+        raise ValueError("time_budget_seconds must be positive")
+    if not isinstance(time_budget_seconds, (int, float)):
+        raise ValueError("time_budget_seconds must be positive")
+    if not math.isfinite(time_budget_seconds):
+        raise ValueError("time_budget_seconds must be positive")
+    if time_budget_seconds <= 0:
+        raise ValueError("time_budget_seconds must be positive")
+
+
+def _needed_language_shards(paths: list[Path]) -> list[Path]:
+    """Return unfinished language shards in deterministic order."""
+    return [path for path in paths if shard_needs_language_detection(path)]
+
+
+def _run_language_shards(
+    shards: list[Path],
+    *,
+    detector: Any,
+    state: RunState,
+    batch_rows: int,
+    time_budget_seconds: float | None,
+) -> _LanguageRunProgress:
+    """Process sorted language shards until complete or the shared budget expires."""
+    changed_shards = 0
+    processed_rows = 0
+    started_at = _language_start_time(time_budget_seconds)
+    for shard in shards:
+        remaining_budget = _remaining_language_budget(
+            time_budget_seconds,
+            started_at=started_at,
+        )
+        if _language_budget_exhausted(remaining_budget):
+            return _LanguageRunProgress(changed_shards, processed_rows, completed=False)
+        result = detect_language_shard(
+            shard,
+            detector=detector,
+            batch_rows=batch_rows,
+            time_budget_seconds=remaining_budget,
+        )
+        processed_rows += result.processed_rows
+        if not result.completed:
+            return _LanguageRunProgress(changed_shards, processed_rows, completed=False)
+        _record_completed_language_shard(state, shard, result)
+        changed_shards += int(result.changed)
+    return _LanguageRunProgress(changed_shards, processed_rows, completed=True)
+
+
+def _record_completed_language_shard(
+    state: RunState,
+    shard: Path,
+    result: Any,
+) -> None:
+    """Persist one completed language shard's ordinary manifest metadata."""
+    update_public_shard_metadata(
+        state,
+        filename=f"{shard.stem}.osm.pbf",
+        row_count=result.row_count,
+        shard_sha256=result.shard_sha256,
+    )
+
+
+def _remaining_language_budget(
+    time_budget_seconds: float | None,
+    *,
+    started_at: float | None,
+) -> float | None:
+    """Return the remaining shared budget for the next shard."""
+    if time_budget_seconds is None or started_at is None:
+        return None
+    return time_budget_seconds - (monotonic() - started_at)
+
+
+def _language_start_time(time_budget_seconds: float | None) -> float | None:
+    """Start one shared monotonic clock only for bounded commands."""
+    if time_budget_seconds is None:
+        return None
+    return monotonic()
+
+
+def _language_budget_exhausted(remaining_budget: float | None) -> bool:
+    """Return whether no time remains for another shard."""
+    if remaining_budget is None:
+        return False
+    return remaining_budget <= 0
+
+
+def _language_command_payload(
+    run_dir: Path,
+    *,
+    changed_shards: int,
+    completed: bool,
+    processed_rows: int,
+    bounded: bool,
+) -> dict[str, object]:
+    """Build the legacy or bounded language-command JSON response."""
+    payload: dict[str, object] = {"changed_shards": changed_shards, "run_dir": str(run_dir)}
+    if bounded:
+        payload.update({"completed": completed, "processed_rows": processed_rows})
+    return payload
 
 
 def _validate_language_shard_membership(state: RunState, paths: list[Path]) -> None:
@@ -458,6 +618,86 @@ def _finish_language_command_state(state: RunState) -> None:
     """Complete the language stage after every shard was promoted."""
     if state.metadata.get("status") == STATUS_ENRICHING:
         transition_status(state, STATUS_ENRICHED)
+
+
+@app.command("grid5000-prepare")
+def grid5000_prepare_command(
+    run_dir: RunDir,
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    model_path: Annotated[Path, typer.Option("--model-path")],
+    commit: Annotated[str, typer.Option("--commit")],
+    shard: Annotated[
+        str | None,
+        typer.Option("--shard", help="Optional source shard basename to stage."),
+    ] = None,
+    time_budget_seconds: Annotated[
+        int,
+        typer.Option("--time-budget-seconds", help="Detection budget within the 30-minute job."),
+    ] = DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    batch_rows: Annotated[
+        int,
+        typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
+    ] = DEFAULT_GRID_BATCH_ROWS,
+) -> int:
+    """Prepare one Seagate-backed, offline Grid'5000 language bundle."""
+    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_model_path = assert_seagate_path(model_path, label="GlotLID model path")
+    bundle = prepare_language_bundle(
+        normalized_run_dir,
+        normalized_bundle_dir,
+        model_path=normalized_model_path,
+        commit=commit,
+        time_budget_seconds=time_budget_seconds,
+        batch_rows=batch_rows,
+        shard_name=shard,
+    )
+    _json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
+    return 0
+
+
+@app.command("grid5000-run")
+def grid5000_run_command(
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    time_budget_seconds: Annotated[
+        float | None,
+        typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
+    ] = None,
+    batch_rows: Annotated[
+        int | None,
+        typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
+    ] = None,
+    job_id: Annotated[str | None, typer.Option("--job-id")] = None,
+) -> int:
+    """Run one staged bundle on a reserved node without network access."""
+    result = run_language_bundle(
+        bundle_dir,
+        time_budget_seconds=time_budget_seconds,
+        batch_rows=batch_rows,
+        job_id=job_id,
+    )
+    _json(result.payload(), sort_keys=True)
+    return 0
+
+
+@app.command("grid5000-sync")
+def grid5000_sync_command(
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    run_dir: RunDir,
+) -> int:
+    """Synchronize one Grid'5000 result into the Seagate canonical run."""
+    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    result = sync_language_bundle(normalized_bundle_dir, normalized_run_dir)
+    _json(
+        {
+            "bundle_dir": str(normalized_bundle_dir),
+            "run_dir": str(normalized_run_dir),
+            **result.payload(),
+        },
+        sort_keys=True,
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

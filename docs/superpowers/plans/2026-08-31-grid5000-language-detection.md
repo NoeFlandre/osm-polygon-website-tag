@@ -239,13 +239,13 @@ Expected: shell syntax and documentation/architecture tests pass.
 
 **Files:**
 - No generated model/cache files are committed.
-- Model/cache artifacts remain under /Volumes/Seagate M3/projects/osm-polygon-website-tag-data/.
+- Model/cache artifacts remain under /Volumes/Seagate M3/projects/osm-polygon-website-tag/.
 
 - [ ] **Step 1: Download and verify the pinned model**
 
     hf download cis-lmu/glotlid model_v3.bin \
       --revision 85cd671 \
-      --cache-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid'
+      --cache-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid'
 
 Use the model identity helper against the downloaded binary and record only
 its path, revision, and SHA-256 in the Seagate bundle manifest.

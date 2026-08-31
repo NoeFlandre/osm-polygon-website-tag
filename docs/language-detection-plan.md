@@ -504,7 +504,7 @@ def test_interrupt_leaves_original_and_resumes_only_after_durable_prefix(tmp_pat
     assert pq.read_table(shard)["website_language"].to_pylist() == ["eng_Latn", "eng_Latn"]
 ```
 
-Also test that a changed source hash, nonterminal text status, malformed successful text, a missing model prediction, or a non-finite probability raises before promotion and leaves the original shard valid.
+Also test that a changed source hash, unfinished or unknown text status, malformed successful text, a missing model prediction, or a non-finite probability raises before promotion and leaves the original shard valid. Resolved non-success statuses such as `fetch_error` are preserved with null language fields.
 
 - [ ] **Step 2: Run the detection tests and verify RED.**
 
@@ -541,9 +541,9 @@ def detect_language_shard(
 
 The pipeline must:
 
-1. Accept only exact v1.3 or v1.4 public schemas, require both text-status columns, and require every text status to be `success` or `absent` before processing a shard.
+1. Accept only exact v1.3 or v1.4 public schemas, require both text-status columns, and require every text status to be a known resolved outcome before processing a shard. `pending`, null, and unknown values are rejected; resolved non-success outcomes are preserved with null language fields.
 2. Read `batch_rows` source rows at a time and skip exactly the durable checkpoint prefix.
-3. Set `schema_version` to `"v1.4"`; for `success`, send website and contact text values as separate ordered detector calls; for `absent`, keep both language fields null.
+3. Set `schema_version` to `"v1.4"`; for `success`, send website and contact text values as separate ordered detector calls; for every resolved non-success status, keep both language fields null.
 4. Preserve already-complete v1.4 language pairs, detect only missing pairs, and reject incomplete pairs rather than silently keeping one half.
 5. Flush one v1.4 checkpoint part after every completed input batch, assemble in source order, validate exact v1.4 schema and row count, then atomically replace the shard.
 6. Remove the language checkpoint directory only after successful promotion. On `KeyboardInterrupt` or ordinary exceptions, remove only known staged files and retain the original shard plus durable parts.
@@ -817,7 +817,7 @@ def _finish_language_command_state(state: RunState) -> None:
         transition_status(state, STATUS_ENRICHED)
 ```
 
-The actual implementation must validate source-manifest membership and text terminal statuses before each shard, reject a frozen snapshot, and keep the model cache under the Seagate root. `run-all --detect-languages` must pass the same stage and model resource, not a second implementation.
+The actual implementation must validate source-manifest membership and known resolved text statuses before each shard, reject a frozen snapshot, and keep the model cache under the Seagate root. `run-all --detect-languages` must pass the same stage and model resource, not a second implementation.
 
 - [ ] **Step 4: Run CLI tests and documentation build checks.**
 
@@ -833,11 +833,11 @@ Expected: CLI tests pass and the documentation build is clean.
 Document that production files are kept at:
 
 ```text
-/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/glotlid/
-/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run-id>/
+/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/
+/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>/
 ```
 
-Document the pinned [GlotLID model card](https://huggingface.co/cis-lmu/glotlid), the four nullable v1.4 fields, exact raw labels such as `eng_Latn`, top-1 probabilities, `Ctrl-C`/rerun behavior, terminal text precondition, and the need to run the existing analysis/card/finalization commands after a standalone language stage changes an already analyzed run. State explicitly that the default `run-all` path remains v1.3 and does not load the model.
+Document the pinned [GlotLID model card](https://huggingface.co/cis-lmu/glotlid), the four nullable v1.4 fields, exact raw labels such as `eng_Latn`, top-1 probabilities, `Ctrl-C`/rerun behavior, the known-resolved text precondition, and the need to run the existing analysis/card/finalization commands after a standalone language stage changes an already analyzed run. State explicitly that the default `run-all` path remains v1.3 and does not load the model.
 
 - [ ] **Step 6: Commit the CLI and documentation.**
 

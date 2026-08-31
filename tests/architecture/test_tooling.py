@@ -46,13 +46,21 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     for recipe in (
         "sync:",
         "lock:",
+        "baseline:",
         "lint:",
+        "ruff:",
         "format:",
         "format-check:",
+        "unit:",
+        "acceptance:",
+        "architecture:",
         "typecheck:",
         "test:",
         "build:",
         "check:",
+        "smoke:",
+        "diff-review:",
+        "qa-gauntlet:",
         "pre-commit:",
         "pre-push:",
         "install-hooks:",
@@ -68,17 +76,46 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "uv lock --check",
         "uv run --locked ruff check .",
         "uv run --locked ruff format --check .",
+        "uv run --locked pytest tests --ignore=tests/acceptance --ignore=tests/architecture",
+        "uv run --locked pytest tests/acceptance",
+        "uv run --locked pytest tests/architecture",
         "uv run --locked ty check src tests scripts",
         "uv run --locked pytest",
         "uv build",
+        "git diff --check",
         "docker build --pull",
         "docker run --rm --read-only",
     ):
         assert command in justfile
+    gauntlet = re.search(r"^qa-gauntlet:\s*(.*)$", justfile, re.MULTILINE)
+    assert gauntlet is not None
+    assert gauntlet.group(1).strip() == (
+        "baseline ruff typecheck unit acceptance architecture crap mutation smoke diff-review"
+    )
     assert "--max-crap 6" in justfile
     assert "--path src/osm_polygon_website_tag" in justfile
     assert "--path src/osm_polygon_website_tag/application/workflow.py" not in justfile
     assert "python scripts/quality/mutation_runner.py" in justfile
+
+
+def test_justfile_keeps_uv_cache_on_seagate_when_available() -> None:
+    justfile = (ROOT / "justfile").read_text()
+
+    assert "set export" in justfile
+    assert 'UV_CACHE_DIR := if env("UV_CACHE_DIR", "") != "" {' in justfile
+    assert 'path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag")' in justfile
+    assert '"/Volumes/Seagate M3/projects/osm-polygon-website-tag/uv-cache"' in justfile
+
+
+def test_justfile_keeps_build_artifacts_on_seagate_when_available() -> None:
+    justfile = (ROOT / "justfile").read_text()
+
+    assert (
+        'BUILD_OUTPUT_DIR := if path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag")'
+        in justfile
+    )
+    assert '"/Volumes/Seagate M3/projects/osm-polygon-website-tag/build"' in justfile
+    assert 'uv build --out-dir "{{ BUILD_OUTPUT_DIR }}"' in justfile
 
 
 def test_mutation_gate_covers_the_whole_package_and_behavior_suite() -> None:
@@ -118,7 +155,7 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
 
     assert "contents: read" in workflow
     assert "uv sync --locked" in workflow
-    assert "run: just check" in workflow
+    assert "run: just qa-gauntlet" in workflow
     assert "HF_TOKEN" not in workflow
     uses = re.findall(r"uses: [^@\s]+@([^\s]+)", workflow)
     assert len(uses) == 3

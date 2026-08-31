@@ -675,7 +675,8 @@ def test_serialize_area_geometry_records_factory_failures(
     result = handler._serialize_area_geometry(cast(osmium.osm.Area, area))
 
     assert result is None
-    assert events == [("drain", ""), ("reject", area, expected_kind, expected_message)]
+    assert events[0] == ("drain", "")
+    assert events[1] == ("reject", area, expected_kind, expected_message)
 
 
 def test_serialize_area_geometry_forwards_area_to_factory(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -26,8 +27,8 @@ def test_mutant_environment_prioritizes_isolated_source(monkeypatch) -> None:
 
     assert environment["MUTMUT_TEST_SENTINEL"] == "kept"
     assert environment["PYTHONPATH"].split(":")[:2] == [
-        str((Path("mutants") / "src").resolve()),
-        str(Path("mutants").resolve()),
+        str(mutation_runner._mutants_directory() / "src"),
+        str(mutation_runner._mutants_directory()),
     ]
     assert environment["MPLCONFIGDIR"] == str(mutation_runner._MPLCONFIGDIR)
 
@@ -51,7 +52,7 @@ def test_coverage_environment_prefers_original_checkout(monkeypatch, tmp_path: P
 
     paths = environment["PYTHONPATH"].split(os.pathsep)
     assert paths[:2] == [str((tmp_path / "src").resolve()), str(tmp_path.resolve())]
-    assert str((Path("mutants") / "src").resolve()) not in paths
+    assert str(mutation_runner._mutants_directory() / "src") not in paths
     assert environment["MUTANT_UNDER_TEST"] == ""
     assert environment["MPLCONFIGDIR"] == str(mutation_runner._MPLCONFIGDIR)
 
@@ -70,7 +71,7 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
             return None
 
         def get_data(self):
-            original = str((Path.cwd() / source_file).resolve())
+            original = str((mutation_runner._project_root() / source_file).resolve())
             return SimpleNamespace(lines=lambda path: {11} if path == original else {99})
 
     def fake_run(command, **kwargs):
@@ -83,7 +84,7 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
 
     result = mutation_runner._run_coverage(_runner(), [source_file])
 
-    mutant_path = str((Path("mutants") / source_file).resolve())
+    mutant_path = str(mutation_runner._mutants_directory() / source_file)
     assert result == {mutant_path: {11}}
     assert captured["cwd"] == Path.cwd().resolve()
     environment = cast(dict[str, str], captured["env"])
@@ -111,7 +112,7 @@ def test_run_tests_returns_child_exit_code(monkeypatch) -> None:
     )
 
     assert result == 7
-    assert captured["cwd"] == mutation_runner.MUTANTS_ROOT
+    assert captured["cwd"] == mutation_runner._mutants_directory()
     assert captured["check"] is False
     assert captured["stdout"] is mutation_runner.subprocess.DEVNULL
     assert captured["stderr"] is mutation_runner.subprocess.DEVNULL
@@ -233,9 +234,23 @@ def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> Non
     output = tmp_path / "stats.json"
 
     assert mutation_runner._run_stats_child(output, ["tests/test_one.py::test_one"]) == 0
-    assert captured["cwd"] == (Path("mutants").resolve())
+    assert captured["cwd"] == mutation_runner._mutants_directory()
     assert json.loads(output.read_text(encoding="utf-8")) == {
         "tests_by_mangled_function_name": {"function": ["tests/test_one.py::test_one"]},
         "duration_by_test": {"tests/test_one.py::test_one": 0.25},
         "function_dependencies": {"function": ["caller"]},
     }
+
+
+def test_mutation_workspace_copies_current_tests() -> None:
+    """Mutation runs must execute the repository's current tests, not stale copies."""
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "tests" in project["tool"]["mutmut"]["also_copy"]
+
+
+def test_mutation_root_remains_stable_when_running_inside_mutants(monkeypatch) -> None:
+    project_root = mutation_runner._project_root()
+    monkeypatch.chdir(project_root / "mutants")
+
+    assert mutation_runner._mutants_directory() == project_root / "mutants"
