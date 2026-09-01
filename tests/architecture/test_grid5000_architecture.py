@@ -36,6 +36,7 @@ def test_submit_script_checks_policy_around_submission() -> None:
     assert "GRID5000_REPO_DIR" in script
     assert "scripts/grid5000/run_language_detection.sh" in script
     assert "OAR job id" in script
+    assert "OAR_JOB_ID" in script
     assert "sed -nE" in script
     assert "active" in script.lower()
 
@@ -45,6 +46,8 @@ def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
     assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
+    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
+    assert "if ! command -v module" not in script
     assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
     assert "--offline" in script
     assert "HF_HUB_OFFLINE=1" in script
@@ -56,6 +59,8 @@ def test_runtime_bootstrap_is_locked_and_runtime_only() -> None:
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
     assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
+    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
+    assert "if ! command -v module" not in script
     assert "uv sync --locked --no-dev --python 3.12" in script
     assert "--offline" not in script
 

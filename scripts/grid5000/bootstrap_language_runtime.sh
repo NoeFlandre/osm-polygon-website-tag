@@ -4,7 +4,7 @@
 #OAR -E OAR_%jobid%.err
 set -euo pipefail
 
-if ! command -v module >/dev/null 2>&1 && [[ -f /etc/profile.d/modules.sh ]]; then
+if [[ -f /etc/profile.d/modules.sh ]]; then
   # shellcheck source=/dev/null
   source /etc/profile.d/modules.sh
 fi
