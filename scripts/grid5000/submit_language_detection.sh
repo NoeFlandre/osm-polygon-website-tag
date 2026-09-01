@@ -2,7 +2,12 @@
 set -euo pipefail
 
 job_dir="${GRID5000_JOB_DIR:?set GRID5000_JOB_DIR to the staged job directory}"
-job_script="${GRID5000_JOB_SCRIPT:-$job_dir/run_language_detection.sh}"
+repo_dir="${GRID5000_REPO_DIR:-$job_dir/checkout}"
+default_job_script="$job_dir/run_language_detection.sh"
+if [[ ! -f "$default_job_script" ]]; then
+  default_job_script="$repo_dir/scripts/grid5000/run_language_detection.sh"
+fi
+job_script="${GRID5000_JOB_SCRIPT:-$default_job_script}"
 queue="${GRID5000_QUEUE:-default}"
 cores="${GRID5000_CORES:-2}"
 gpus="${GRID5000_GPUS:-1}"

@@ -122,7 +122,13 @@ scripts/grid5000/prepare_language_detection.sh
 ```
 
 Copy the checkout and bundle to the selected site's frontend with `rsync`.
-Submit one job with `scripts/grid5000/submit_language_detection.sh`; it runs
+Before the first detection job, bootstrap the locked Linux runtime once by
+pointing the same policy-aware submit wrapper at
+`scripts/grid5000/bootstrap_language_runtime.sh`. Wait for that job to finish
+and clear its active marker only after confirming its terminal state. The
+bootstrap installs runtime dependencies without the development group; all
+subsequent detection jobs use that environment offline. Then submit one job
+with `scripts/grid5000/submit_language_detection.sh`; it runs
 `usagepolicycheck -t` before and after `oarsub`, records the OAR job ID, and
 refuses to submit while its active marker exists. Set `GRID5000_GPUS=1` per
 job; submit distinct bundles one at a time or in a small staged wave, never

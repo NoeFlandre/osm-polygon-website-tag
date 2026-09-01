@@ -46,6 +46,23 @@ scripts/grid5000/submit_language_detection.sh
 oarstat -u
 ```
 
+Before the first language job on a site, bootstrap the locked Linux runtime
+once. It uses the same one-GPU, policy-aware submission boundary and stores
+the environment/cache under the temporary Grid'5000 job directory:
+
+```bash
+export GRID5000_JOB_SCRIPT="$GRID5000_REPO_DIR/scripts/grid5000/bootstrap_language_runtime.sh"
+scripts/grid5000/submit_language_detection.sh
+```
+
+After that job reaches a terminal state, clear its active marker and restore
+the default job script before submitting a detection bundle:
+
+```bash
+rm "$GRID5000_JOB_DIR/job.active"
+unset GRID5000_JOB_SCRIPT
+```
+
 The submit wrapper runs `usagepolicycheck -t` immediately before and after
 `oarsub`, records the job ID in `job.active`, and refuses a second submission
 while that marker exists. Inspect the job with `oarstat`; cancel only the
