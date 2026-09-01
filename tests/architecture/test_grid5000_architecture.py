@@ -40,7 +40,7 @@ def test_submit_script_checks_policy_around_submission() -> None:
 def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
     script = (SCRIPT_ROOT / "run_language_detection.sh").read_text()
 
-    assert "#OAR -l host=1/gpu=1/core=2,walltime=0:30" in script
+    assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
     assert "module load python/3.12.12 uv/0.10.12" in script
     assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
     assert "--offline" in script
@@ -51,7 +51,7 @@ def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
 def test_runtime_bootstrap_is_locked_and_runtime_only() -> None:
     script = (SCRIPT_ROOT / "bootstrap_language_runtime.sh").read_text()
 
-    assert "#OAR -l host=1/gpu=1/core=2,walltime=0:30" in script
+    assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
     assert "module load python/3.12.12 uv/0.10.12" in script
     assert "uv sync --locked --no-dev --python 3.12" in script
     assert "--offline" not in script

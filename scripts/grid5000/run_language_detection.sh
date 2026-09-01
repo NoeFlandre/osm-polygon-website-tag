@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#OAR -l host=1/gpu=1/core=2,walltime=0:30
+#OAR -l host=1/gpu=1,walltime=0:30
 #OAR -O OAR_%jobid%.out
 #OAR -E OAR_%jobid%.err
 set -euo pipefail

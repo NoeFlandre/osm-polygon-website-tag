@@ -2,7 +2,7 @@
 
 These wrappers keep the Grid'5000 frontend lightweight and run GlotLID only
 on a reserved node. They stage one shard at a time, use a 30-minute OAR job
-with one GPU and two CPU cores, and give detection 25 minutes so the job can
+with one GPU and give detection 25 minutes so the job can
 stop with a durable checkpoint. The model itself is CPU-bound, so the GPU is a
 resource-isolation and parallel-job requirement rather than an inference
 acceleration claim.

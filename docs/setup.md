@@ -167,8 +167,8 @@ Use `scripts/grid5000/` only after the local locked environment and pinned
 model are ready. The workflow keeps the run, model cache, bundle, and receipts
 on Seagate. It transfers one shard and its checkpoint prefix to Grid'5000,
 then runs `grid5000-run` on one reserved GPU node with no network access. The
-OAR wrapper requests one GPU and two CPU cores for 30 minutes and enforces a
-25-minute detection budget. The staged bundle is intentionally tiny and
+OAR wrapper requests one GPU for 30 minutes and enforces a 25-minute detection
+budget. The staged bundle is intentionally tiny and
 resumable; several distinct GPU jobs can process successive bundles.
 
 Read [Operations and resume](operations.md#run-language-detection-on-grid5000)

@@ -9,7 +9,6 @@ if [[ ! -f "$default_job_script" ]]; then
 fi
 job_script="${GRID5000_JOB_SCRIPT:-$default_job_script}"
 queue="${GRID5000_QUEUE:-default}"
-cores="${GRID5000_CORES:-2}"
 gpus="${GRID5000_GPUS:-1}"
 active_marker="${GRID5000_ACTIVE_MARKER:-$job_dir/job.active}"
 policy_log_dir="${GRID5000_POLICY_LOG_DIR:-$job_dir/logs}"
@@ -34,7 +33,7 @@ fi
 before_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 usagepolicycheck -t > "$policy_log_dir/usagepolicy-before-$before_stamp.txt"
 
-submission="$(oarsub -q "$queue" -l "host=1/gpu=$gpus/core=$cores,walltime=0:30" -S "$job_script")"
+submission="$(oarsub -q "$queue" -l "host=1/gpu=$gpus,walltime=0:30" -S "$job_script")"
 if [[ ! "$submission" =~ ([0-9]+) ]]; then
   printf 'Could not identify the OAR job ID from submission output.\n%s\n' "$submission" >&2
   exit 1

@@ -98,7 +98,7 @@ download GlotLID or write production data.
 The repository includes wrappers in `scripts/grid5000/` for short, resumable
 jobs. They follow the Grid'5000 usage policy: the frontend is used only for
 checkout, transfer, submission, and monitoring; detection runs on one
-reserved GPU node. Each job requests `host=1/gpu=1/core=2,walltime=0:30` and
+reserved GPU node. Each job requests `host=1/gpu=1,walltime=0:30` and
 gives the detector a 1,500-second budget. The remaining five minutes are
 reserved for job cleanup and transfer. GlotLID's pinned FastText model is
 CPU-bound; the GPU reservation provides the requested isolated workers and
