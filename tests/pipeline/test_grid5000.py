@@ -110,6 +110,21 @@ def test_prepare_bundle_records_source_and_model_identity(tmp_path: Path) -> Non
     ).read_bytes()
 
 
+def test_prepare_bundle_reuses_model_storage_on_the_same_filesystem(tmp_path: Path) -> None:
+    run_dir = _write_enriched_run(tmp_path)
+    model = tmp_path / "model_v3.bin"
+    model.write_bytes(b"model")
+
+    grid5000.prepare_language_bundle(
+        run_dir,
+        tmp_path / "bundle",
+        model_path=model,
+        commit="abc123",
+    )
+
+    assert (tmp_path / "bundle" / "model_v3.bin").samefile(model)
+
+
 def test_run_bundle_uses_only_the_staged_model_and_writes_a_receipt(
     tmp_path: Path, monkeypatch
 ) -> None:

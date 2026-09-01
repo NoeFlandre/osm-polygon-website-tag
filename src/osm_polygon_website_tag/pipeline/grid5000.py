@@ -162,7 +162,7 @@ def prepare_language_bundle(
     _create_bundle_directory(target)
     try:
         shutil.copy2(source, target / bundle.source_shard)
-        shutil.copy2(model_path, target / model.filename)
+        _stage_model(model_path, target / model.filename)
         _copy_checkpoint(source, target, bundle)
         atomic_write_json(target / BUNDLE_MANIFEST_NAME, bundle.payload())
         _prepare_run_state(state)
@@ -170,6 +170,14 @@ def prepare_language_bundle(
         shutil.rmtree(target)
         raise
     return bundle
+
+
+def _stage_model(model_path: Path | str, target: Path) -> None:
+    """Reuse the immutable model inode when the bundle shares its filesystem."""
+    try:
+        target.hardlink_to(model_path)
+    except OSError:
+        shutil.copy2(model_path, target)
 
 
 def run_language_bundle(
