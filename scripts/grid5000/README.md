@@ -65,7 +65,8 @@ unset GRID5000_JOB_SCRIPT
 
 The submit wrapper runs `usagepolicycheck -t` immediately before and after
 `oarsub`, records the job ID in `job.active`, and refuses a second submission
-while that marker exists. Inspect the job with `oarstat`; cancel only the
+while that marker exists. It defaults to the Nancy GPU queue `abaca`; set
+`GRID5000_QUEUE` for another site's queue. Inspect the job with `oarstat`; cancel only the
 confirmed job with `oardel <job-id>` if necessary.
 
 After the job finishes, copy the bundle back to the Seagate bundle directory,

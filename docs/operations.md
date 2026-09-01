@@ -130,9 +130,11 @@ bootstrap installs runtime dependencies without the development group; all
 subsequent detection jobs use that environment offline. Then submit one job
 with `scripts/grid5000/submit_language_detection.sh`; it runs
 `usagepolicycheck -t` before and after `oarsub`, records the OAR job ID, and
-refuses to submit while its active marker exists. Set `GRID5000_GPUS=1` per
-job; submit distinct bundles one at a time or in a small staged wave, never
-duplicate or speculative jobs. Monitor with `oarstat -u`.
+refuses to submit while its active marker exists. The wrapper defaults to the
+Nancy GPU queue `abaca`; override it with `GRID5000_QUEUE` when using another
+site. Set `GRID5000_GPUS=1` per job; submit distinct bundles one at a time or
+in a small staged wave, never duplicate or speculative jobs. Monitor with
+`oarstat -u`.
 Do not run Python, model inference, compilation, or bulk processing on the
 frontend. The node runner sets `HF_HUB_OFFLINE=1`, uses only the staged model
 and shard, and never fetches website URLs or Hub weights.

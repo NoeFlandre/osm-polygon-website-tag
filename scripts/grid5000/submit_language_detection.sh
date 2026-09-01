@@ -8,7 +8,7 @@ if [[ ! -f "$default_job_script" ]]; then
   default_job_script="$repo_dir/scripts/grid5000/run_language_detection.sh"
 fi
 job_script="${GRID5000_JOB_SCRIPT:-$default_job_script}"
-queue="${GRID5000_QUEUE:-default}"
+queue="${GRID5000_QUEUE:-abaca}"
 gpus="${GRID5000_GPUS:-1}"
 active_marker="${GRID5000_ACTIVE_MARKER:-$job_dir/job.active}"
 policy_log_dir="${GRID5000_POLICY_LOG_DIR:-$job_dir/logs}"

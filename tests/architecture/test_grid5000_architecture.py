@@ -32,6 +32,7 @@ def test_submit_script_checks_policy_around_submission() -> None:
     assert "walltime=0:30" in script
     assert "host=1/gpu=" in script
     assert "GRID5000_GPUS:-1" in script
+    assert "GRID5000_QUEUE:-abaca" in script
     assert "GRID5000_REPO_DIR" in script
     assert "scripts/grid5000/run_language_detection.sh" in script
     assert "active" in script.lower()
