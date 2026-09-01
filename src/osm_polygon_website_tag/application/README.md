@@ -19,9 +19,11 @@ separate from workflow side effects.
     progress without leaking terminal concerns into the pipeline.
   - `cli`: exposes the typed Typer application, uses Rich for human-facing
     stderr, and delegates to application entry points.
+  - `grid5000_runner`: provides the dependency-light, offline entry point for
+    one staged language-detection bundle on a reserved compute node.
 - Dependencies: any lower project package; no lower package may import `application`.
 - Entry points: `inventory.discover_sources`, `workflow.run_all`, the
-  compatibility import `workflow.discover_sources`, Typer `app`, and CLI
-  compatibility function `main`.
+  compatibility import `workflow.discover_sources`, Typer `app`, CLI
+  compatibility function `main`, and `grid5000_runner.main`.
 - Excludes: reusable domain rules, storage primitives, stage implementations,
   and inventory writes.

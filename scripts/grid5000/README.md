@@ -55,8 +55,9 @@ export GRID5000_JOB_SCRIPT="$GRID5000_REPO_DIR/scripts/grid5000/bootstrap_langua
 scripts/grid5000/submit_language_detection.sh
 ```
 
-The bootstrap and offline runner load the pinned `expat/2.7.1` module required
-by the installed `osmium` native extension.
+The bootstrap and offline runner load the pinned `expat/2.7.1` module for
+runtime compatibility. The offline runner itself uses a dependency-light
+module entry point and does not import the extraction-only `osmium` extension.
 
 After that job reaches a terminal state, clear its active marker and restore
 the default job script before submitting a detection bundle:
@@ -86,3 +87,8 @@ checkpoint and submit the next short job. A completed result atomically
 installs the v1.4 shard and updates the ordinary run manifest. Keep Grid'5000
 copies only until checksums, the result receipt, and synchronization have been
 verified; remove only confirmed project-owned temporary files.
+
+The reserved-node runner processes at most 256 rows per detector batch by
+default. Every completed batch is checkpointed; a paused job is copied back and
+synchronized before the next bundle is prepared, so the sequence can continue
+with one small unit at a time.

@@ -96,7 +96,7 @@ uv run --locked osm-polygon-website-tag grid5000-prepare \
 
 uv run --locked --offline osm-polygon-website-tag grid5000-run \
   --bundle-dir '/path/to/staged/bundle' \
-  --time-budget-seconds 1500 --batch-rows 512
+  --time-budget-seconds 1500 --batch-rows 256
 
 uv run --locked osm-polygon-website-tag grid5000-sync \
   --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
@@ -105,8 +105,11 @@ uv run --locked osm-polygon-website-tag grid5000-sync \
 
 `grid5000-prepare` and `grid5000-sync` reject paths outside the Seagate data
 root. `grid5000-run` accepts only a staged bundle and never calls Hugging Face
-or the website-fetching code. The shell wrappers add the OAR resource request
-and policy checks; see [Operations and resume](operations.md).
+or the website-fetching code. The reserved-node shell wrapper invokes a
+dependency-light module entry point so it does not import extraction-only
+native libraries. It defaults to 256-row checkpoint batches. The shell
+wrappers add the OAR resource request and policy checks; see [Operations and
+resume](operations.md).
 
 `extract` also accepts `--area-workers` and `--max-in-flight-areas`. The
 enrichment phase is intentionally owned by `run-all`, because it coordinates

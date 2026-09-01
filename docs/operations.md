@@ -135,8 +135,10 @@ Nancy GPU queue `abaca`; override it with `GRID5000_QUEUE` when using another
 site. Set `GRID5000_GPUS=1` per job; submit distinct bundles one at a time or
 in a small staged wave, never duplicate or speculative jobs. Monitor with
 `oarstat -u`.
-The runner loads the site-provided `expat/2.7.1` module so the locked
-`osmium` wheel can resolve its native dependency on compute nodes.
+The runner uses a dependency-light Python module entry point and 256-row
+checkpoint batches by default. It does not import the extraction-only
+`osmium` extension on compute nodes. The site-provided `expat/2.7.1` module
+remains loaded for compatibility with the locked runtime.
 Do not run Python, model inference, compilation, or bulk processing on the
 frontend. The node runner sets `HF_HUB_OFFLINE=1`, uses only the staged model
 and shard, and never fetches website URLs or Hub weights.

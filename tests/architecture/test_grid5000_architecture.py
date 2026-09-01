@@ -49,9 +49,12 @@ def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
     assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
     assert "if ! command -v module" not in script
     assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
+    assert "GRID5000_BATCH_ROWS:-256" in script
     assert "--offline" in script
     assert "HF_HUB_OFFLINE=1" in script
     assert "UV_NO_DEV=1" in script
+    assert "python -m osm_polygon_website_tag.application.grid5000_runner" in script
+    assert "osm-polygon-website-tag" not in script
 
 
 def test_runtime_bootstrap_is_locked_and_runtime_only() -> None:
