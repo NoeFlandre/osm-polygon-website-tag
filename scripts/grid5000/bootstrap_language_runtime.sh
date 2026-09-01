@@ -8,7 +8,7 @@ if ! command -v module >/dev/null 2>&1 && [[ -f /etc/profile.d/modules.sh ]]; th
   # shellcheck source=/dev/null
   source /etc/profile.d/modules.sh
 fi
-module load python/3.12.12 uv/0.10.12
+module load python/3.12.12 uv/0.10.12 expat/2.7.1
 
 job_dir="${GRID5000_JOB_DIR:-$PWD}"
 repo_dir="${GRID5000_REPO_DIR:-$job_dir/checkout}"
