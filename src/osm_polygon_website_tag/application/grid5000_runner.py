@@ -15,9 +15,9 @@ def _parser() -> argparse.ArgumentParser:
     """Build the small argument parser needed on a reserved compute node."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle-dir", type=Path, required=True)
-    parser.add_argument("--time-budget-seconds", type=float, default=None)
-    parser.add_argument("--batch-rows", type=int, default=None)
-    parser.add_argument("--job-id", default=None)
+    parser.add_argument("--time-budget-seconds", type=float)
+    parser.add_argument("--batch-rows", type=int)
+    parser.add_argument("--job-id")
     return parser
 
 

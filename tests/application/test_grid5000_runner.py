@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,7 +17,13 @@ def test_main_delegates_bundle_options_and_emits_receipt(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls: list[tuple[Path, dict[str, object]]] = []
-    result = SimpleNamespace(payload=lambda: {"completed": False, "processed_rows": 2})
+    result = SimpleNamespace(
+        payload=lambda: {
+            "processed_rows": 2,
+            "completed": False,
+            "bundle": tmp_path / "bundle",
+        }
+    )
 
     def run_bundle(bundle_dir: Path, **kwargs: object) -> SimpleNamespace:
         calls.append((bundle_dir, kwargs))
@@ -48,7 +53,23 @@ def test_main_delegates_bundle_options_and_emits_receipt(
             {"time_budget_seconds": 1500.0, "batch_rows": 256, "job_id": "123"},
         )
     ]
-    assert json.loads(capsys.readouterr().out) == {"completed": False, "processed_rows": 2}
+    assert capsys.readouterr().out == (
+        "{\n"
+        f'  "bundle": "{tmp_path / "bundle"}",\n'
+        '  "completed": false,\n'
+        '  "processed_rows": 2\n'
+        "}\n"
+    )
+
+
+def test_parser_requires_a_bundle_and_describes_the_runner() -> None:
+    parser = grid5000_runner._parser()
+
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args([])
+
+    assert error.value.code == 2
+    assert "Dependency-light entry point for one offline Grid'5000 bundle." in parser.format_help()
 
 
 def test_main_reports_invalid_bundle_arguments(
