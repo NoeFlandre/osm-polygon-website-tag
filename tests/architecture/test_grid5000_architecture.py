@@ -39,6 +39,11 @@ def test_submit_script_checks_policy_around_submission() -> None:
     assert "OAR_JOB_ID" in script
     assert "sed -nE" in script
     assert "active" in script.lower()
+    assert 'export GRID5000_JOB_DIR="$job_dir"' in script
+    assert 'export GRID5000_REPO_DIR="$repo_dir"' in script
+    assert 'export GRID5000_BUNDLE_DIR="$bundle_dir"' in script
+    assert 'export GRID5000_UV_CACHE_DIR="$uv_cache_dir"' in script
+    assert 'cd "$job_dir"' in script
 
 
 def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:

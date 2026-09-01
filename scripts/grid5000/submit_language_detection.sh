@@ -12,6 +12,9 @@ queue="${GRID5000_QUEUE:-abaca}"
 gpus="${GRID5000_GPUS:-1}"
 active_marker="${GRID5000_ACTIVE_MARKER:-$job_dir/job.active}"
 policy_log_dir="${GRID5000_POLICY_LOG_DIR:-$job_dir/logs}"
+time_budget_seconds="${GRID5000_TIME_BUDGET_SECONDS:-1500}"
+batch_rows="${GRID5000_BATCH_ROWS:-256}"
+uv_cache_dir="${GRID5000_UV_CACHE_DIR:-$job_dir/uv-cache}"
 
 if [[ -e "$active_marker" ]]; then
   printf 'Refusing duplicate Grid5000 submission; inspect %s first.\n' "$active_marker" >&2
@@ -24,6 +27,14 @@ fi
 command -v usagepolicycheck >/dev/null
 command -v oarsub >/dev/null
 mkdir -p "$policy_log_dir"
+cd "$job_dir"
+
+export GRID5000_JOB_DIR="$job_dir"
+export GRID5000_REPO_DIR="$repo_dir"
+export GRID5000_BUNDLE_DIR="$bundle_dir"
+export GRID5000_TIME_BUDGET_SECONDS="$time_budget_seconds"
+export GRID5000_BATCH_ROWS="$batch_rows"
+export GRID5000_UV_CACHE_DIR="$uv_cache_dir"
 
 if [[ ! "$gpus" =~ ^[1-9][0-9]*$ ]]; then
   printf 'GRID5000_GPUS must be a positive integer: %s\n' "$gpus" >&2
