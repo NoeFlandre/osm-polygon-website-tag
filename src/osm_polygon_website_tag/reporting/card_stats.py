@@ -99,6 +99,7 @@ def compute_card_stats(
     _set_shard_counts(stats, public_shards, observation_shards, rejection_shards)
     stats.expected_sources_count = _expected_source_count(run_dir, stats.sources_count)
     _add_public_shard_stats(stats, public_shards)
+    _set_unique_polygon_text_count(stats, public_shards)
     if source_names is None and analysis_dir.exists():
         _add_analysis_stats(stats, analysis_dir)
     return stats
@@ -164,6 +165,52 @@ def _add_public_shard_stats(stats: CardStats, public_shards: Collection[Path]) -
         stats.per_source_counts.append(
             {"source_pbf": f"{shard.stem}.osm.pbf", "row_count": _parquet_row_count(shard)}
         )
+
+
+def _set_unique_polygon_text_count(stats: CardStats, public_shards: Collection[Path]) -> None:
+    """Count unique OSM polygons with successful, non-empty extracted text."""
+    polygon_ids: set[tuple[str, int]] = set()
+    columns = (
+        "osm_type",
+        "osm_id",
+        "website_text",
+        "website_text_status",
+        "contact_website_text",
+        "contact_website_text_status",
+    )
+    for shard in public_shards:
+        parquet = pq.ParquetFile(shard)
+        if not set(columns).issubset(parquet.schema_arrow.names):
+            continue
+        for batch in parquet.iter_batches(columns=list(columns), batch_size=8_192):
+            polygon_ids.update(_text_polygon_ids(batch))
+    stats.polygons_with_any_text = len(polygon_ids)
+
+
+def _text_polygon_ids(batch: Any) -> set[tuple[str, int]]:
+    """Return qualifying OSM polygon identities from one Arrow batch."""
+    website_mask = _non_empty_successful_text_mask(
+        batch.column("website_text"), batch.column("website_text_status")
+    )
+    contact_mask = _non_empty_successful_text_mask(
+        batch.column("contact_website_text"), batch.column("contact_website_text_status")
+    )
+    selected = call_arrow_kernel("or_kleene", website_mask, contact_mask)
+    types = call_arrow_kernel("filter", batch.column("osm_type"), selected).to_pylist()
+    ids = call_arrow_kernel("filter", batch.column("osm_id"), selected).to_pylist()
+    return {
+        (str(osm_type), int(osm_id))
+        for osm_type, osm_id in zip(types, ids, strict=True)
+        if osm_type is not None and osm_id is not None
+    }
+
+
+def _non_empty_successful_text_mask(text: pa.Array, status: pa.Array) -> pa.Array:
+    """Return rows whose status is success and whose trimmed text is non-empty."""
+    trimmed = call_arrow_kernel("utf8_trim_whitespace", text)
+    non_empty = call_arrow_kernel("not_equal", trimmed, "")
+    successful = call_arrow_kernel("equal", status, "success")
+    return pc.fill_null(call_arrow_kernel("and_kleene", successful, non_empty), False)
 
 
 def _parquet_row_count(path: Path) -> int:

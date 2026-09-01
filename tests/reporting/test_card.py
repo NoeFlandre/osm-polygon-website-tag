@@ -281,7 +281,8 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         | `website` | 9 | 10 | 11 | 12 | 13 |
         | `contact:website` | 14 | 15 | 16 | 17 | 18 |
 
-        Polygons with extracted text: **19**
+        Unique polygons with extracted text: **19**
+        Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy has successful, trimmed non-empty website or contact:website text.
         Combined extracted words: **31**
 
         ## Geographic distribution
@@ -347,8 +348,8 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
     ).lstrip()
 
     expected = expected.replace(
-        "Polygons with extracted text: **19**\n",
-        "Polygons with extracted text: **19**  \n",
+        "Unique polygons with extracted text: **19**\n",
+        "Unique polygons with extracted text: **19**  \n",
     )
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
     assert card_module._render_markdown(_golden_card_stats(), schema=schema) == expected
@@ -826,6 +827,179 @@ def test_card_stats_derives_text_and_word_totals_from_polygon_parquet(tmp_path: 
     assert stats.website_total_words == 3
     assert stats.contact_website_urls_present == 0
     assert stats.polygons_with_any_text == 1
+
+
+def test_card_counts_unique_polygons_with_trimmed_successful_text_across_regions(
+    tmp_path: Path,
+) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    duplicate = _public_row(polygon_id="duplicate")
+    duplicate.update(
+        {
+            "website_text": "  website text  ",
+            "website_word_count": 2,
+            "website_text_status": "success",
+        }
+    )
+    duplicate_copy = _public_row(polygon_id="duplicate", source_pbf="france-latest.osm.pbf")
+    duplicate_copy.update({"website_text": None, "website_text_status": "pending"})
+    contact_only = _public_row(polygon_id="contact-only")
+    contact_only.update(
+        {
+            "osm_id": 101,
+            "website": None,
+            "has_website": False,
+            "contact_website": "https://contact.example",
+            "has_contact_website": True,
+            "contact_website_text": " contact text ",
+            "contact_website_word_count": 2,
+            "contact_website_text_status": "success",
+        }
+    )
+    whitespace = _public_row(polygon_id="whitespace")
+    whitespace.update(
+        {
+            "osm_id": 102,
+            "website_text": " \t\n",
+            "website_word_count": 0,
+            "website_text_status": "success",
+        }
+    )
+    unsuccessful = _public_row(polygon_id="unsuccessful")
+    unsuccessful.update(
+        {"osm_id": 103, "website_text": "not counted", "website_text_status": "fetch_error"}
+    )
+    for filename, rows in (
+        ("monaco-latest.parquet", [duplicate, contact_only, whitespace, unsuccessful]),
+        ("france-latest.parquet", [duplicate_copy]),
+    ):
+        pq.write_table(
+            pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA),
+            run_dir / "polygons" / filename,
+        )
+
+    stats = compute_card_stats(run_dir)
+
+    assert stats.polygons_with_any_text == 2
+    assert stats.public_row_count == 5
+    assert stats.website_text_success_count == 2
+    assert stats.contact_website_text_success_count == 1
+    assert stats.website_text_failure_count == 1
+
+
+def test_card_explains_unique_polygon_text_metric(tmp_path: Path) -> None:
+    content = build_card(_setup_minimal_run(tmp_path)).read_text()
+
+    assert "Unique polygons with extracted text: **0**" in content
+    assert "across regional rows" in content
+
+
+def test_text_polygon_ids_preserves_osm_identity_and_skips_null_ids() -> None:
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array(["way", "node", None, "relation", "way"]),
+            pa.array([42, 42, 99, None, None], type=pa.int64()),
+            pa.array(["way text", "node text", "null type", "null id", "null id"]),
+            pa.array(["success"] * 5),
+            pa.array([None] * 5, type=pa.large_string()),
+            pa.array(["absent"] * 5),
+        ],
+        names=[
+            "osm_type",
+            "osm_id",
+            "website_text",
+            "website_text_status",
+            "contact_website_text",
+            "contact_website_text_status",
+        ],
+    )
+
+    assert card_stats_module._text_polygon_ids(batch) == {("way", 42), ("node", 42)}
+
+
+def test_text_polygon_ids_rejects_mismatched_filtered_identity_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = pa.RecordBatch.from_arrays(
+        [
+            pa.array(["way"]),
+            pa.array([42], type=pa.int64()),
+            pa.array(["text"]),
+            pa.array(["success"]),
+            pa.array([None], type=pa.large_string()),
+            pa.array(["absent"]),
+        ],
+        names=[
+            "osm_type",
+            "osm_id",
+            "website_text",
+            "website_text_status",
+            "contact_website_text",
+            "contact_website_text_status",
+        ],
+    )
+    original_kernel = card_stats_module.call_arrow_kernel
+    filter_calls = 0
+
+    def mismatched_filter(name: str, *args: object) -> object:
+        nonlocal filter_calls
+        if name == "filter":
+            filter_calls += 1
+            return pa.array(["way"]) if filter_calls == 1 else pa.array([42, 43])
+        return original_kernel(name, *args)
+
+    monkeypatch.setattr(card_stats_module, "call_arrow_kernel", mismatched_filter)
+
+    with pytest.raises(ValueError, match="longer than"):
+        card_stats_module._text_polygon_ids(batch)
+
+
+def test_non_empty_successful_text_mask_requires_trimmed_text_and_success() -> None:
+    mask = card_stats_module._non_empty_successful_text_mask(
+        pa.array(["  text  ", " \t\n", None, "failed text"]),
+        pa.array(["success", "success", "success", "fetch_error"]),
+    )
+
+    assert mask.to_pylist() == [True, False, False, False]
+
+
+def test_unique_polygon_text_count_uses_bounded_required_columns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "source.parquet"
+    row = _public_row()
+    row.update({"website_text": "text", "website_text_status": "success"})
+    pq.write_table(pa.Table.from_pylist([row], schema=POLYGON_PUBLIC_SCHEMA), path)
+    real_parquet = pq.ParquetFile(path)
+    calls: list[dict[str, object]] = []
+
+    class TrackedParquet:
+        schema_arrow = real_parquet.schema_arrow
+
+        def iter_batches(self, **kwargs: object):  # type: ignore[no-untyped-def]
+            calls.append(kwargs)
+            yield from real_parquet.iter_batches(**kwargs)
+
+    monkeypatch.setattr(card_stats_module.pq, "ParquetFile", lambda _path: TrackedParquet())
+    stats = CardStats()
+
+    card_stats_module._set_unique_polygon_text_count(stats, [path])
+
+    assert stats.polygons_with_any_text == 1
+    assert calls == [
+        {
+            "columns": [
+                "osm_type",
+                "osm_id",
+                "website_text",
+                "website_text_status",
+                "contact_website_text",
+                "contact_website_text_status",
+            ],
+            "batch_size": 8_192,
+        }
+    ]
 
 
 def test_card_stats_preserves_status_buckets_and_pending_semantics(tmp_path: Path) -> None:

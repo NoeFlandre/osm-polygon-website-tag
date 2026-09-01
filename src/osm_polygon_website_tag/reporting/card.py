@@ -246,7 +246,11 @@ def _render_website_text_section(stats: CardStats) -> list[str]:
             f"{stats.contact_website_total_words:,} |"
         ),
         "",
-        f"Polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
+        f"Unique polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
+        (
+            "Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy "
+            "has successful, trimmed non-empty website or contact:website text."
+        ),
         f"Combined extracted words: **{combined_words:,}**",
         "",
     ]
