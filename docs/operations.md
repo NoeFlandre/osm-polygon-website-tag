@@ -98,9 +98,11 @@ download GlotLID or write production data.
 The repository includes wrappers in `scripts/grid5000/` for short, resumable
 jobs. They follow the Grid'5000 usage policy: the frontend is used only for
 checkout, transfer, submission, and monitoring; detection runs on one
-reserved node. Each job requests `host=1/core=2,walltime=0:30`, uses no GPU,
-and gives the detector a 1,500-second budget. The remaining five minutes are
-reserved for job cleanup and transfer.
+reserved GPU node. Each job requests `host=1/gpu=1/core=2,walltime=0:30` and
+gives the detector a 1,500-second budget. The remaining five minutes are
+reserved for job cleanup and transfer. GlotLID's pinned FastText model is
+CPU-bound; the GPU reservation provides the requested isolated workers and
+parallel-job capacity, but does not claim GPU acceleration for inference.
 
 First download the pinned public model into the Seagate cache and prepare one
 new bundle. Preparation records the repository commit, source row count and
@@ -122,7 +124,9 @@ scripts/grid5000/prepare_language_detection.sh
 Copy the checkout and bundle to the selected site's frontend with `rsync`.
 Submit one job with `scripts/grid5000/submit_language_detection.sh`; it runs
 `usagepolicycheck -t` before and after `oarsub`, records the OAR job ID, and
-refuses to submit while its active marker exists. Monitor with `oarstat -u`.
+refuses to submit while its active marker exists. Set `GRID5000_GPUS=1` per
+job; submit distinct bundles one at a time or in a small staged wave, never
+duplicate or speculative jobs. Monitor with `oarstat -u`.
 Do not run Python, model inference, compilation, or bulk processing on the
 frontend. The node runner sets `HF_HUB_OFFLINE=1`, uses only the staged model
 and shard, and never fetches website URLs or Hub weights.

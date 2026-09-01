@@ -14,8 +14,10 @@ checkpoints, provenance, and final artifacts.
 
 - Grid'5000 frontends are used only for checkout, file transfer, submission,
   and monitoring. Detection runs only on a reserved node.
-- Each job requests one host and two CPU cores for `0:30`; GlotLID is a
-  FastText CPU model, so no GPU is requested by default.
+- Each job requests one host, one GPU, and two CPU cores for `0:30`; GlotLID is
+  a FastText CPU model. The operational wrapper requests one GPU per short job
+  to support isolated staged workers; this is a resource contract, not a claim
+  that the FastText inference itself uses the GPU.
 - Detection receives a 25-minute compute budget. It stops between complete
   Parquet batches, leaving five minutes of walltime margin for job cleanup and
   result synchronization.

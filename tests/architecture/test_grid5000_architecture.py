@@ -29,18 +29,19 @@ def test_submit_script_checks_policy_around_submission() -> None:
     assert script.index("usagepolicycheck -t") < script.index(submit_call)
     assert script.rindex("usagepolicycheck -t") > script.index(submit_call)
     assert "walltime=0:30" in script
-    assert "host=1/core=" in script
+    assert "host=1/gpu=" in script
+    assert "GRID5000_GPUS:-1" in script
     assert "active" in script.lower()
 
 
 def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
     script = (SCRIPT_ROOT / "run_language_detection.sh").read_text()
 
-    assert "#OAR -l host=1/core=2,walltime=0:30" in script
+    assert "#OAR -l host=1/gpu=1/core=2,walltime=0:30" in script
+    assert "module load python/3.12.12 uv/0.10.12" in script
     assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
     assert "--offline" in script
     assert "HF_HUB_OFFLINE=1" in script
-    assert "gpu" not in script.lower()
 
 
 def test_grid5000_scripts_do_not_contain_credentials() -> None:
