@@ -34,11 +34,11 @@ before_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 usagepolicycheck -t > "$policy_log_dir/usagepolicy-before-$before_stamp.txt"
 
 submission="$(oarsub -q "$queue" -l "host=1/gpu=$gpus,walltime=0:30" -S "$job_script")"
-if [[ ! "$submission" =~ ([0-9]+) ]]; then
+job_id="$(printf '%s\n' "$submission" | sed -nE 's/.*OAR job id[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' | tail -n 1)"
+if [[ -z "$job_id" ]]; then
   printf 'Could not identify the OAR job ID from submission output.\n%s\n' "$submission" >&2
   exit 1
 fi
-job_id="${BASH_REMATCH[1]}"
 printf '%s\n' "$job_id" > "$active_marker"
 
 after_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
