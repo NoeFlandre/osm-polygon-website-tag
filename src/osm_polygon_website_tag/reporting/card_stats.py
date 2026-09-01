@@ -99,7 +99,14 @@ def compute_card_stats(
     _set_shard_counts(stats, public_shards, observation_shards, rejection_shards)
     stats.expected_sources_count = _expected_source_count(run_dir, stats.sources_count)
     _add_public_shard_stats(stats, public_shards)
-    _set_unique_polygon_text_count(stats, public_shards)
+    _set_unique_polygon_text_count(
+        stats,
+        _regional_public_shards(
+            public_shards,
+            observation_shards,
+            source_names=source_names,
+        ),
+    )
     if source_names is None and analysis_dir.exists():
         _add_analysis_stats(stats, analysis_dir)
     return stats
@@ -185,6 +192,34 @@ def _set_unique_polygon_text_count(stats: CardStats, public_shards: Collection[P
         for batch in parquet.iter_batches(columns=list(columns), batch_size=8_192):
             polygon_ids.update(_text_polygon_ids(batch))
     stats.polygons_with_any_text = len(polygon_ids)
+
+
+def _regional_public_shards(
+    public_shards: Collection[Path],
+    observation_shards: Collection[Path],
+    *,
+    source_names: Collection[str] | None,
+) -> list[Path]:
+    """Resolve regional public shards for a canonical run when available.
+
+    Canonical runs retain the source-level observation directory as a symlink
+    to the regional run. Its sibling ``polygons`` directory contains text
+    results from every regional copy, including copies not selected as the
+    canonical public row.
+    """
+    if not observation_shards:
+        return list(public_shards)
+    observation_shard = next(iter(observation_shards))
+    observations_dir = observation_shard.parent
+    if not observations_dir.is_symlink():
+        return list(public_shards)
+    try:
+        regional_public_dir = observations_dir.resolve().parent / "polygons"
+    except OSError:
+        return list(public_shards)
+    if not regional_public_dir.is_dir():
+        return list(public_shards)
+    return _selected_parquets(regional_public_dir, source_names)
 
 
 def _text_polygon_ids(batch: Any) -> set[tuple[str, int]]:

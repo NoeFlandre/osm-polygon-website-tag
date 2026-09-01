@@ -887,6 +887,95 @@ def test_card_counts_unique_polygons_with_trimmed_successful_text_across_regions
     assert stats.website_text_failure_count == 1
 
 
+def test_card_counts_text_from_regional_copies_when_run_is_canonical(
+    tmp_path: Path,
+) -> None:
+    regional_run = _setup_minimal_run(tmp_path / "regional")
+    regional_row = _public_row(polygon_id="regional-copy")
+    regional_row.update(
+        {
+            "website_text": "regional text",
+            "website_word_count": 2,
+            "website_text_status": "success",
+        }
+    )
+    pq.write_table(
+        pa.Table.from_pylist([regional_row], schema=POLYGON_PUBLIC_SCHEMA),
+        regional_run / "polygons" / "monaco-latest.parquet",
+    )
+
+    canonical_run = _setup_minimal_run(tmp_path / "canonical")
+    (canonical_run / "analysis_observations" / "monaco-latest.parquet").unlink()
+    (canonical_run / "analysis_observations").rmdir()
+    (canonical_run / "analysis_observations").symlink_to(
+        regional_run / "analysis_observations",
+        target_is_directory=True,
+    )
+
+    stats = compute_card_stats(canonical_run)
+
+    assert stats.public_row_count == 1
+    assert stats.polygons_with_any_text == 1
+
+
+def test_regional_public_shards_preserves_scope_and_path(tmp_path: Path) -> None:
+    regional_run = _setup_minimal_run(tmp_path / "regional")
+    france = _public_row(polygon_id="france-copy", source_pbf="france-latest.osm.pbf")
+    pq.write_table(
+        pa.Table.from_pylist([france], schema=POLYGON_PUBLIC_SCHEMA),
+        regional_run / "polygons" / "france-latest.parquet",
+    )
+
+    canonical_run = _setup_minimal_run(tmp_path / "canonical")
+    (canonical_run / "analysis_observations" / "monaco-latest.parquet").unlink()
+    (canonical_run / "analysis_observations").rmdir()
+    (canonical_run / "analysis_observations").symlink_to(
+        regional_run / "analysis_observations",
+        target_is_directory=True,
+    )
+
+    regional_shards = card_stats_module._regional_public_shards(
+        [canonical_run / "polygons" / "monaco-latest.parquet"],
+        [canonical_run / "analysis_observations" / "monaco-latest.parquet"],
+        source_names={"france-latest.osm.pbf"},
+    )
+
+    assert regional_shards == [regional_run / "polygons" / "france-latest.parquet"]
+
+
+def test_regional_public_shards_falls_back_without_observation_shards(tmp_path: Path) -> None:
+    public_shards = [tmp_path / "polygons" / "monaco-latest.parquet"]
+
+    assert (
+        card_stats_module._regional_public_shards(
+            public_shards,
+            [],
+            source_names=None,
+        )
+        == public_shards
+    )
+
+
+def test_regional_public_shards_falls_back_without_regional_polygons(
+    tmp_path: Path,
+) -> None:
+    regional_observations = tmp_path / "regional" / "analysis_observations"
+    regional_observations.mkdir(parents=True)
+    canonical_observations = tmp_path / "canonical" / "analysis_observations"
+    canonical_observations.parent.mkdir()
+    canonical_observations.symlink_to(regional_observations, target_is_directory=True)
+    public_shards = [tmp_path / "canonical" / "polygons" / "monaco-latest.parquet"]
+
+    assert (
+        card_stats_module._regional_public_shards(
+            public_shards,
+            [canonical_observations / "monaco-latest.parquet"],
+            source_names=None,
+        )
+        == public_shards
+    )
+
+
 def test_card_explains_unique_polygon_text_metric(tmp_path: Path) -> None:
     content = build_card(_setup_minimal_run(tmp_path)).read_text()
 
