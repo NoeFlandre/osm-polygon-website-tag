@@ -17,7 +17,8 @@ MODEL_REPOSITORY = "cis-lmu/glotlid"
 MODEL_FILENAME = "model_v3.bin"
 MODEL_REVISION = "85cd671"
 _HASH_CHUNK_BYTES = 1024 * 1024
-_PROBABILITY_BOUND_TOLERANCE = 1e-5
+# GlotLID's float32 FastText output can overshoot one by a few millionths.
+_PROBABILITY_BOUND_TOLERANCE = 1.5e-5
 
 
 @dataclass(frozen=True)

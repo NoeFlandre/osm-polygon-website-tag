@@ -253,6 +253,14 @@ def test_probability_validation_accepts_fasttext_float32() -> None:
     assert glotlid._validated_probability(numpy.float32(0.5)) == 0.5
 
 
+def test_probability_validation_clamps_glotlid_float32_overshoot() -> None:
+    numpy = pytest.importorskip("numpy")
+
+    value = numpy.float32(1.0000100135803223)
+
+    assert glotlid._validated_probability(value) == 1.0
+
+
 @pytest.mark.parametrize(
     "value",
     [float("nan"), float("inf"), float("-inf")],
