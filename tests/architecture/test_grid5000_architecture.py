@@ -34,6 +34,7 @@ def test_submit_script_checks_policy_around_submission() -> None:
     assert "GRID5000_GPUS:-1" in script
     assert "GRID5000_QUEUE:-abaca" in script
     assert "GRID5000_REPO_DIR" in script
+    assert 'bundle_dir="${GRID5000_BUNDLE_DIR:-$job_dir/bundle}"' in script
     assert "scripts/grid5000/run_language_detection.sh" in script
     assert "OAR job id" in script
     assert "OAR_JOB_ID" in script
