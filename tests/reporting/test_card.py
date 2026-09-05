@@ -1247,3 +1247,32 @@ def test_hostname_renderer_caps_public_table_at_ten_rows() -> None:
 
     assert "host-9.example" in rendered
     assert "host-10.example" not in rendered
+
+
+def _language_card_stats() -> CardStats:
+    stats = _golden_card_stats()
+    stats.detected_language_count = 2
+    stats.website_language_count = 10
+    stats.contact_website_language_count = 15
+    stats.top_languages = [("eng_Latn", 25), ("deu_Latn", 5)]
+    return stats
+
+
+def test_language_front_matter_and_section_render_detected_labels() -> None:
+    front_matter = card_module._render_yaml_front_matter(_language_card_stats())
+
+    assert "language:\n  - eng\n  - deu\n" in front_matter
+    assert "detected_language_count: 2" in front_matter
+    assert "website_language_count: 10" in front_matter
+    assert "contact_website_language_count: 15" in front_matter
+
+    body = card_module._render_markdown(_language_card_stats())
+    assert "## Languages" in body
+    assert "| `eng_Latn` | 25 |" in body
+
+
+def test_language_section_is_absent_without_detected_languages() -> None:
+    front_matter = card_module._render_yaml_front_matter(_golden_card_stats())
+
+    assert "language:" not in front_matter
+    assert "## Languages" not in card_module._render_markdown(_golden_card_stats())

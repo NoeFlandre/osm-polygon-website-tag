@@ -29,6 +29,8 @@ Output tables in ``<run_dir>/analysis/``:
 * ``hostnames_exact_contact_website.parquet`` -- exact contact:website hostnames.
 * ``top_hostnames_website.parquet`` -- top 1000 website hostnames.
 * ``top_hostnames_contact_website.parquet`` -- top 1000 contact:website hostnames.
+* ``languages.parquet`` -- exact detected-language counts per website tag
+  (empty when the run carries no v1.4 language columns).
 """
 
 from __future__ import annotations
@@ -79,6 +81,7 @@ ANALYSIS_FILES: tuple[str, ...] = (
     "hostnames_exact_contact_website.parquet",
     "top_hostnames_website.parquet",
     "top_hostnames_contact_website.parquet",
+    "languages.parquet",
 )
 
 TOP_K_HOSTNAMES = 1000
@@ -217,6 +220,7 @@ def _write_analysis_tables(
     _write_class_tables(con, analysis_dir)
     _write_overlap_tables(con, analysis_dir)
     _write_hostname_tables(con, analysis_dir)
+    _write_language_table(con, analysis_dir)
     return _analysis_summary(
         con,
         polygons_dir,
@@ -393,6 +397,34 @@ def _write_hostname_tables(con: duckdb.DuckDBPyConnection, analysis_dir: Path) -
             f"SELECT * FROM ({exact_query}) LIMIT {TOP_K_HOSTNAMES}",  # noqa: S608
             analysis_dir / f"top_hostnames_{raw_column}.parquet",
         )
+
+
+LANGUAGE_TABLE_SCHEMA = pa.schema(
+    [
+        pa.field("tag", pa.string(), nullable=False),
+        pa.field("language", pa.string(), nullable=False),
+        pa.field("row_count", pa.int64(), nullable=False),
+    ]
+)
+
+
+def _write_language_table(con: duckdb.DuckDBPyConnection, analysis_dir: Path) -> None:
+    """Write exact GlotLID label counts, or an empty table for a v1.3 run."""
+    columns = {row[0] for row in con.execute("DESCRIBE public_polygons").fetchall()}
+    if not {"website_language", "contact_website_language"}.issubset(columns):
+        _write_arrow_table(analysis_dir / "languages.parquet", [], LANGUAGE_TABLE_SCHEMA)
+        return
+    query = """
+        SELECT 'website' AS tag, website_language AS language, COUNT(*)::BIGINT AS row_count
+        FROM public_polygons WHERE website_language IS NOT NULL GROUP BY 1, 2
+        UNION ALL
+        SELECT 'contact_website' AS tag,
+               contact_website_language AS language,
+               COUNT(*)::BIGINT AS row_count
+        FROM public_polygons WHERE contact_website_language IS NOT NULL GROUP BY 1, 2
+        ORDER BY tag, row_count DESC, language
+    """
+    duckdb_engine.copy_query_atomic(con, query, analysis_dir / "languages.parquet")
 
 
 def _analysis_summary(

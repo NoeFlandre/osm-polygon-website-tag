@@ -109,6 +109,7 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         "  - website",
         "  - wikidata",
         "  - geographic-data",
+        *_language_tag_lines(stats),
         "size_categories:",
         f"  - {_size_category(stats.public_row_count)}",
         "configs:",
@@ -129,12 +130,42 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         f"website_total_words: {stats.website_total_words}",
         f"contact_website_text_success_count: {stats.contact_website_text_success_count}",
         f"contact_website_total_words: {stats.contact_website_total_words}",
+        *_language_metadata_lines(stats),
         f"polygon_density_h3_resolution: {stats.polygon_density_h3_resolution}",
         f"polygon_density_row_count: {stats.polygon_density_row_count}",
         f"occupied_h3_cell_count: {stats.occupied_h3_cell_count}",
         "---",
     ]
     return "\n".join(lines)
+
+
+CARD_LANGUAGE_TAG_LIMIT = 20
+CARD_TOP_LANGUAGE_LIMIT = 10
+
+
+def _language_tag_lines(stats: CardStats) -> list[str]:
+    """Render the Hugging Face ``language`` tags for detected labels."""
+    codes = _detected_language_codes(stats)
+    if not codes:
+        return []
+    return ["language:", *(f"  - {code}" for code in codes)]
+
+
+def _detected_language_codes(stats: CardStats) -> list[str]:
+    """Return deduplicated ISO 639-3 prefixes of the most frequent labels."""
+    prefixes = dict.fromkeys(label.split("_")[0] for label, _ in stats.top_languages)
+    return [code for code in prefixes if code][:CARD_LANGUAGE_TAG_LIMIT]
+
+
+def _language_metadata_lines(stats: CardStats) -> list[str]:
+    """Render detected-language counts for the YAML front matter."""
+    if not stats.detected_language_count:
+        return []
+    return [
+        f"detected_language_count: {stats.detected_language_count}",
+        f"website_language_count: {stats.website_language_count}",
+        f"contact_website_language_count: {stats.contact_website_language_count}",
+    ]
 
 
 def _size_category(row_count: int) -> str:
@@ -160,6 +191,7 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
         *_render_intro_section(),
         *_render_snapshot_section(stats),
         *_render_website_text_section(stats),
+        *_render_language_section(stats),
         *_render_geographic_section(stats),
         *_render_links_section(),
         *_hostname_sections(stats),
@@ -252,6 +284,34 @@ def _render_website_text_section(stats: CardStats) -> list[str]:
             "has successful, trimmed non-empty website or contact:website text."
         ),
         f"Combined extracted words: **{combined_words:,}**",
+        "",
+    ]
+
+
+def _render_language_section(stats: CardStats) -> list[str]:
+    """Render detected-language totals when the run carries v1.4 labels."""
+    if not stats.detected_language_count:
+        return []
+    top = stats.top_languages[:CARD_TOP_LANGUAGE_LIMIT]
+    return [
+        "## Languages",
+        "",
+        (
+            "Detected with GlotLID v3 on successfully extracted text; labels are exact "
+            "script-aware `language_Script` codes with a top-1 probability column."
+        ),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Distinct languages | {stats.detected_language_count:,} |",
+        f"| Labeled `website` texts | {stats.website_language_count:,} |",
+        f"| Labeled `contact:website` texts | {stats.contact_website_language_count:,} |",
+        "",
+        f"Top {len(top)} labels across both tags:",
+        "",
+        "| Language | Texts |",
+        "| --- | ---: |",
+        *(f"| `{label}` | {count:,} |" for label, count in top),
         "",
     ]
 

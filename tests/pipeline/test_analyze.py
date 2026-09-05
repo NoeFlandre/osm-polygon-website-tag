@@ -31,6 +31,7 @@ from osm_polygon_website_tag.pipeline.analyze import (
     _write_cells_per_group,
     _write_class_count,
     _write_hostname_tables,
+    _write_language_table,
     analyze_results,
 )
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -1048,3 +1049,34 @@ def test_analyze_results_successful_run_is_byte_identical(tmp_path: Path) -> Non
     assert second_hashes == first_hashes
     assert second_summary == first_summary
     assert _staging_dir_entries(run_dir / "staging") == []
+
+
+def test_write_language_table_counts_labels_per_tag(tmp_path: Path) -> None:
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE public_polygons AS SELECT * FROM (VALUES
+          ('eng_Latn', 'deu_Latn'),
+          ('eng_Latn', NULL),
+          (NULL, NULL)
+        ) AS t(website_language, contact_website_language)
+        """
+    )
+
+    _write_language_table(con, tmp_path)
+
+    assert pq.read_table(tmp_path / "languages.parquet").to_pylist() == [
+        {"tag": "contact_website", "language": "deu_Latn", "row_count": 1},
+        {"tag": "website", "language": "eng_Latn", "row_count": 2},
+    ]
+
+
+def test_write_language_table_is_empty_for_a_v13_run(tmp_path: Path) -> None:
+    con = duckdb.connect()
+    con.execute("CREATE TABLE public_polygons AS SELECT 1 AS osm_id")
+
+    _write_language_table(con, tmp_path)
+
+    table = pq.read_table(tmp_path / "languages.parquet")
+    assert table.num_rows == 0
+    assert table.schema.names == ["tag", "language", "row_count"]

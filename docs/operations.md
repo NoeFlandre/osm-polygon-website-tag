@@ -86,6 +86,14 @@ prefix remains on Seagate, and repeating the command verifies identity and
 continues from the first unfinished batch. A changed shard or model fails
 closed. Once every shard is promoted, the source manifest hashes are updated.
 
+A later URL retry that turns a failed value into `success` produces text with a
+null language, so re-run `detect-languages` (and rebuild analysis and the card)
+after any enrichment retry on a v1.4 run.
+
+Analysis writes `analysis/languages.parquet` with exact per-tag label counts,
+and the card publishes the distinct-language count, labeled-text totals, and
+top labels.
+
 If the standalone stage is run on an analyzed, card-built, or non-frozen
 complete run, it reopens the stage as `enriching` and finishes at `enriched`.
 Rebuild analysis, card, verification, and finalization afterward. A snapshot
@@ -94,6 +102,12 @@ before model loading. Tests use injected fakes and `tmp_path`; they never
 download GlotLID or write production data.
 
 ## Run language detection on Grid'5000
+
+Paths below use the canonical data root. Runs created before the storage-root
+change stay under the approved legacy root
+`/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/`; the published
+`geofabrik-website-v1-glotlid-v1` run, its GlotLID cache, and its Grid'5000
+bundles live there. Substitute that root when resuming or inspecting it.
 
 The repository includes wrappers in `scripts/grid5000/` for short, resumable
 jobs. They follow the Grid'5000 usage policy: the frontend is used only for

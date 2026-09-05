@@ -76,6 +76,10 @@ class CardStats:
     contact_website_text_failure_count: int = 0
     contact_website_total_words: int = 0
     polygons_with_any_text: int = 0
+    website_language_count: int = 0
+    contact_website_language_count: int = 0
+    detected_language_count: int = 0
+    top_languages: list[tuple[str, int]] = field(default_factory=list)
     polygon_density_h3_resolution: int = 3
     occupied_h3_cell_count: int = 0
     polygon_density_row_count: int = 0
@@ -272,6 +276,38 @@ def _add_analysis_stats(stats: CardStats, analysis_dir: Path) -> None:
     )
     _add_cell_stats(stats, analysis_dir / "cells_global.parquet")
     _add_hostname_stats(stats, analysis_dir)
+    _add_language_stats(stats, analysis_dir / "languages.parquet")
+
+
+def _add_language_stats(stats: CardStats, path: Path) -> None:
+    """Load optional detected-language counts from the analysis table."""
+    if not path.exists():
+        return
+    rows = pq.read_table(path).to_pylist()
+    totals = _combined_language_counts(rows)
+    stats.website_language_count = _language_total(rows, "website")
+    stats.contact_website_language_count = _language_total(rows, "contact_website")
+    stats.detected_language_count = len(totals)
+    stats.top_languages = sorted(totals.items(), key=_language_sort_key)
+
+
+def _language_total(rows: list[dict[str, Any]], tag: str) -> int:
+    """Sum labeled-text counts for one website tag."""
+    return sum(int(row["row_count"]) for row in rows if row.get("tag") == tag)
+
+
+def _language_sort_key(item: tuple[str, int]) -> tuple[int, str]:
+    """Order languages by descending count, then by label."""
+    return -item[1], item[0]
+
+
+def _combined_language_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Sum website and contact:website counts per detected language label."""
+    totals: dict[str, int] = {}
+    for row in rows:
+        language = str(row["language"])
+        totals[language] = totals.get(language, 0) + int(row["row_count"])
+    return totals
 
 
 def _optional_row_count(path: Path) -> int:
