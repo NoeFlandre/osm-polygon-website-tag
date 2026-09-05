@@ -17,6 +17,7 @@ from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_UNSUPPORTED_LANGUAGE,
 )
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
+from osm_polygon_website_tag.pipeline.sentence_languages import sat_code_for_glotlid_label
 
 TEXT_PREFIXES = ("website", "contact_website")
 
@@ -29,18 +30,10 @@ class SentenceSplitter(Protocol):
     @property
     def identity(self) -> ModelIdentity: ...
 
-    @property
-    def supported_languages(self) -> frozenset[str]: ...
-
     def split(self, texts: Sequence[str]) -> list[list[str]]: ...
 
 
-def sentence_gate(
-    text_status: object,
-    text: str,
-    language: object,
-    supported_languages: frozenset[str],
-) -> str | None:
+def sentence_gate(text_status: object, text: str, language: object) -> str | None:
     """Return the terminal status for a row, or ``None`` to segment it.
 
     Blankness is decided before language support so that empty text is reported
@@ -50,7 +43,7 @@ def sentence_gate(
         return SENTENCE_ABSENT
     if not text.strip():
         return SENTENCE_EMPTY_TEXT
-    if language not in supported_languages:
+    if sat_code_for_glotlid_label(language) is None:
         return SENTENCE_UNSUPPORTED_LANGUAGE
     return None
 
@@ -59,25 +52,22 @@ def segment_batch(
     originals: list[dict[str, object]], splitter: SentenceSplitter
 ) -> list[dict[str, object]]:
     """Segment one batch, calling the model once per website field."""
-    supported = splitter.supported_languages
     pending: dict[str, list[_Pending]] = {prefix: [] for prefix in TEXT_PREFIXES}
-    rows = [_prepare_row(original, supported, pending) for original in originals]
+    rows = [_prepare_row(original, pending) for original in originals]
     for prefix in TEXT_PREFIXES:
         _segment_pending(prefix, pending[prefix], splitter)
     return rows
 
 
 def _prepare_row(
-    original: dict[str, object],
-    supported: frozenset[str],
-    pending: dict[str, list[_Pending]],
+    original: dict[str, object], pending: dict[str, list[_Pending]]
 ) -> dict[str, object]:
     """Copy one row, record each gate decision, and queue what needs the model."""
     row = dict(original)
     for prefix in TEXT_PREFIXES:
         text = _successful_text(row, prefix)
         status = sentence_gate(
-            row.get(f"{prefix}_text_status"), text, row.get(f"{prefix}_language"), supported
+            row.get(f"{prefix}_text_status"), text, row.get(f"{prefix}_language")
         )
         if status is None:
             pending[prefix].append((row, text))

@@ -31,4 +31,20 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-__all__ = ["ModelIdentity", "sha256_file"]
+def sha256_directory(directory: Path) -> str:
+    """Hash every file in a model directory by relative path and content.
+
+    Names are folded into the digest alongside contents so that a reshuffled
+    repository is recognized as a different model rather than the same one.
+    """
+    if not directory.is_dir():
+        raise NotADirectoryError(directory)
+    digest = hashlib.sha256()
+    for path in sorted(child for child in directory.rglob("*") if child.is_file()):
+        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(sha256_file(path).encode("ascii"))
+    return digest.hexdigest()
+
+
+__all__ = ["ModelIdentity", "sha256_directory", "sha256_file"]

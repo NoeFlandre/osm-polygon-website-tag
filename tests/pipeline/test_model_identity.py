@@ -54,3 +54,36 @@ def test_sha256_reads_in_bounded_chunks_and_stops_at_empty_chunk(
         model_identity.sha256_file(tmp_path / "model.bin") == hashlib.sha256(b"model").hexdigest()
     )
     assert handle.sizes == [model_identity._HASH_CHUNK_BYTES, model_identity._HASH_CHUNK_BYTES]
+
+
+def test_sha256_directory_covers_nested_files_and_is_stable(tmp_path: Path) -> None:
+    directory = tmp_path / "model"
+    (directory / "nested").mkdir(parents=True)
+    (directory / "a.json").write_bytes(b"a")
+    (directory / "nested" / "b.bin").write_bytes(b"b")
+
+    digest = model_identity.sha256_directory(directory)
+
+    assert digest == model_identity.sha256_directory(directory)
+    (directory / "nested" / "b.bin").write_bytes(b"c")
+    assert model_identity.sha256_directory(directory) != digest
+
+
+def test_sha256_directory_ignores_empty_subdirectories(tmp_path: Path) -> None:
+    """Only files carry model content, so an empty directory changes nothing."""
+    directory = tmp_path / "model"
+    directory.mkdir()
+    (directory / "a.json").write_bytes(b"a")
+    digest = model_identity.sha256_directory(directory)
+
+    (directory / "empty").mkdir()
+
+    assert model_identity.sha256_directory(directory) == digest
+
+
+def test_sha256_directory_rejects_a_file(tmp_path: Path) -> None:
+    path = tmp_path / "model.bin"
+    path.write_bytes(b"x")
+
+    with pytest.raises(NotADirectoryError):
+        model_identity.sha256_directory(path)

@@ -32,7 +32,9 @@ SENTENCE_COLUMN_NAMES = (
     "contact_website_sentence_status",
 )
 
-_SENTENCE_LIST_TYPE = pa.list_(pa.field("item", pa.string(), nullable=False))
+# Parquet names a list's inner field "element"; declaring anything else here
+# means the written schema can never equal this one after a round-trip.
+_SENTENCE_LIST_TYPE = pa.list_(pa.field("element", pa.string(), nullable=False))
 
 SENTENCE_FIELDS = (
     pa.field("website_sentences", _SENTENCE_LIST_TYPE, nullable=True),
