@@ -21,13 +21,8 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import TEXT_COLUMN_NAMES, initial_text_fields
-from osm_polygon_website_tag.pipeline.enrichment_checkpoint import (
-    EnrichmentCheckpoint,
-    assemble_checkpoint,
-    checkpoint_parts,
-    load_checkpoint,
-    write_checkpoint_part,
-)
+from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
+from osm_polygon_website_tag.pipeline.enrichment_checkpoint import enrichment_checkpoint_store
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
@@ -72,10 +67,10 @@ class _EnrichmentContext:
     shard: Path
     parquet: pq.ParquetFile
     source_schema: pa.Schema
-    target_schema: pa.Schema
     target_schema_version: str
     source_row_count: int
-    checkpoint: EnrichmentCheckpoint
+    store: CheckpointStore
+    checkpoint: Checkpoint
     cache: TextCache
     staged: Path
     changed: bool
@@ -105,11 +100,11 @@ def enrich_polygon_shard(
         changed_by_batches, max_batch_rows = _process_enrichment_batches(
             parquet=context.parquet,
             source_schema=context.source_schema,
-            target_schema=context.target_schema,
             target_schema_version=context.target_schema_version,
             source_row_count=context.source_row_count,
             batch_rows=batch_rows,
             next_part_index=context.next_part_index,
+            store=context.store,
             checkpoint=context.checkpoint,
             cache=context.cache,
             invocation_id=invocation_id,
@@ -121,12 +116,12 @@ def enrich_polygon_shard(
         _promote_enriched_shard(
             shard=context.shard,
             staged=context.staged,
+            store=context.store,
             checkpoint_directory=context.checkpoint.directory,
             changed=context.changed,
             batch_rows=batch_rows,
             source_row_count=context.source_row_count,
             max_batch_rows=max_batch_rows,
-            target_schema=context.target_schema,
         )
         shutil.rmtree(context.checkpoint.directory)
     except BaseException:
@@ -165,14 +160,13 @@ def _prepare_enrichment_context(
     if not is_supported_public_polygon_schema(source_schema):
         raise ValueError(f"unsupported polygon schema for enrichment: {shard.name}")
     target_schema, target_schema_version = _enrichment_contract(source_schema)
+    store = enrichment_checkpoint_store(target_schema, target_schema_version)
     cache = TextCache(Path(cache_path))
     try:
-        checkpoint = load_checkpoint(
+        checkpoint = store.load(
             shard,
             source_row_count=source_row_count,
             source_shard_sha256=hash_shard(shard),
-            schema=target_schema,
-            schema_version=target_schema_version,
         )
     except BaseException:
         cache.close()
@@ -183,9 +177,9 @@ def _prepare_enrichment_context(
         shard=shard,
         parquet=parquet,
         source_schema=source_schema,
-        target_schema=target_schema,
         target_schema_version=target_schema_version,
         source_row_count=source_row_count,
+        store=store,
         checkpoint=checkpoint,
         cache=cache,
         staged=staged,
@@ -198,12 +192,12 @@ def _process_enrichment_batches(
     *,
     parquet: pq.ParquetFile,
     source_schema: pa.Schema,
-    target_schema: pa.Schema,
     target_schema_version: str,
     source_row_count: int,
     batch_rows: int,
     next_part_index: int,
-    checkpoint: EnrichmentCheckpoint,
+    store: CheckpointStore,
+    checkpoint: Checkpoint,
     cache: TextCache,
     invocation_id: str,
     fetcher: Fetcher,
@@ -232,12 +226,11 @@ def _process_enrichment_batches(
             )
             changed = changed or batch_changed
             cache.flush()
-            write_checkpoint_part(
+            store.write_part(
                 checkpoint.directory,
                 next_part_index,
                 enriched_rows,
                 batch_rows=batch_rows,
-                schema=target_schema,
             )
             next_part_index += 1
             processed_rows += len(enriched_rows)
@@ -371,27 +364,25 @@ def _promote_enriched_shard(
     *,
     shard: Path,
     staged: Path,
+    store: CheckpointStore,
     checkpoint_directory: Path,
     changed: bool,
     batch_rows: int,
     source_row_count: int,
     max_batch_rows: int,
-    target_schema: pa.Schema,
 ) -> int:
     """Assemble checkpoint parts and atomically promote the enriched shard."""
-    parts = checkpoint_parts(checkpoint_directory, schema=target_schema)
-    assembled_max_batch_rows = assemble_checkpoint(
-        parts,
+    assembled_max_batch_rows = store.assemble(
+        store.parts(checkpoint_directory),
         staged,
         batch_rows=batch_rows,
         row_count=source_row_count,
-        schema=target_schema,
     )
     max_batch_rows = max(max_batch_rows, assembled_max_batch_rows)
     if not changed:
         staged.unlink(missing_ok=True)
         return max_batch_rows
-    if not schema_matches(pq.read_schema(staged), target_schema):
+    if not schema_matches(pq.read_schema(staged), store.schema):
         raise ValueError("enriched shard schema mismatch")
     atomic_promote_bundle([(staged, shard)])
     return max_batch_rows

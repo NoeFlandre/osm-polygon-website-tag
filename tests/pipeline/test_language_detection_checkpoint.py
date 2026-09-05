@@ -1,18 +1,23 @@
-"""Tests for durable language-detection checkpoint parts."""
+"""Contract for the language stage's durable checkpoint identity."""
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
 
-import osm_polygon_website_tag.pipeline.language_detection_checkpoint as checkpoint
+import osm_polygon_website_tag.pipeline.language_detection_checkpoint as language_checkpoint
+from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_SCHEMA_VERSION
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA_V1_4
 from osm_polygon_website_tag.pipeline.glotlid import ModelIdentity
+from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
+    language_checkpoint_store,
+    load_language_checkpoint,
+)
 
 
 def _model(sha256: str = "a" * 64) -> ModelIdentity:
@@ -26,7 +31,7 @@ def _row(index: int) -> dict[str, object]:
             values[field.name] = f"source:way/{index}"
         elif field.name == "website":
             values[field.name] = "https://example.org"
-        elif field.name == "has_website" or field.name == "has_any_website":
+        elif field.name in {"has_website", "has_any_website"}:
             values[field.name] = True
         elif field.name == "website_text":
             values[field.name] = f"text {index}"
@@ -60,21 +65,46 @@ def _row(index: int) -> dict[str, object]:
     return values
 
 
-def test_checkpoint_metadata_binds_source_and_model(tmp_path: Path) -> None:
+def test_language_checkpoint_module_exposes_focused_boundary() -> None:
+    """Checkpoint identity is isolated from detection orchestration."""
+    module = importlib.import_module(
+        "osm_polygon_website_tag.pipeline.language_detection_checkpoint"
+    )
+
+    assert set(module.__all__) == {
+        "CHECKPOINT_DIRECTORY_SUFFIX",
+        "language_checkpoint_store",
+        "load_language_checkpoint",
+    }
+
+
+def test_store_is_bound_to_the_v1_4_language_contract() -> None:
+    assert language_checkpoint_store().schema.equals(
+        POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True
+    )
+    assert language_checkpoint_store().schema_version == LANGUAGE_SCHEMA_VERSION
+
+
+def test_checkpoint_parts_live_beside_the_shard_they_label(tmp_path: Path) -> None:
+    shard = tmp_path / "polygons" / "region.parquet"
+
+    directory = language_checkpoint_store().directory_for(shard)
+
+    assert directory == tmp_path / "polygons" / ".region.parquet.language.parts"
+    assert language_checkpoint.CHECKPOINT_DIRECTORY_SUFFIX == ".language.parts"
+
+
+def test_load_binds_the_prefix_to_both_source_and_model(tmp_path: Path) -> None:
     shard = tmp_path / "nested" / "region.parquet"
-    checkpoint_state = checkpoint.load_language_checkpoint(
+
+    loaded = load_language_checkpoint(
         shard,
         source_row_count=4,
         source_shard_sha256="b" * 64,
         model=_model(),
     )
 
-    assert checkpoint._checkpoint_directory(shard) == (
-        tmp_path / "nested" / ".region.parquet.language.parts"
-    )
-    metadata = json.loads((checkpoint_state.directory / "checkpoint.json").read_text())
-
-    assert metadata == {
+    assert json.loads((loaded.directory / "checkpoint.json").read_text()) == {
         "checkpoint_version": 1,
         "schema_version": "v1.4",
         "source_row_count": 4,
@@ -84,89 +114,53 @@ def test_checkpoint_metadata_binds_source_and_model(tmp_path: Path) -> None:
         "model_revision": "85cd671",
         "model_sha256": "a" * 64,
     }
-    reloaded = checkpoint.load_language_checkpoint(
-        shard,
-        source_row_count=4,
-        source_shard_sha256="b" * 64,
-        model=_model(),
-    )
-    assert reloaded.completed_rows == 0
+    assert loaded.completed_rows == 0
 
 
-def test_checkpoint_rejects_source_or_model_drift(tmp_path: Path) -> None:
+def test_load_rejects_source_or_model_drift(tmp_path: Path) -> None:
     shard = tmp_path / "region.parquet"
-    checkpoint.load_language_checkpoint(
+    load_language_checkpoint(
         shard,
         source_row_count=1,
         source_shard_sha256="b" * 64,
         model=_model(),
     )
+    drift = re.escape("language checkpoint does not match source or model identity: region.parquet")
 
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            "language checkpoint does not match source or model identity: region.parquet"
-        ),
-    ):
-        checkpoint.load_language_checkpoint(
+    with pytest.raises(ValueError, match=drift):
+        load_language_checkpoint(
             shard,
             source_row_count=1,
             source_shard_sha256="c" * 64,
             model=_model(),
         )
-    with pytest.raises(
-        ValueError,
-        match=re.escape(
-            "language checkpoint does not match source or model identity: region.parquet"
-        ),
-    ):
-        checkpoint.load_language_checkpoint(
+    with pytest.raises(ValueError, match=drift):
+        load_language_checkpoint(
             shard,
             source_row_count=1,
             source_shard_sha256="b" * 64,
             model=_model("d" * 64),
         )
+    with pytest.raises(ValueError, match=drift):
+        load_language_checkpoint(
+            shard,
+            source_row_count=1,
+            source_shard_sha256="b" * 64,
+            model=ModelIdentity("other/repo", "other.bin", "0000000", "a" * 64),
+        )
 
 
-def test_checkpoint_parts_are_sequential_and_v1_4_shaped(tmp_path: Path) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
-
-    parts = checkpoint.checkpoint_parts(directory)
-    assert parts == (directory / "part-00000000.parquet",)
-    assert pq.read_schema(parts[0]).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
-
-    (directory / "part-00000002.parquet").write_bytes(parts[0].read_bytes())
-    with pytest.raises(ValueError, match="non-sequential"):
-        checkpoint.checkpoint_parts(directory)
-
-
-def test_checkpoint_parts_preserve_language_error_identity(tmp_path: Path) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    wrong_schema = POLYGON_PUBLIC_SCHEMA_V1_4.append(pa.field("unexpected", pa.string()))
-    row = {**_row(0), "unexpected": "value"}
-    pq.write_table(
-        pa.Table.from_pylist([row], schema=wrong_schema),
-        directory / "part-00000000.parquet",
-    )
-
-    with pytest.raises(ValueError, match="invalid language checkpoint schema"):
-        checkpoint.checkpoint_parts(directory)
-
-
-def test_checkpoint_allows_a_complete_durable_prefix(tmp_path: Path) -> None:
-    shard = tmp_path / "nested" / "region.parquet"
-    state = checkpoint.load_language_checkpoint(
+def test_load_reports_a_durable_prefix_written_for_the_same_model(tmp_path: Path) -> None:
+    shard = tmp_path / "region.parquet"
+    opened = load_language_checkpoint(
         shard,
         source_row_count=1,
         source_shard_sha256="b" * 64,
         model=_model(),
     )
-    checkpoint.write_language_checkpoint_part(state.directory, 0, [_row(0)], batch_rows=1)
+    language_checkpoint_store().write_part(opened.directory, 0, [_row(0)], batch_rows=1)
 
-    loaded = checkpoint.load_language_checkpoint(
+    loaded = load_language_checkpoint(
         shard,
         source_row_count=1,
         source_shard_sha256="b" * 64,
@@ -176,124 +170,20 @@ def test_checkpoint_allows_a_complete_durable_prefix(tmp_path: Path) -> None:
     assert loaded.completed_rows == 1
 
 
-def test_checkpoint_part_writer_preserves_language_error_identity(tmp_path: Path) -> None:
+def test_stage_errors_name_the_language_stage(tmp_path: Path) -> None:
     directory = tmp_path / "parts"
     directory.mkdir()
-    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
+    language_checkpoint_store().write_part(directory, 0, [_row(0)], batch_rows=1)
 
     with pytest.raises(
         ValueError,
         match=re.escape("language checkpoint part already exists: part-00000000.parquet"),
     ):
-        checkpoint.write_language_checkpoint_part(directory, 0, [_row(1)], batch_rows=1)
-
-
-def test_checkpoint_assembly_preserves_language_error_identity(tmp_path: Path) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
-
-    with pytest.raises(
-        ValueError,
-        match="language row count changed while assembling checkpoint",
-    ):
-        checkpoint.assemble_language_checkpoint(
-            (directory / "part-00000000.parquet",),
+        language_checkpoint_store().write_part(directory, 0, [_row(1)], batch_rows=1)
+    with pytest.raises(ValueError, match="language row count changed while assembling"):
+        language_checkpoint_store().assemble(
+            language_checkpoint_store().parts(directory),
             tmp_path / "staged.parquet",
             batch_rows=1,
             row_count=2,
         )
-
-
-def test_checkpoint_assembly_preserves_part_order(tmp_path: Path) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
-    checkpoint.write_language_checkpoint_part(directory, 1, [_row(1)], batch_rows=1)
-
-    staged = tmp_path / "staged.parquet"
-    max_batch_rows = checkpoint.assemble_language_checkpoint(
-        (directory / "part-00000000.parquet", directory / "part-00000001.parquet"),
-        staged,
-        batch_rows=1,
-        row_count=2,
-    )
-
-    assert max_batch_rows == 1
-    assert pq.ParquetFile(staged).metadata.row_group(0).column(0).compression == "SNAPPY"
-    assert [row["polygon_id"] for row in pq.read_table(staged).to_pylist()] == [
-        "source:way/0",
-        "source:way/1",
-    ]
-
-
-def test_checkpoint_assembly_requests_snappy_compression(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    checkpoint.write_language_checkpoint_part(directory, 0, [_row(0)], batch_rows=1)
-    original_writer = checkpoint.pq.ParquetWriter
-    compressions: list[object] = []
-
-    def recording_writer(*args: object, **kwargs: object) -> object:
-        compressions.append(kwargs.get("compression"))
-        return original_writer(*args, **kwargs)
-
-    monkeypatch.setattr(checkpoint.pq, "ParquetWriter", recording_writer)
-
-    checkpoint.assemble_language_checkpoint(
-        (directory / "part-00000000.parquet",),
-        tmp_path / "staged.parquet",
-        batch_rows=1,
-        row_count=1,
-    )
-
-    assert compressions == ["snappy"]
-
-
-def test_empty_checkpoint_assembly_reports_no_batch_rows(tmp_path: Path) -> None:
-    staged = tmp_path / "empty.parquet"
-
-    assert checkpoint.assemble_language_checkpoint((), staged, batch_rows=1, row_count=0) == 0
-    assert pq.read_table(staged).num_rows == 0
-
-
-def test_checkpoint_rejects_unknown_files_and_cleans_known_temps(tmp_path: Path) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    metadata = directory / "checkpoint.json"
-    temporary = directory / ".part-00000000.parquet.writing"
-    temporary.write_bytes(b"stale")
-    metadata_temporary = metadata.with_suffix(metadata.suffix + ".tmp")
-    metadata_temporary.write_text("stale")
-    checkpoint._cleanup_checkpoint_temps(directory, metadata)
-    assert not temporary.exists()
-    assert not metadata_temporary.exists()
-    checkpoint._cleanup_checkpoint_temps(directory, metadata)
-
-    (directory / "unexpected").write_text("x")
-    with pytest.raises(ValueError, match="unrecognized language checkpoint contents"):
-        checkpoint._validate_checkpoint_contents(directory, ())
-
-
-def test_checkpoint_cleanup_uses_missing_ok_for_known_temps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    directory = tmp_path / "parts"
-    directory.mkdir()
-    metadata = directory / "checkpoint.json"
-    temporary = directory / ".part-00000000.parquet.writing"
-    temporary.write_bytes(b"stale")
-    metadata_temporary = metadata.with_suffix(metadata.suffix + ".tmp")
-    metadata_temporary.write_text("stale")
-    calls: list[tuple[str, bool | None]] = []
-
-    def record_unlink(path: Path, *, missing_ok: bool | None = False) -> None:
-        calls.append((path.name, missing_ok))
-
-    monkeypatch.setattr(checkpoint.Path, "unlink", record_unlink)
-
-    checkpoint._cleanup_checkpoint_temps(directory, metadata)
-
-    assert calls == [(temporary.name, True), (metadata_temporary.name, True)]

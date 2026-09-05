@@ -33,7 +33,7 @@ from osm_polygon_website_tag.pipeline.glotlid import (
     model_identity_for_path,
 )
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
-    CHECKPOINT_DIRECTORY_SUFFIX,
+    language_checkpoint_store,
     load_language_checkpoint,
 )
 from osm_polygon_website_tag.runtime.run_state import (
@@ -327,7 +327,7 @@ def _validate_sync_state(state: RunState, bundle: Grid5000Bundle) -> None:
 
 def _copy_checkpoint(source: Path, target: Path, bundle: Grid5000Bundle) -> None:
     """Validate and copy an existing source-bound checkpoint prefix."""
-    checkpoint_dir = _checkpoint_directory(source)
+    checkpoint_dir = language_checkpoint_store().directory_for(source)
     if not checkpoint_dir.exists():
         return
     if not checkpoint_dir.is_dir():
@@ -366,7 +366,7 @@ def _sync_completed_shard(
             atomic_promote_bundle([(staged, local)])
         finally:
             staged.unlink(missing_ok=True)
-        shutil.rmtree(_checkpoint_directory(local), ignore_errors=True)
+        shutil.rmtree(language_checkpoint_store().directory_for(local), ignore_errors=True)
     update_public_shard_metadata(
         state,
         filename=f"{local.stem}.osm.pbf",
@@ -401,7 +401,7 @@ def _sync_paused_checkpoint(
     )
     if checkpoint.completed_rows != result.processed_rows:
         raise ValueError("paused result does not match checkpoint progress")
-    _replace_directory(checkpoint.directory, _checkpoint_directory(local))
+    _replace_directory(checkpoint.directory, language_checkpoint_store().directory_for(local))
 
 
 def _validate_completed_shard(path: Path, result: Grid5000Result) -> None:
@@ -601,11 +601,6 @@ def _remove_directory(path: Path | None) -> None:
     """Remove a temporary directory when it exists."""
     if path is not None:
         shutil.rmtree(path, ignore_errors=True)
-
-
-def _checkpoint_directory(shard: Path) -> Path:
-    """Return the language checkpoint directory for a shard."""
-    return shard.with_name(f".{shard.name}{CHECKPOINT_DIRECTORY_SUFFIX}")
 
 
 def _read_object(path: Path, label: str) -> dict[str, object]:

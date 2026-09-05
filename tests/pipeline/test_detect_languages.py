@@ -19,8 +19,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
+from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
-from osm_polygon_website_tag.pipeline.language_detection_checkpoint import LanguageCheckpoint
+from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
+    language_checkpoint_store,
+)
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 
 
@@ -719,7 +722,8 @@ def test_skip_checkpointed_rows_preserves_remaining_skip_count() -> None:
 def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.MonkeyPatch) -> None:
     observed: dict[str, object] = {}
     parquet = cast(pq.ParquetFile, object())
-    checkpoint = LanguageCheckpoint(Path("parts"), (), 0)
+    checkpoint = Checkpoint(Path("parts"), (), 0)
+    store = language_checkpoint_store()
     detector = RecordingDetector()
 
     def clock() -> float:
@@ -728,8 +732,9 @@ def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.Mon
     def fake_process(
         actual_parquet: pq.ParquetFile,
         source_row_count: int,
-        actual_checkpoint: LanguageCheckpoint,
+        actual_checkpoint: Checkpoint,
         *,
+        store: object,
         next_part_index: int,
         detector: object,
         batch_rows: int,
@@ -740,6 +745,7 @@ def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.Mon
             parquet=actual_parquet,
             source_row_count=source_row_count,
             checkpoint=actual_checkpoint,
+            store=store,
             next_part_index=next_part_index,
             detector=detector,
             batch_rows=batch_rows,
@@ -755,6 +761,7 @@ def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.Mon
             parquet,
             3,
             checkpoint,
+            store=store,
             next_part_index=4,
             detector=detector,
             batch_rows=2,
@@ -767,6 +774,7 @@ def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.Mon
         "parquet": parquet,
         "source_row_count": 3,
         "checkpoint": checkpoint,
+        "store": store,
         "next_part_index": 4,
         "detector": detector,
         "batch_rows": 2,
@@ -784,7 +792,8 @@ def test_completed_process_progress_retains_rows_and_completion() -> None:
     progress = detection._process_detection_batches_with_progress(
         cast(pq.ParquetFile, EmptyParquet()),
         2,
-        LanguageCheckpoint(Path("parts"), (), 2),
+        Checkpoint(Path("parts"), (), 2),
+        store=language_checkpoint_store(),
         next_part_index=0,
         detector=RecordingDetector(),
         batch_rows=2,
@@ -805,13 +814,14 @@ def test_empty_detection_batch_reports_no_change() -> None:
             assert batch_size == 2
             return []
 
-    checkpoint = LanguageCheckpoint(Path("parts"), (), 2)
+    checkpoint = Checkpoint(Path("parts"), (), 2)
 
     assert (
         detection._process_detection_batches(
             cast(pq.ParquetFile, EmptyParquet()),
             2,
             checkpoint,
+            store=language_checkpoint_store(),
             next_part_index=0,
             detector=RecordingDetector(),
             batch_rows=2,
@@ -838,7 +848,8 @@ def test_process_batches_reports_a_paused_progress_state_at_the_deadline() -> No
     progress = detection._process_detection_batches_with_progress(
         cast(pq.ParquetFile, OneBatchParquet()),
         1,
-        LanguageCheckpoint(Path("parts"), (), 0),
+        Checkpoint(Path("parts"), (), 0),
+        store=language_checkpoint_store(),
         next_part_index=0,
         detector=RecordingDetector(),
         batch_rows=1,

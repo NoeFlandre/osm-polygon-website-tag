@@ -70,13 +70,15 @@ and a completion receipt is immutable; `run-all` returns without reopening
 sources or retrying enrichment.
 
 `enrich` owns row orchestration, URL resolution, cache use, and final shard
-promotion. `enrichment_checkpoint` owns the source-bound checkpoint metadata,
-sequential part validation, atomic part writes, and bounded final assembly.
-The shared `checkpoint_storage` module owns only the mechanics common to
-enrichment and language checkpoints; each stage retains its own identity
-metadata and schema-specific boundary. This keeps durable resume-state rules
-independently reviewable while leaving the `enrich_polygon_shard` entry point
-and on-disk contract unchanged.
+promotion. Durable resume state belongs to `checkpoint_storage`, whose
+`CheckpointStore` owns every mechanic a resumable stage needs: part naming and
+ordering, temporary-file cleanup, the stored identity contract, rejection of
+unrecognized directory contents, atomic part promotion, and bounded final
+assembly. A stage declares its contract once and then works in whole
+checkpoints. `enrichment_checkpoint` declares only what is specific to
+enrichment — its directory suffix, error identity, and the target schema
+resolved per invocation — so the on-disk contract and the
+`enrich_polygon_shard` entry point are unchanged.
 
 ## Language detection
 
@@ -87,9 +89,11 @@ language pairs, and atomically promotes a validated v1.4 shard. Absent or
 unsuccessful text receives null language fields.
 
 `glotlid` owns the pinned FastText/GlotLID adapter, model hash, and explicit
-Seagate cache boundary. `language_detection_checkpoint` owns source/model
-identity metadata and the language-specific public boundary, while shared
-checkpoint mechanics live in `checkpoint_storage`. A `Ctrl-C` or ordinary
+Seagate cache boundary. `language_detection_checkpoint` declares the language
+stage's `CheckpointStore` and joins the pinned model identity to the source
+hash in the stored contract, so labels are only reused while both are
+unchanged; the checkpoint mechanics themselves live in `checkpoint_storage`
+and are shared with enrichment. A `Ctrl-C` or ordinary
 exception leaves the source shard untouched and preserves durable parts for
 the next invocation. The model is loaded once by the application layer and is
 never copied to URL or geometry workers.

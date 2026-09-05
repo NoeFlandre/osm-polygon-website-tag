@@ -24,13 +24,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, TEXT_UNFINISHED_STATUSES
+from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
 from osm_polygon_website_tag.pipeline.glotlid import LanguageDetector, LanguagePrediction
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
-    LanguageCheckpoint,
-    assemble_language_checkpoint,
-    checkpoint_parts,
+    language_checkpoint_store,
     load_language_checkpoint,
-    write_language_checkpoint_part,
 )
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -69,7 +67,8 @@ class _DetectionContext:
     shard: Path
     parquet: pq.ParquetFile
     source_row_count: int
-    checkpoint: LanguageCheckpoint
+    store: CheckpointStore
+    checkpoint: Checkpoint
     staged: Path
     next_part_index: int
 
@@ -105,6 +104,7 @@ def detect_language_shard(
             context.parquet,
             context.source_row_count,
             context.checkpoint,
+            store=context.store,
             next_part_index=context.next_part_index,
             detector=detector,
             batch_rows=batch_rows,
@@ -227,6 +227,7 @@ def _prepare_detection_context(
         shard=shard,
         parquet=parquet,
         source_row_count=source_row_count,
+        store=language_checkpoint_store(),
         checkpoint=checkpoint,
         staged=staged,
         next_part_index=len(checkpoint.parts),
@@ -362,8 +363,9 @@ def _language_pair_needs_detection(row: dict[str, object], prefix: str) -> bool:
 def _process_detection_batches(
     parquet: pq.ParquetFile,
     source_row_count: int,
-    checkpoint: LanguageCheckpoint,
+    checkpoint: Checkpoint,
     *,
+    store: CheckpointStore,
     next_part_index: int,
     detector: LanguageDetector,
     batch_rows: int,
@@ -375,6 +377,7 @@ def _process_detection_batches(
         parquet,
         source_row_count,
         checkpoint,
+        store=store,
         next_part_index=next_part_index,
         detector=detector,
         batch_rows=batch_rows,
@@ -386,8 +389,9 @@ def _process_detection_batches(
 def _process_detection_batches_with_progress(
     parquet: pq.ParquetFile,
     source_row_count: int,
-    checkpoint: LanguageCheckpoint,
+    checkpoint: Checkpoint,
     *,
+    store: CheckpointStore,
     next_part_index: int,
     detector: LanguageDetector,
     batch_rows: int,
@@ -404,7 +408,7 @@ def _process_detection_batches_with_progress(
         if _deadline_reached(deadline, clock):
             return _DetectionProgress(processed_rows, max_batch_rows, completed=False)
         detected_rows = _detect_batch(originals, detector)
-        write_language_checkpoint_part(
+        store.write_part(
             checkpoint.directory,
             next_part_index,
             detected_rows,
@@ -558,9 +562,8 @@ def _valid_probability(value: object) -> bool:
 def _promote_detected_shard(
     *, context: _DetectionContext, batch_rows: int, max_batch_rows: int
 ) -> int:
-    parts = checkpoint_parts(context.checkpoint.directory)
-    assembled_max_batch_rows = assemble_language_checkpoint(
-        parts,
+    assembled_max_batch_rows = context.store.assemble(
+        context.store.parts(context.checkpoint.directory),
         context.staged,
         batch_rows=batch_rows,
         row_count=context.source_row_count,

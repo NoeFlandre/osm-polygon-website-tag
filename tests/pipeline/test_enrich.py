@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 from tests.fixtures.polygon_shards import legacy_polygon_row, write_legacy_polygon_shard
 
-import osm_polygon_website_tag.pipeline.enrichment_checkpoint as checkpoint_module
+import osm_polygon_website_tag.pipeline.checkpoint_storage as checkpoint_storage
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
@@ -43,6 +43,7 @@ from osm_polygon_website_tag.pipeline.enrich import (
     _validate_enrichment_settings,
     enrich_polygon_shard,
 )
+from osm_polygon_website_tag.pipeline.enrichment_checkpoint import enrichment_checkpoint_store
 from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
@@ -231,15 +232,11 @@ def test_assemble_checkpoint_streams_arrow_batches(
     def unexpected_row_sink(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("assembly must not construct BatchParquetSink")
 
-    monkeypatch.setattr(checkpoint_module, "BatchParquetSink", unexpected_row_sink)
+    monkeypatch.setattr(checkpoint_storage, "BatchParquetSink", unexpected_row_sink)
     staged = tmp_path / "staged.parquet"
+    store = enrichment_checkpoint_store()
 
-    max_batch_rows = checkpoint_module.assemble_checkpoint(
-        (part,),
-        staged,
-        batch_rows=2,
-        row_count=2,
-    )
+    max_batch_rows = store.assemble((part,), staged, batch_rows=2, row_count=2)
 
     assert max_batch_rows == 2
     assert pq.read_schema(staged).equals(POLYGON_PUBLIC_SCHEMA, check_metadata=True)
@@ -248,7 +245,7 @@ def test_assemble_checkpoint_streams_arrow_batches(
         "source:way/1",
     ]
     repeated = tmp_path / "repeated.parquet"
-    checkpoint_module.assemble_checkpoint((part,), repeated, batch_rows=2, row_count=2)
+    store.assemble((part,), repeated, batch_rows=2, row_count=2)
     assert repeated.read_bytes() == staged.read_bytes()
 
 

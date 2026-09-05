@@ -21,12 +21,12 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.pipeline import grid5000
+from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint
 from osm_polygon_website_tag.pipeline.detect_languages import (
     LanguageDetectionResult,
     detect_language_shard,
 )
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
-from osm_polygon_website_tag.pipeline.language_detection_checkpoint import LanguageCheckpoint
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -614,7 +614,7 @@ def test_copy_checkpoint_allows_a_prefix_at_the_source_row_count(
     source_checkpoint = source.with_name(f".{source.name}.language.parts")
     source_checkpoint.mkdir()
     (source_checkpoint / "checkpoint.json").write_text("{}", encoding="utf-8")
-    checkpoint = LanguageCheckpoint(source_checkpoint, (), bundle.source_row_count)
+    checkpoint = Checkpoint(source_checkpoint, (), bundle.source_row_count)
     monkeypatch.setattr(grid5000, "load_language_checkpoint", lambda *_args, **_kwargs: checkpoint)
 
     target = tmp_path / "copy-target"
