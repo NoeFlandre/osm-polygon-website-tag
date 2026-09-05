@@ -41,9 +41,11 @@ def sha256_directory(directory: Path) -> str:
         raise NotADirectoryError(directory)
     digest = hashlib.sha256()
     for path in sorted(child for child in directory.rglob("*") if child.is_file()):
-        digest.update(path.relative_to(directory).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(sha256_file(path).encode("ascii"))
+        # Both updates are fixed-length hex, so no separator byte is needed to
+        # keep the name and content boundaries unambiguous.
+        name = path.relative_to(directory).as_posix()
+        digest.update(hashlib.sha256(name.encode()).hexdigest().encode())
+        digest.update(sha256_file(path).encode())
     return digest.hexdigest()
 
 

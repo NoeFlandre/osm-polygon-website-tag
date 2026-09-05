@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
+    POLYGON_PUBLIC_SCHEMA_V1_5,
     column_doc,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
@@ -494,9 +495,11 @@ def _hostname_sections(stats: CardStats) -> list[str]:
 def _public_schema_for_card(
     run_dir: Path, source_names: Collection[str] | None = None
 ) -> pa.Schema:
-    """Return v1.4 when the selected public artifacts carry language fields."""
+    """Return the richest contract the selected public artifacts actually carry."""
     paths = _selected_public_paths(run_dir, source_names)
-    if _has_v1_4_schema(paths):
+    if _has_schema(paths, POLYGON_PUBLIC_SCHEMA_V1_5):
+        return POLYGON_PUBLIC_SCHEMA_V1_5
+    if _has_schema(paths, POLYGON_PUBLIC_SCHEMA_V1_4):
         return POLYGON_PUBLIC_SCHEMA_V1_4
     return POLYGON_PUBLIC_SCHEMA
 
@@ -512,12 +515,9 @@ def _selected_public_paths(run_dir: Path, source_names: Collection[str] | None) 
     return paths
 
 
-def _has_v1_4_schema(paths: Collection[Path]) -> bool:
-    """Return whether any selected public shard has the language contract."""
-    return any(
-        pq.read_schema(path).equals(POLYGON_PUBLIC_SCHEMA_V1_4, check_metadata=True)
-        for path in paths
-    )
+def _has_schema(paths: Collection[Path], schema: pa.Schema) -> bool:
+    """Return whether any selected public shard carries an exact contract."""
+    return any(pq.read_schema(path).equals(schema, check_metadata=True) for path in paths)
 
 
 def _schema_rows(schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> list[str]:

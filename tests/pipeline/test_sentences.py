@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import pytest
@@ -135,19 +136,25 @@ def test_segment_batch_rejects_a_result_count_that_does_not_match_the_batch() ->
             del texts
             return []
 
-    with pytest.raises(ValueError, match="sentence result count does not match input count"):
+    with pytest.raises(
+        ValueError, match=rf"^{re.escape('sentence result count does not match input count')}$"
+    ):
         segment_batch([_row()], ShortSplitter())
 
 
 def test_segment_batch_rejects_empty_segmentation_of_non_empty_text() -> None:
     splitter = _FakeSplitter({"One. Two.": ["  ", ""]})
 
-    with pytest.raises(ValueError, match="model returned no sentences for non-empty text"):
+    with pytest.raises(
+        ValueError, match=rf"^{re.escape('model returned no sentences for non-empty text')}$"
+    ):
         segment_batch([_row()], splitter)
 
 
 def test_segment_batch_rejects_a_non_string_successful_text() -> None:
-    with pytest.raises(ValueError, match="successful website text is not a string"):
+    with pytest.raises(
+        ValueError, match=rf"^{re.escape('successful website text is not a string')}$"
+    ):
         segment_batch([_row(website_text=None)], _FakeSplitter())
 
 

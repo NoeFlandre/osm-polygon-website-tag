@@ -4,12 +4,14 @@ Implements bounded data-processing stages.
 
 - Modules: `extraction`, `extraction_handler`, `area_work`, `extraction_records`,
   `record_builders`, `enrich`, `checkpoint_storage`, `enrichment_checkpoint`, `glotlid`,
-  `language_detection_checkpoint`, `detect_languages`, `grid5000`,
+  `language_detection_checkpoint`, `detect_languages`, `model_identity`,
+  `sat`, `sentence_languages`, `sentences`, `sentence_checkpoint`,
+  `split_sentences`, `grid5000`,
   `public_schema_migration`, `analyze`, `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
-  `migrate_public_shard`, `detect_language_shard`, `analyze_results`,
-  `deduplicate_public_shards`.
+  `migrate_public_shard`, `detect_language_shard`, `segment_sentence_shard`,
+  `analyze_results`, `deduplicate_public_shards`.
 - Excludes: full-run orchestration, card rendering, and remote publication.
 
 `deduplicate_public_shards` is a read-only derivative stage. It reads finalized
@@ -166,3 +168,34 @@ Hard process termination (such as `SIGKILL`) is outside the scope of these
 guarantees; an in-flight DuckDB write may leave spill files under
 `staging/duckdb/` because `duckdb_engine.cleanup_temp_dir` preserves
 non-empty diagnostic directories on purpose.
+
+## Sentence segmentation
+
+`segment_sentence_shard` consumes a language-complete v1.4 shard (or an
+already-segmented v1.5 one) and atomically promotes a validated v1.5 shard.
+Segmentation is attempted only for text the fetch stage completed, that is
+non-blank, and whose detected language the model covers; every other row
+records why it was skipped -- `absent`, `empty_text`, or
+`unsupported_language` -- rather than carrying an indistinguishable null.
+
+`sat` owns the pinned SaT ("Segment any Text") adapter. The model is a
+Hugging Face directory rather than one binary, so its identity is a digest
+over every file, with relative paths folded in so a reshuffled repository
+reads as a different model. Its revision is supplied by the caller rather
+than hard-coded, because nothing in the tree may claim a commit that has not
+actually been staged. `wtpsplit` is imported lazily inside the loader so that
+importing the adapter never drags in a deep-learning backend.
+
+`sentence_languages` bridges the two models' naming: GlotLID labels a
+language as `<ISO 639-3>_<script>` and covers thousands, while the segmenter
+is trained on 85 named by ISO 639-1. The segmenter is script-agnostic at
+inference, so only the language subtag is resolved and the script half is
+deliberately ignored. A guard test asserts the pinned table still matches the
+language metadata `wtpsplit` actually ships.
+
+`sentence_checkpoint` binds the durable prefix to the segmentation model as
+well as the source hash, so sentences are reused only while both are
+unchanged; the checkpoint mechanics themselves are `checkpoint_storage`'s,
+shared with enrichment and language detection. A time budget pauses between
+batches and leaves the source shard and its durable prefix intact, which is
+what makes a walltime-bounded reservation resumable.

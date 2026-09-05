@@ -85,5 +85,7 @@ def test_sha256_directory_rejects_a_file(tmp_path: Path) -> None:
     path = tmp_path / "model.bin"
     path.write_bytes(b"x")
 
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(NotADirectoryError) as error:
         model_identity.sha256_directory(path)
+
+    assert error.value.args == (path,)

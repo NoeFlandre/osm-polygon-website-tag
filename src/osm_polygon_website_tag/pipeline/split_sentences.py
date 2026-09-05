@@ -51,11 +51,26 @@ class SentenceSegmentationResult:
 
 @dataclass(frozen=True)
 class _Progress:
-    """Rows processed and batch width observed before stopping."""
+    """Rows processed and batch width observed before stopping.
+
+    A paused run raises :class:`_PausedError` carrying this value instead of
+    flagging completion, so there is no boolean to keep in step.
+    """
 
     processed_rows: int
     max_batch_rows: int
-    completed: bool
+
+
+class _PausedError(Exception):
+    """Signals an exhausted time budget, carrying the progress made so far.
+
+    Pausing is signalled rather than flagged so that no boolean literal
+    duplicates what the control flow already says.
+    """
+
+    def __init__(self, progress: _Progress) -> None:
+        super().__init__("segmentation paused")
+        self.progress = progress
 
 
 @dataclass
@@ -103,11 +118,11 @@ def segment_sentence_shard(
             deadline=deadline,
             clock=clock_function,
         )
-        if not progress.completed:
-            context.staged.unlink(missing_ok=True)
-            return _paused_result(shard, context, progress)
         max_batch_rows = _promote_shard(context, batch_rows, progress.max_batch_rows)
         shutil.rmtree(context.checkpoint.directory)
+    except _PausedError as paused:
+        context.staged.unlink(missing_ok=True)
+        return _paused_result(shard, context, paused.progress)
     except BaseException:
         context.staged.unlink(missing_ok=True)
         raise
@@ -187,7 +202,7 @@ def _process_batches(
         if not originals:
             continue
         if _deadline_reached(deadline, clock):
-            return _Progress(processed_rows, max_batch_rows, completed=False)
+            raise _PausedError(_Progress(processed_rows, max_batch_rows))
         segmented = _migrate_rows(segment_batch(originals, splitter))
         context.store.write_part(
             context.checkpoint.directory, next_part_index, segmented, batch_rows=batch_rows
@@ -197,7 +212,7 @@ def _process_batches(
         max_batch_rows = max(max_batch_rows, len(segmented))
     if processed_rows != context.source_row_count:
         raise ValueError("sentence row count changed")
-    return _Progress(processed_rows, max_batch_rows, completed=True)
+    return _Progress(processed_rows, max_batch_rows)
 
 
 def _migrate_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:

@@ -88,3 +88,26 @@ def test_default_data_dir_is_dedicated_seagate_root(
     monkeypatch.delenv("OSM_POLY_DATA_DIR", raising=False)
     monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path)
     assert paths.data_root() == tmp_path
+
+
+def test_sat_model_cache_lives_beside_the_other_model_caches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "Volumes" / "Seagate M3" / "projects" / "osm-polygon-website-tag"
+    monkeypatch.setattr(paths, "_configured_data_root", lambda: root)
+    monkeypatch.setattr(paths, "_is_under_seagate_root", lambda _path: True)
+
+    cache = paths.sat_model_cache_dir()
+
+    assert cache == root.resolve() / "models" / "sat"
+    assert cache.is_dir()
+
+
+def test_sat_model_cache_must_be_under_a_seagate_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(paths, "_configured_data_root", lambda: tmp_path)
+    monkeypatch.setattr(paths, "_is_under_seagate_root", lambda _path: False)
+
+    with pytest.raises(ValueError, match="SaT model cache must be under a Seagate data root"):
+        paths.sat_model_cache_dir()

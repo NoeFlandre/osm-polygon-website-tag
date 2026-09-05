@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -65,14 +66,16 @@ def test_split_of_nothing_never_calls_the_model(tmp_path: Path) -> None:
 def test_split_rejects_a_result_count_that_does_not_match(tmp_path: Path) -> None:
     model = _FakeModel([["only"]])
 
-    with pytest.raises(ValueError, match="sentence result count does not match input count"):
+    with pytest.raises(
+        ValueError, match=rf"^{re.escape('sentence result count does not match input count')}$"
+    ):
         _splitter(model, tmp_path).split(["a", "b"])
 
 
 def test_split_rejects_a_non_string_sentence(tmp_path: Path) -> None:
     model = _FakeModel([[17]])
 
-    with pytest.raises(ValueError, match="model returned a non-string sentence"):
+    with pytest.raises(ValueError, match=rf"^{re.escape('model returned a non-string sentence')}$"):
         _splitter(model, tmp_path).split(["a"])
 
 
@@ -103,8 +106,10 @@ def test_identity_changes_when_a_file_is_renamed(tmp_path: Path) -> None:
 
 
 def test_identity_requires_a_real_directory(tmp_path: Path) -> None:
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(NotADirectoryError) as error:
         sat_model_identity(tmp_path / "missing", revision="r")
+
+    assert error.value.args == (tmp_path / "missing",)
 
 
 def test_identity_is_exposed_for_checkpoint_binding(tmp_path: Path) -> None:

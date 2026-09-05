@@ -70,3 +70,12 @@ def test_v1_5_appends_sentence_fields_to_v1_4_without_reordering() -> None:
 
 def test_v1_5_is_accepted_for_resumption_and_migration() -> None:
     assert is_supported_public_polygon_schema(POLYGON_PUBLIC_SCHEMA_V1_5)
+
+
+def test_v1_5_is_a_current_output_schema_so_verification_accepts_it() -> None:
+    """Publishing is gated on this predicate; v1.5 shards must pass it."""
+    from osm_polygon_website_tag.contracts.polygon_schema import (
+        is_current_public_polygon_schema,
+    )
+
+    assert is_current_public_polygon_schema(POLYGON_PUBLIC_SCHEMA_V1_5)

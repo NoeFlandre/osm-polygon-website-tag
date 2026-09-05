@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from osm_polygon_website_tag.application import cli
+from osm_polygon_website_tag.application import cli, sentence_run
 from osm_polygon_website_tag.application.cli import app, main
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -625,3 +625,120 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
     assert events == [True]
     assert calls[0]["detect_languages"] is True
     assert '"complete": true' in capsys.readouterr().out
+
+
+def test_cli_segment_sentences_loads_the_pinned_model_and_updates_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    transition_status(state, "extracting")
+    transition_status(state, "extracted")
+    transition_status(state, "enriching")
+    transition_status(state, "enriched")
+    model_dir = tmp_path / "sat-3l-sm"
+    model_dir.mkdir()
+    loaded: list[tuple[Path, str]] = []
+    splitter = SimpleNamespace(
+        identity=ModelIdentity("segment-any-text/sat-3l-sm", "sat-3l-sm", "abc1234", "a" * 64),
+        split=lambda texts: [[text] for text in texts],
+    )
+
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(
+        cli,
+        "load_sat_splitter_from_path",
+        lambda path, *, revision: loaded.append((path, revision)) or splitter,
+    )
+    monkeypatch.setattr(cli, "shard_needs_sentence_segmentation", lambda _path: True)
+
+    observed: dict[str, object] = {}
+
+    def segment(_path, *, splitter, batch_rows, time_budget_seconds):
+        observed.update(
+            splitter=splitter, batch_rows=batch_rows, time_budget_seconds=time_budget_seconds
+        )
+        return SimpleNamespace(
+            row_count=1,
+            shard_sha256="b" * 64,
+            changed=True,
+            completed=True,
+            processed_rows=1,
+        )
+
+    monkeypatch.setattr(cli, "run_sentence_shards", _passthrough_sentence_run(segment))
+
+    assert (
+        main(
+            [
+                "segment-sentences",
+                "--run-dir",
+                str(run_dir),
+                "--model-dir",
+                str(model_dir),
+                "--model-revision",
+                "abc1234",
+                "--batch-rows",
+                "4",
+            ]
+        )
+        == 0
+    )
+
+    assert loaded == [(model_dir, "abc1234")]
+    assert observed["splitter"] is splitter
+    assert observed["batch_rows"] == 4
+    assert observed["time_budget_seconds"] is None
+    assert json.loads(capsys.readouterr().out) == {"changed_shards": 1, "run_dir": str(run_dir)}
+    assert load_run(run_dir).sources["monaco-latest.osm.pbf"]["public_shard_sha256"] == "b" * 64
+
+
+def _passthrough_sentence_run(segment):
+    """Run the real orchestrator with an injected per-shard segmenter."""
+
+    def run(shards, **kwargs):
+        return sentence_run.run_sentence_shards(shards, segment=segment, **kwargs)
+
+    return run
+
+
+def test_cli_segment_sentences_reports_nothing_to_do(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    """A fully segmented run must not load the model at all."""
+    run_dir = _setup_run(tmp_path)
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "shard_needs_sentence_segmentation", lambda _path: False)
+    monkeypatch.setattr(
+        cli,
+        "load_sat_splitter_from_path",
+        lambda *_args, **_kwargs: pytest.fail("no shard needs the model"),
+    )
+
+    assert (
+        main(
+            [
+                "segment-sentences",
+                "--run-dir",
+                str(run_dir),
+                "--model-dir",
+                str(tmp_path / "sat"),
+                "--model-revision",
+                "abc1234",
+                "--time-budget-seconds",
+                "5",
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out) == {
+        "changed_shards": 0,
+        "completed": True,
+        "processed_rows": 0,
+        "run_dir": str(run_dir),
+    }

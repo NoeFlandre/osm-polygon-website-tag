@@ -37,6 +37,8 @@ def test_glotlid_labels_resolve_by_language_ignoring_script() -> None:
     assert sat_code_for_glotlid_label("srp_Cyrl") == "sr"
     assert sat_code_for_glotlid_label("srp_Latn") == "sr"
     assert sat_code_for_glotlid_label("cmn_Hani") == "zh"
+    # Only the first underscore separates the subtag; the rest is script detail.
+    assert sat_code_for_glotlid_label("eng_Latn_XX") == "en"
 
 
 def test_unsupported_and_malformed_labels_resolve_to_nothing() -> None:

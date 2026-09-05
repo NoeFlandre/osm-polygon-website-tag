@@ -141,11 +141,16 @@ def is_supported_public_polygon_schema(schema: pa.Schema) -> bool:
     return any(schema_matches(schema, candidate) for candidate in _SUPPORTED_PUBLIC_POLYGON_SCHEMAS)
 
 
+_CURRENT_PUBLIC_POLYGON_SCHEMAS: tuple[pa.Schema, ...] = (
+    POLYGON_PUBLIC_SCHEMA_V1_3,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+    POLYGON_PUBLIC_SCHEMA_V1_5,
+)
+
+
 def is_current_public_polygon_schema(schema: pa.Schema) -> bool:
-    """Return whether ``schema`` is a current v1.3 or v1.4 output schema."""
-    return schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_3) or schema_matches(
-        schema, POLYGON_PUBLIC_SCHEMA_V1_4
-    )
+    """Return whether ``schema`` is a current v1.3, v1.4, or v1.5 output schema."""
+    return any(schema_matches(schema, candidate) for candidate in _CURRENT_PUBLIC_POLYGON_SCHEMAS)
 
 
 _COLUMN_DOCS: dict[str, str] = {

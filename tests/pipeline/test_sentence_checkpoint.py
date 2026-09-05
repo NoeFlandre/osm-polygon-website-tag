@@ -91,7 +91,10 @@ def test_stage_errors_name_the_sentence_stage(tmp_path: Path) -> None:
     )
     (loaded.directory / "unexpected").write_text("x")
 
-    with pytest.raises(ValueError, match="unrecognized sentence checkpoint contents"):
+    with pytest.raises(
+        ValueError,
+        match=rf"^{re.escape("unrecognized sentence checkpoint contents: ['unexpected']")}$",
+    ):
         load_sentence_checkpoint(
             shard, source_row_count=1, source_shard_sha256="b" * 64, model=_model()
         )

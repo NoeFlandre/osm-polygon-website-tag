@@ -623,7 +623,7 @@ def test_public_schema_selection_respects_source_filter_and_metadata_check(
             return True
 
     monkeypatch.setattr(card_module.pq, "read_schema", lambda _path: Schema())
-    assert card_module._has_v1_4_schema([language_shard])
+    assert card_module._has_schema([language_shard], POLYGON_PUBLIC_SCHEMA_V1_4)
     assert checks == [True]
 
 

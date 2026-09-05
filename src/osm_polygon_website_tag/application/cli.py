@@ -12,6 +12,7 @@ import typer
 from rich.console import Console
 
 from osm_polygon_website_tag.application.progress import ProgressReporter
+from osm_polygon_website_tag.application.sentence_run import run_sentence_shards
 from osm_polygon_website_tag.application.workflow import run_all
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.detect_languages import (
@@ -33,6 +34,14 @@ from osm_polygon_website_tag.pipeline.grid5000 import (
     prepare_language_bundle,
     run_language_bundle,
     sync_language_bundle,
+)
+from osm_polygon_website_tag.pipeline.sat import load_sat_splitter_from_path
+from osm_polygon_website_tag.pipeline.split_sentences import (
+    DEFAULT_BATCH_ROWS as DEFAULT_SENTENCE_BATCH_ROWS,
+)
+from osm_polygon_website_tag.pipeline.split_sentences import (
+    shard_needs_sentence_segmentation,
+    validate_segmentation_options,
 )
 from osm_polygon_website_tag.publishing.publish import (
     build_publish_plan,
@@ -461,6 +470,70 @@ def detect_languages_command(
     )
     if progress.completed:
         _finish_language_command_state(state)
+    _json(
+        _language_command_payload(
+            normalized_run_dir,
+            changed_shards=progress.changed_shards,
+            completed=progress.completed,
+            processed_rows=progress.processed_rows,
+            bounded=time_budget_seconds is not None,
+        ),
+        sort_keys=True,
+    )
+    return 0
+
+
+@app.command("segment-sentences")
+def segment_sentences_command(
+    run_dir: RunDir,
+    model_dir: Annotated[
+        Path,
+        typer.Option("--model-dir", help="Locally staged SaT model directory."),
+    ],
+    model_revision: Annotated[
+        str,
+        typer.Option("--model-revision", help="Pinned Hugging Face revision of the SaT model."),
+    ],
+    batch_rows: Annotated[
+        int,
+        typer.Option("--batch-rows", help="Rows processed per sentence checkpoint batch."),
+    ] = DEFAULT_SENTENCE_BATCH_ROWS,
+    time_budget_seconds: Annotated[
+        float | None,
+        typer.Option("--time-budget-seconds", help="Stop cleanly after this segmentation budget."),
+    ] = None,
+) -> int:
+    """Segment website text into sentences for every language-complete shard."""
+    validate_segmentation_options(batch_rows, time_budget_seconds)
+    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    state = load_run(normalized_run_dir)
+    paths = sorted((normalized_run_dir / "polygons").glob("*.parquet"))
+    _validate_language_shard_membership(state, paths)
+    _reject_frozen_language_run(state)
+    needed = [path for path in paths if shard_needs_sentence_segmentation(path)]
+    if not needed:
+        _json(
+            _language_command_payload(
+                normalized_run_dir,
+                changed_shards=0,
+                completed=True,
+                processed_rows=0,
+                bounded=time_budget_seconds is not None,
+            ),
+            sort_keys=True,
+        )
+        return 0
+    splitter = load_sat_splitter_from_path(
+        assert_seagate_path(model_dir, label="SaT model directory"),
+        revision=model_revision,
+    )
+    progress = run_sentence_shards(
+        needed,
+        splitter=splitter,
+        record=lambda shard, result: _record_completed_language_shard(state, shard, result),
+        batch_rows=batch_rows,
+        time_budget_seconds=time_budget_seconds,
+    )
     _json(
         _language_command_payload(
             normalized_run_dir,

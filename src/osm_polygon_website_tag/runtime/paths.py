@@ -69,6 +69,16 @@ def glotlid_model_cache_dir() -> Path:
     return path
 
 
+def sat_model_cache_dir() -> Path:
+    """Return the generated-data directory reserved for the SaT model cache."""
+    normalized_root = _configured_data_root().resolve()
+    if not _is_under_seagate_root(normalized_root):
+        raise ValueError(f"SaT model cache must be under a Seagate data root: {DEFAULT_DATA_ROOT}")
+    path = normalized_root / "models" / "sat"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def assert_seagate_path(path: Path | str, *, label: str) -> Path:
     """Require a production path to be inside an approved Seagate data root.
 

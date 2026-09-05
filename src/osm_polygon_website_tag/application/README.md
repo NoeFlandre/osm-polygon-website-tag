@@ -27,3 +27,10 @@ separate from workflow side effects.
   compatibility function `main`, and `grid5000_runner.main`.
 - Excludes: reusable domain rules, storage primitives, stage implementations,
   and inventory writes.
+
+`sentence_run` owns bounded multi-shard orchestration for the sentence
+stage. One monotonic budget is shared across every shard, so a
+walltime-limited job stops cleanly between or inside shards and resumes from
+its durable checkpoints on the next invocation. It takes the per-shard
+segmenter and the manifest recorder as arguments, which keeps the loop free
+of run-state and model concerns and testable without either.
