@@ -43,6 +43,7 @@ from __future__ import annotations
 import pyarrow as pa
 
 from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_FIELDS
+from osm_polygon_website_tag.contracts.sentence_schema import SENTENCE_FIELDS
 from osm_polygon_website_tag.contracts.text_schema import TEXT_FIELDS
 
 SCHEMA_VERSION = "v1.3"
@@ -119,11 +120,14 @@ POLYGON_PUBLIC_SCHEMA = POLYGON_PUBLIC_SCHEMA_V1_3
 
 POLYGON_PUBLIC_SCHEMA_V1_4: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_3, *LANGUAGE_FIELDS])
 
+POLYGON_PUBLIC_SCHEMA_V1_5: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_4, *SENTENCE_FIELDS])
+
 _SUPPORTED_PUBLIC_POLYGON_SCHEMAS: tuple[pa.Schema, ...] = (
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
     POLYGON_PUBLIC_SCHEMA_V1_3,
     POLYGON_PUBLIC_SCHEMA_V1_4,
+    POLYGON_PUBLIC_SCHEMA_V1_5,
 )
 
 

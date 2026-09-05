@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -13,22 +12,13 @@ from typing import Any, Protocol
 import fasttext
 from huggingface_hub import hf_hub_download
 
+from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity, sha256_file
+
 MODEL_REPOSITORY = "cis-lmu/glotlid"
 MODEL_FILENAME = "model_v3.bin"
 MODEL_REVISION = "85cd671"
-_HASH_CHUNK_BYTES = 1024 * 1024
 # GlotLID's float32 FastText output can overshoot one by a few millionths.
 _PROBABILITY_BOUND_TOLERANCE = 1.5e-5
-
-
-@dataclass(frozen=True)
-class ModelIdentity:
-    """Immutable identity of the model binary used for one detection run."""
-
-    repository: str
-    filename: str
-    revision: str
-    sha256: str
 
 
 @dataclass(frozen=True)
@@ -92,7 +82,7 @@ def model_identity_for_path(model_path: Path | str) -> ModelIdentity:
         repository=MODEL_REPOSITORY,
         filename=MODEL_FILENAME,
         revision=MODEL_REVISION,
-        sha256=_sha256_file(path),
+        sha256=sha256_file(path),
     )
 
 
@@ -162,18 +152,6 @@ def _one_item_sequence(value: Any) -> bool:
         return len(value) == 1
     except TypeError:
         return False
-
-
-def _sha256_file(path: Path) -> str:
-    """Hash a model file in bounded chunks."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while True:
-            chunk = handle.read(_HASH_CHUNK_BYTES)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 __all__ = [

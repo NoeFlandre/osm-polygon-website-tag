@@ -313,32 +313,3 @@ def test_one_item_sequence_distinguishes_scalar_empty_and_single_values() -> Non
     assert glotlid._one_item_sequence("scalar") is False
     assert glotlid._one_item_sequence([]) is False
     assert glotlid._one_item_sequence(["one"]) is True
-
-
-def test_sha256_reads_in_bounded_chunks_and_stops_at_empty_chunk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class FakeHandle:
-        def __init__(self) -> None:
-            self.sizes: list[int] = []
-            self.chunks = iter([b"model", b""])
-
-        def __enter__(self) -> FakeHandle:
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-        def read(self, size: int) -> bytes:
-            assert size == glotlid._HASH_CHUNK_BYTES
-            self.sizes.append(size)
-            try:
-                return next(self.chunks)
-            except StopIteration as error:
-                raise AssertionError("hash reader was not stopped by an empty chunk") from error
-
-    handle = FakeHandle()
-    monkeypatch.setattr(glotlid.Path, "open", lambda _path, _mode: handle)
-
-    assert glotlid._sha256_file(tmp_path / "model.bin") == hashlib.sha256(b"model").hexdigest()
-    assert handle.sizes == [glotlid._HASH_CHUNK_BYTES, glotlid._HASH_CHUNK_BYTES]
