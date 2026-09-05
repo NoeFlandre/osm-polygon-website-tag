@@ -59,78 +59,10 @@ def build_public_record(
     """Build and validate one public polygon record."""
     if derived is None:
         derived = derive_tags(tags_dict)
-    website_metadata = _website_metadata(derived)
-    record = _public_record_values(
-        polygon_id=polygon_id,
-        source_pbf=source_pbf,
-        region=region,
-        tags_dict=tags_dict,
-        osm_type=osm_type,
-        osm_id=osm_id,
-        osm_version=osm_version,
-        osm_timestamp=osm_timestamp,
-        geom_text=geom_text,
-        centroid_text=centroid_text,
-        centroid_kind=centroid_kind,
-        lat=lat,
-        lon=lon,
-        bbox=bbox,
-        area_m2=area_m2,
-        area_bucket=area_bucket,
-        derived=derived,
-        website_metadata=website_metadata,
-    )
-    record.update(
-        initial_text_fields(
-            website_present=derived.has_website,
-            contact_website_present=derived.has_contact_website,
-        )
-    )
-    validate_public_row(record)
-    return record
-
-
-def _website_metadata(
-    derived: DerivedTags,
-) -> tuple[str | None, str | None, str | None, str | None]:
-    """Derive public URL classes and hostnames from one shared projection."""
-    website_class = classify_website(derived.website).value if derived.website else None
-    contact_class = (
-        classify_contact_website(derived.contact_website).value if derived.contact_website else None
-    )
-    website_hostname = extract_hostname(derived.website) if derived.website else None
-    contact_hostname = (
-        extract_contact_hostname(derived.contact_website) if derived.contact_website else None
-    )
-    return website_class, contact_class, website_hostname, contact_hostname
-
-
-def _public_record_values(
-    *,
-    polygon_id: str,
-    source_pbf: str,
-    region: str,
-    tags_dict: dict[str, str],
-    osm_type: str,
-    osm_id: int,
-    osm_version: int,
-    osm_timestamp: dt.datetime,
-    geom_text: str,
-    centroid_text: str,
-    centroid_kind: str,
-    lat: float,
-    lon: float,
-    bbox: list[float],
-    area_m2: float,
-    area_bucket: str,
-    derived: DerivedTags,
-    website_metadata: tuple[str | None, str | None, str | None, str | None],
-) -> dict[str, object]:
-    """Assemble the non-text fields of a public polygon row."""
-    website_class, contact_class, website_hostname, contact_hostname = website_metadata
+    website_class, contact_class, website_hostname, contact_hostname = _website_metadata(derived)
     tags_json, tag_keys_json, bbox_json = _serialise_public_values(tags_dict, bbox)
     name_raw = normalize_value(tags_dict.get("name", "")) or None
-    return {
+    record: dict[str, object] = {
         "polygon_id": polygon_id,
         "region": region,
         "source_pbf": source_pbf,
@@ -162,6 +94,29 @@ def _public_record_values(
         "area_bucket": area_bucket,
         "schema_version": SCHEMA_VERSION,
     }
+    record.update(
+        initial_text_fields(
+            website_present=derived.has_website,
+            contact_website_present=derived.has_contact_website,
+        )
+    )
+    validate_public_row(record)
+    return record
+
+
+def _website_metadata(
+    derived: DerivedTags,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Derive public URL classes and hostnames from one shared projection."""
+    website_class = classify_website(derived.website).value if derived.website else None
+    contact_class = (
+        classify_contact_website(derived.contact_website).value if derived.contact_website else None
+    )
+    website_hostname = extract_hostname(derived.website) if derived.website else None
+    contact_hostname = (
+        extract_contact_hostname(derived.contact_website) if derived.contact_website else None
+    )
+    return website_class, contact_class, website_hostname, contact_hostname
 
 
 def _serialise_public_values(tags_dict: dict[str, str], bbox: list[float]) -> tuple[str, str, str]:

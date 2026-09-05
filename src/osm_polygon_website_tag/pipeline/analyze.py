@@ -98,16 +98,8 @@ class AnalysisSummary:
     cell_canonical: dict[str, int]
 
 
-def _public_row_count(polygons_dir: Path) -> int:
-    return sum(
-        int(pq.ParquetFile(path).metadata.num_rows) for path in polygons_dir.glob("*.parquet")
-    )
-
-
-def _rejection_count(rejections_dir: Path) -> int:
-    return sum(
-        int(pq.ParquetFile(path).metadata.num_rows) for path in rejections_dir.glob("*.parquet")
-    )
+def _directory_row_count(directory: Path) -> int:
+    return sum(_parquet_row_count(path) for path in directory.glob("*.parquet"))
 
 
 def _parquet_row_count(path: Path) -> int:
@@ -167,7 +159,7 @@ def analyze_results(run_dir: Path | str) -> AnalysisSummary:
         _validate_analysis_inputs(run_dir, polygons_dir, obs_dir, rej_dir)
         con = _register_analysis_sources(run_dir, obs_dir, polygons_dir, rej_dir)
         try:
-            summary = _write_analysis_tables(con, obs_dir, polygons_dir, rej_dir, analysis_dir)
+            summary = _write_analysis_tables(con, polygons_dir, rej_dir, analysis_dir)
         finally:
             _close_analysis_connection(con)
         atomic_promote_bundle(
@@ -216,13 +208,12 @@ def _close_analysis_connection(con: duckdb.DuckDBPyConnection) -> None:
 
 def _write_analysis_tables(
     con: duckdb.DuckDBPyConnection,
-    obs_dir: Path,
     polygons_dir: Path,
     rej_dir: Path,
     analysis_dir: Path,
 ) -> AnalysisSummary:
     """Write all deterministic analysis tables and return their summary."""
-    cells_obs, cells_canon = _write_cell_tables(con, obs_dir, analysis_dir)
+    cells_obs, cells_canon = _write_cell_tables(con, analysis_dir)
     _write_class_tables(con, analysis_dir)
     _write_overlap_tables(con, analysis_dir)
     _write_hostname_tables(con, analysis_dir)
@@ -237,7 +228,7 @@ def _write_analysis_tables(
 
 
 def _write_cell_tables(
-    con: duckdb.DuckDBPyConnection, obs_dir: Path, analysis_dir: Path
+    con: duckdb.DuckDBPyConnection, analysis_dir: Path
 ) -> tuple[dict[str, int], dict[str, int]]:
     """Write global and grouped H3 cell tables."""
     cells_obs = duckdb_engine.cells_global_observation(con)[0]
@@ -254,7 +245,7 @@ def _write_cell_tables(
             ]
         ),
     )
-    _write_cells_per_group(con, obs_dir, analysis_dir / "cells_by_source.parquet")
+    _write_cells_per_group(con, analysis_dir / "cells_by_source.parquet")
     for group_column, filename in (
         ("region", "cells_by_region.parquet"),
         ("osm_type", "cells_by_osm_type.parquet"),
@@ -262,7 +253,6 @@ def _write_cell_tables(
     ):
         _write_cells_per_group(
             con,
-            obs_dir,
             analysis_dir / filename,
             group_column=group_column,
             view="canonical_observations",
@@ -420,8 +410,8 @@ def _analysis_summary(
     return AnalysisSummary(
         observation_count=int(observation_count[0]) if observation_count else 0,
         canonical_count=int(canonical_count[0]) if canonical_count else 0,
-        public_row_count=_public_row_count(polygons_dir),
-        rejection_count=_rejection_count(rej_dir),
+        public_row_count=_directory_row_count(polygons_dir),
+        rejection_count=_directory_row_count(rej_dir),
         duplicate_count=_parquet_row_count(analysis_dir / "duplicate_observations.parquet"),
         conflicting_snapshot_count=_parquet_row_count(
             analysis_dir / "conflicting_snapshots.parquet"
@@ -439,7 +429,6 @@ def _write_arrow_table(path: Path, rows: list[dict[str, object]], schema: pa.Sch
 
 def _write_cells_per_group(
     con: duckdb.DuckDBPyConnection,
-    obs_dir: Path,
     out_path: Path,
     *,
     group_column: str = "source_pbf",

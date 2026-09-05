@@ -88,6 +88,9 @@ bounded, independent website and contact-text batches, preserves completed
 language pairs, and atomically promotes a validated v1.4 shard. Absent or
 unsuccessful text receives null language fields.
 
+`validate_language_detection_options` shares the batch-size and time-budget
+checks between shard detection and the CLI, before either opens run artifacts.
+
 `glotlid` owns the pinned FastText/GlotLID adapter, model hash, and explicit
 Seagate cache boundary. `language_detection_checkpoint` declares the language
 stage's `CheckpointStore` and joins the pinned model identity to the source

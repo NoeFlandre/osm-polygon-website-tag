@@ -154,7 +154,6 @@ def test_card_stats_uses_arrow_columns_without_row_dicts(
     assert stats.website_urls_present == 1
     assert stats.website_text_success_count == 1
     assert stats.website_total_words == 3
-    assert stats.polygons_with_any_text == 1
 
 
 def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:

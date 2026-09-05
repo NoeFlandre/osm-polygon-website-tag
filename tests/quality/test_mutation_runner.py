@@ -6,11 +6,39 @@ import json
 import os
 import sys
 import tomllib
+from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
 from scripts.quality import mutation_runner
+
+
+@pytest.fixture(autouse=True)
+def isolated_mutation_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep adapter tests independent of previous mutation runs and their files."""
+    (tmp_path / "mutants").mkdir()
+    monkeypatch.setattr(
+        mutation_runner, "__file__", str(tmp_path / "scripts" / "quality" / "mutation_runner.py")
+    )
+    monkeypatch.setattr(mutation_runner, "_MPLCONFIGDIR", tmp_path / "matplotlib")
+
+
+@pytest.fixture(autouse=True)
+def isolated_mutmut_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Adapter unit tests must not erase a surrounding mutation run's statistics."""
+    import mutmut
+    import mutmut.configuration as configuration
+    import mutmut.state as mutation_state
+
+    monkeypatch.setattr(mutmut, "duration_by_test", defaultdict(float))
+    monkeypatch.setattr(mutmut, "tests_by_mangled_function_name", defaultdict(set))
+    monkeypatch.setattr(mutmut, "_stats", set())
+    monkeypatch.setattr(mutmut, "stats_time", None)
+    monkeypatch.setattr(mutmut, "_covered_lines", None)
+    monkeypatch.setattr(mutation_state, "_state", None)
+    monkeypatch.setattr(configuration, "_config", configuration._config)
 
 
 def _runner() -> SimpleNamespace:
@@ -45,14 +73,13 @@ def test_pytest_command_preserves_mutmut_selection_and_project_flags() -> None:
 def test_coverage_environment_prefers_original_checkout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "PYTHONPATH",
-        os.pathsep.join(("external", str((Path("mutants") / "src").resolve()), "tail")),
+        os.pathsep.join(("external", str(mutation_runner._mutants_directory() / "src"), "tail")),
     )
 
     environment = mutation_runner._coverage_environment(tmp_path)
 
     paths = environment["PYTHONPATH"].split(os.pathsep)
-    assert paths[:2] == [str((tmp_path / "src").resolve()), str(tmp_path.resolve())]
-    assert str(mutation_runner._mutants_directory() / "src") not in paths
+    assert paths == [str((tmp_path / "src").resolve()), str(tmp_path.resolve()), "external", "tail"]
     assert environment["MUTANT_UNDER_TEST"] == ""
     assert environment["MPLCONFIGDIR"] == str(mutation_runner._MPLCONFIGDIR)
 
@@ -91,7 +118,7 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
     command = cast(list[str], captured["command"])
     assert environment["MUTANT_UNDER_TEST"] == ""
     assert "--source=src" in command
-    assert not (mutation_runner.MUTANTS_ROOT / mutation_runner._COVERAGE_FILE).exists()
+    assert not (mutation_runner._mutants_directory() / mutation_runner._COVERAGE_FILE).exists()
     assert "coverage" in sys.modules
 
 
@@ -137,10 +164,6 @@ def test_run_stats_merges_fresh_child_payload(monkeypatch, tmp_path: Path) -> No
 
     monkeypatch.setattr(mutation_runner, "_stats_output_path", lambda: output)
     monkeypatch.setattr(mutation_runner.subprocess, "run", fake_run)
-    mutmut.tests_by_mangled_function_name.clear()
-    mutmut.duration_by_test.clear()
-    state().function_dependencies.clear()
-
     assert mutation_runner._run_stats(_runner(), []) == 0
     assert mutmut.tests_by_mangled_function_name["function"] == {"tests/test_one.py::test_one"}
     assert mutmut.duration_by_test["tests/test_one.py::test_one"] == 0.25
@@ -148,8 +171,6 @@ def test_run_stats_merges_fresh_child_payload(monkeypatch, tmp_path: Path) -> No
 
 
 def test_run_stats_invokes_child_and_removes_transfer_file(monkeypatch, tmp_path: Path) -> None:
-    import mutmut
-
     captured: dict[str, object] = {}
     output = tmp_path / "stats.json"
     payload = {
@@ -166,9 +187,6 @@ def test_run_stats_invokes_child_and_removes_transfer_file(monkeypatch, tmp_path
 
     monkeypatch.setattr(mutation_runner, "_stats_output_path", lambda: output)
     monkeypatch.setattr(mutation_runner.subprocess, "run", fake_run)
-    mutmut.tests_by_mangled_function_name.clear()
-    mutmut.duration_by_test.clear()
-
     assert mutation_runner._run_stats(_runner(), ["tests/test_one.py::test_one"]) == 0
     command = captured["command"]
     assert isinstance(command, list)
@@ -228,9 +246,6 @@ def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> Non
             return 0
 
     monkeypatch.setattr(mutmut_main, "PytestRunner", FakeRunner)
-    mutmut.tests_by_mangled_function_name.clear()
-    mutmut.duration_by_test.clear()
-    state().function_dependencies.clear()
     output = tmp_path / "stats.json"
 
     assert mutation_runner._run_stats_child(output, ["tests/test_one.py::test_one"]) == 0

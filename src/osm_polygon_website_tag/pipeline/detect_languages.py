@@ -91,8 +91,7 @@ def detect_language_shard(
     clock: Callable[[], float] | None = None,
 ) -> LanguageDetectionResult:
     """Detect languages in bounded batches and atomically promote the result."""
-    _validate_batch_rows(batch_rows)
-    _validate_time_budget(time_budget_seconds)
+    validate_language_detection_options(batch_rows, time_budget_seconds)
     clock_function = clock if clock is not None else monotonic
     deadline = _detection_deadline(time_budget_seconds, clock_function)
     shard = Path(shard_path)
@@ -126,15 +125,12 @@ def detect_language_shard(
     return _completed_detection_result(shard, context, max_batch_rows)
 
 
-def _validate_batch_rows(batch_rows: int) -> None:
+def validate_language_detection_options(batch_rows: int, time_budget_seconds: float | None) -> None:
+    """Validate shared CLI and shard settings before reading run artifacts."""
     if batch_rows < 1:
         raise ValueError("batch_rows must be positive")
-
-
-def _validate_time_budget(time_budget_seconds: float | None) -> None:
-    if time_budget_seconds is None:
-        return
-    _validate_positive_time_value(time_budget_seconds)
+    if time_budget_seconds is not None:
+        _validate_positive_time_value(time_budget_seconds)
 
 
 def _validate_positive_time_value(time_budget_seconds: object) -> None:
@@ -344,48 +340,6 @@ def _language_pair_needs_detection_arrow(batch: pa.RecordBatch, prefix: str) -> 
     return bool(call_arrow_kernel("any", needs_detection).as_py() or False)
 
 
-def _row_needs_language_detection(row: dict[str, object]) -> bool:
-    return any(
-        _language_pair_needs_detection(row, prefix) for prefix in ("website", "contact_website")
-    )
-
-
-def _language_pair_needs_detection(row: dict[str, object], prefix: str) -> bool:
-    """Return whether one text field lacks a valid language result."""
-    status = row[f"{prefix}_text_status"]
-    label = row.get(f"{prefix}_language")
-    probability = row.get(f"{prefix}_language_probability")
-    if status == "success":
-        return not _complete_language_pair(label, probability)
-    return label is not None or probability is not None
-
-
-def _process_detection_batches(
-    parquet: pq.ParquetFile,
-    source_row_count: int,
-    checkpoint: Checkpoint,
-    *,
-    store: CheckpointStore,
-    next_part_index: int,
-    detector: LanguageDetector,
-    batch_rows: int,
-    deadline: float | None = None,
-    clock: Callable[[], float] | None = None,
-) -> int:
-    """Process batches and retain the historical maximum-batch return value."""
-    return _process_detection_batches_with_progress(
-        parquet,
-        source_row_count,
-        checkpoint,
-        store=store,
-        next_part_index=next_part_index,
-        detector=detector,
-        batch_rows=batch_rows,
-        deadline=deadline,
-        clock=clock if clock is not None else monotonic,
-    ).max_batch_rows
-
-
 def _process_detection_batches_with_progress(
     parquet: pq.ParquetFile,
     source_row_count: int,
@@ -580,4 +534,5 @@ __all__ = [
     "LanguageDetectionResult",
     "detect_language_shard",
     "shard_needs_language_detection",
+    "validate_language_detection_options",
 ]

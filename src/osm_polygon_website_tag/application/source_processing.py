@@ -465,10 +465,9 @@ def _record_source_upload(
     if not uploaded:
         return
     manifest_entry = context.state.sources[source.name]
-    context.upload_checkpoint["sources"].__setitem__(
-        source.name,
-        {"polygon_sha256": str(manifest_entry["public_shard_sha256"])},
-    )
+    context.upload_checkpoint["sources"][source.name] = {
+        "polygon_sha256": str(manifest_entry["public_shard_sha256"])
+    }
 
 
 def _published_source_names(

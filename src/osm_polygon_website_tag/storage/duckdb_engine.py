@@ -29,7 +29,7 @@ Safety
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import duckdb
 
@@ -239,16 +239,23 @@ EIGHT_CELL_LABELS: tuple[tuple[str, str], ...] = (
 )
 
 
-def cells_global_observation(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
-    """Return the eight-cell counts at observation level (raw rows)."""
+def _cells_global(
+    con: duckdb.DuckDBPyConnection,
+    view: Literal["observations", "canonical_observations"],
+) -> list[dict[str, Any]]:
     select_exprs = ", ".join(
         f"COALESCE(SUM({expr}), 0) AS {name}" for name, expr in EIGHT_CELL_EXPRESSIONS.items()
     )
-    row = con.execute(f"SELECT {select_exprs} FROM observations").fetchone()  # noqa: S608
+    row = con.execute(f"SELECT {select_exprs} FROM {view}").fetchone()  # noqa: S608
     if row is None:
         return [dict.fromkeys(EIGHT_CELL_EXPRESSIONS.keys(), 0)]
     cols = [d[0] for d in con.description]
     return [dict(zip(cols, row, strict=False))]
+
+
+def cells_global_observation(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
+    """Return the eight-cell counts at observation level (raw rows)."""
+    return _cells_global(con, "observations")
 
 
 def canonical_observations(con: duckdb.DuckDBPyConnection) -> None:
@@ -277,16 +284,7 @@ def canonical_observations(con: duckdb.DuckDBPyConnection) -> None:
 
 def cells_global_canonical(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
     """Return the eight-cell counts at canonical (post-dedup) level."""
-    select_exprs = ", ".join(
-        f"COALESCE(SUM({expr}), 0) AS {name}" for name, expr in EIGHT_CELL_EXPRESSIONS.items()
-    )
-    row = con.execute(
-        f"SELECT {select_exprs} FROM canonical_observations"  # noqa: S608
-    ).fetchone()
-    if row is None:
-        return [dict.fromkeys(EIGHT_CELL_EXPRESSIONS.keys(), 0)]
-    cols = [d[0] for d in con.description]
-    return [dict(zip(cols, row, strict=False))]
+    return _cells_global(con, "canonical_observations")
 
 
 def copy_query_atomic(

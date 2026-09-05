@@ -10,26 +10,6 @@ import pytest
 
 
 @pytest.fixture
-def synth_pbf_dir(tmp_path: Path) -> Path:
-    """Directory where synthetic OSM XML fixtures should be placed."""
-    return tmp_path
-
-
-@pytest.fixture
-def write_osm_xml(tmp_path: Path):
-    """Helper to write a synthetic OSM XML file and return its path."""
-    counter = {"i": 0}
-
-    def _write(content: str) -> Path:
-        counter["i"] += 1
-        path = tmp_path / f"fixture_{counter['i']:03d}.osm"
-        path.write_text(content, encoding="utf-8")
-        return path
-
-    return _write
-
-
-@pytest.fixture
 def make_pbf(tmp_path: Path):
     """Write synthetic OSM XML as a ``.osm.pbf`` file.
 

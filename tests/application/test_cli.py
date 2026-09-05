@@ -6,7 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast, get_type_hints
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -23,8 +23,6 @@ from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
-    RunState,
-    SourceFingerprint,
     hash_shard,
     initialise_run,
     load_run,
@@ -122,15 +120,6 @@ def _setup_run(tmp_path: Path) -> Path:
 def test_cli_help_exits_2() -> None:
     rc = main([])
     assert rc == 2
-
-
-def test_cli_exposes_explicit_typer_app() -> None:
-    assert hasattr(cli, "app")
-
-
-def test_cli_extract_helpers_expose_concrete_state_types() -> None:
-    assert get_type_hints(cli._validate_expected_extract_source)["fingerprint"] is SourceFingerprint
-    assert get_type_hints(cli._prepare_extract_status)["state"] is RunState
 
 
 def test_typer_help_lists_every_public_command() -> None:
@@ -510,12 +499,13 @@ def test_cli_detect_languages_forwards_batch_and_time_budget(
     assert 0 < time_budget <= 2.0
 
 
-@pytest.mark.parametrize("value", [True, None, float("nan"), float("inf"), 0, -1])
-def test_cli_language_budget_validation_rejects_non_positive_or_non_finite_values(
+@pytest.mark.parametrize("value", [True, "invalid", float("nan"), float("inf"), 0, -1])
+def test_cli_rejects_invalid_language_budget_before_reading_run(
     value: object,
+    tmp_path: Path,
 ) -> None:
     with pytest.raises(ValueError, match="time_budget_seconds must be positive"):
-        cli._validate_positive_language_time(value)
+        cli.detect_languages_command(tmp_path / "missing", time_budget_seconds=cast(float, value))
 
 
 def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(

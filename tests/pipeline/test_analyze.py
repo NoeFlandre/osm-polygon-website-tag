@@ -22,11 +22,10 @@ from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import (
     ANALYSIS_FILES,
     _close_analysis_connection,
+    _directory_row_count,
     _duckdb_extract_hostname,
     _global_cell_rows,
     _parquet_row_count,
-    _public_row_count,
-    _rejection_count,
     _validate_analysis_inputs,
     _write_arrow_table,
     _write_cells_per_group,
@@ -111,8 +110,7 @@ def test_analyze_private_count_and_input_helpers(tmp_path: Path) -> None:
     run_dir = _make_minimal_run(tmp_path)
     _write_public_shard(run_dir, stem="a", rows=[])
     _write_rejection_shard(run_dir, stem="a", rows=[])
-    assert _public_row_count(run_dir / "polygons") == 0
-    assert _rejection_count(run_dir / "rejections") == 0
+    assert _directory_row_count(run_dir / "polygons") == 0
     empty = tmp_path / "empty.parquet"
     pq.write_table(pa.table({"value": pa.array([], type=pa.int64())}), empty)
     assert _parquet_row_count(empty) == 0
@@ -138,7 +136,7 @@ def test_analyze_private_duckdb_writers_validate_allowed_queries(tmp_path: Path)
             "INSERT INTO observations VALUES ('a.osm.pbf', 'r', 'building', 'way', true, false, false)"
         )
         out = tmp_path / "cells.parquet"
-        _write_cells_per_group(con, tmp_path, out)
+        _write_cells_per_group(con, out)
         assert out.exists()
         class_out = tmp_path / "classes.parquet"
         con.execute(
@@ -149,7 +147,7 @@ def test_analyze_private_duckdb_writers_validate_allowed_queries(tmp_path: Path)
             {"class_value": "absolute_url", "row_count": 1}
         ]
         with pytest.raises(ValueError, match="unsupported group"):
-            _write_cells_per_group(con, tmp_path, tmp_path / "bad.parquet", group_column="bad")
+            _write_cells_per_group(con, tmp_path / "bad.parquet", group_column="bad")
         with pytest.raises(ValueError, match="unsupported class"):
             _write_class_count(
                 con, tmp_path / "bad-class.parquet", column="bad", view="public_polygons"

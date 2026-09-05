@@ -32,6 +32,17 @@ from osm_polygon_website_tag.reporting.geographic.aggregation import (
 )
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 
+_TEXT_STATS_COLUMNS = frozenset(
+    {
+        "website",
+        "contact_website",
+        "website_word_count",
+        "website_text_status",
+        "contact_website_word_count",
+        "contact_website_text_status",
+    }
+)
+
 
 @dataclass
 class CardStats:
@@ -324,31 +335,14 @@ def _count_parquets(paths: Collection[Path]) -> int:
 
 def _add_text_stats(stats: CardStats, shard: Path) -> None:
     parquet = pq.ParquetFile(shard)
-    if not _has_text_columns(parquet):
+    if not _TEXT_STATS_COLUMNS.issubset(parquet.schema_arrow.names):
         return
     has_retryable_status = False
-    columns = sorted(_required_text_columns())
+    columns = sorted(_TEXT_STATS_COLUMNS)
     for batch in parquet.iter_batches(columns=columns, batch_size=8_192):
         has_retryable_status = _add_text_batch(stats, batch) or has_retryable_status
     if not has_retryable_status:
         stats.enriched_sources_count += 1
-
-
-def _required_text_columns() -> set[str]:
-    """Return the text columns needed for artifact-derived counters."""
-    return {
-        "website",
-        "contact_website",
-        "website_word_count",
-        "website_text_status",
-        "contact_website_word_count",
-        "contact_website_text_status",
-    }
-
-
-def _has_text_columns(parquet: pq.ParquetFile) -> bool:
-    """Return whether a shard contains the complete enrichment contract."""
-    return _required_text_columns().issubset(set(parquet.schema_arrow.names))
 
 
 def _add_text_batch(stats: CardStats, batch: Any) -> bool:
@@ -365,9 +359,6 @@ def _add_text_batch(stats: CardStats, batch: Any) -> bool:
     _add_status_counts(stats, website_status, contact_status, website_success, contact_success)
     stats.website_total_words += _sum_success_words(website_status, website_words)
     stats.contact_website_total_words += _sum_success_words(contact_status, contact_words)
-    stats.polygons_with_any_text += _count_true(
-        call_arrow_kernel("or_kleene", website_success, contact_success)
-    )
     return status_has_retryable_value(website_status) or status_has_retryable_value(contact_status)
 
 

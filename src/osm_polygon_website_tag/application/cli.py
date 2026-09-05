@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
@@ -19,6 +18,7 @@ from osm_polygon_website_tag.pipeline.detect_languages import (
     DEFAULT_BATCH_ROWS,
     detect_language_shard,
     shard_needs_language_detection,
+    validate_language_detection_options,
 )
 from osm_polygon_website_tag.pipeline.enrich import DEFAULT_FETCH_WORKERS
 from osm_polygon_website_tag.pipeline.extraction import (
@@ -429,7 +429,7 @@ def detect_languages_command(
     ] = None,
 ) -> int:
     """Detect GlotLID languages for every completed text shard."""
-    _validate_language_options(batch_rows, time_budget_seconds)
+    validate_language_detection_options(batch_rows, time_budget_seconds)
     normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
     state = load_run(normalized_run_dir)
     paths = sorted((normalized_run_dir / "polygons").glob("*.parquet"))
@@ -472,27 +472,6 @@ def detect_languages_command(
         sort_keys=True,
     )
     return 0
-
-
-def _validate_language_options(batch_rows: int, time_budget_seconds: float | None) -> None:
-    """Reject invalid bounded-run settings before reading run state."""
-    if batch_rows < 1:
-        raise ValueError("batch_rows must be positive")
-    if time_budget_seconds is None:
-        return
-    _validate_positive_language_time(time_budget_seconds)
-
-
-def _validate_positive_language_time(time_budget_seconds: object) -> None:
-    """Validate one positive finite CLI language budget."""
-    if isinstance(time_budget_seconds, bool):
-        raise ValueError("time_budget_seconds must be positive")
-    if not isinstance(time_budget_seconds, (int, float)):
-        raise ValueError("time_budget_seconds must be positive")
-    if not math.isfinite(time_budget_seconds):
-        raise ValueError("time_budget_seconds must be positive")
-    if time_budget_seconds <= 0:
-        raise ValueError("time_budget_seconds must be positive")
 
 
 def _needed_language_shards(paths: list[Path]) -> list[Path]:

@@ -34,9 +34,6 @@ CATEGORY_ORDER: tuple[str, ...] = (
     "other",
 )
 
-# Pre-build the precedence rank for O(1) lookup.
-_RANK: dict[str, int] = {key: i for i, key in enumerate(CATEGORY_ORDER)}
-
 
 def normalize_category(value: str | None) -> str:
     """Return the lowercased, trimmed category value."""

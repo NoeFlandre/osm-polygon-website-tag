@@ -602,24 +602,25 @@ def test_language_readiness_inspection_validates_later_batches() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "label", "probability"),
+    ("status", "label", "probability", "expected"),
     [
-        ("success", "eng_Latn", 0.9),
-        ("success", None, None),
-        ("success", "", 0.9),
-        ("success", "eng_Latn", None),
-        ("success", "eng_Latn", -0.1),
-        ("success", "eng_Latn", 1.1),
-        ("absent", None, None),
-        ("absent", "eng_Latn", None),
-        ("failed", None, 0.5),
-        (None, "eng_Latn", None),
+        ("success", "eng_Latn", 0.9, False),
+        ("success", None, None, True),
+        ("success", "", 0.9, True),
+        ("success", "eng_Latn", None, True),
+        ("success", "eng_Latn", -0.1, True),
+        ("success", "eng_Latn", 1.1, True),
+        ("absent", None, None, False),
+        ("absent", "eng_Latn", None, True),
+        ("failed", None, 0.5, True),
+        (None, "eng_Latn", None, True),
     ],
 )
-def test_arrow_language_pair_readiness_matches_row_semantics(
+def test_arrow_language_pair_readiness_is_status_aware(
     status: object,
     label: object,
     probability: object,
+    expected: bool,
 ) -> None:
     batch = pa.RecordBatch.from_arrays(
         [
@@ -638,15 +639,6 @@ def test_arrow_language_pair_readiness_matches_row_semantics(
             "contact_website_language",
             "contact_website_language_probability",
         ],
-    )
-
-    expected = detection._language_pair_needs_detection(
-        {
-            "website_text_status": status,
-            "website_language": label,
-            "website_language_probability": probability,
-        },
-        "website",
     )
 
     assert detection._language_pair_needs_detection_arrow(batch, "website") is expected
@@ -675,41 +667,6 @@ def test_batch_language_readiness_checks_contact_pair() -> None:
     assert detection._batch_needs_language_detection(batch)
 
 
-@pytest.mark.parametrize(
-    ("status", "label", "probability", "expected"),
-    [
-        ("success", None, None, True),
-        ("success", "eng_Latn", 0.9, False),
-        ("success", "eng_Latn", None, True),
-        ("absent", None, None, False),
-        ("absent", "eng_Latn", None, True),
-    ],
-)
-def test_language_pair_needs_detection_is_status_aware(
-    status: str, label: object, probability: object, expected: bool
-) -> None:
-    row = {
-        "website_text_status": status,
-        "website_language": label,
-        "website_language_probability": probability,
-    }
-
-    assert detection._language_pair_needs_detection(row, "website") is expected
-
-
-def test_row_needs_detection_checks_both_website_fields() -> None:
-    row: dict[str, object] = {
-        "website_text_status": "absent",
-        "website_language": None,
-        "website_language_probability": None,
-        "contact_website_text_status": "success",
-        "contact_website_language": None,
-        "contact_website_language_probability": None,
-    }
-
-    assert detection._row_needs_language_detection(row) is True
-
-
 def test_skip_checkpointed_rows_preserves_remaining_skip_count() -> None:
     originals: list[dict[str, object]] = [{"id": 1}, {"id": 2}]
 
@@ -717,70 +674,6 @@ def test_skip_checkpointed_rows_preserves_remaining_skip_count() -> None:
     assert detection._skip_checkpointed_rows(originals, 2) == ([], 0)
     assert detection._skip_checkpointed_rows(originals, 1) == ([{"id": 2}], 0)
     assert detection._skip_checkpointed_rows(originals, 0) == (originals, 0)
-
-
-def test_process_batches_forwards_every_control_argument(monkeypatch: pytest.MonkeyPatch) -> None:
-    observed: dict[str, object] = {}
-    parquet = cast(pq.ParquetFile, object())
-    checkpoint = Checkpoint(Path("parts"), (), 0)
-    store = language_checkpoint_store()
-    detector = RecordingDetector()
-
-    def clock() -> float:
-        return 12.0
-
-    def fake_process(
-        actual_parquet: pq.ParquetFile,
-        source_row_count: int,
-        actual_checkpoint: Checkpoint,
-        *,
-        store: object,
-        next_part_index: int,
-        detector: object,
-        batch_rows: int,
-        deadline: float | None,
-        clock: object,
-    ) -> detection._DetectionProgress:
-        observed.update(
-            parquet=actual_parquet,
-            source_row_count=source_row_count,
-            checkpoint=actual_checkpoint,
-            store=store,
-            next_part_index=next_part_index,
-            detector=detector,
-            batch_rows=batch_rows,
-            deadline=deadline,
-            clock=clock,
-        )
-        return detection._DetectionProgress(0, 7, completed=True)
-
-    monkeypatch.setattr(detection, "_process_detection_batches_with_progress", fake_process)
-
-    assert (
-        detection._process_detection_batches(
-            parquet,
-            3,
-            checkpoint,
-            store=store,
-            next_part_index=4,
-            detector=detector,
-            batch_rows=2,
-            deadline=10.0,
-            clock=clock,
-        )
-        == 7
-    )
-    assert observed == {
-        "parquet": parquet,
-        "source_row_count": 3,
-        "checkpoint": checkpoint,
-        "store": store,
-        "next_part_index": 4,
-        "detector": detector,
-        "batch_rows": 2,
-        "deadline": 10.0,
-        "clock": clock,
-    }
 
 
 def test_completed_process_progress_retains_rows_and_completion() -> None:
@@ -806,28 +699,6 @@ def test_completed_process_progress_retains_rows_and_completion() -> None:
 
 def test_deadline_is_reached_at_the_exact_boundary() -> None:
     assert detection._deadline_reached(1.0, lambda: 1.0) is True
-
-
-def test_empty_detection_batch_reports_no_change() -> None:
-    class EmptyParquet:
-        def iter_batches(self, *, batch_size: int) -> list[object]:
-            assert batch_size == 2
-            return []
-
-    checkpoint = Checkpoint(Path("parts"), (), 2)
-
-    assert (
-        detection._process_detection_batches(
-            cast(pq.ParquetFile, EmptyParquet()),
-            2,
-            checkpoint,
-            store=language_checkpoint_store(),
-            next_part_index=0,
-            detector=RecordingDetector(),
-            batch_rows=2,
-        )
-        == 0
-    )
 
 
 def test_process_batches_reports_a_paused_progress_state_at_the_deadline() -> None:

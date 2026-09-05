@@ -44,6 +44,8 @@ def test_glotlid_model_cache_is_under_the_default_data_root(
 def test_glotlid_model_cache_rejects_external_override_before_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(paths, "LEGACY_DATA_ROOT", tmp_path / "legacy-data")
     external_root = tmp_path / "external"
     monkeypatch.setenv("OSM_POLY_DATA_DIR", str(external_root))
 
@@ -53,7 +55,11 @@ def test_glotlid_model_cache_rejects_external_override_before_writing(
     assert not external_root.exists()
 
 
-def test_assert_seagate_path_rejects_paths_outside_the_data_root(tmp_path: Path) -> None:
+def test_assert_seagate_path_rejects_paths_outside_the_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(paths, "LEGACY_DATA_ROOT", tmp_path / "legacy-data")
     with pytest.raises(ValueError, match="Seagate data root"):
         assert_seagate_path(tmp_path, label="model cache")
 
@@ -62,7 +68,6 @@ def test_assert_seagate_path_rejects_paths_outside_the_data_root(tmp_path: Path)
 def isolated_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Force the data root to a temp directory for the duration of a test."""
     monkeypatch.setenv("OSM_POLY_DATA_DIR", str(tmp_path))
-    # Clear the lru_cache if we add one later; safe to call even without one.
     return tmp_path
 
 

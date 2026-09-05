@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Any
 
 import pytest
 
@@ -803,16 +803,6 @@ def test_load_upload_checkpoint_preserves_legacy_default_global_bundle(
     checkpoint = load_upload_checkpoint(run_dir)
 
     assert checkpoint["global_bundle"] == {}
-
-
-def test_checkpoint_v2_schema_version_is_literal_v2() -> None:
-    """``CheckpointV2.schema_version`` is statically ``Literal["v2"]``."""
-    from typing import get_type_hints
-
-    from osm_polygon_website_tag.publishing.incremental import CheckpointV2
-
-    hints = get_type_hints(CheckpointV2)
-    assert hints["schema_version"] == Literal["v2"]
 
 
 def test_load_upload_checkpoint_distinguishes_missing_from_null_schema_version(

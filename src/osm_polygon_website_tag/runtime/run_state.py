@@ -157,12 +157,7 @@ def atomic_write_json(path: Path, payload: Any) -> None:
     """Write JSON through a same-directory temporary file and replace."""
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    Path(tmp).replace(path)
-
-
-def _atomic_write_json(path: Path, payload: Any) -> None:
-    """Internal compatibility alias for run-state writers."""
-    atomic_write_json(path, payload)
+    tmp.replace(path)
 
 
 def _read_json_document(path: Path, *, label: str) -> Any:
@@ -229,7 +224,7 @@ def _write_sources_manifest(state: RunState) -> None:
         state.sources.values(),
         key=lambda entry: str(entry["filename"]),
     )
-    _atomic_write_json(state.run_dir / "manifests" / "sources.json", entries)
+    atomic_write_json(state.run_dir / "manifests" / "sources.json", entries)
 
 
 def snapshot_source_fingerprint(pbf_path: Path) -> SourceFingerprint:
@@ -273,14 +268,14 @@ def initialise_run(
     state.metadata["run_id"] = run_id
     state.metadata["created_at"] = dt.datetime.now(tz=dt.UTC).isoformat()
     state.metadata["status"] = STATUS_INITIALIZED
-    _atomic_write_json(run_dir / "manifests" / "run.json", state.metadata)
-    _atomic_write_json(run_dir / "manifests" / "sources.json", [])
+    atomic_write_json(run_dir / "manifests" / "run.json", state.metadata)
+    atomic_write_json(run_dir / "manifests" / "sources.json", [])
     if expected_sources is not None:
         entries = sorted(
             (_source_fingerprint_payload(fp) for fp in expected_sources),
             key=lambda e: str(e["filename"]),
         )
-        _atomic_write_json(run_dir / "manifests" / "expected_sources.json", entries)
+        atomic_write_json(run_dir / "manifests" / "expected_sources.json", entries)
     return run_dir, state
 
 
@@ -319,7 +314,7 @@ def upsert_run_metadata(state: RunState, patch: dict[str, Any]) -> None:
             "refuses to set it implicitly"
         )
     state.metadata.update(patch)
-    _atomic_write_json(state.run_dir / "manifests" / "run.json", state.metadata)
+    atomic_write_json(state.run_dir / "manifests" / "run.json", state.metadata)
 
 
 def transition_status(state: RunState, new_status: str) -> None:
@@ -338,7 +333,7 @@ def transition_status(state: RunState, new_status: str) -> None:
         raise ValueError(f"illegal run-status transition: {current!r} -> {new_status!r}")
     state.metadata["status"] = new_status
     state.metadata["status_changed_at"] = dt.datetime.now(tz=dt.UTC).isoformat()
-    _atomic_write_json(state.run_dir / "manifests" / "run.json", state.metadata)
+    atomic_write_json(state.run_dir / "manifests" / "run.json", state.metadata)
 
 
 def record_processed_source(
