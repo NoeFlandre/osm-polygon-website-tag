@@ -69,7 +69,7 @@ class _PausedError(Exception):
     """
 
     def __init__(self, progress: _Progress) -> None:
-        super().__init__("segmentation paused")
+        super().__init__()
         self.progress = progress
 
 
@@ -226,11 +226,7 @@ def _skip_checkpointed_rows(
     originals: list[dict[str, object]], rows_to_skip: int
 ) -> tuple[list[dict[str, object]], int]:
     """Drop the durable prefix from one Arrow batch."""
-    if rows_to_skip >= len(originals):
-        return [], rows_to_skip - len(originals)
-    if rows_to_skip:
-        return originals[rows_to_skip:], 0
-    return originals, 0
+    return originals[rows_to_skip:], max(0, rows_to_skip - len(originals))
 
 
 def _promote_shard(context: _Context, batch_rows: int, max_batch_rows: int) -> int:

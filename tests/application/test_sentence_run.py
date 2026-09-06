@@ -97,7 +97,7 @@ def test_an_exhausted_budget_stops_before_the_next_shard(tmp_path: Path) -> None
     progress = _run(shards, segment, budget=10.0, clock=lambda: next(ticks, 99.0))
 
     assert seen == shards[:1]
-    assert progress.completed is False
+    assert progress == SentenceRunProgress(changed_shards=1, processed_rows=3, completed=False)
 
 
 def test_the_remaining_budget_is_shared_across_shards(tmp_path: Path) -> None:
@@ -125,3 +125,19 @@ def test_an_unbounded_run_passes_no_budget_to_any_shard(tmp_path: Path) -> None:
     _run([tmp_path / "a.parquet"], segment)
 
     assert budgets == [None]
+
+
+def test_a_budget_spent_exactly_stops_before_the_next_shard(tmp_path: Path) -> None:
+    """No time left means none, not a negative remainder."""
+    shards = [tmp_path / "a.parquet", tmp_path / "b.parquet"]
+    seen: list[Path] = []
+    ticks = iter([0.0, 0.0, 10.0])
+
+    def segment(shard: Path, **_kwargs: object) -> object:
+        seen.append(shard)
+        return _result(shard)
+
+    progress = _run(shards, segment, budget=10.0, clock=lambda: next(ticks, 10.0))
+
+    assert seen == shards[:1]
+    assert progress.completed is False

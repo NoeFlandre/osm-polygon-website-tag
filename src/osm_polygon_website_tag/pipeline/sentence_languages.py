@@ -114,7 +114,7 @@ def sat_code_for_glotlid_label(label: object) -> str | None:
     """Return the segmenter code for a GlotLID label, or ``None`` if uncovered."""
     if not isinstance(label, str):
         return None
-    subtag = label.split("_", 1)[0]
+    subtag = label.partition("_")[0]
     return _SUBTAG_TO_SAT_CODE.get(subtag)
 
 
