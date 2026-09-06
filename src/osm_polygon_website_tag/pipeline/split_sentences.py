@@ -119,6 +119,7 @@ def segment_sentence_shard(
             clock=clock_function,
         )
         max_batch_rows = _promote_shard(context, batch_rows, progress.max_batch_rows)
+        processed_rows = progress.processed_rows
         shutil.rmtree(context.checkpoint.directory)
     except _PausedError as paused:
         context.staged.unlink(missing_ok=True)
@@ -126,7 +127,7 @@ def segment_sentence_shard(
     except BaseException:
         context.staged.unlink(missing_ok=True)
         raise
-    return _completed_result(shard, context, max_batch_rows)
+    return _completed_result(shard, context, max_batch_rows, processed_rows)
 
 
 def validate_segmentation_options(batch_rows: int, time_budget_seconds: float | None) -> None:
@@ -273,7 +274,7 @@ def _paused_result(
 
 
 def _completed_result(
-    shard: Path, context: _Context, max_batch_rows: int
+    shard: Path, context: _Context, max_batch_rows: int, processed_rows: int
 ) -> SentenceSegmentationResult:
     """Report a promoted shard."""
     return SentenceSegmentationResult(
@@ -282,7 +283,7 @@ def _completed_result(
         changed=True,
         shard_sha256=hash_shard(shard),
         max_batch_rows=max_batch_rows,
-        processed_rows=context.source_row_count,
+        processed_rows=processed_rows,
         completed=True,
     )
 

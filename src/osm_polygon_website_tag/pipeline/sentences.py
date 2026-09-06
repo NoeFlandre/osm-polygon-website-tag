@@ -8,7 +8,7 @@ row records why it was skipped instead of carrying an indistinguishable null.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol, cast
+from typing import Protocol
 
 from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_ABSENT,
@@ -33,16 +33,12 @@ class SentenceSplitter(Protocol):
     def split(self, texts: Sequence[str]) -> list[list[str]]: ...
 
 
-def sentence_gate(prefix: str, text_status: object, text: object, language: object) -> str | None:
-    """Return the terminal status for a row, or ``None`` to segment it.
+def sentence_gate(text: str, language: object) -> str | None:
+    """Return the terminal status for fetched text, or ``None`` to segment it.
 
     Blankness is decided before language support so that empty text is reported
     as empty whatever the detector labelled it.
     """
-    if text_status != "success":
-        return SENTENCE_ABSENT
-    if not isinstance(text, str):
-        raise ValueError(f"successful {prefix} text is not a string")
     if not text.strip():
         return SENTENCE_EMPTY_TEXT
     if sat_code_for_glotlid_label(language) is None:
@@ -67,14 +63,23 @@ def _prepare_row(
     """Copy one row, record each gate decision, and queue what needs the model."""
     row = dict(original)
     for prefix in TEXT_PREFIXES:
-        text = row.get(f"{prefix}_text")
-        status = sentence_gate(
-            prefix, row.get(f"{prefix}_text_status"), text, row.get(f"{prefix}_language")
-        )
+        if row.get(f"{prefix}_text_status") != "success":
+            _set_sentences(row, prefix, None, SENTENCE_ABSENT)
+            continue
+        text = _required_text(row, prefix)
+        status = sentence_gate(text, row.get(f"{prefix}_language"))
         if status is None:
-            pending[prefix].append((row, cast(str, text)))
+            pending[prefix].append((row, text))
         _set_sentences(row, prefix, None, status if status is not None else SENTENCE_SUCCESS)
     return row
+
+
+def _required_text(row: dict[str, object], prefix: str) -> str:
+    """Return the text of a completed fetch, which must be a string."""
+    text = row.get(f"{prefix}_text")
+    if not isinstance(text, str):
+        raise ValueError(f"successful {prefix} text is not a string")
+    return text
 
 
 def _segment_pending(prefix: str, pending: list[_Pending], splitter: SentenceSplitter) -> None:

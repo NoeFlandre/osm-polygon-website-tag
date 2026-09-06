@@ -47,27 +47,22 @@ def _row(**overrides: object) -> dict[str, object]:
 
 
 def test_gate_defers_to_the_model_only_for_successful_supported_text() -> None:
-    assert sentence_gate("website", "success", "hello", "eng_Latn") is None
-
-
-def test_gate_marks_unfetched_text_absent() -> None:
-    assert sentence_gate("website", "absent", "", None) == SENTENCE_ABSENT
-    assert sentence_gate("website", "error", "", None) == SENTENCE_ABSENT
+    assert sentence_gate("hello", "eng_Latn") is None
 
 
 def test_gate_marks_blank_text_empty_rather_than_segmenting_it() -> None:
-    assert sentence_gate("website", "success", "   \n\t ", "eng_Latn") == SENTENCE_EMPTY_TEXT
+    assert sentence_gate("   \n\t ", "eng_Latn") == SENTENCE_EMPTY_TEXT
 
 
 def test_gate_records_a_language_the_model_does_not_cover() -> None:
     """GlotLID labels far more languages than the segmenter supports."""
-    assert sentence_gate("website", "success", "hello", "zza_Latn") == SENTENCE_UNSUPPORTED_LANGUAGE
-    assert sentence_gate("website", "success", "hello", None) == SENTENCE_UNSUPPORTED_LANGUAGE
+    assert sentence_gate("hello", "zza_Latn") == SENTENCE_UNSUPPORTED_LANGUAGE
+    assert sentence_gate("hello", None) == SENTENCE_UNSUPPORTED_LANGUAGE
 
 
 def test_blank_text_is_checked_before_language_support() -> None:
     """An empty string is empty regardless of which language was detected."""
-    assert sentence_gate("website", "success", "  ", "zza_Latn") == SENTENCE_EMPTY_TEXT
+    assert sentence_gate("  ", "zza_Latn") == SENTENCE_EMPTY_TEXT
 
 
 def test_segment_batch_fills_sentences_counts_and_status() -> None:

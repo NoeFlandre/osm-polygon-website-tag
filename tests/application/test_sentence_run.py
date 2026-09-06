@@ -141,3 +141,19 @@ def test_a_budget_spent_exactly_stops_before_the_next_shard(tmp_path: Path) -> N
 
     assert seen == shards[:1]
     assert progress.completed is False
+
+
+def test_a_fraction_of_a_second_left_still_starts_the_next_shard(tmp_path: Path) -> None:
+    """Only a spent budget stops the run, not merely a small one."""
+    shards = [tmp_path / "a.parquet", tmp_path / "b.parquet"]
+    seen: list[Path] = []
+    ticks = iter([0.0, 0.0, 9.5])
+
+    def segment(shard: Path, **_kwargs: object) -> object:
+        seen.append(shard)
+        return _result(shard)
+
+    progress = _run(shards, segment, budget=10.0, clock=lambda: next(ticks, 9.5))
+
+    assert seen == shards
+    assert progress.completed is True
