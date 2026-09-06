@@ -158,3 +158,28 @@ def test_segment_batch_preserves_every_input_column() -> None:
 
     assert rows[0]["polygon_id"] == "source:way/1"
     assert rows[0]["website_text"] == "One. Two."
+
+
+def test_a_contact_only_row_is_segmented_after_an_absent_website() -> None:
+    """Skipping one field must not abandon the other; contact-only rows are real."""
+    splitter = _FakeSplitter()
+
+    rows = segment_batch(
+        [
+            _row(
+                website_text_status="absent",
+                website_text=None,
+                website_language=None,
+                contact_website_text_status="success",
+                contact_website_text="c",
+                contact_website_language="fra_Latn",
+            )
+        ],
+        splitter,
+    )
+
+    assert rows[0]["website_sentence_status"] == SENTENCE_ABSENT
+    assert rows[0]["website_sentences"] is None
+    assert rows[0]["contact_website_sentence_status"] == SENTENCE_SUCCESS
+    assert rows[0]["contact_website_sentences"] == ["c"]
+    assert splitter.batches == [["c"]]
