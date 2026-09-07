@@ -1,6 +1,7 @@
 """Public polygon schema and column documentation.
 
-Default schema version: ``v1.3``; the opt-in language stage appends schema ``v1.4``.
+Default schema version: ``v1.3``; the opt-in language stage appends schema
+``v1.4``, and the opt-in sentence stage appends schema ``v1.5``.
 
 The schema is the contract for every Parquet file in the published
 ``polygons/`` directory. Every published row must satisfy the row-level
@@ -305,6 +306,34 @@ _COLUMN_DOCS: dict[str, str] = {
     "contact_website_language_probability": (
         "Top-1 GlotLID probability for ``contact_website_language``; null without a successful "
         "language detection."
+    ),
+    "website_sentences": (
+        "Sentences segmented from ``website_text`` with SaT; null unless "
+        "``website_sentence_status`` is ``success``. Segments keep their own trailing "
+        "whitespace but not the line breaks that separated them, so joining them does not "
+        "reproduce ``website_text``."
+    ),
+    "website_sentence_count": (
+        "Number of sentences in ``website_sentences``; null unless the text was segmented."
+    ),
+    "website_sentence_status": (
+        "Why ``website_text`` was or was not segmented: ``success``, ``absent`` when no text "
+        "was extracted, ``unsupported_language`` when the detected language is outside the "
+        "segmenter's range, or ``empty_text`` when the text carries no segmentable content."
+    ),
+    "contact_website_sentences": (
+        "Sentences segmented from ``contact_website_text`` with SaT; null unless "
+        "``contact_website_sentence_status`` is ``success``. Segments keep their own trailing "
+        "whitespace but not the line breaks that separated them, so joining them does not "
+        "reproduce ``contact_website_text``."
+    ),
+    "contact_website_sentence_count": (
+        "Number of sentences in ``contact_website_sentences``; null unless the text was segmented."
+    ),
+    "contact_website_sentence_status": (
+        "Why ``contact_website_text`` was or was not segmented: ``success``, ``absent`` when "
+        "no text was extracted, ``unsupported_language`` when the detected language is outside "
+        "the segmenter's range, or ``empty_text`` when the text carries no segmentable content."
     ),
 }
 

@@ -9,6 +9,9 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_1,
     POLYGON_PUBLIC_SCHEMA_V1_2,
+    POLYGON_PUBLIC_SCHEMA_V1_3,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+    POLYGON_PUBLIC_SCHEMA_V1_5,
     SCHEMA_VERSION,
     PublicRowInvariantError,
     column_doc,
@@ -168,6 +171,16 @@ def test_column_doc_returns_string_per_column() -> None:
         doc = column_doc(col)
         assert isinstance(doc, str)
         assert len(doc) > 0
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [POLYGON_PUBLIC_SCHEMA_V1_3, POLYGON_PUBLIC_SCHEMA_V1_4, POLYGON_PUBLIC_SCHEMA_V1_5],
+)
+def test_every_current_schema_column_is_documented(schema: pa.Schema) -> None:
+    """The card renders a documentation row per column of the shards it finds."""
+    for col in polygon_column_names(schema):
+        assert column_doc(col).strip()
 
 
 def test_column_doc_unknown_raises() -> None:
