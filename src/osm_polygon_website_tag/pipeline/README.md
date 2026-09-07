@@ -6,7 +6,8 @@ Implements bounded data-processing stages.
   `record_builders`, `enrich`, `checkpoint_storage`, `enrichment_checkpoint`, `glotlid`,
   `language_detection_checkpoint`, `detect_languages`, `model_identity`,
   `sat`, `sentence_languages`, `sentences`, `sentence_checkpoint`,
-  `split_sentences`, `grid5000`,
+  `split_sentences`, `sentence_run`, `grid5000_bundle`, `grid5000`,
+  `grid5000_sentences`,
   `public_schema_migration`, `analyze`, `partition_aggregate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
@@ -103,12 +104,24 @@ exception leaves the source shard untouched and preserves durable parts for
 the next invocation. The model is loaded once by the application layer and is
 never copied to URL or geometry workers.
 
+`grid5000_bundle` holds what both staged stages share: the bundle and receipt
+payload primitives, the pinned model identity, and the directory creation and
+replacement helpers that keep a synchronization crash from destroying prior
+work.
+
 `grid5000` owns the portable bundle and result-receipt boundary. Preparation
 copies one unfinished shard, its validated checkpoint prefix, and the pinned
 model into a new Seagate bundle. The reserved-node runner reads only those
 files and stays offline; synchronization validates the receipt and atomically
 installs either the checkpoint prefix or the completed v1.4 shard back into
 the canonical run.
+
+`grid5000_sentences` is the same boundary for segmentation, with one
+difference: a bundle carries several shards packed up to a row budget, and its
+receipt records every shard the job touched, so synchronization installs the
+completed v1.5 shards and at most one paused checkpoint. `sentence_run` owns
+the bounded multi-shard loop those jobs share with the local command: one
+monotonic budget across shards, stopping cleanly between or inside a shard.
 
 ## Record builders
 

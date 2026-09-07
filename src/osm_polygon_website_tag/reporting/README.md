@@ -29,7 +29,9 @@ Builds and validates public-facing local artifacts.
   publishable paths and bounded SHA-256 hashing used by both finalization and
   receipt verification.
 - `verify` is the stable verification entry point; its internal section
-  validators live under `verification/` and are not public API.
+  validators live under `verification/` and are not public API. They cover
+  rows, shards, text, language pairs, sentence segmentation, analysis and card
+  output, and the completion receipt.
 - Entry points: `compute_card_stats`, `build_card`, `verify_results`,
   `finalize_run`, `finalize_snapshot`, and `refresh_card_run`.
 - Excludes: extraction, HTTP fetching, remote upload, and CLI dispatch.
