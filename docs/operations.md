@@ -178,7 +178,16 @@ extracted texts.
 
 The reserved GPU does the work: the loader moves the pinned encoder onto the
 node's CUDA device in half precision and segments 256 texts per forward batch,
-falling back to CPU only when a node exposes no accelerator. Unlike the
+falling back to CPU only when a node exposes no usable accelerator. The locked
+CUDA runtime supports compute capability 7.5 and newer, so a job must land on a
+Turing-or-later GPU; Nancy's Pascal nodes silently fall back to CPU and segment
+roughly twenty times slower. Constrain the reservation with
+`GRID5000_PROPERTIES` before submitting:
+
+```bash
+export GRID5000_PROPERTIES="cluster IN ('gres','gruss','grouille','graffiti','grue','grat')"
+```
+ Unlike the
 CPU-bound GlotLID stage, this one is a genuine GPU workload. The segmenter also
 loads the `facebookAI/xlm-roberta-base` tokenizer, so that Hub cache must exist
 under `~/.cache/huggingface` on the site before the first offline job.

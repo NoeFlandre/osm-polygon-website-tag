@@ -28,15 +28,18 @@ def test_grid5000_scripts_are_executable() -> None:
 
 def test_submit_script_checks_policy_around_submission() -> None:
     script = (SCRIPT_ROOT / "submit_language_detection.sh").read_text()
-    submit_call = "oarsub -q"
+    submit_call = 'oarsub "${oarsub_arguments[@]}"'
 
     assert script.count("usagepolicycheck -t") >= 2
     assert script.index("usagepolicycheck -t") < script.index(submit_call)
     assert script.rindex("usagepolicycheck -t") > script.index(submit_call)
     assert "walltime=0:30" in script
     assert "host=1/gpu=" in script
+    assert '-q "$queue"' in script
     assert "GRID5000_GPUS:-1" in script
     assert "GRID5000_QUEUE:-abaca" in script
+    assert "GRID5000_PROPERTIES:-" in script
+    assert 'oarsub_arguments+=(-p "$properties")' in script
     assert "GRID5000_REPO_DIR" in script
     assert 'bundle_dir="${GRID5000_BUNDLE_DIR:-$job_dir/bundle}"' in script
     assert "scripts/grid5000/run_language_detection.sh" in script

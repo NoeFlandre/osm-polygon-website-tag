@@ -11,6 +11,7 @@ fi
 job_script="${GRID5000_JOB_SCRIPT:-$default_job_script}"
 queue="${GRID5000_QUEUE:-abaca}"
 gpus="${GRID5000_GPUS:-1}"
+properties="${GRID5000_PROPERTIES:-}"
 active_marker="${GRID5000_ACTIVE_MARKER:-$job_dir/job.active}"
 policy_log_dir="${GRID5000_POLICY_LOG_DIR:-$job_dir/logs}"
 time_budget_seconds="${GRID5000_TIME_BUDGET_SECONDS:-1500}"
@@ -45,7 +46,13 @@ fi
 before_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 usagepolicycheck -t > "$policy_log_dir/usagepolicy-before-$before_stamp.txt"
 
-submission="$(oarsub -q "$queue" -l "host=1/gpu=$gpus,walltime=0:30" -S "$job_script")"
+oarsub_arguments=(-q "$queue" -l "host=1/gpu=$gpus,walltime=0:30")
+if [[ -n "$properties" ]]; then
+  oarsub_arguments+=(-p "$properties")
+fi
+oarsub_arguments+=(-S "$job_script")
+
+submission="$(oarsub "${oarsub_arguments[@]}")"
 job_id="$(
   printf '%s\n' "$submission" |
     sed -nE \
