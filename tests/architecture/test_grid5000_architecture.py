@@ -12,6 +12,10 @@ SCRIPT_NAMES = (
     "run_language_detection.sh",
     "submit_language_detection.sh",
     "sync_language_detection.sh",
+    "prepare_sentence_segmentation.sh",
+    "run_sentence_segmentation.sh",
+    "sync_sentence_segmentation.sh",
+    "bootstrap_sentence_runtime.sh",
 )
 
 
@@ -71,6 +75,46 @@ def test_runtime_bootstrap_is_locked_and_runtime_only() -> None:
     assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
     assert "if ! command -v module" not in script
     assert "uv sync --locked --no-dev --python 3.12" in script
+    assert "--offline" not in script
+
+
+def test_reserved_node_sentence_runner_is_offline_and_has_a_cleanup_margin() -> None:
+    script = (SCRIPT_ROOT / "run_sentence_segmentation.sh").read_text()
+
+    assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
+    assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
+    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
+    assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
+    assert "GRID5000_BATCH_ROWS:-256" in script
+    assert "--offline" in script
+    assert "HF_HUB_OFFLINE=1" in script
+    assert "TRANSFORMERS_OFFLINE=1" in script
+    assert "UV_NO_DEV=1" in script
+    assert "--extra sentences" in script
+    assert "python -m osm_polygon_website_tag.application.grid5000_sentence_runner" in script
+    assert "osm-polygon-website-tag" not in script
+
+
+def test_sentence_transfer_wrappers_stay_on_the_frontend_boundary() -> None:
+    prepare = (SCRIPT_ROOT / "prepare_sentence_segmentation.sh").read_text()
+    sync = (SCRIPT_ROOT / "sync_sentence_segmentation.sh").read_text()
+
+    assert "grid5000-prepare-sentences" in prepare
+    assert "--model-dir" in prepare
+    assert "--model-revision" in prepare
+    assert "OSM_POLY_MAX_ROWS" in prepare
+    assert "grid5000-sync-sentences" in sync
+    for script in (prepare, sync):
+        assert "oarsub" not in script
+        assert "python -m" not in script
+
+
+def test_sentence_runtime_bootstrap_installs_only_the_locked_segmentation_extra() -> None:
+    script = (SCRIPT_ROOT / "bootstrap_sentence_runtime.sh").read_text()
+
+    assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
+    assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
+    assert "uv sync --locked --no-dev --extra sentences --python 3.12" in script
     assert "--offline" not in script
 
 

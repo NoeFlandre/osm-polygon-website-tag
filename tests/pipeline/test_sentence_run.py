@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from osm_polygon_website_tag.application.sentence_run import (
+from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
+from osm_polygon_website_tag.pipeline.sentence_run import (
     SentenceRunProgress,
     run_sentence_shards,
 )
-from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
 from osm_polygon_website_tag.pipeline.split_sentences import SentenceSegmentationResult
 
 

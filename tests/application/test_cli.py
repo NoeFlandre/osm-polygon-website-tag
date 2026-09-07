@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from osm_polygon_website_tag.application import cli, sentence_run
+from osm_polygon_website_tag.application import cli
 from osm_polygon_website_tag.application.cli import app, main
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -20,6 +20,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+from osm_polygon_website_tag.pipeline import sentence_run
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
@@ -147,6 +148,9 @@ def test_typer_help_lists_every_public_command() -> None:
         "grid5000-prepare",
         "grid5000-run",
         "grid5000-sync",
+        "grid5000-prepare-sentences",
+        "grid5000-run-sentences",
+        "grid5000-sync-sentences",
     ):
         assert command in result.stdout
 
@@ -742,3 +746,82 @@ def test_cli_segment_sentences_reports_nothing_to_do(
         "processed_rows": 0,
         "run_dir": str(run_dir),
     }
+
+
+def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    bundle = SimpleNamespace(payload=lambda: {"shards": [{"name": "source.parquet"}]})
+    result = SimpleNamespace(payload=lambda: {"completed": True, "shards": []})
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(
+        cli,
+        "prepare_sentence_bundle",
+        lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or bundle,
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_sentence_bundle",
+        lambda *args, **kwargs: calls.append(("run", args, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        cli,
+        "sync_sentence_bundle",
+        lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_sat_splitter_from_path",
+        lambda model_dir, *, revision: SimpleNamespace(model_dir=model_dir, revision=revision),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_sentence_bundle",
+        lambda bundle_dir: SimpleNamespace(
+            model=SimpleNamespace(filename="sat-3l-sm", revision="137da05")
+        ),
+    )
+
+    assert (
+        main(
+            [
+                "grid5000-prepare-sentences",
+                "--run-dir",
+                str(tmp_path / "run"),
+                "--bundle-dir",
+                str(tmp_path / "bundle"),
+                "--model-dir",
+                str(tmp_path / "sat-3l-sm"),
+                "--model-revision",
+                "137da05",
+                "--commit",
+                "abc123",
+            ]
+        )
+        == 0
+    )
+    assert main(["grid5000-run-sentences", "--bundle-dir", str(tmp_path / "bundle")]) == 0
+    assert (
+        main(
+            [
+                "grid5000-sync-sentences",
+                "--bundle-dir",
+                str(tmp_path / "bundle"),
+                "--run-dir",
+                str(tmp_path / "run"),
+            ]
+        )
+        == 0
+    )
+
+    assert [name for name, _args, _kwargs in calls] == ["prepare", "run", "sync"]
+    assert calls[0][1] == (tmp_path / "run", tmp_path / "bundle")
+    assert calls[0][2]["model_dir"] == tmp_path / "sat-3l-sm"
+    assert calls[0][2]["model_revision"] == "137da05"
+    assert calls[1][1] == (tmp_path / "bundle",)
+    assert calls[2][1] == (tmp_path / "bundle", tmp_path / "run")
+    assert "source.parquet" in capsys.readouterr().out

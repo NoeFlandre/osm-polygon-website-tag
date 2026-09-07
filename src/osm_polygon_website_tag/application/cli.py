@@ -12,7 +12,6 @@ import typer
 from rich.console import Console
 
 from osm_polygon_website_tag.application.progress import ProgressReporter
-from osm_polygon_website_tag.application.sentence_run import run_sentence_shards
 from osm_polygon_website_tag.application.workflow import run_all
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.pipeline.detect_languages import (
@@ -35,7 +34,15 @@ from osm_polygon_website_tag.pipeline.grid5000 import (
     run_language_bundle,
     sync_language_bundle,
 )
+from osm_polygon_website_tag.pipeline.grid5000_sentences import (
+    DEFAULT_GRID_MAX_ROWS,
+    load_sentence_bundle,
+    prepare_sentence_bundle,
+    run_sentence_bundle,
+    sync_sentence_bundle,
+)
 from osm_polygon_website_tag.pipeline.sat import load_sat_splitter_from_path
+from osm_polygon_website_tag.pipeline.sentence_run import run_sentence_shards
 from osm_polygon_website_tag.pipeline.split_sentences import (
     DEFAULT_BATCH_ROWS as DEFAULT_SENTENCE_BATCH_ROWS,
 )
@@ -741,6 +748,94 @@ def grid5000_sync_command(
     normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
     normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
     result = sync_language_bundle(normalized_bundle_dir, normalized_run_dir)
+    _json(
+        {
+            "bundle_dir": str(normalized_bundle_dir),
+            "run_dir": str(normalized_run_dir),
+            **result.payload(),
+        },
+        sort_keys=True,
+    )
+    return 0
+
+
+@app.command("grid5000-prepare-sentences")
+def grid5000_prepare_sentences_command(
+    run_dir: RunDir,
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    model_dir: Annotated[Path, typer.Option("--model-dir")],
+    model_revision: Annotated[str, typer.Option("--model-revision")],
+    commit: Annotated[str, typer.Option("--commit")],
+    time_budget_seconds: Annotated[
+        int,
+        typer.Option("--time-budget-seconds", help="Segmentation budget within the job."),
+    ] = DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    batch_rows: Annotated[
+        int,
+        typer.Option("--batch-rows", help="Rows processed per sentence checkpoint batch."),
+    ] = DEFAULT_SENTENCE_BATCH_ROWS,
+    max_rows: Annotated[
+        int,
+        typer.Option("--max-rows", help="Row budget packed into one bundle."),
+    ] = DEFAULT_GRID_MAX_ROWS,
+) -> int:
+    """Prepare one Seagate-backed, offline Grid'5000 sentence bundle."""
+    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_model_dir = assert_seagate_path(model_dir, label="SaT model directory")
+    bundle = prepare_sentence_bundle(
+        normalized_run_dir,
+        normalized_bundle_dir,
+        model_dir=normalized_model_dir,
+        model_revision=model_revision,
+        commit=commit,
+        time_budget_seconds=time_budget_seconds,
+        batch_rows=batch_rows,
+        max_rows=max_rows,
+    )
+    _json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
+    return 0
+
+
+@app.command("grid5000-run-sentences")
+def grid5000_run_sentences_command(
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    time_budget_seconds: Annotated[
+        float | None,
+        typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
+    ] = None,
+    batch_rows: Annotated[
+        int | None,
+        typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
+    ] = None,
+    job_id: Annotated[str | None, typer.Option("--job-id")] = None,
+) -> int:
+    """Segment one staged sentence bundle on a reserved node, offline."""
+    bundle = load_sentence_bundle(bundle_dir)
+    splitter = load_sat_splitter_from_path(
+        Path(bundle_dir) / bundle.model.filename,
+        revision=bundle.model.revision,
+    )
+    result = run_sentence_bundle(
+        bundle_dir,
+        splitter=splitter,
+        time_budget_seconds=time_budget_seconds,
+        batch_rows=batch_rows,
+        job_id=job_id,
+    )
+    _json(result.payload(), sort_keys=True)
+    return 0
+
+
+@app.command("grid5000-sync-sentences")
+def grid5000_sync_sentences_command(
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    run_dir: RunDir,
+) -> int:
+    """Synchronize one sentence receipt into the Seagate canonical run."""
+    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    result = sync_sentence_bundle(normalized_bundle_dir, normalized_run_dir)
     _json(
         {
             "bundle_dir": str(normalized_bundle_dir),

@@ -166,6 +166,70 @@ provenance; clean temporary Grid'5000 copies only after the receipt and
 checksums have been verified. Cancel an unneeded job with `oardel <job-id>` and
 clear its marker only after confirming that it is no longer running.
 
+## Segment sentences on Grid'5000
+
+Sentence segmentation runs only on reserved nodes. The stage consumes the
+language-complete v1.4 shards, calls the pinned
+[SaT](https://huggingface.co/segment-any-text/sat-3l-sm) segmenter
+(`sat-3l-sm`, revision `137da05`) once per website field, and promotes a v1.5
+shard. Rows whose detected language is outside the segmenter's 85 languages
+record `unsupported_language` instead of sentences; that is about 3% of the
+extracted texts.
+
+One bundle carries several shards. Segmentation is fast enough that a whole
+30-minute reservation would otherwise be spent staging a single small country,
+so `grid5000-prepare-sentences` packs unfinished shards in stable order up to
+`--max-rows` and the node segments them under one shared budget. Every
+completed batch is checkpointed, so a job that runs out of budget mid-shard is
+copied back, synchronized, and resumed by the next bundle.
+
+The segmentation backend is the optional `sentences` extra. The default image,
+the Mac checkout, and every extraction-only run stay free of a deep-learning
+runtime; only the reserved node installs it:
+
+```bash
+export GRID5000_JOB_SCRIPT="$GRID5000_REPO_DIR/scripts/grid5000/bootstrap_sentence_runtime.sh"
+scripts/grid5000/submit_language_detection.sh
+```
+
+Stage the pinned model once under the Seagate model cache, keeping only the
+files the loader reads (`config.json` and `model.safetensors`), then prepare a
+bundle:
+
+```bash
+export OSM_POLY_RUN_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run-id>'
+export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/grid5000-sentences/<bundle-id>'
+export OSM_POLY_MODEL_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/sat/sat-3l-sm-min'
+export OSM_POLY_MODEL_REVISION='137da054051ad9f1eac42025f758db4ac9f22535'
+export OSM_POLY_COMMIT="$(git rev-parse HEAD)"
+scripts/grid5000/prepare_sentence_segmentation.sh
+```
+
+Copy the bundle to the job directory and submit exactly one job, using the
+same policy-aware submission wrapper with the sentence job script:
+
+```bash
+export GRID5000_JOB_SCRIPT="$GRID5000_REPO_DIR/scripts/grid5000/run_sentence_segmentation.sh"
+scripts/grid5000/submit_language_detection.sh
+```
+
+The model directory is immutable and identical for every bundle, so it is
+staged once on the site and linked into each bundle rather than transferred per
+job; the runner still verifies its digest against the manifest before loading
+it. After the job reaches a terminal state, copy the bundle back and
+synchronize it:
+
+```bash
+export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/grid5000-sentences/<bundle-id>'
+scripts/grid5000/sync_sentence_segmentation.sh
+```
+
+Synchronization installs each completed v1.5 shard atomically after validating
+its schema, row count, and digest, installs a validated checkpoint for a paused
+shard, updates the source manifest, and records a receipt under
+`manifests/grid5000-sentences/`. Once every shard carries sentences, rebuild
+analysis, the card, verification, and finalization before publishing.
+
 ## Dry run versus apply
 
 Without `--apply`, `run-all` computes and verifies local artifacts but does not

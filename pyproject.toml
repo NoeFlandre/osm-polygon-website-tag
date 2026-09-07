@@ -37,6 +37,14 @@ dependencies = [
     "wtpsplit",
 ]
 
+[project.optional-dependencies]
+# The segmentation backend is an extra so the default image, the Mac checkout,
+# and every extraction-only run stay free of a deep-learning runtime. Only the
+# reserved Grid'5000 node that segments text installs it.
+sentences = [
+    "torch>=2.6,<3",
+]
+
 [project.scripts]
 osm-polygon-website-tag = "osm_polygon_website_tag.application.cli:main"
 

@@ -20,7 +20,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
-from osm_polygon_website_tag.pipeline import grid5000
+from osm_polygon_website_tag.pipeline import grid5000, grid5000_bundle
 from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint
 from osm_polygon_website_tag.pipeline.detect_languages import (
     LanguageDetectionResult,
@@ -747,75 +747,75 @@ def test_bundle_and_result_payloads_require_the_current_schema_version(tmp_path:
 def test_model_payload_round_trips_the_complete_identity() -> None:
     model = ModelIdentity("repo", "file", "revision", "a" * 64)
 
-    assert grid5000._model_from_payload(grid5000._model_payload(model)) == model
+    assert grid5000_bundle.model_from_payload(grid5000_bundle.model_payload(model)) == model
 
 
 def test_schema_version_rejects_true_even_though_it_compares_equal_to_one() -> None:
     with pytest.raises(ValueError, match=r"^unsupported Grid'5000 bundle schema version$"):
-        grid5000._schema_version({"schema_version": True})
+        grid5000_bundle.schema_version({"schema_version": True})
 
 
 @pytest.mark.parametrize("value", [1, True, ""])
 def test_required_string_rejects_non_string_and_empty_values(value: object) -> None:
     with pytest.raises(ValueError, match=r"^name must be a non-empty string$"):
-        grid5000._required_string({"name": value}, "name")
+        grid5000_bundle.required_string({"name": value}, "name")
 
 
 @pytest.mark.parametrize("value", ["a" * 63, "X" * 64])
 def test_sha256_value_rejects_wrong_length_and_invalid_case(value: str) -> None:
     with pytest.raises(ValueError, match=r"^digest must be a lowercase SHA-256 digest$"):
-        grid5000._sha256_value({"digest": value}, "digest")
+        grid5000_bundle.sha256_value({"digest": value}, "digest")
 
 
 @pytest.mark.parametrize("value", [1.5, True])
 def test_positive_int_rejects_non_integer_values(value: object) -> None:
     with pytest.raises(ValueError, match=r"^value must be a positive integer$"):
-        grid5000._positive_int({"value": value}, "value")
+        grid5000_bundle.positive_int({"value": value}, "value")
 
 
 def test_positive_int_accepts_one() -> None:
-    assert grid5000._positive_int({"value": 1}, "value") == 1
+    assert grid5000_bundle.positive_int({"value": 1}, "value") == 1
 
 
 @pytest.mark.parametrize("value", [1.5, True])
 def test_nonnegative_int_rejects_non_integer_values(value: object) -> None:
     with pytest.raises(ValueError, match=r"^value must be a non-negative integer$"):
-        grid5000._nonnegative_int({"value": value}, "value")
+        grid5000_bundle.nonnegative_int({"value": value}, "value")
 
 
 @pytest.mark.parametrize(("value", "expected"), [(None, None), ("job-42", "job-42")])
 def test_optional_job_id_accepts_null_and_non_empty_strings(
     value: object, expected: str | None
 ) -> None:
-    assert grid5000._optional_job_id(value) == expected
+    assert grid5000_bundle.optional_job_id(value) == expected
 
 
 @pytest.mark.parametrize("value", [42, ""])
 def test_optional_job_id_rejects_non_string_and_empty_values(value: object) -> None:
     with pytest.raises(ValueError, match=r"^job_id must be null or a non-empty string$"):
-        grid5000._optional_job_id(value)
+        grid5000_bundle.optional_job_id(value)
 
 
 @pytest.mark.parametrize("value", [cast(str, 42), "  "])
 def test_validate_commit_rejects_non_string_and_blank_values(value: str) -> None:
     with pytest.raises(ValueError, match=r"^commit must be a non-empty string$"):
-        grid5000._validate_commit(value)
+        grid5000_bundle.validate_commit(value)
 
 
 @pytest.mark.parametrize("batch_rows", [1.5, True])
 def test_validate_grid_options_rejects_non_integer_batch_sizes(batch_rows: object) -> None:
     with pytest.raises(ValueError, match=r"^batch_rows must be a positive integer$"):
-        grid5000._validate_grid_options(1, cast(int, batch_rows))
+        grid5000_bundle.validate_grid_options(1, cast(int, batch_rows))
 
 
 def test_validate_positive_grid_time_accepts_one() -> None:
-    grid5000._validate_positive_grid_time(1)
+    grid5000_bundle.validate_positive_grid_time(1)
 
 
 @pytest.mark.parametrize("value", [True, "1", float("inf"), float("nan"), 0])
 def test_validate_positive_grid_time_rejects_invalid_values(value: object) -> None:
     with pytest.raises(ValueError, match=r"^time_budget_seconds must be positive$"):
-        grid5000._validate_positive_grid_time(value)
+        grid5000_bundle.validate_positive_grid_time(value)
 
 
 def test_result_payload_validates_zero_row_and_nonzero_row_batch_bounds(tmp_path: Path) -> None:
@@ -1016,34 +1016,34 @@ def test_restore_directory_reinstates_the_previous_checkpoint(tmp_path: Path) ->
     backup.mkdir()
     (backup / "saved").write_text("saved", encoding="utf-8")
 
-    grid5000._restore_directory(target, backup)
+    grid5000_bundle.restore_directory(target, backup)
 
     assert not backup.exists()
     assert (target / "saved").read_text(encoding="utf-8") == "saved"
 
-    grid5000._restore_directory(target, None)
+    grid5000_bundle.restore_directory(target, None)
     assert not target.exists()
 
 
 def test_remove_directory_ignores_a_missing_path(tmp_path: Path) -> None:
-    grid5000._remove_directory(tmp_path / "missing")
+    grid5000_bundle.remove_directory(tmp_path / "missing")
 
     target = tmp_path / "target"
     target.mkdir()
-    grid5000._restore_directory(target, None)
+    grid5000_bundle.restore_directory(target, None)
     assert not target.exists()
 
 
 def test_create_bundle_directory_creates_missing_parent_directories(tmp_path: Path) -> None:
     target = tmp_path / "nested" / "bundle"
 
-    grid5000._create_bundle_directory(target)
+    grid5000_bundle.create_bundle_directory(target)
 
     assert target.is_dir()
 
 
 def test_backup_directory_returns_none_for_a_missing_directory(tmp_path: Path) -> None:
-    assert grid5000._backup_directory(tmp_path / "missing") is None
+    assert grid5000_bundle.backup_directory(tmp_path / "missing") is None
 
 
 def test_backup_directory_moves_an_existing_directory(tmp_path: Path) -> None:
@@ -1051,7 +1051,7 @@ def test_backup_directory_moves_an_existing_directory(tmp_path: Path) -> None:
     target.mkdir()
     (target / "part").write_text("data", encoding="utf-8")
 
-    backup = grid5000._backup_directory(target)
+    backup = grid5000_bundle.backup_directory(target)
 
     assert backup is not None
     assert not target.exists()
@@ -1064,7 +1064,7 @@ def test_backup_directory_rejects_a_file_target(tmp_path: Path) -> None:
     target.write_text("not a directory", encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"^checkpoint target is not a directory:"):
-        grid5000._backup_directory(target)
+        grid5000_bundle.backup_directory(target)
 
 
 @pytest.mark.parametrize("contents", ["not json", "[]"])
@@ -1073,10 +1073,10 @@ def test_read_object_rejects_invalid_receipts(tmp_path: Path, contents: str) -> 
     path.write_text(contents, encoding="utf-8")
 
     with pytest.raises(ValueError, match=r"JSON must be an object|invalid"):
-        grid5000._read_object(path, "receipt")
+        grid5000_bundle.read_object(path, "receipt")
 
     with pytest.raises(FileNotFoundError):
-        grid5000._read_object(tmp_path / "missing.json", "receipt")
+        grid5000_bundle.read_object(tmp_path / "missing.json", "receipt")
 
 
 def test_read_object_rejects_invalid_utf8(tmp_path: Path) -> None:
@@ -1084,7 +1084,7 @@ def test_read_object_rejects_invalid_utf8(tmp_path: Path) -> None:
     path.write_bytes(b"\xff")
 
     with pytest.raises(ValueError, match="invalid receipt JSON"):
-        grid5000._read_object(path, "receipt")
+        grid5000_bundle.read_object(path, "receipt")
 
 
 def test_read_object_requests_explicit_utf8_decoding(
@@ -1098,7 +1098,7 @@ def test_read_object_requests_explicit_utf8_decoding(
 
     monkeypatch.setattr(grid5000.Path, "read_text", read_text)
 
-    assert grid5000._read_object(tmp_path / "receipt.json", "receipt") == {}
+    assert grid5000_bundle.read_object(tmp_path / "receipt.json", "receipt") == {}
     assert observed == ["utf-8"]
 
 
