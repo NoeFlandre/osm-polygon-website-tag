@@ -26,6 +26,10 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+from osm_polygon_website_tag.contracts.sentence_schema import (
+    SENTENCE_SUCCESS,
+    SENTENCE_UNSUPPORTED_LANGUAGE,
+)
 from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
@@ -79,6 +83,10 @@ class CardStats:
     website_language_count: int = 0
     contact_website_language_count: int = 0
     detected_language_count: int = 0
+    website_sentence_row_count: int = 0
+    contact_website_sentence_row_count: int = 0
+    total_sentence_count: int = 0
+    unsupported_language_row_count: int = 0
     top_languages: list[tuple[str, int]] = field(default_factory=list)
     polygon_density_h3_resolution: int = 3
     occupied_h3_cell_count: int = 0
@@ -277,6 +285,29 @@ def _add_analysis_stats(stats: CardStats, analysis_dir: Path) -> None:
     _add_cell_stats(stats, analysis_dir / "cells_global.parquet")
     _add_hostname_stats(stats, analysis_dir)
     _add_language_stats(stats, analysis_dir / "languages.parquet")
+    _add_sentence_stats(stats, analysis_dir / "sentences.parquet")
+
+
+def _add_sentence_stats(stats: CardStats, path: Path) -> None:
+    """Load optional segmentation status counts from the analysis table."""
+    if not path.exists():
+        return
+    rows = pq.read_table(path).to_pylist()
+    stats.website_sentence_row_count = _sentence_rows(rows, "website")
+    stats.contact_website_sentence_row_count = _sentence_rows(rows, "contact_website")
+    stats.total_sentence_count = sum(int(row["sentence_count"]) for row in rows)
+    stats.unsupported_language_row_count = sum(
+        int(row["row_count"]) for row in rows if row.get("status") == SENTENCE_UNSUPPORTED_LANGUAGE
+    )
+
+
+def _sentence_rows(rows: list[dict[str, Any]], tag: str) -> int:
+    """Count successfully segmented rows for one website tag."""
+    return sum(
+        int(row["row_count"])
+        for row in rows
+        if row.get("tag") == tag and row.get("status") == SENTENCE_SUCCESS
+    )
 
 
 def _add_language_stats(stats: CardStats, path: Path) -> None:

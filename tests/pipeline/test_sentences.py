@@ -14,7 +14,11 @@ from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_UNSUPPORTED_LANGUAGE,
 )
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
-from osm_polygon_website_tag.pipeline.sentences import segment_batch, sentence_gate
+from osm_polygon_website_tag.pipeline.sentences import (
+    segment_batch,
+    segmentable_text,
+    sentence_gate,
+)
 
 
 class _FakeSplitter:
@@ -183,3 +187,28 @@ def test_a_contact_only_row_is_segmented_after_an_absent_website() -> None:
     assert rows[0]["contact_website_sentence_status"] == SENTENCE_SUCCESS
     assert rows[0]["contact_website_sentences"] == ["c"]
     assert splitter.batches == [["c"]]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "�",
+        "� �\n",
+        "\x00\x01",
+        "​‎",
+        "",
+    ],
+)
+def test_gate_marks_content_free_text_empty_rather_than_segmenting_it(text: str) -> None:
+    """A text the tokenizer would reduce to nothing crashes the segmenter."""
+    assert sentence_gate(text, "eng_Latn") == SENTENCE_EMPTY_TEXT
+
+
+@pytest.mark.parametrize("text", ["a", "🙂", "42", "،", "。"])
+def test_gate_still_segments_text_with_any_real_content(text: str) -> None:
+    assert sentence_gate(text, "eng_Latn") is None
+
+
+def test_segmentable_text_keeps_only_content_characters() -> None:
+    assert segmentable_text(" a​b�\n") == "ab"
+    assert segmentable_text("�\x00") == ""

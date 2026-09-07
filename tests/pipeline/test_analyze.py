@@ -32,6 +32,7 @@ from osm_polygon_website_tag.pipeline.analyze import (
     _write_class_count,
     _write_hostname_tables,
     _write_language_table,
+    _write_sentence_table,
     analyze_results,
 )
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
@@ -1080,3 +1081,43 @@ def test_write_language_table_is_empty_for_a_v13_run(tmp_path: Path) -> None:
     table = pq.read_table(tmp_path / "languages.parquet")
     assert table.num_rows == 0
     assert table.schema.names == ["tag", "language", "row_count"]
+
+
+def test_write_sentence_table_counts_statuses_and_sentences(tmp_path: Path) -> None:
+    con = duckdb.connect()
+    con.execute(
+        """
+        CREATE TABLE public_polygons AS SELECT * FROM (VALUES
+          ('success', 3, 'absent', NULL),
+          ('success', 2, 'unsupported_language', NULL),
+          ('empty_text', NULL, 'success', 4)
+        ) AS t(website_sentence_status, website_sentence_count,
+               contact_website_sentence_status, contact_website_sentence_count)
+        """
+    )
+
+    _write_sentence_table(con, tmp_path)
+
+    assert pq.read_table(tmp_path / "sentences.parquet").to_pylist() == [
+        {"tag": "contact_website", "status": "absent", "row_count": 1, "sentence_count": 0},
+        {"tag": "contact_website", "status": "success", "row_count": 1, "sentence_count": 4},
+        {
+            "tag": "contact_website",
+            "status": "unsupported_language",
+            "row_count": 1,
+            "sentence_count": 0,
+        },
+        {"tag": "website", "status": "empty_text", "row_count": 1, "sentence_count": 0},
+        {"tag": "website", "status": "success", "row_count": 2, "sentence_count": 5},
+    ]
+
+
+def test_write_sentence_table_is_empty_for_a_v14_run(tmp_path: Path) -> None:
+    con = duckdb.connect()
+    con.execute("CREATE TABLE public_polygons AS SELECT 1 AS osm_id")
+
+    _write_sentence_table(con, tmp_path)
+
+    table = pq.read_table(tmp_path / "sentences.parquet")
+    assert table.num_rows == 0
+    assert table.schema.names == ["tag", "status", "row_count", "sentence_count"]

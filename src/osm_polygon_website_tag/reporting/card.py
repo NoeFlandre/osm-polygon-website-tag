@@ -132,6 +132,7 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         f"contact_website_text_success_count: {stats.contact_website_text_success_count}",
         f"contact_website_total_words: {stats.contact_website_total_words}",
         *_language_metadata_lines(stats),
+        *_sentence_metadata_lines(stats),
         f"polygon_density_h3_resolution: {stats.polygon_density_h3_resolution}",
         f"polygon_density_row_count: {stats.polygon_density_row_count}",
         f"occupied_h3_cell_count: {stats.occupied_h3_cell_count}",
@@ -156,6 +157,17 @@ def _detected_language_codes(stats: CardStats) -> list[str]:
     """Return deduplicated ISO 639-3 prefixes of the most frequent labels."""
     prefixes = dict.fromkeys(label.split("_")[0] for label, _ in stats.top_languages)
     return [code for code in prefixes if code][:CARD_LANGUAGE_TAG_LIMIT]
+
+
+def _sentence_metadata_lines(stats: CardStats) -> list[str]:
+    """Render sentence-segmentation counts for the YAML front matter."""
+    if not stats.total_sentence_count:
+        return []
+    return [
+        f"sentence_count: {stats.total_sentence_count}",
+        f"website_segmented_count: {stats.website_sentence_row_count}",
+        f"contact_website_segmented_count: {stats.contact_website_sentence_row_count}",
+    ]
 
 
 def _language_metadata_lines(stats: CardStats) -> list[str]:
@@ -193,6 +205,7 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
         *_render_snapshot_section(stats),
         *_render_website_text_section(stats),
         *_render_language_section(stats),
+        *_render_sentence_section(stats),
         *_render_geographic_section(stats),
         *_render_links_section(),
         *_hostname_sections(stats),
@@ -313,6 +326,32 @@ def _render_language_section(stats: CardStats) -> list[str]:
         "| Language | Texts |",
         "| --- | ---: |",
         *(f"| `{label}` | {count:,} |" for label, count in top),
+        "",
+    ]
+
+
+def _render_sentence_section(stats: CardStats) -> list[str]:
+    """Render sentence totals when the run carries v1.5 segmentation."""
+    if not stats.total_sentence_count:
+        return []
+    segmented = stats.website_sentence_row_count + stats.contact_website_sentence_row_count
+    return [
+        "## Sentences",
+        "",
+        (
+            "Extracted text is segmented with [SaT](https://huggingface.co/segment-any-text/sat-3l-sm) "
+            "for the 85 languages the segmenter covers; text in any other detected language "
+            "records `unsupported_language` instead of sentences."
+        ),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Sentences | {stats.total_sentence_count:,} |",
+        f"| Segmented `website` texts | {stats.website_sentence_row_count:,} |",
+        f"| Segmented `contact:website` texts | {stats.contact_website_sentence_row_count:,} |",
+        f"| Texts in an uncovered language | {stats.unsupported_language_row_count:,} |",
+        "",
+        f"Mean sentences per segmented text: **{stats.total_sentence_count / segmented:.1f}**",
         "",
     ]
 

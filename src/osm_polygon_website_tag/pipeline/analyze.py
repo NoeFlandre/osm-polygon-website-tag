@@ -31,6 +31,8 @@ Output tables in ``<run_dir>/analysis/``:
 * ``top_hostnames_contact_website.parquet`` -- top 1000 contact:website hostnames.
 * ``languages.parquet`` -- exact detected-language counts per website tag
   (empty when the run carries no v1.4 language columns).
+* ``sentences.parquet`` -- exact segmentation status and sentence counts per
+  website tag (empty when the run carries no v1.5 sentence columns).
 """
 
 from __future__ import annotations
@@ -82,6 +84,7 @@ ANALYSIS_FILES: tuple[str, ...] = (
     "top_hostnames_website.parquet",
     "top_hostnames_contact_website.parquet",
     "languages.parquet",
+    "sentences.parquet",
 )
 
 TOP_K_HOSTNAMES = 1000
@@ -221,6 +224,7 @@ def _write_analysis_tables(
     _write_overlap_tables(con, analysis_dir)
     _write_hostname_tables(con, analysis_dir)
     _write_language_table(con, analysis_dir)
+    _write_sentence_table(con, analysis_dir)
     return _analysis_summary(
         con,
         polygons_dir,
@@ -425,6 +429,53 @@ def _write_language_table(con: duckdb.DuckDBPyConnection, analysis_dir: Path) ->
         ORDER BY tag, row_count DESC, language
     """
     duckdb_engine.copy_query_atomic(con, query, analysis_dir / "languages.parquet")
+
+
+SENTENCE_TABLE_SCHEMA = pa.schema(
+    [
+        pa.field("tag", pa.string(), nullable=False),
+        pa.field("status", pa.string(), nullable=False),
+        pa.field("row_count", pa.int64(), nullable=False),
+        pa.field("sentence_count", pa.int64(), nullable=False),
+    ]
+)
+
+_SENTENCE_TAG_COLUMNS = (
+    ("website", "website_sentence_status", "website_sentence_count"),
+    ("contact_website", "contact_website_sentence_status", "contact_website_sentence_count"),
+)
+
+
+def _sentence_tag_select(tag: str, status_column: str, count_column: str) -> str:
+    """Build the grouped status/sentence query for one website tag.
+
+    Every interpolated name is a literal from ``_SENTENCE_TAG_COLUMNS``; no
+    caller-supplied value reaches the statement.
+    """
+    return f"""
+        SELECT '{tag}' AS tag, {status_column} AS status, COUNT(*)::BIGINT AS row_count,
+               COALESCE(SUM({count_column}), 0)::BIGINT AS sentence_count
+        FROM public_polygons WHERE {status_column} IS NOT NULL GROUP BY 1, 2
+    """  # noqa: S608
+
+
+def _write_sentence_table(con: duckdb.DuckDBPyConnection, analysis_dir: Path) -> None:
+    """Write exact segmentation status counts, or an empty table for v1.4."""
+    if not _has_sentence_columns(con):
+        _write_arrow_table(analysis_dir / "sentences.parquet", [], SENTENCE_TABLE_SCHEMA)
+        return
+    selects = " UNION ALL ".join(
+        _sentence_tag_select(tag, status, count) for tag, status, count in _SENTENCE_TAG_COLUMNS
+    )
+    query = f"SELECT * FROM ({selects}) ORDER BY tag, status"  # noqa: S608
+    duckdb_engine.copy_query_atomic(con, query, analysis_dir / "sentences.parquet")
+
+
+def _has_sentence_columns(con: duckdb.DuckDBPyConnection) -> bool:
+    """Return whether the public view carries the v1.5 sentence columns."""
+    columns = {row[0] for row in con.execute("DESCRIBE public_polygons").fetchall()}
+    required = {name for _tag, status, count in _SENTENCE_TAG_COLUMNS for name in (status, count)}
+    return required.issubset(columns)
 
 
 def _analysis_summary(

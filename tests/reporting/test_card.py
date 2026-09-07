@@ -1276,3 +1276,67 @@ def test_language_section_is_absent_without_detected_languages() -> None:
 
     assert "language:" not in front_matter
     assert "## Languages" not in card_module._render_markdown(_golden_card_stats())
+
+
+def _sentence_card_stats() -> CardStats:
+    stats = _language_card_stats()
+    stats.total_sentence_count = 60
+    stats.website_sentence_row_count = 8
+    stats.contact_website_sentence_row_count = 4
+    stats.unsupported_language_row_count = 3
+    return stats
+
+
+def test_sentence_front_matter_and_section_render_segmentation_totals() -> None:
+    front_matter = card_module._render_yaml_front_matter(_sentence_card_stats())
+
+    assert "sentence_count: 60" in front_matter
+    assert "website_segmented_count: 8" in front_matter
+    assert "contact_website_segmented_count: 4" in front_matter
+
+    body = card_module._render_markdown(_sentence_card_stats())
+    assert "## Sentences" in body
+    assert "| Sentences | 60 |" in body
+    assert "| Segmented `website` texts | 8 |" in body
+    assert "| Segmented `contact:website` texts | 4 |" in body
+    assert "| Texts in an uncovered language | 3 |" in body
+    assert "Mean sentences per segmented text: **5.0**" in body
+
+
+def test_sentence_section_is_absent_without_segmentation() -> None:
+    front_matter = card_module._render_yaml_front_matter(_language_card_stats())
+
+    assert "sentence_count:" not in front_matter
+    assert "## Sentences" not in card_module._render_markdown(_language_card_stats())
+
+
+def test_sentence_section_has_a_stable_line_contract() -> None:
+    assert card_module._render_sentence_section(_sentence_card_stats()) == [
+        "## Sentences",
+        "",
+        (
+            "Extracted text is segmented with "
+            "[SaT](https://huggingface.co/segment-any-text/sat-3l-sm) for the 85 languages the "
+            "segmenter covers; text in any other detected language records "
+            "`unsupported_language` instead of sentences."
+        ),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        "| Sentences | 60 |",
+        "| Segmented `website` texts | 8 |",
+        "| Segmented `contact:website` texts | 4 |",
+        "| Texts in an uncovered language | 3 |",
+        "",
+        "Mean sentences per segmented text: **5.0**",
+        "",
+    ]
+
+
+def test_sentence_metadata_has_a_stable_line_contract() -> None:
+    assert card_module._sentence_metadata_lines(_sentence_card_stats()) == [
+        "sentence_count: 60",
+        "website_segmented_count: 8",
+        "contact_website_segmented_count: 4",
+    ]
+    assert card_module._sentence_metadata_lines(_language_card_stats()) == []

@@ -7,6 +7,7 @@ row records why it was skipped instead of carrying an indistinguishable null.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -21,6 +22,14 @@ from osm_polygon_website_tag.pipeline.sentence_languages import sat_code_for_glo
 
 TEXT_PREFIXES = ("website", "contact_website")
 
+# Characters that carry no segmentable content: the replacement character a
+# broken decode leaves behind, plus the control, format, surrogate,
+# private-use and unassigned categories. A text made only of these tokenizes
+# to nothing, and the segmenter fails an internal invariant on such input, so
+# it is recorded as empty text instead of being sent to the model.
+_REPLACEMENT_CHARACTER = "\ufffd"
+_CONTENT_FREE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+
 _Pending = tuple[dict[str, object], str]
 
 
@@ -33,13 +42,24 @@ class SentenceSplitter(Protocol):
     def split(self, texts: Sequence[str]) -> list[list[str]]: ...
 
 
+def segmentable_text(text: str) -> str:
+    """Return only the characters a segmenter can actually see."""
+    return "".join(
+        character
+        for character in text
+        if not character.isspace()
+        and character != _REPLACEMENT_CHARACTER
+        and unicodedata.category(character) not in _CONTENT_FREE_CATEGORIES
+    )
+
+
 def sentence_gate(text: str, language: object) -> str | None:
     """Return the terminal status for fetched text, or ``None`` to segment it.
 
-    Blankness is decided before language support so that empty text is reported
-    as empty whatever the detector labelled it.
+    Emptiness is decided before language support so that text without content
+    is reported as empty whatever the detector labelled it.
     """
-    if not text.strip():
+    if not segmentable_text(text):
         return SENTENCE_EMPTY_TEXT
     if sat_code_for_glotlid_label(language) is None:
         return SENTENCE_UNSUPPORTED_LANGUAGE
@@ -114,4 +134,10 @@ def _set_sentences(
     row[f"{prefix}_sentence_status"] = status
 
 
-__all__ = ["TEXT_PREFIXES", "SentenceSplitter", "segment_batch", "sentence_gate"]
+__all__ = [
+    "TEXT_PREFIXES",
+    "SentenceSplitter",
+    "segment_batch",
+    "segmentable_text",
+    "sentence_gate",
+]
