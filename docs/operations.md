@@ -192,6 +192,10 @@ CPU-bound GlotLID stage, this one is a genuine GPU workload. The segmenter also
 loads the `facebookAI/xlm-roberta-base` tokenizer, so that Hub cache must exist
 under `~/.cache/huggingface` on the site before the first offline job.
 
+Segments keep their own trailing whitespace but not the line breaks that
+separated them, so concatenating a row's sentences does not reproduce its
+extracted text; the untouched text remains in the `*_text` columns.
+
 One bundle carries several shards. Segmentation is fast enough that a whole
 30-minute reservation would otherwise be spent staging a single small country,
 so `grid5000-prepare-sentences` packs unfinished shards in stable order up to

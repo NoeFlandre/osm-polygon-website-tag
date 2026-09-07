@@ -1318,7 +1318,9 @@ def test_sentence_section_has_a_stable_line_contract() -> None:
             "Extracted text is segmented with "
             "[SaT](https://huggingface.co/segment-any-text/sat-3l-sm) for the 85 languages the "
             "segmenter covers; text in any other detected language records "
-            "`unsupported_language` instead of sentences."
+            "`unsupported_language` instead of sentences. Segments carry their own trailing "
+            "spaces but not the line breaks that separated them, so joining them does not "
+            "reproduce the source text; the full text stays in the `*_text` columns."
         ),
         "",
         "| Metric | Value |",
