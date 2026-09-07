@@ -26,6 +26,7 @@ from osm_polygon_website_tag.pipeline.analyze import (
     _duckdb_extract_hostname,
     _global_cell_rows,
     _parquet_row_count,
+    _public_columns,
     _validate_analysis_inputs,
     _write_arrow_table,
     _write_cells_per_group,
@@ -1066,6 +1067,7 @@ def test_write_language_table_counts_labels_per_tag(tmp_path: Path) -> None:
 
     _write_language_table(con, tmp_path)
 
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["languages.parquet"]
     assert pq.read_table(tmp_path / "languages.parquet").to_pylist() == [
         {"tag": "contact_website", "language": "deu_Latn", "row_count": 1},
         {"tag": "website", "language": "eng_Latn", "row_count": 2},
@@ -1078,6 +1080,7 @@ def test_write_language_table_is_empty_for_a_v13_run(tmp_path: Path) -> None:
 
     _write_language_table(con, tmp_path)
 
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["languages.parquet"]
     table = pq.read_table(tmp_path / "languages.parquet")
     assert table.num_rows == 0
     assert table.schema.names == ["tag", "language", "row_count"]
@@ -1098,6 +1101,7 @@ def test_write_sentence_table_counts_statuses_and_sentences(tmp_path: Path) -> N
 
     _write_sentence_table(con, tmp_path)
 
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["sentences.parquet"]
     assert pq.read_table(tmp_path / "sentences.parquet").to_pylist() == [
         {"tag": "contact_website", "status": "absent", "row_count": 1, "sentence_count": 0},
         {"tag": "contact_website", "status": "success", "row_count": 1, "sentence_count": 4},
@@ -1118,6 +1122,14 @@ def test_write_sentence_table_is_empty_for_a_v14_run(tmp_path: Path) -> None:
 
     _write_sentence_table(con, tmp_path)
 
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["sentences.parquet"]
     table = pq.read_table(tmp_path / "sentences.parquet")
     assert table.num_rows == 0
     assert table.schema.names == ["tag", "status", "row_count", "sentence_count"]
+
+
+def test_public_columns_reads_the_registered_view() -> None:
+    con = duckdb.connect()
+    con.execute("CREATE TABLE public_polygons AS SELECT 1 AS osm_id, 'x' AS region")
+
+    assert _public_columns(con) == {"osm_id", "region"}

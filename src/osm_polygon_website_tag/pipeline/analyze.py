@@ -414,8 +414,7 @@ LANGUAGE_TABLE_SCHEMA = pa.schema(
 
 def _write_language_table(con: duckdb.DuckDBPyConnection, analysis_dir: Path) -> None:
     """Write exact GlotLID label counts, or an empty table for a v1.3 run."""
-    columns = {row[0] for row in con.execute("DESCRIBE public_polygons").fetchall()}
-    if not {"website_language", "contact_website_language"}.issubset(columns):
+    if not {"website_language", "contact_website_language"}.issubset(_public_columns(con)):
         _write_arrow_table(analysis_dir / "languages.parquet", [], LANGUAGE_TABLE_SCHEMA)
         return
     query = """
@@ -473,9 +472,13 @@ def _write_sentence_table(con: duckdb.DuckDBPyConnection, analysis_dir: Path) ->
 
 def _has_sentence_columns(con: duckdb.DuckDBPyConnection) -> bool:
     """Return whether the public view carries the v1.5 sentence columns."""
-    columns = {row[0] for row in con.execute("DESCRIBE public_polygons").fetchall()}
     required = {name for _tag, status, count in _SENTENCE_TAG_COLUMNS for name in (status, count)}
-    return required.issubset(columns)
+    return required.issubset(_public_columns(con))
+
+
+def _public_columns(con: duckdb.DuckDBPyConnection) -> set[str]:
+    """Return the column names the registered public view exposes."""
+    return set(con.table("public_polygons").columns)
 
 
 def _analysis_summary(
