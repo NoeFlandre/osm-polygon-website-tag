@@ -138,3 +138,14 @@ def test_parser_rejects_an_unsupported_device() -> None:
         )
 
     assert error.value.code == 2
+
+
+def test_parser_documents_and_constrains_the_device_option() -> None:
+    parser = grid5000_sentence_runner._parser()
+
+    assert parser.parse_args(["--bundle-dir", "/tmp/b", "--device", "cpu"]).device == "cpu"
+    help_text = " ".join(parser.format_help().split())
+    assert (
+        "{cuda,cpu} Require this segmentation device instead of preferring an accelerator."
+        in help_text
+    )
