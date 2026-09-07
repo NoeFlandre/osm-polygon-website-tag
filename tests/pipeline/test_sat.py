@@ -10,10 +10,13 @@ from typing import Any
 import pytest
 
 from osm_polygon_website_tag.pipeline.sat import (
+    DEFAULT_MODEL_BATCH_SIZE,
     MODEL_REPOSITORY,
     SaTSplitter,
     load_sat_splitter_from_path,
+    prepare_model,
     sat_model_identity,
+    select_device,
 )
 
 
@@ -24,7 +27,7 @@ class _FakeModel:
         self.calls: list[list[str]] = []
         self._results = results
 
-    def split(self, text_or_texts: Sequence[str]) -> Any:
+    def split(self, text_or_texts: Sequence[str], batch_size: int | None = None) -> Any:
         self.calls.append(list(text_or_texts))
         results = self._results
         if results is None:
@@ -132,12 +135,18 @@ def test_loader_imports_wtpsplit_lazily_and_pins_the_staged_directory(
         def __init__(self, name: str) -> None:
             constructed.append(name)
 
-        def split(self, text_or_texts: Sequence[str]) -> Any:
+        def split(self, text_or_texts: Sequence[str], batch_size: int | None = None) -> Any:
             return ([text] for text in text_or_texts)
 
     module = types.ModuleType("wtpsplit")
     monkeypatch.setattr(module, "SaT", FakeSaT, raising=False)
     monkeypatch.setitem(sys.modules, "wtpsplit", module)
+
+    torch_module = types.ModuleType("torch")
+    monkeypatch.setattr(
+        torch_module, "cuda", types.SimpleNamespace(is_available=lambda: False), raising=False
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
 
     splitter = load_sat_splitter_from_path(directory, revision="abc1234")
 
@@ -145,3 +154,167 @@ def test_loader_imports_wtpsplit_lazily_and_pins_the_staged_directory(
     assert splitter.identity.revision == "abc1234"
     assert splitter.identity.filename == "sat-3l-sm"
     assert splitter.split(["a"]) == [["a"]]
+
+
+class _DeviceModel(_FakeModel):
+    """Fake model recording the device and precision moves it received."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.moves: list[str] = []
+        self.halved = 0
+        self.batch_sizes: list[int] = []
+
+    def half(self) -> _DeviceModel:
+        self.halved += 1
+        return self
+
+    def to(self, device: str) -> _DeviceModel:
+        self.moves.append(device)
+        return self
+
+    def split(self, text_or_texts: Sequence[str], batch_size: int | None = None) -> Any:
+        if batch_size is not None:
+            self.batch_sizes.append(batch_size)
+        return super().split(text_or_texts, batch_size=batch_size)
+
+
+def test_select_device_prefers_an_available_accelerator() -> None:
+    assert select_device(requested=None, cuda_available=True) == "cuda"
+    assert select_device(requested=None, cuda_available=False) == "cpu"
+
+
+def test_select_device_honours_an_explicit_request() -> None:
+    assert select_device(requested="cpu", cuda_available=True) == "cpu"
+    assert select_device(requested="cuda", cuda_available=True) == "cuda"
+
+
+def test_select_device_refuses_an_unavailable_accelerator() -> None:
+    with pytest.raises(
+        ValueError, match=rf"^{re.escape('requested CUDA device is not available')}$"
+    ):
+        select_device(requested="cuda", cuda_available=False)
+
+
+def test_select_device_refuses_an_unknown_device() -> None:
+    with pytest.raises(ValueError, match=r"^unsupported segmentation device: 'tpu'$"):
+        select_device(requested="tpu", cuda_available=True)
+
+
+def test_prepare_model_moves_a_cuda_model_to_half_precision(tmp_path: Path) -> None:
+    model = _DeviceModel()
+
+    prepared = prepare_model(model, device="cuda")
+
+    assert prepared is model
+    assert model.halved == 1
+    assert model.moves == ["cuda"]
+
+
+def test_prepare_model_leaves_a_cpu_model_in_full_precision(tmp_path: Path) -> None:
+    model = _DeviceModel()
+
+    prepare_model(model, device="cpu")
+
+    assert model.halved == 0
+    assert model.moves == []
+
+
+def test_split_passes_the_configured_model_batch_size(tmp_path: Path) -> None:
+    model = _DeviceModel()
+
+    SaTSplitter(
+        model,
+        sat_model_identity(_model_dir(tmp_path), revision="r"),
+        model_batch_size=128,
+    ).split(["a", "b"])
+
+    assert model.batch_sizes == [128]
+
+
+def test_split_uses_the_documented_default_batch_size(tmp_path: Path) -> None:
+    model = _DeviceModel()
+
+    _splitter(model, tmp_path).split(["a"])
+
+    assert model.batch_sizes == [DEFAULT_MODEL_BATCH_SIZE]
+    assert DEFAULT_MODEL_BATCH_SIZE == 256
+
+
+def test_loader_prepares_the_model_for_the_selected_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+    import types
+
+    directory = _model_dir(tmp_path)
+    model = _DeviceModel()
+    module = types.ModuleType("wtpsplit")
+    monkeypatch.setattr(module, "SaT", lambda _name: model, raising=False)
+    monkeypatch.setitem(sys.modules, "wtpsplit", module)
+    torch_module = types.ModuleType("torch")
+    monkeypatch.setattr(
+        torch_module, "cuda", types.SimpleNamespace(is_available=lambda: True), raising=False
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+    splitter = load_sat_splitter_from_path(directory, revision="abc1234")
+
+    assert model.moves == ["cuda"]
+    assert model.halved == 1
+    assert splitter.split(["a"]) == [["a"]]
+
+
+def _fake_backends(
+    monkeypatch: pytest.MonkeyPatch, model: _DeviceModel, *, cuda_available: bool
+) -> None:
+    """Install torch-free stand-ins for the two backends the loader imports."""
+    import sys
+    import types
+
+    module = types.ModuleType("wtpsplit")
+    monkeypatch.setattr(module, "SaT", lambda _name: model, raising=False)
+    monkeypatch.setitem(sys.modules, "wtpsplit", module)
+    torch_module = types.ModuleType("torch")
+    monkeypatch.setattr(
+        torch_module,
+        "cuda",
+        types.SimpleNamespace(is_available=lambda: cuda_available),
+        raising=False,
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch_module)
+
+
+def test_loader_honours_an_explicit_cpu_request_on_a_gpu_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _DeviceModel()
+    _fake_backends(monkeypatch, model, cuda_available=True)
+
+    load_sat_splitter_from_path(_model_dir(tmp_path), revision="r", device="cpu")
+
+    assert model.moves == []
+    assert model.halved == 0
+
+
+def test_loader_passes_an_explicit_model_batch_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _DeviceModel()
+    _fake_backends(monkeypatch, model, cuda_available=False)
+
+    splitter = load_sat_splitter_from_path(_model_dir(tmp_path), revision="r", model_batch_size=8)
+    splitter.split(["a"])
+
+    assert model.batch_sizes == [8]
+
+
+def test_loader_defaults_to_the_documented_model_batch_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _DeviceModel()
+    _fake_backends(monkeypatch, model, cuda_available=False)
+
+    load_sat_splitter_from_path(_model_dir(tmp_path), revision="r").split(["a"])
+
+    assert model.batch_sizes == [DEFAULT_MODEL_BATCH_SIZE]

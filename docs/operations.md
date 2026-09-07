@@ -176,6 +176,13 @@ shard. Rows whose detected language is outside the segmenter's 85 languages
 record `unsupported_language` instead of sentences; that is about 3% of the
 extracted texts.
 
+The reserved GPU does the work: the loader moves the pinned encoder onto the
+node's CUDA device in half precision and segments 256 texts per forward batch,
+falling back to CPU only when a node exposes no accelerator. Unlike the
+CPU-bound GlotLID stage, this one is a genuine GPU workload. The segmenter also
+loads the `facebookAI/xlm-roberta-base` tokenizer, so that Hub cache must exist
+under `~/.cache/huggingface` on the site before the first offline job.
+
 One bundle carries several shards. Segmentation is fast enough that a whole
 30-minute reservation would otherwise be spent staging a single small country,
 so `grid5000-prepare-sentences` packs unfinished shards in stable order up to
