@@ -20,7 +20,7 @@ def test_main_loads_the_staged_model_and_emits_a_receipt(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    loaded: list[tuple[Path, str]] = []
+    loaded: list[tuple[Path, str, str | None]] = []
     calls: list[tuple[Path, dict[str, object]]] = []
     splitter = object()
     result = SimpleNamespace(
@@ -36,7 +36,9 @@ def test_main_loads_the_staged_model_and_emits_a_receipt(
     monkeypatch.setattr(
         grid5000_sentence_runner,
         "load_sat_splitter_from_path",
-        lambda model_dir, *, revision: loaded.append((model_dir, revision)) or splitter,
+        lambda model_dir, *, revision, device: (
+            loaded.append((model_dir, revision, device)) or splitter
+        ),
     )
 
     def run_bundle(bundle_dir: Path, **kwargs: object) -> SimpleNamespace:
@@ -62,7 +64,7 @@ def test_main_loads_the_staged_model_and_emits_a_receipt(
     )
 
     assert bundles == [tmp_path / "bundle"]
-    assert loaded == [(tmp_path / "bundle" / "sat-3l-sm", "137da05")]
+    assert loaded == [(tmp_path / "bundle" / "sat-3l-sm", "137da05", None)]
     assert calls == [
         (
             tmp_path / "bundle",
@@ -100,3 +102,39 @@ def test_main_reports_invalid_bundle_arguments(
 
     assert main(["--bundle-dir", "/tmp/bundle"]) == 2
     assert capsys.readouterr().err == "error: invalid bundle\n"
+
+
+def test_main_requires_the_device_the_job_asked_for(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    requested: list[str | None] = []
+    monkeypatch.setattr(
+        grid5000_sentence_runner, "load_sentence_bundle", lambda _dir: _stub_bundle()
+    )
+    monkeypatch.setattr(
+        grid5000_sentence_runner,
+        "load_sat_splitter_from_path",
+        lambda _dir, *, revision, device: requested.append(device) or object(),
+    )
+    monkeypatch.setattr(
+        grid5000_sentence_runner,
+        "run_sentence_bundle",
+        lambda *_args, **_kwargs: SimpleNamespace(payload=lambda: {"completed": True}),
+    )
+
+    assert main(["--bundle-dir", str(tmp_path / "bundle"), "--device", "cuda"]) == 0
+    assert main(["--bundle-dir", str(tmp_path / "bundle")]) == 0
+
+    assert requested == ["cuda", None]
+    capsys.readouterr()
+
+
+def test_parser_rejects_an_unsupported_device() -> None:
+    with pytest.raises(SystemExit) as error:
+        grid5000_sentence_runner._parser().parse_args(
+            ["--bundle-dir", "/tmp/bundle", "--device", "tpu"]
+        )
+
+    assert error.value.code == 2

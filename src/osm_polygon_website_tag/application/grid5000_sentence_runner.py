@@ -27,6 +27,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-budget-seconds", type=float)
     parser.add_argument("--batch-rows", type=int)
     parser.add_argument("--job-id")
+    parser.add_argument(
+        "--device",
+        choices=("cuda", "cpu"),
+        help="Require this segmentation device instead of preferring an accelerator.",
+    )
     return parser
 
 
@@ -38,6 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         splitter = load_sat_splitter_from_path(
             Path(args.bundle_dir) / bundle.model.filename,
             revision=bundle.model.revision,
+            device=args.device,
         )
         result = run_sentence_bundle(
             args.bundle_dir,

@@ -94,6 +94,8 @@ def test_reserved_node_sentence_runner_is_offline_and_has_a_cleanup_margin() -> 
     assert "TRANSFORMERS_OFFLINE=1" in script
     assert "UV_NO_DEV=1" in script
     assert "--extra sentences" in script
+    assert 'LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu' in script
+    assert '--device "${GRID5000_DEVICE:-cuda}"' in script
     assert "python -m osm_polygon_website_tag.application.grid5000_sentence_runner" in script
     assert "osm-polygon-website-tag" not in script
 
