@@ -6,7 +6,11 @@ resolved by :func:`resolve_hf_token` from, in order:
 1. The ``HF_TOKEN`` environment variable.
 2. The ``HUGGING_FACE_HUB_TOKEN`` environment variable.
 3. The local credential store (only if huggingface_hub is installed
-   and a token has been persisted via ``huggingface-cli login``).
+   and a token has been persisted via ``hf auth login``).
+
+``HfApi().token`` is deliberately not used: from huggingface_hub 1.0 it
+reports only a token passed to the constructor, so reading it silently
+resolved nothing and refused every publish.
 """
 
 from __future__ import annotations
@@ -30,15 +34,12 @@ def _environment_token() -> str | None:
 def _stored_token() -> str | None:
     """Read the optional huggingface_hub local credential store."""
     try:
-        from huggingface_hub import HfApi
+        from huggingface_hub import get_token
 
-        api = HfApi()
-        token = api.token
-        if isinstance(token, str) and token:
-            return token
-        return None
+        token = get_token()
     except Exception:
         return None
+    return token if isinstance(token, str) and token else None
 
 
 __all__ = ["resolve_hf_token"]

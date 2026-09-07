@@ -22,6 +22,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline import sentence_run
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
+from osm_polygon_website_tag.publishing import publish as publish_module
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
     hash_shard,
@@ -545,9 +546,22 @@ def test_cli_publish_plan_runs(tmp_path: Path) -> None:
     assert rc == 0
 
 
-def test_cli_create_repo_requires_token() -> None:
+def test_cli_create_repo_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a credential the command must refuse before touching the Hub."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: None)
+    reached: list[str] = []
+    monkeypatch.setattr(
+        publish_module,
+        "_create_repo_remote",
+        lambda **kwargs: reached.append(str(kwargs)) or "foo/bar",
+    )
+
     rc = main(["create-repo", "--repo-id", "foo/bar"])
+
     assert rc != 0
+    assert reached == []
 
 
 def test_cli_publish_dry_run(tmp_path: Path) -> None:

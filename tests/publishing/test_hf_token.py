@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from osm_polygon_website_tag.publishing import hf_token
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 
 
@@ -42,24 +43,28 @@ def test_env_takes_precedence_over_store(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_resolve_from_stored_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The store is read through ``get_token``, the documented accessor."""
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     monkeypatch.setitem(
         sys.modules,
         "huggingface_hub",
-        SimpleNamespace(HfApi=lambda: SimpleNamespace(token="stored-token")),
+        SimpleNamespace(get_token=lambda: "stored-token"),
     )
 
     assert resolve_hf_token() == "stored-token"
 
 
-def test_stored_token_requires_a_non_empty_string(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("value", [1, "", None])
+def test_stored_token_requires_a_non_empty_string(
+    monkeypatch: pytest.MonkeyPatch, value: object
+) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     monkeypatch.setitem(
         sys.modules,
         "huggingface_hub",
-        SimpleNamespace(HfApi=lambda: SimpleNamespace(token=1)),
+        SimpleNamespace(get_token=lambda: value),
     )
 
     assert resolve_hf_token() is None
@@ -75,7 +80,54 @@ def test_stored_token_errors_are_optional(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setitem(
         sys.modules,
         "huggingface_hub",
-        SimpleNamespace(HfApi=raise_error),
+        SimpleNamespace(get_token=raise_error),
     )
 
     assert resolve_hf_token() is None
+
+
+def test_the_real_credential_store_is_readable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guard against a Hub release moving the accessor out from under us."""
+    from huggingface_hub import get_token
+
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    stored = get_token()
+
+    assert resolve_hf_token() == (stored if isinstance(stored, str) and stored else None)
+
+
+def test_env_lookup_reads_both_documented_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each variable must be read on its own, with HF_TOKEN taking precedence."""
+    monkeypatch.setattr(hf_token, "_stored_token", lambda: None)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "primary")
+    assert resolve_hf_token() == "primary"
+
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "secondary")
+    assert resolve_hf_token() == "secondary"
+
+    monkeypatch.setenv("HF_TOKEN", "primary")
+    assert resolve_hf_token() == "primary"
+
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN")
+    assert resolve_hf_token() is None
+
+
+def test_the_store_is_consulted_only_without_an_environment_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(hf_token, "_stored_token", lambda: calls.append(1) or "stored")
+    monkeypatch.setenv("HF_TOKEN", "primary")
+
+    assert resolve_hf_token() == "primary"
+    assert calls == []
+
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    assert resolve_hf_token() == "stored"
+    assert calls == [1]
