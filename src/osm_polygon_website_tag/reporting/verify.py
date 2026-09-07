@@ -17,6 +17,9 @@ from osm_polygon_website_tag.reporting.verification.receipt import verify_receip
 from osm_polygon_website_tag.reporting.verification.rows import (
     verify_row_invariants as _verify_row_invariants,
 )
+from osm_polygon_website_tag.reporting.verification.sentence import (
+    verify_sentence_invariants as _verify_sentence_invariants,
+)
 from osm_polygon_website_tag.reporting.verification.shards import verify_shards as _verify_shards
 from osm_polygon_website_tag.reporting.verification.text import (
     verify_text_invariants as _verify_text_invariants,
@@ -59,6 +62,7 @@ def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
     status = metadata.get("status")
     _verify_text_invariants(root, status, errors)
     _verify_language_invariants(root, errors)
+    _verify_sentence_invariants(root, errors)
     _verify_status_artifacts(root, status, include_receipt, errors)
     return VerificationReport(not errors, errors, checked)
 
