@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -114,3 +116,108 @@ def test_sat_model_cache_must_be_under_a_seagate_root(
 
     with pytest.raises(ValueError, match="SaT model cache must be under a Seagate data root"):
         paths.sat_model_cache_dir()
+
+
+def test_data_root_creates_a_nested_root_and_tolerates_an_existing_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The root is created on first call, parents included, and reused after."""
+    root = tmp_path / "volume" / "projects" / "osm-polygon-website-tag"
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(root))
+
+    assert paths.data_root() == root
+    assert root.is_dir()
+
+    marker = root / "marker.txt"
+    marker.write_text("kept", encoding="utf-8")
+
+    assert paths.data_root() == root
+    assert marker.read_text(encoding="utf-8") == "kept"
+
+
+@pytest.mark.parametrize(
+    ("factory", "name"),
+    [
+        (paths.raw_dir, paths.RAW_DIRNAME),
+        (paths.processed_dir, paths.PROCESSED_DIRNAME),
+        (paths.exports_dir, paths.EXPORTS_DIRNAME),
+    ],
+)
+def test_each_subdirectory_is_named_created_and_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    factory: object,
+    name: str,
+) -> None:
+    root = tmp_path / "volume" / "osm-polygon-website-tag"
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(root))
+    make = cast("Callable[[], Path]", factory)
+
+    path = make()
+
+    assert path == root / name
+    assert path.is_dir()
+
+    marker = path / "marker.txt"
+    marker.write_text("kept", encoding="utf-8")
+
+    assert make() == path
+    assert marker.read_text(encoding="utf-8") == "kept"
+
+
+def test_the_subdirectory_names_are_the_documented_layout() -> None:
+    assert (paths.RAW_DIRNAME, paths.PROCESSED_DIRNAME, paths.EXPORTS_DIRNAME) == (
+        "raw",
+        "processed",
+        "exports",
+    )
+
+
+@pytest.mark.parametrize(
+    ("factory", "name"),
+    [(glotlid_model_cache_dir, "glotlid"), (paths.sat_model_cache_dir, "sat")],
+)
+def test_each_model_cache_lives_under_models_and_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    factory: object,
+    name: str,
+) -> None:
+    root = tmp_path / "volume" / "osm-polygon-website-tag"
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", root)
+    monkeypatch.delenv("OSM_POLY_DATA_DIR", raising=False)
+    make = cast("Callable[[], Path]", factory)
+
+    path = make()
+
+    assert path == root.resolve() / "models" / name
+    assert path.is_dir()
+
+    marker = path / "marker.txt"
+    marker.write_text("kept", encoding="utf-8")
+
+    assert make() == path
+    assert marker.read_text(encoding="utf-8") == "kept"
+
+
+def test_the_sat_cache_rejects_an_external_override_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "project")
+    external_root = tmp_path / "external"
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(external_root))
+
+    with pytest.raises(ValueError, match="SaT model cache must be under a Seagate data root"):
+        paths.sat_model_cache_dir()
+
+    assert not external_root.exists()
+
+
+def test_the_glotlid_cache_names_itself_in_its_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "project")
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(tmp_path / "external"))
+
+    with pytest.raises(ValueError, match="GlotLID model cache must be under a Seagate data root"):
+        glotlid_model_cache_dir()
