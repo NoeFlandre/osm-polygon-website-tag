@@ -1,8 +1,9 @@
 """Generated-data path resolution.
 
-Code lives on the Mac; generated run artifacts live on the Seagate project
-volume. Immutable PBF sources are supplied explicitly to the CLI and are
-never represented as an output data root here.
+Everything lives on the Seagate project volume: the checkout sits in ``repo/``
+beside the runs, models and Grid'5000 bundles it produces. Immutable PBF
+sources are supplied explicitly to the CLI and are never represented as an
+output data root here.
 
 Override with the ``OSM_POLY_DATA_DIR`` environment variable (see ``.env.example``).
 """
@@ -13,7 +14,6 @@ import os
 from pathlib import Path
 
 DEFAULT_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag")
-LEGACY_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag-data")
 
 # Sub-directory layout under the data root. Add constants here as we grow
 # instead of inlining path joins across the codebase.
@@ -80,10 +80,10 @@ def sat_model_cache_dir() -> Path:
 
 
 def assert_seagate_path(path: Path | str, *, label: str) -> Path:
-    """Require a production path to be inside an approved Seagate data root.
+    """Require a production path to be inside the Seagate project root.
 
-    The canonical root receives new output. The legacy root remains approved so
-    callers can resume or inspect runs created before the storage-root change.
+    Runs, models and Grid'5000 bundles all live under that one directory, so a
+    path outside it is a mistake rather than an older layout.
     """
     normalized = Path(path).expanduser().resolve()
     if not _is_under_seagate_root(normalized):
@@ -101,4 +101,4 @@ def _is_under_seagate_root(path: Path) -> bool:
 
 
 def _seagate_roots() -> tuple[Path, ...]:
-    return tuple(root.resolve() for root in (DEFAULT_DATA_ROOT, LEGACY_DATA_ROOT))
+    return (DEFAULT_DATA_ROOT.resolve(),)

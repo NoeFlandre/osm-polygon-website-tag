@@ -103,11 +103,9 @@ download GlotLID or write production data.
 
 ## Run language detection on Grid'5000
 
-Paths below use the canonical data root. Runs created before the storage-root
-change stay under the approved legacy root
-`/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/`; the published
-`geofabrik-website-v1-glotlid-v1` run, its GlotLID cache, and its Grid'5000
-bundles live there. Substitute that root when resuming or inspecting it.
+Everything lives under one project directory on the Seagate volume: the
+checkout in `repo/` beside `runs/`, `models/`, and the Grid'5000 bundle
+directories it produces.
 
 The repository includes wrappers in `scripts/grid5000/` for short, resumable
 jobs. They follow the Grid'5000 usage policy: the frontend is used only for
@@ -217,9 +215,9 @@ files the loader reads (`config.json` and `model.safetensors`), then prepare a
 bundle:
 
 ```bash
-export OSM_POLY_RUN_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/runs/<run-id>'
-export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/grid5000-sentences/<bundle-id>'
-export OSM_POLY_MODEL_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/models/sat/sat-3l-sm-min'
+export OSM_POLY_RUN_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000-sentences/<bundle-id>'
+export OSM_POLY_MODEL_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/sat/sat-3l-sm-min'
 export OSM_POLY_MODEL_REVISION='137da054051ad9f1eac42025f758db4ac9f22535'
 export OSM_POLY_COMMIT="$(git rev-parse HEAD)"
 scripts/grid5000/prepare_sentence_segmentation.sh
@@ -240,7 +238,7 @@ it. After the job reaches a terminal state, copy the bundle back and
 synchronize it:
 
 ```bash
-export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag-data/grid5000-sentences/<bundle-id>'
+export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000-sentences/<bundle-id>'
 scripts/grid5000/sync_sentence_segmentation.sh
 ```
 

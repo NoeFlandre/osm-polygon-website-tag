@@ -23,14 +23,19 @@ def test_assert_seagate_path_accepts_the_project_storage_root() -> None:
     assert assert_seagate_path(path, label="run") == path
 
 
-def test_assert_seagate_path_keeps_legacy_root_for_existing_runs(
+def test_assert_seagate_path_rejects_the_retired_legacy_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    legacy_root = tmp_path / "legacy-data"
-    monkeypatch.setattr(paths, "LEGACY_DATA_ROOT", legacy_root)
-    path = legacy_root / "runs" / "existing"
+    """Every run now lives under the single project root."""
+    monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "osm-polygon-website-tag")
 
-    assert assert_seagate_path(path, label="run") == path
+    with pytest.raises(ValueError, match="Seagate data root"):
+        assert_seagate_path(tmp_path / "osm-polygon-website-tag-data" / "runs" / "old", label="run")
+
+
+def test_the_data_root_is_the_single_project_directory() -> None:
+    assert Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == paths.DEFAULT_DATA_ROOT
+    assert not hasattr(paths, "LEGACY_DATA_ROOT")
 
 
 def test_glotlid_model_cache_is_under_the_default_data_root(
@@ -45,7 +50,6 @@ def test_glotlid_model_cache_rejects_external_override_before_writing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "data")
-    monkeypatch.setattr(paths, "LEGACY_DATA_ROOT", tmp_path / "legacy-data")
     external_root = tmp_path / "external"
     monkeypatch.setenv("OSM_POLY_DATA_DIR", str(external_root))
 
@@ -59,7 +63,6 @@ def test_assert_seagate_path_rejects_paths_outside_the_data_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(paths, "DEFAULT_DATA_ROOT", tmp_path / "data")
-    monkeypatch.setattr(paths, "LEGACY_DATA_ROOT", tmp_path / "legacy-data")
     with pytest.raises(ValueError, match="Seagate data root"):
         assert_seagate_path(tmp_path, label="model cache")
 
