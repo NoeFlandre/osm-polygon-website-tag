@@ -27,8 +27,10 @@ from closed ways and supported polygon relations. It then:
 The default public polygon schema is versioned (`v1.3`) and documented in
 [`contracts/polygon_schema.py`](src/osm_polygon_website_tag/contracts/polygon_schema.py).
 The opt-in `--detect-languages` stage adds GlotLID top-1 labels and
-probabilities as schema `v1.4`; it keeps its model cache and run artifacts on
-the Seagate data volume. Full extracted text is retained without truncation.
+probabilities as schema `v1.4`, and the opt-in sentence stage adds SaT
+sentences, their counts, and a per-field segmentation status as schema `v1.5`;
+both keep their model caches and run artifacts on the Seagate data volume.
+Full extracted text is retained without truncation.
 Current row, text, and word
 totals are maintained in the [dataset card](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag),
 not duplicated here.
@@ -87,10 +89,15 @@ The default `run-all` path does not load or download it.
 
 For short Grid'5000 jobs, use the policy-aware wrappers in
 `scripts/grid5000/`. They stage one shard and the pinned model on Seagate,
-request one two-core, 30-minute OAR job, run the detector offline for at most
-25 minutes, and synchronize a verified checkpoint or completed v1.4 shard
+request one 30-minute OAR job, run the model offline for at most
+25 minutes, and synchronize a verified checkpoint or completed shard
 back to Seagate. The frontend is used only for transfer, submission, and
 monitoring; see [Operations and resume](docs/operations.md#run-language-detection-on-grid5000).
+
+Sentence segmentation runs the same way, one bundle of several shards per job,
+on a reserved GPU: see
+[Segment sentences on Grid'5000](docs/operations.md#segment-sentences-on-grid5000).
+The published snapshot was segmented entirely on reserved Grid'5000 nodes.
 
 For a reproducible container workflow, see [Getting started](docs/setup.md#docker-workflow).
 

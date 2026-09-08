@@ -119,8 +119,13 @@ def load_sat_splitter_from_path(
 
 
 def _cuda_available() -> bool:
-    """Report whether this host exposes a CUDA device, importing torch lazily."""
-    import torch
+    """Report whether this host exposes a CUDA device, importing torch lazily.
+
+    ``torch`` ships in the optional ``sentences`` extra, so it is absent from
+    the default environment a type checker sees; only a node that segments
+    installs it.
+    """
+    import torch  # ty: ignore[unresolved-import]
 
     return bool(torch.cuda.is_available())
 
