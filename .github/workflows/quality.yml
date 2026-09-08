@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The mutation gate diffs against a base ref to find changed modules.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -29,5 +32,15 @@ jobs:
       - name: Sync locked environment
         run: uv sync --locked
 
+      - name: Resolve the mutation base
+        id: mutation-base
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            printf 'ref=origin/%s\n' "${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            printf 'ref=HEAD^\n' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run quality gates
-        run: just qa-gauntlet
+        run: just qa-ci "${{ steps.mutation-base.outputs.ref }}"

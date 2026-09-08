@@ -74,10 +74,47 @@ coverage:
 crap: coverage
     uv run --locked python scripts/quality/crap_report.py --coverage-json /tmp/osm-polygon-website-tag-coverage.json --path src/osm_polygon_website_tag --max-crap 6
 
-mutation:
+mutation: mutation-clean
     uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
-    uv run --locked mutmut results --all true | tee /tmp/osm-polygon-website-tag-mutmut-results.txt
-    if rg -q ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)' /tmp/osm-polygon-website-tag-mutmut-results.txt; then printf '%s\n' 'Mutation gate failed: an unverified mutant remains.' >&2; exit 1; fi
+    just mutation-gate
+
+# Results persist in the mutant workspace between invocations, so a run must
+# start from a clean one or the gate reads verdicts for mutants it never
+# checked.
+mutation-clean:
+    rm -rf mutants
+
+# Mutate only the package modules a change touches. A full sweep is hours of
+# work that a hosted runner does not reliably survive, so CI enforces the gate
+# on new code and the full `mutation` sweep stays a deliberate local run.
+mutation-scope base="origin/main": mutation-clean
+    #!/usr/bin/env bash
+    set -euo pipefail
+    filters="$(uv run --locked python scripts/quality/mutation_scope.py --base "{{ base }}")"
+    if [ -z "$filters" ]; then
+        printf '%s\n' 'No package module changed; nothing to mutate.'
+        exit 0
+    fi
+    printf 'Mutating:\n%s\n' "$filters"
+    # One invocation: mutmut accepts several filters, so coverage and test
+    # association are collected once for the whole scope.
+    # shellcheck disable=SC2086
+    uv run --locked python scripts/quality/mutation_runner.py run --max-children 2 $filters
+    just mutation-gate
+
+# Fail on any mutant the suite did not verify. Uses grep rather than ripgrep so
+# the check runs everywhere, including a bare CI image.
+mutation-gate:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    results="${TMPDIR:-/tmp}/osm-polygon-website-tag-mutmut-results.txt"
+    uv run --locked mutmut results --all true | tee "$results"
+    if grep -Eq ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)' "$results"; then
+        printf '%s\n' 'Mutation gate failed: an unverified mutant remains.' >&2
+        grep -Ec ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)' "$results" >&2
+        exit 1
+    fi
+    printf '%s\n' 'Mutation gate passed: every checked mutant was killed.'
 
 smoke:
     just docker-smoke
@@ -90,6 +127,13 @@ diff-review:
     git diff --cached --name-only -- .
 
 qa-gauntlet: baseline ruff typecheck unit acceptance architecture crap mutation smoke diff-review
+
+# The gates CI runs: identical to `qa-gauntlet` except that mutation is scoped
+# to the modules the change touches, so the job finishes inside a hosted
+# runner's lifetime instead of being reclaimed mid-sweep.
+qa-ci base="origin/main": baseline ruff typecheck unit acceptance architecture crap
+    just mutation-scope "{{ base }}"
+    just smoke
 
 install-hooks:
     uv run --locked pre-commit install --hook-type pre-commit --hook-type pre-push

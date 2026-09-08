@@ -69,6 +69,10 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "coverage:",
         "crap:",
         "mutation:",
+        "mutation-scope",
+        "mutation-gate:",
+        "mutation-clean:",
+        "qa-ci",
         "quality:",
     ):
         assert recipe in justfile
@@ -96,6 +100,12 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     assert "--path src/osm_polygon_website_tag" in justfile
     assert "--path src/osm_polygon_website_tag/application/workflow.py" not in justfile
     assert "python scripts/quality/mutation_runner.py" in justfile
+    assert "python scripts/quality/mutation_scope.py" in justfile
+    ci = re.search(r"^qa-ci base=\"origin/main\":\s*(.*)$", justfile, re.MULTILINE)
+    assert ci is not None
+    assert ci.group(1).strip() == "baseline ruff typecheck unit acceptance architecture crap"
+    assert 'just mutation-scope "{{ base }}"' in justfile
+    assert "mutation_runner.py run --max-children 2 $filters" in justfile
 
 
 def test_justfile_keeps_uv_cache_on_seagate_when_available() -> None:
@@ -155,7 +165,8 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
 
     assert "contents: read" in workflow
     assert "uv sync --locked" in workflow
-    assert "run: just qa-gauntlet" in workflow
+    assert "run: just qa-ci" in workflow
+    assert "fetch-depth: 0" in workflow
     assert "HF_TOKEN" not in workflow
     uses = re.findall(r"uses: [^@\s]+@([^\s]+)", workflow)
     assert len(uses) == 3
@@ -164,3 +175,24 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
 
 def test_production_text_io_declares_utf8_encoding() -> None:
     assert _implicit_text_io_calls() == []
+
+
+def test_a_mutation_run_starts_from_a_clean_workspace() -> None:
+    """Verdicts persist between runs, so a stale workspace fakes the gate."""
+    justfile = (ROOT / "justfile").read_text()
+
+    assert "mutation: mutation-clean" in justfile
+    assert 'mutation-scope base="origin/main": mutation-clean' in justfile
+    assert "rm -rf mutants" in justfile
+
+
+def test_mutation_gate_uses_a_portable_survivor_check() -> None:
+    """The gate ran ripgrep, which a bare CI image lacks, so it never fired."""
+    justfile = (ROOT / "justfile").read_text()
+
+    assert "rg -q" not in justfile
+    assert (
+        "grep -Eq ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)'"
+        in justfile
+    )
+    assert "Mutation gate failed: an unverified mutant remains." in justfile
