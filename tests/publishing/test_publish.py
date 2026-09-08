@@ -9,10 +9,12 @@ from types import SimpleNamespace
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+from osm_polygon_website_tag.publishing import publish as publish_module
 from osm_polygon_website_tag.publishing.publish import (
     PublishPlan,
     _upload_folder,
@@ -165,17 +167,48 @@ def test_publish_to_hf_refuses_on_verification_failure(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     # Corrupt the shard.
     (run_dir / "polygons" / "monaco-latest.parquet").write_bytes(b"junk")
-    import pytest
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="verification failed"):
         publish_to_hf(run_dir, dry_run=False)
 
 
-def test_publish_to_hf_requires_token_when_not_dry_run(tmp_path: Path) -> None:
+def test_publish_to_hf_requires_a_complete_run(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
-    import pytest
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="publication requires a COMPLETE run"):
+        publish_to_hf(run_dir, dry_run=False)
+
+
+def _complete(monkeypatch: pytest.MonkeyPatch, run_dir: Path) -> None:
+    """Let a fixture run past the completeness gate without publishing it."""
+    monkeypatch.setattr(
+        publish_module,
+        "load_run",
+        lambda _dir: SimpleNamespace(run_dir=run_dir, metadata={"status": "complete"}),
+    )
+
+
+def test_publish_to_hf_requires_token_when_not_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal must come from the missing credential, not the environment."""
+    run_dir = _setup_run(tmp_path)
+    _complete(monkeypatch, run_dir)
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: None)
+
+    with pytest.raises(ValueError, match="requires Hugging Face environment/local credentials"):
+        publish_to_hf(run_dir, dry_run=False)
+
+
+def test_publish_to_hf_never_uploads_without_an_explicit_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The suite's safety net stands between a test and the real repository."""
+    run_dir = _setup_run(tmp_path)
+    _complete(monkeypatch, run_dir)
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: "token")
+
+    with pytest.raises(AssertionError, match="tried to reach Hugging Face"):
         publish_to_hf(run_dir, dry_run=False)
 
 

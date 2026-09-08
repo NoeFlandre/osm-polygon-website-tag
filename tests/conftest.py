@@ -8,6 +8,35 @@ import osmium
 import osmium.osm
 import pytest
 
+from osm_polygon_website_tag.application import source_processing as source_processing_module
+from osm_polygon_website_tag.publishing import incremental as incremental_module
+from osm_polygon_website_tag.publishing import publish as publish_module
+
+_UPLOAD_ATTEMPT = (
+    "a test tried to reach Hugging Face; publication is an explicit, "
+    "human-approved operation and must be stubbed in tests"
+)
+
+
+@pytest.fixture(autouse=True)
+def _never_reach_hugging_face(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed instead of touching the real dataset repository.
+
+    An apply-mode publish test once relied on no credential being resolvable;
+    when one became resolvable it uploaded fixture artifacts over the published
+    dataset. A test that means to exercise upload must stub these itself.
+    """
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+
+    def refuse(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError(_UPLOAD_ATTEMPT)
+
+    # Each module binds the uploader at import time, so every binding is closed.
+    for module in (publish_module, incremental_module, source_processing_module):
+        monkeypatch.setattr(module, "_upload_folder", refuse)
+
 
 @pytest.fixture
 def make_pbf(tmp_path: Path):
