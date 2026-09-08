@@ -8,19 +8,20 @@ from pathlib import Path
 import pytest
 from scripts.quality import mutation_scope
 
+_ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_only_package_modules_become_filters() -> None:
     paths = [
         "src/osm_polygon_website_tag/pipeline/sat.py",
         "src/osm_polygon_website_tag/reporting/verification/sentence.py",
         "src/osm_polygon_website_tag/__init__.py",
-        "tests/pipeline/test_sat.py",
         "docs/operations.md",
-        "scripts/quality/mutation_scope.py",
+        "scripts/quality/mutation_runner.py",
         "src/osm_polygon_website_tag/pipeline/README.md",
     ]
 
-    assert mutation_scope.module_filters(paths) == [
+    assert mutation_scope.module_filters(paths, root=_ROOT) == [
         "osm_polygon_website_tag.*",
         "osm_polygon_website_tag.pipeline.sat.*",
         "osm_polygon_website_tag.reporting.verification.sentence.*",
@@ -34,14 +35,39 @@ def test_filters_are_deduplicated_and_sorted() -> None:
         "src/osm_polygon_website_tag/application/cli.py",
     ]
 
-    assert mutation_scope.module_filters(paths) == [
+    assert mutation_scope.module_filters(paths, root=_ROOT) == [
         "osm_polygon_website_tag.application.cli.*",
         "osm_polygon_website_tag.pipeline.sat.*",
     ]
 
 
 def test_no_package_change_produces_no_filters() -> None:
-    assert mutation_scope.module_filters(["docs/operations.md", "justfile"]) == []
+    assert mutation_scope.module_filters(["docs/operations.md", "justfile"], root=_ROOT) == []
+
+
+def test_a_changed_test_file_rechecks_the_module_it_mirrors() -> None:
+    """Weakening a test must not slip past the gate untested."""
+    paths = [
+        "tests/pipeline/test_sat.py",
+        "tests/reporting/geographic/test_h3_geometry.py",
+    ]
+
+    assert mutation_scope.module_filters(paths, root=_ROOT) == [
+        "osm_polygon_website_tag.pipeline.sat.*",
+        "osm_polygon_website_tag.reporting.geographic.h3_geometry.*",
+    ]
+
+
+def test_tests_without_a_mirrored_module_are_ignored() -> None:
+    paths = [
+        "tests/quality/test_mutation_scope.py",
+        "tests/architecture/test_tooling.py",
+        "tests/conftest.py",
+        "tests/fixtures/polygon_shards.py",
+        "tests/pipeline/test_nothing_like_this.py",
+    ]
+
+    assert mutation_scope.module_filters(paths, root=_ROOT) == []
 
 
 def test_changed_paths_excludes_deletions(monkeypatch: pytest.MonkeyPatch) -> None:

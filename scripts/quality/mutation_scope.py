@@ -20,6 +20,8 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path("src/osm_polygon_website_tag")
 PACKAGE_NAME = "osm_polygon_website_tag"
+TESTS_ROOT = Path("tests")
+_TEST_PREFIX = "test_"
 
 
 def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
@@ -37,17 +39,44 @@ def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def module_filters(paths: Iterable[str]) -> list[str]:
-    """Return one deterministic mutmut filter per changed package module."""
+def module_filters(paths: Iterable[str], *, root: Path | None = None) -> list[str]:
+    """Return one deterministic mutmut filter per module a change reaches.
+
+    A changed test file re-checks the module it mirrors: weakening a test would
+    otherwise leave that module's mutants unverified until some later change
+    happened to touch it.
+    """
+    base = root if root is not None else Path.cwd()
     filters: set[str] = set()
     for raw in paths:
         path = Path(raw)
-        if path.suffix != ".py" or PACKAGE_ROOT not in path.parents:
+        if path.suffix != ".py":
             continue
-        relative = path.relative_to(PACKAGE_ROOT).with_suffix("")
-        parts = [part for part in relative.parts if part != "__init__"]
-        filters.add(".".join([PACKAGE_NAME, *parts, "*"]))
+        parts = _source_parts(path)
+        if parts is None:
+            parts = _mirrored_source_parts(path, base)
+        if parts is not None:
+            filters.add(".".join([PACKAGE_NAME, *parts, "*"]))
     return sorted(filters)
+
+
+def _source_parts(path: Path) -> list[str] | None:
+    """Return the module parts of a changed package source file."""
+    if PACKAGE_ROOT not in path.parents:
+        return None
+    relative = path.relative_to(PACKAGE_ROOT).with_suffix("")
+    return [part for part in relative.parts if part != "__init__"]
+
+
+def _mirrored_source_parts(path: Path, root: Path) -> list[str] | None:
+    """Return the module parts a changed test file mirrors, when one exists."""
+    if TESTS_ROOT not in path.parents or not path.name.startswith(_TEST_PREFIX):
+        return None
+    relative = path.relative_to(TESTS_ROOT).with_suffix("")
+    parts = [*relative.parts[:-1], relative.parts[-1].removeprefix(_TEST_PREFIX)]
+    if not (root / PACKAGE_ROOT / Path(*parts).with_suffix(".py")).is_file():
+        return None
+    return parts
 
 
 def main(argv: Sequence[str] | None = None) -> int:
