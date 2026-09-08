@@ -38,22 +38,27 @@ def data_root() -> Path:
 
 def raw_dir() -> Path:
     """Directory for raw, immutable OSM extracts (PBF, Overpass dumps)."""
-    path = data_root() / RAW_DIRNAME
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return _data_subdirectory(RAW_DIRNAME)
 
 
 def processed_dir() -> Path:
     """Directory for cleaned/normalized intermediate artifacts."""
-    path = data_root() / PROCESSED_DIRNAME
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return _data_subdirectory(PROCESSED_DIRNAME)
 
 
 def exports_dir() -> Path:
     """Directory for final artifacts ready to upload to Hugging Face."""
-    path = data_root() / EXPORTS_DIRNAME
-    path.mkdir(parents=True, exist_ok=True)
+    return _data_subdirectory(EXPORTS_DIRNAME)
+
+
+def _data_subdirectory(name: str) -> Path:
+    """Create and return one directory directly under the data root.
+
+    ``data_root`` has already created the parent, so this needs no recursive
+    creation of its own.
+    """
+    path = data_root() / name
+    path.mkdir(exist_ok=True)
     return path
 
 

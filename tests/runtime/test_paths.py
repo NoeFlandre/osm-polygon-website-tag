@@ -221,3 +221,16 @@ def test_the_glotlid_cache_names_itself_in_its_refusal(
 
     with pytest.raises(ValueError, match="GlotLID model cache must be under a Seagate data root"):
         glotlid_model_cache_dir()
+
+
+def test_a_subdirectory_is_created_under_a_root_that_did_not_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The data root is created first, so a subdirectory needs no recursion."""
+    root = tmp_path / "volume" / "osm-polygon-website-tag"
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(root))
+
+    path = paths._data_subdirectory("raw")
+
+    assert path == root / "raw"
+    assert path.is_dir()
