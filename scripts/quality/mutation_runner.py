@@ -93,9 +93,17 @@ def _coverage_environment(project_root: Path) -> dict[str, str]:
     return _with_isolated_caches(environment)
 
 
-def _pytest_command(runner: Any, tests: Iterable[str]) -> list[str]:
-    """Build mutmut's normal pytest command without invoking pytest in-process."""
+def _pytest_command(
+    runner: Any, tests: Iterable[str], *, rewrite_asserts: bool = True
+) -> list[str]:
+    """Build mutmut's normal pytest command without invoking pytest in-process.
+
+    A mutant run only needs pass or fail, so it skips assertion rewriting; the
+    coverage and stats passes keep it for readable failures.
+    """
     params = ["--rootdir=.", "--tb=native", "-p", "no:cacheprovider"]
+    if not rewrite_asserts:
+        params.append("--assert=plain")
     params.extend(runner._pytest_args_regular_run(tests))
     params.extend(runner._pytest_add_cli_args)
     return [sys.executable, "-m", "pytest", *params]
@@ -153,7 +161,7 @@ def _run_tests(runner: Any, *, mutant_name: str | None, tests: Iterable[str]) ->
     """Run one mutant's selected tests in a new interpreter."""
     del mutant_name
     result = subprocess.run(  # noqa: S603
-        _pytest_command(runner, tests),
+        _pytest_command(runner, tests, rewrite_asserts=False),
         cwd=_mutants_directory(),
         env=_mutant_environment(),
         check=False,

@@ -68,6 +68,20 @@ def test_mutant_environment_disables_pytest_plugin_autoload(monkeypatch) -> None
     assert mutation_runner._mutant_environment()["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
 
 
+def test_a_mutant_run_skips_assertion_rewriting() -> None:
+    """A mutant run needs only pass or fail, and rewriting costs every run."""
+    runner = SimpleNamespace(
+        _pytest_args_regular_run=lambda tests: ["-x", "-q", *tests],
+        _pytest_add_cli_args=["-q"],
+    )
+
+    mutant = mutation_runner._pytest_command(runner, ["t.py::a"], rewrite_asserts=False)
+    other = mutation_runner._pytest_command(runner, ["t.py::a"])
+
+    assert "--assert=plain" in mutant
+    assert "--assert=plain" not in other
+
+
 def test_pytest_command_skips_the_cache_provider() -> None:
     runner = SimpleNamespace(
         _pytest_args_regular_run=lambda tests: ["-x", "-q", *tests],
