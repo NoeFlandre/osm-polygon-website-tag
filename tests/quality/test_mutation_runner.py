@@ -61,6 +61,25 @@ def test_mutant_environment_prioritizes_isolated_source(monkeypatch) -> None:
     assert environment["MPLCONFIGDIR"] == str(mutation_runner._MPLCONFIGDIR)
 
 
+def test_mutant_environment_disables_pytest_plugin_autoload(monkeypatch) -> None:
+    """Autoloading installed plugins costs a fifth of every mutant run."""
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+
+    assert mutation_runner._mutant_environment()["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+
+
+def test_pytest_command_skips_the_cache_provider() -> None:
+    runner = SimpleNamespace(
+        _pytest_args_regular_run=lambda tests: ["-x", "-q", *tests],
+        _pytest_add_cli_args=["-q"],
+    )
+
+    command = mutation_runner._pytest_command(runner, ["tests/test_a.py::test_b"])
+
+    assert command[1:5] == ["-m", "pytest", "--rootdir=.", "--tb=native"]
+    assert command[5:7] == ["-p", "no:cacheprovider"]
+
+
 def test_pytest_command_preserves_mutmut_selection_and_project_flags() -> None:
     command = mutation_runner._pytest_command(_runner(), ["tests/example.py"])
 

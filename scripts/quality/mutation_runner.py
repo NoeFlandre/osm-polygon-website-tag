@@ -58,8 +58,14 @@ def _with_isolated_caches(environment: dict[str, str]) -> dict[str, str]:
 
 
 def _mutant_environment() -> dict[str, str]:
-    """Return an environment that imports the isolated mutated source first."""
+    """Return an environment that imports the isolated mutated source first.
+
+    Plugin autoload is off: a mutant run needs no third-party pytest plugin,
+    and importing the installed ones costs a fifth of every run's wall time
+    across fourteen thousand runs.
+    """
     environment = os.environ.copy()
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     mutants_root = _mutants_directory()
     source_path = str(mutants_root / "src")
     root_path = str(mutants_root)
@@ -89,7 +95,7 @@ def _coverage_environment(project_root: Path) -> dict[str, str]:
 
 def _pytest_command(runner: Any, tests: Iterable[str]) -> list[str]:
     """Build mutmut's normal pytest command without invoking pytest in-process."""
-    params = ["--rootdir=.", "--tb=native"]
+    params = ["--rootdir=.", "--tb=native", "-p", "no:cacheprovider"]
     params.extend(runner._pytest_args_regular_run(tests))
     params.extend(runner._pytest_add_cli_args)
     return [sys.executable, "-m", "pytest", *params]

@@ -1,6 +1,10 @@
 set dotenv-load := false
 set export
 
+# Mutant runs are independent processes, so the sweep scales with cores. CI
+# runners have four; a workstation usually has more.
+MUTATION_CHILDREN := env("MUTATION_CHILDREN", "4")
+
 UV_CACHE_DIR := if env("UV_CACHE_DIR", "") != "" {
     env("UV_CACHE_DIR", "")
 } else if path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == "true" {
@@ -75,7 +79,7 @@ crap: coverage
     uv run --locked python scripts/quality/crap_report.py --coverage-json /tmp/osm-polygon-website-tag-coverage.json --path src/osm_polygon_website_tag --max-crap 6
 
 mutation: mutation-clean
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
+    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}"
     just mutation-gate
 
 # Results persist in the mutant workspace between invocations, so a run must
@@ -87,7 +91,7 @@ mutation-clean:
 # Mutate only the package modules a change touches. A full sweep is hours of
 # work that a hosted runner does not reliably survive, so CI enforces the gate
 # on new code and the full `mutation` sweep stays a deliberate local run.
-mutation-scope base="origin/main": mutation-clean
+mutation-scope base="origin/main":
     #!/usr/bin/env bash
     set -euo pipefail
     filters="$(uv run --locked python scripts/quality/mutation_scope.py --base "{{ base }}")"
@@ -97,24 +101,24 @@ mutation-scope base="origin/main": mutation-clean
     fi
     printf 'Mutating:\n%s\n' "$filters"
     # One invocation: mutmut accepts several filters, so coverage and test
-    # association are collected once for the whole scope.
+    # association are collected once for the whole scope. The workspace is kept
+    # -- regenerating fourteen thousand mutants costs minutes -- and the gate is
+    # told the scope so stale verdicts from other modules are ignored.
     # shellcheck disable=SC2086
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children 2 $filters
-    just mutation-gate
+    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters
+    scopes=()
+    while read -r filter; do scopes+=(--scope "$filter"); done <<< "$filters"
+    just mutation-gate "${scopes[@]}"
 
-# Fail on any mutant the suite did not verify. Uses grep rather than ripgrep so
-# the check runs everywhere, including a bare CI image.
-mutation-gate:
+# Fail on any unverified mutant the baseline does not already record, so a
+# long-standing backlog stays visible without blocking unrelated work.
+mutation-gate *scopes:
     #!/usr/bin/env bash
     set -uo pipefail
     results="${TMPDIR:-/tmp}/osm-polygon-website-tag-mutmut-results.txt"
-    uv run --locked mutmut results --all true | tee "$results"
-    if grep -Eq ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)' "$results"; then
-        printf '%s\n' 'Mutation gate failed: an unverified mutant remains.' >&2
-        grep -Ec ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)' "$results" >&2
-        exit 1
-    fi
-    printf '%s\n' 'Mutation gate passed: every checked mutant was killed.'
+    uv run --locked mutmut results --all true > "$results"
+    uv run --locked python scripts/quality/mutation_gate.py \
+        --results "$results" --baseline docs/quality/mutation-baseline.txt {{ scopes }}
 
 smoke:
     just docker-smoke

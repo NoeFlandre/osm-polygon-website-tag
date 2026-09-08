@@ -1,0 +1,2 @@
+# Mutation baseline: mutants the suite does not yet verify.
+# Regenerate with: just mutation && python scripts/quality/mutation_baseline.py

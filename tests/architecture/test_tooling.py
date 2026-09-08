@@ -70,7 +70,7 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "crap:",
         "mutation:",
         "mutation-scope",
-        "mutation-gate:",
+        "mutation-gate *scopes",
         "mutation-clean:",
         "qa-ci",
         "quality:",
@@ -105,7 +105,8 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     assert ci is not None
     assert ci.group(1).strip() == "baseline ruff typecheck unit acceptance architecture crap"
     assert 'just mutation-scope "{{ base }}"' in justfile
-    assert "mutation_runner.py run --max-children 2 $filters" in justfile
+    assert 'mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters' in justfile
+    assert 'MUTATION_CHILDREN := env("MUTATION_CHILDREN", "4")' in justfile
 
 
 def test_justfile_keeps_uv_cache_on_seagate_when_available() -> None:
@@ -177,22 +178,23 @@ def test_production_text_io_declares_utf8_encoding() -> None:
     assert _implicit_text_io_calls() == []
 
 
-def test_a_mutation_run_starts_from_a_clean_workspace() -> None:
+def test_a_full_sweep_starts_from_a_clean_workspace() -> None:
     """Verdicts persist between runs, so a stale workspace fakes the gate."""
     justfile = (ROOT / "justfile").read_text()
 
     assert "mutation: mutation-clean" in justfile
-    assert 'mutation-scope base="origin/main": mutation-clean' in justfile
     assert "rm -rf mutants" in justfile
+    # A scoped run keeps the workspace -- regenerating every mutant costs
+    # minutes -- and tells the gate its scope instead.
+    assert 'mutation-scope base="origin/main":\n' in justfile
+    assert 'just mutation-gate "${scopes[@]}"' in justfile
 
 
-def test_mutation_gate_uses_a_portable_survivor_check() -> None:
+def test_mutation_gate_runs_a_portable_baseline_check() -> None:
     """The gate ran ripgrep, which a bare CI image lacks, so it never fired."""
     justfile = (ROOT / "justfile").read_text()
 
     assert "rg -q" not in justfile
-    assert (
-        "grep -Eq ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)'"
-        in justfile
-    )
-    assert "Mutation gate failed: an unverified mutant remains." in justfile
+    assert "python scripts/quality/mutation_gate.py" in justfile
+    assert "--baseline docs/quality/mutation-baseline.txt" in justfile
+    assert (ROOT / "docs" / "quality" / "mutation-baseline.txt").is_file()

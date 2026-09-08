@@ -121,8 +121,10 @@ smoke checks before changing `Dockerfile`.
 | Build distributions | `just build` |
 | Coverage gate | `just coverage` |
 | CRAP complexity gate | `just crap` |
-| Targeted mutation gate | `just mutation` |
+| Full mutation sweep | `just mutation` |
+| Changed-module mutation gate | `just mutation-scope <base>` |
 | Completion QA gate | `just qa-gauntlet` |
+| CI quality gates | `just qa-ci <base>` |
 | Strict docs build | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
 
 All Python tools run inside the locked `uv` environment. If a hook fails, run
@@ -134,6 +136,23 @@ The completion QA gate `just qa-gauntlet` runs baseline lock checks, Ruff,
 mutations, smoke test, and diff review, in that order. The command uses
 `just quality` for CRAP/mutation reporting and `just check` for the fast
 core quality baseline, so all project-wide safeguards stay in place.
+
+## Mutation testing
+
+A full sweep is about fourteen thousand mutants and several hours, which a
+hosted CI runner does not reliably survive, so CI runs `just qa-ci`: the same
+gates with mutation scoped to the modules a change touches, including the
+module a changed test file mirrors. Run the full `just mutation` sweep locally
+before a release or after broad refactoring.
+
+Both paths end in `just mutation-gate`, which fails on any unverified mutant
+that [`docs/quality/mutation-baseline.txt`](https://github.com/NoeFlandre/osm-polygon-website-tag/blob/main/docs/quality/mutation-baseline.txt)
+does not already record. That baseline is a backlog, not a licence: the gate
+had been searching results with ripgrep, which the CI image lacks, so it never
+failed and the backlog accumulated unnoticed. Shrink it by picking a module,
+writing the tests that kill its mutants, and deleting the lines they cover;
+regenerate it from a full sweep with
+`scripts/quality/mutation_baseline.py`.
 
 ## Public documentation
 
