@@ -1,2 +1,57 @@
 # Mutation baseline: mutants the suite does not yet verify.
-# Regenerate with: just mutation && python scripts/quality/mutation_baseline.py
+#
+# Every name below is known debt, recorded so the gate can fail on a new
+# survivor instead of on this backlog. Shrink it: pick a module, write the
+# tests that kill its mutants, and delete the lines they cover.
+#
+# Incomplete: recorded from the mutation gate's own report for the modules
+# a change has touched so far, not from a full sweep. Expect a change to an
+# unrecorded module to surface its own backlog the first time it is scoped.
+#
+# Regenerate from a full sweep:
+#   just mutation-clean
+#   uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
+#   uv run --locked mutmut results --all true > results.txt
+#   uv run --locked python scripts/quality/mutation_baseline.py --results results.txt
+# Recorded mutants: 40
+
+osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_10
+osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_7
+osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_8
+osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_9
+osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_11
+osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_4
+osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_5
+osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_6
+osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_7
+osm_polygon_website_tag.publishing.publish.x__directory_artifacts__mutmut_5
+osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_11
+osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_13
+osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_3
+osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_5
+osm_polygon_website_tag.publishing.publish.x__sort_artifacts__mutmut_1
+osm_polygon_website_tag.publishing.publish.x_build_publish_plan__mutmut_1
+osm_polygon_website_tag.publishing.publish.x_build_publish_plan__mutmut_2
+osm_polygon_website_tag.publishing.publish.x_build_publish_plan__mutmut_31
+osm_polygon_website_tag.publishing.publish.x_build_publish_plan__mutmut_7
+osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_1
+osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_2
+osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_3
+osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_6
+osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_7
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_1
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_13
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_15
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_16
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_2
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_24
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_3
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_30
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_33
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_34
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_35
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_36
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_37
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_38
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_39
+osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_40

@@ -86,14 +86,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     healed = sorted(name for name in baseline & killed_mutants(lines) if in_scope(name, args.scope))
     if healed:
         print(f"{len(healed)} baseline mutant(s) are now killed; remove them from {args.baseline}:")
-        for name in healed[:20]:
+        for name in healed:
             print(f"  {name}")
     if regressions:
         print(
             f"Mutation gate failed: {len(regressions)} unverified mutant(s) outside the baseline.",
             file=sys.stderr,
         )
-        for name in regressions[:40]:
+        for name in regressions:
             print(f"  {name}", file=sys.stderr)
         return 1
     print(

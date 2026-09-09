@@ -218,3 +218,19 @@ def test_a_scope_with_no_findings_passes(
 
     assert code == 0
     assert "0 baseline hit(s)" in capsys.readouterr().out
+
+
+def test_the_gate_lists_every_finding_not_a_prefix(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A truncated list cannot be recorded in the baseline or acted on."""
+    names = [f"osm_polygon_website_tag.m.x_f__mutmut_{i}" for i in range(60)]
+    results, baseline = _write(
+        tmp_path, results="".join(f"    {name}: survived\n" for name in names)
+    )
+
+    code = mutation_gate.main(["--results", str(results), "--baseline", str(baseline)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert all(name in captured.err for name in names)
