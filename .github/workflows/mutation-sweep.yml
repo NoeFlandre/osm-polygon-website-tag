@@ -1,0 +1,99 @@
+name: Mutation sweep
+
+# A full sweep is about fourteen thousand mutants. Run per package area in
+# parallel so each job finishes well inside a runner's lifetime, then merge the
+# results into the baseline the gate enforces. Manual: pushes run the scoped
+# gate in the Quality workflow instead.
+on:
+  workflow_dispatch:
+    inputs:
+      children:
+        description: Mutant test processes per job
+        default: "4"
+
+permissions:
+  contents: read
+
+jobs:
+  area:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        area:
+          - pipeline
+          - reporting
+          - application
+          - publishing
+          - domain
+          - contracts
+          - runtime
+          - web
+          - storage
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Sweep the area
+        run: |
+          uv run --locked python scripts/quality/mutation_runner.py run \
+            --max-children "${{ inputs.children }}" \
+            "osm_polygon_website_tag.${{ matrix.area }}.*"
+
+      - name: Collect the area's unverified mutants
+        run: |
+          uv run --locked mutmut results --all true \
+            | grep -E ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)$' \
+            > "results-${{ matrix.area }}.txt" || true
+          wc -l < "results-${{ matrix.area }}.txt"
+
+      - name: Upload the area's baseline
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-results-${{ matrix.area }}
+          path: results-${{ matrix.area }}.txt
+
+  merge:
+    needs: area
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Download every area's baseline
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: areas
+          pattern: mutation-results-*
+          merge-multiple: true
+
+      - name: Merge the areas into one baseline
+        run: |
+          cat areas/results-*.txt > merged.txt
+          uv run --locked python scripts/quality/mutation_baseline.py \
+            --results merged.txt --baseline docs/quality/mutation-baseline.txt
+          cat docs/quality/mutation-baseline.txt | head -20
+
+      - name: Upload the merged baseline
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-baseline
+          path: docs/quality/mutation-baseline.txt

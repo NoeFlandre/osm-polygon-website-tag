@@ -199,3 +199,21 @@ def test_mutation_gate_runs_a_portable_baseline_check() -> None:
     assert "python scripts/quality/mutation_gate.py" in justfile
     assert "--baseline docs/quality/mutation-baseline.txt" in justfile
     assert (ROOT / "docs" / "quality" / "mutation-baseline.txt").is_file()
+
+
+def test_the_mutation_sweep_workflow_is_manual_pinned_and_sharded() -> None:
+    """A full sweep runs per area in parallel so no job outlives its runner."""
+    workflow = (ROOT / ".github" / "workflows" / "mutation-sweep.yml").read_text()
+
+    assert "workflow_dispatch:" in workflow
+    assert "on:\n  workflow_dispatch:" in workflow
+    assert "contents: read" in workflow
+    assert "HF_TOKEN" not in workflow
+    assert "uv sync --locked" in workflow
+    assert "mutation_runner.py run" in workflow
+    assert "mutation_baseline.py" in workflow
+    for area in ("pipeline", "reporting", "application", "publishing", "runtime"):
+        assert f"          - {area}\n" in workflow
+    uses = re.findall(r"uses: [^@\s]+@([^\s]+)", workflow)
+    assert uses
+    assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for revision in uses)
