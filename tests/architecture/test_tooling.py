@@ -183,7 +183,8 @@ def test_a_full_sweep_starts_from_a_clean_workspace() -> None:
     justfile = (ROOT / "justfile").read_text()
 
     assert "mutation: mutation-clean" in justfile
-    assert "rm -rf mutants" in justfile
+    assert "rm -rf mutants .pytest_cache" in justfile
+    assert "-name '__pycache__' -type d -exec rm -rf {} +" in justfile
     # A scoped run keeps the workspace -- regenerating every mutant costs
     # minutes -- and tells the gate its scope instead.
     assert 'mutation-scope base="origin/main":\n' in justfile

@@ -86,7 +86,13 @@ mutation: mutation-clean
 # start from a clean one or the gate reads verdicts for mutants it never
 # checked.
 mutation-clean:
-    rm -rf mutants
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf mutants .pytest_cache
+    # Bytecode caches record the absolute path they were compiled at; a stale
+    # one copied into the workspace fails collection with a missing directory.
+    find src tests scripts -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    find src tests scripts -name '*.pyc' -delete 2>/dev/null || true
 
 # Mutate only the package modules a change touches. A full sweep is hours of
 # work that a hosted runner does not reliably survive, so CI enforces the gate
