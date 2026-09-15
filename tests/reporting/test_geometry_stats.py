@@ -12,6 +12,15 @@ import pytest
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.reporting.geometry_stats import (
+    _Accumulator,
+    _accumulate_area,
+    _accumulate_bbox_metres,
+    _accumulate_extent,
+    _accumulate_shape,
+    _coordinates,
+    _geodesic_lengths,
+    _midpoints,
+    _widen_bbox,
     AREA_BUCKET_LABELS,
     GEOMETRY_STATS_SCHEMA_VERSION,
     NumericSummary,
@@ -314,6 +323,93 @@ def test_percentiles_use_exact_nearest_rank_over_every_value() -> None:
     assert _percentile(ordered, 50) == 50.0
     assert _percentile(ordered, 99) == 99.0
     assert _percentile([4.0], 1) == 4.0
+
+    # A thousand values separate the exact rank from any neighbouring scale.
+    thousand = [float(value) for value in range(1, 1001)]
+    assert _percentile(thousand, 1) == 10.0
+    assert _percentile(thousand, 50) == 500.0
+    assert _percentile(thousand, 99) == 990.0
+
+
+def test_area_accumulation_records_buckets_degenerates_and_tags() -> None:
+    accumulator = _Accumulator()
+
+    _accumulate_area(accumulator, 0.0, "building")
+    _accumulate_area(accumulator, 0.5, "building")
+    _accumulate_area(accumulator, 25.0, "amenity")
+
+    assert list(accumulator.areas) == [0.0, 0.5, 25.0]
+    assert accumulator.zero_area_row_count == 1
+    assert accumulator.below_one_m2_row_count == 2
+    assert dict(accumulator.buckets) == {"0": 1, "<1e0": 1, "1e1-1e2": 1}
+    assert dict(accumulator.tag_row_counts) == {"building": 2, "amenity": 1}
+    assert list(accumulator.tag_areas["building"]) == [0.0, 0.5]
+    assert list(accumulator.tag_areas["amenity"]) == [25.0]
+
+
+def test_shape_accumulation_separates_polygons_multipolygons_and_holes() -> None:
+    accumulator = _Accumulator()
+
+    _accumulate_shape(accumulator, json.dumps(_SQUARE))
+    _accumulate_shape(accumulator, json.dumps(_MULTIPOLYGON_WITH_HOLE))
+    _accumulate_shape(accumulator, json.dumps({"type": "Polygon", "coordinates": []}))
+
+    assert accumulator.polygon_row_count == 2
+    assert accumulator.multipolygon_row_count == 1
+    assert accumulator.with_holes_row_count == 1
+    assert accumulator.hole_ring_count == 1
+    assert list(accumulator.components) == [2.0]
+    assert list(accumulator.rings) == [1.0, 3.0, 0.0]
+    assert list(accumulator.vertices) == [5.0, 15.0, 0.0]
+
+
+def test_extent_accumulation_widens_the_box_and_flags_edge_rows() -> None:
+    accumulator = _Accumulator()
+
+    _accumulate_extent(accumulator, (1.0, 2.0, 3.0, 5.0))
+    _accumulate_extent(accumulator, (-179.0, -86.0, 179.0, -85.5))
+
+    assert list(accumulator.widths_degrees) == [2.0, 358.0]
+    assert list(accumulator.heights_degrees) == [3.0, 0.5]
+    assert accumulator.antimeridian_row_count == 1
+    assert accumulator.polar_row_count == 1
+    assert accumulator.bbox == [-179.0, -86.0, 179.0, 5.0]
+
+
+def test_bbox_metre_accumulation_measures_the_mid_axis_geodesics() -> None:
+    accumulator = _Accumulator()
+
+    _accumulate_bbox_metres(accumulator, [])
+
+    assert list(accumulator.widths_m) == []
+
+    _accumulate_bbox_metres(accumulator, [(0.0, 0.0, 1.0, 2.0)])
+
+    mid_lat, mid_lon = 1.0, 0.5
+    assert list(accumulator.widths_m) == _geodesic_lengths([0.0], [mid_lat], [1.0], [mid_lat])
+    assert list(accumulator.heights_m) == _geodesic_lengths([mid_lon], [0.0], [mid_lon], [2.0])
+
+
+def test_widen_bbox_returns_the_outer_envelope() -> None:
+    assert _widen_bbox(None, (1.0, 2.0, 3.0, 4.0)) == [1.0, 2.0, 3.0, 4.0]
+    assert _widen_bbox([1.0, 2.0, 3.0, 4.0], (0.0, 5.0, 2.0, 9.0)) == [0.0, 2.0, 3.0, 9.0]
+
+
+def test_batch_axis_helpers_project_one_coordinate_each() -> None:
+    boxes = [(0.0, 1.0, 2.0, 5.0), (10.0, 20.0, 30.0, 40.0)]
+
+    assert _coordinates(boxes, 0) == [0.0, 10.0]
+    assert _coordinates(boxes, 3) == [5.0, 40.0]
+    assert _midpoints(boxes, 0, 2) == [1.0, 20.0]
+    assert _midpoints(boxes, 1, 3) == [3.0, 30.0]
+
+
+def test_geodesic_lengths_measure_each_segment_in_metres() -> None:
+    lengths = _geodesic_lengths([0.0, 0.0], [0.0, 0.0], [0.0, 1.0], [1.0, 0.0])
+
+    assert len(lengths) == 2
+    assert lengths[0] == pytest.approx(110_574.4, abs=1.0)
+    assert lengths[1] == pytest.approx(111_319.5, abs=1.0)
 
 
 def test_summary_of_an_empty_distribution_is_zeroed() -> None:

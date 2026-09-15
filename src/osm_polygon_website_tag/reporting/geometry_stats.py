@@ -415,9 +415,13 @@ def _summarize(values: Sequence[float]) -> NumericSummary:
 
 
 def _percentile(ordered: Sequence[float], percentile: int) -> float:
-    """Return the exact nearest-rank percentile of a sorted distribution."""
+    """Return the exact nearest-rank percentile of a sorted distribution.
+
+    ``percentile`` is one of :data:`PERCENTILES`; every value there is at
+    least one, so the rank of a non-empty distribution is never zero.
+    """
     rank = math.ceil(percentile / 100 * len(ordered))
-    return _round(ordered[max(rank, 1) - 1])
+    return _round(ordered[rank - 1])
 
 
 def _round(value: float) -> float:
