@@ -12,7 +12,7 @@ development, recovery, and inspection of an existing run.
 | `init` | Create a run and record its exact expected PBF inventory. |
 | `extract` | Extract one inventoried PBF into the run-owned shards. |
 | `analyze-results` | Build external-memory analysis tables after enrichment. |
-| `build-card` | Recompute `README.md` and `dataset.yaml` from the artifacts. |
+| `build-card` | Recompute `README.md`, `dataset.yaml`, and `stats.json` from the artifacts. |
 | `verify-results` | Check schemas, counts, hashes, and required artifacts without changing the run. |
 | `refresh-card` | Rebuild the local map/card and refresh the completion receipt for an older run. |
 | `finalize-run` | Verify a card-built run and write its completion receipt. |
@@ -21,6 +21,7 @@ development, recovery, and inspection of an existing run.
 | `publish` | Dry-run publication, or upload with explicit `--apply`. |
 | `create-repo` | Explicitly create a public Hugging Face dataset repository. |
 | `card-stats` | Recompute and print card statistics for a run. |
+| `geometry-stats` | Recompute and print the polygon geometry statistics of a run. |
 | `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
 | `detect-languages` | Add resumable GlotLID language results to public polygon shards. |
 | `grid5000-prepare` | Stage one unfinished shard, checkpoint, and pinned model for an offline job. |

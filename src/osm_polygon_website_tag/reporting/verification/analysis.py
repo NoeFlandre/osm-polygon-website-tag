@@ -16,6 +16,11 @@ from osm_polygon_website_tag.reporting.card import (
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geometry_stats import (
+    GEOMETRY_STATS_FILENAME,
+    compute_geometry_stats,
+    render_geometry_stats,
+)
 
 
 def verify_analysis_and_card(root: Path, errors: list[str]) -> None:
@@ -52,7 +57,7 @@ def _verify_analysis_inventory(
 
 
 def _verify_card_files(root: Path, errors: list[str]) -> None:
-    for name in ("README.md", "dataset.yaml"):
+    for name in ("README.md", "dataset.yaml", GEOMETRY_STATS_FILENAME):
         if not (root / name).is_file():
             errors.append(f"missing card artifact: {name}")
 
@@ -75,12 +80,21 @@ def _verify_analysis_readability(
 def _verify_card_statistics(root: Path, errors: list[str]) -> None:
     try:
         stats = compute_card_stats(root)
+        geometry = compute_geometry_stats(root)
         expected_yaml = _render_yaml_front_matter(stats)
         expected_readme = (
-            expected_yaml + "\n" + _render_markdown(stats, schema=_public_schema_for_card(root))
+            expected_yaml
+            + "\n"
+            + _render_markdown(stats, geometry=geometry, schema=_public_schema_for_card(root))
         )
         _compare_card_file(root / "dataset.yaml", expected_yaml, "dataset.yaml", errors)
         _compare_card_file(root / "README.md", expected_readme, "README.md", errors)
+        _compare_card_file(
+            root / GEOMETRY_STATS_FILENAME,
+            render_geometry_stats(geometry),
+            GEOMETRY_STATS_FILENAME,
+            errors,
+        )
     except Exception as exc:
         errors.append(f"card statistic verification failed: {exc}")
 

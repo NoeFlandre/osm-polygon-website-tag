@@ -22,7 +22,10 @@ from closed ways and supported polygon relations. It then:
 - extracts the main text independently from `website` and `contact:website`
   with [Trafilatura](https://trafilatura.readthedocs.io/);
 - records text status, word counts, geometry, and source metadata; and
-- generates an artifact-derived dataset card and a text-only H3 geographic map.
+- generates an artifact-derived dataset card and a text-only H3 geographic map;
+  and
+- reports deterministic polygon geometry statistics (surface, shape, extent)
+  for every published row in `stats.json` and in a dataset-card block.
 
 The default public polygon schema is versioned (`v1.3`) and documented in
 [`contracts/polygon_schema.py`](src/osm_polygon_website_tag/contracts/polygon_schema.py).

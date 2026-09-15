@@ -23,6 +23,7 @@ def test_publishable_paths_are_deterministic_and_exclude_operational_files(
         "README.md": b"card\n",
         "dataset.yaml": b"metadata\n",
         "failures.jsonl": b"failure\n",
+        "stats.json": b"{}\n",
         "assets/geographic_polygon_density.png": b"png",
         "analysis/nested/ignored.parquet": b"nested",
         "assets/ignored.png": b"other asset",
@@ -45,6 +46,7 @@ def test_publishable_paths_are_deterministic_and_exclude_operational_files(
         "polygons/a.parquet",
         "polygons/z.parquet",
         "rejections/a.parquet",
+        "stats.json",
     )
 
 

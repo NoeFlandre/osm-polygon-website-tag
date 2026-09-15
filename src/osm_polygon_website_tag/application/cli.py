@@ -62,6 +62,10 @@ from osm_polygon_website_tag.publishing.trackio import (
 from osm_polygon_website_tag.reporting.card import build_card
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.finalize import finalize_run, finalize_snapshot
+from osm_polygon_website_tag.reporting.geometry_stats import (
+    compute_geometry_stats,
+    render_geometry_stats,
+)
 from osm_polygon_website_tag.reporting.repair import refresh_card_run
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import (
@@ -326,6 +330,13 @@ def card_stats_command(run_dir: RunDir) -> int:
     """Recompute and print dataset-card statistics."""
     stats = compute_card_stats(run_dir)
     _json(stats.__dict__)
+    return 0
+
+
+@app.command("geometry-stats")
+def geometry_stats_command(run_dir: RunDir) -> int:
+    """Recompute and print polygon geometry statistics for a run."""
+    typer.echo(render_geometry_stats(compute_geometry_stats(run_dir)), nl=False)
     return 0
 
 

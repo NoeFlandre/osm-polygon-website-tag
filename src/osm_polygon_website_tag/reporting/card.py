@@ -10,6 +10,9 @@ writes:
 
 * ``<run_dir>/README.md`` -- the rendered card (with YAML front matter)
 * ``<run_dir>/dataset.yaml`` -- machine-readable dataset-card metadata
+* ``<run_dir>/stats.json`` -- the complete polygon geometry statistics, from
+  the same single pass that renders the card's geometry block; it is promoted
+  only when its bytes change
 
 The card is read-only by construction -- it contains no pointers to
 mutable run state.
@@ -36,6 +39,12 @@ from osm_polygon_website_tag.reporting.geographic.layout import (
     POLYGON_DENSITY_ASSET_REL_PATH,
 )
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
+from osm_polygon_website_tag.reporting.geometry_stats import (
+    GEOMETRY_STATS_FILENAME,
+    GeometryStats,
+    compute_geometry_stats,
+    render_geometry_stats,
+)
 from osm_polygon_website_tag.runtime.config import (
     DEFAULT_GITHUB_REPO,
     TRACKIO_DASHBOARD_URL,
@@ -61,13 +70,17 @@ def build_card(
         extracted_text_only=True,
     )
     stats = compute_card_stats(run_dir, summary=summary, source_names=source_names)
-    body = _render_markdown(stats, schema=_public_schema_for_card(run_dir, source_names))
+    geometry = compute_geometry_stats(run_dir, source_names=source_names)
+    body = _render_markdown(
+        stats, geometry=geometry, schema=_public_schema_for_card(run_dir, source_names)
+    )
     front_matter = _render_yaml_front_matter(stats)
     readme = front_matter + "\n" + body
     path = run_dir / "README.md"
     yaml_path = run_dir / "dataset.yaml"
     staged_readme = run_dir / ".README.md.building"
     staged_yaml = run_dir / ".dataset.yaml.building"
+    staged_stats = run_dir / ".stats.json.building"
     staged_map = run_dir / ".assets" / "geographic_polygon_density.png.building"
     staged_map.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -85,13 +98,34 @@ def build_card(
                 (staged_map, run_dir / POLYGON_DENSITY_ASSET_REL_PATH),
                 (staged_readme, path),
                 (staged_yaml, yaml_path),
+                *_staged_geometry_stats(staged_stats, run_dir, geometry),
             ]
         )
     finally:
         staged_map.unlink(missing_ok=True)
         staged_readme.unlink(missing_ok=True)
         staged_yaml.unlink(missing_ok=True)
+        staged_stats.unlink(missing_ok=True)
     return path
+
+
+def _staged_geometry_stats(
+    staged: Path,
+    run_dir: Path,
+    geometry: GeometryStats,
+) -> list[tuple[Path, Path]]:
+    """Stage ``stats.json`` only when its bytes would actually change.
+
+    Regeneration from unchanged artifacts is a no-op: the existing file keeps
+    its bytes and its metadata instead of being rewritten with identical
+    content.
+    """
+    target = run_dir / GEOMETRY_STATS_FILENAME
+    rendered = render_geometry_stats(geometry)
+    if target.is_file() and target.read_text(encoding="utf-8") == rendered:
+        return []
+    staged.write_text(rendered, encoding="utf-8")
+    return [(staged, target)]
 
 
 def _render_yaml_front_matter(stats: CardStats) -> str:
@@ -198,7 +232,12 @@ def _size_category(row_count: int) -> str:
     return "n>1B"
 
 
-def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> str:
+def _render_markdown(
+    stats: CardStats,
+    *,
+    geometry: GeometryStats,
+    schema: pa.Schema = POLYGON_PUBLIC_SCHEMA,
+) -> str:
     """Render a concise public-facing card from artifact-derived statistics."""
     parts = [
         *_render_intro_section(),
@@ -206,6 +245,7 @@ def _render_markdown(stats: CardStats, *, schema: pa.Schema = POLYGON_PUBLIC_SCH
         *_render_website_text_section(stats),
         *_render_language_section(stats),
         *_render_sentence_section(stats),
+        *_render_polygon_geometry_section(geometry),
         *_render_geographic_section(stats),
         *_render_links_section(),
         *_hostname_sections(stats),
@@ -359,6 +399,44 @@ def _render_sentence_section(stats: CardStats) -> list[str]:
     ]
 
 
+def _render_polygon_geometry_section(geometry: GeometryStats) -> list[str]:
+    """Render the headline polygon surface and shape statistics."""
+    area = geometry.area.summary
+    return [
+        "## Polygon geometry",
+        "",
+        (
+            "Surface and shape statistics computed over every published polygon row from the "
+            "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
+            f"ellipsoid. The complete breakdown is published as [`{GEOMETRY_STATS_FILENAME}`]"
+            f"({GEOMETRY_STATS_FILENAME})."
+        ),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Polygons measured | {geometry.row_count:,} |",
+        f"| Total area | {area.total / 1_000_000:,.2f} km² |",
+        f"| Median area | {area.median:,.2f} m² |",
+        f"| Mean area | {area.mean:,.2f} m² |",
+        f"| Smallest / largest area | {area.minimum:,.2f} / {area.maximum:,.2f} m² |",
+        f"| p95 area | {area.percentiles.get('p95', 0.0):,.2f} m² |",
+        f"| MultiPolygon rows | {geometry.shape.multipolygon_row_count:,} |",
+        f"| Rows with holes | {geometry.shape.with_holes_row_count:,} |",
+        f"| Rows below 1 m² | {geometry.area.below_one_m2_row_count:,} |",
+        "",
+        f"Dataset bounding box: `{_render_bbox(geometry.extent.bbox)}` "
+        "(min lon, min lat, max lon, max lat).",
+        "",
+    ]
+
+
+def _render_bbox(bbox: list[float] | None) -> str:
+    """Render the dataset bounding box, or its absence, deterministically."""
+    if bbox is None:
+        return "none"
+    return "[" + ", ".join(f"{value:.6f}" for value in bbox) + "]"
+
+
 def _render_geographic_section(stats: CardStats) -> list[str]:
     """Render the extracted-text polygon density summary."""
     return [
@@ -434,6 +512,7 @@ def _render_dataset_contents_section() -> list[str]:
         "conflict, and per-source statistics.",
         "- `deduplication_summary.json`: counts and tag-conflict totals from the global "
         "canonicalization pass.",
+        f"- `{GEOMETRY_STATS_FILENAME}`: complete machine-readable polygon geometry statistics.",
         "- `manifests/`: source inventory, upload checkpoints, and completion receipt.",
         "",
     ]
