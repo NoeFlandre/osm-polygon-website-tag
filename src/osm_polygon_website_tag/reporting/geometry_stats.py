@@ -13,7 +13,7 @@ Determinism
 -----------
 
 * Shards are read in sorted order and rows in stored order.
-* Totals use :func:`math.fsum`, which is exact and order-independent.
+* Totals use DuckDB's deterministic ``fsum`` aggregate.
 * Percentiles are exact nearest-rank values over every row.
 * Every reported float is rounded to :data:`ROUNDING_DECIMALS` decimals, so
   unchanged input produces byte-identical output.
@@ -21,25 +21,27 @@ Determinism
 Memory
 ------
 
-Geometry strings are decoded one record batch at a time and never retained;
-only the compact numeric distributions (eight bytes per row and column) and
-small counters survive a batch.
+Geometry strings are decoded one record batch at a time and never retained.
+The derived row metrics are inserted into the run-owned, spill-enabled
+DuckDB store; exact percentile queries sort there rather than retaining
+Python arrays for the whole dataset.
 """
 
 from __future__ import annotations
 
 import json
-import math
-from array import array
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Collection, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pyproj
+
+from osm_polygon_website_tag.storage.duckdb_engine import fresh_connection
 
 GEOMETRY_STATS_FILENAME = "stats.json"
 GEOMETRY_STATS_SCHEMA_VERSION = "v1"
@@ -174,12 +176,15 @@ def compute_geometry_stats(
     if not directory.is_dir():
         raise FileNotFoundError(f"missing {directory}")
     accumulator = _Accumulator()
-    per_source: list[SourceAreaStats] = []
-    for shard in _selected_shards(directory, source_names):
-        start = len(accumulator.areas)
-        _accumulate_shard(shard, accumulator)
-        per_source.append(_source_stats(shard, accumulator.areas[start:]))
-    return _build_stats(accumulator, per_source)
+    store = _GeometryValueStore(root)
+    try:
+        selected_shards = _selected_shards(directory, source_names)
+        source_pbf_names = [f"{shard.stem}.osm.pbf" for shard in selected_shards]
+        for shard in selected_shards:
+            _accumulate_shard(shard, accumulator, store)
+        return _build_stats(accumulator, store, source_pbf_names)
+    finally:
+        store.close()
 
 
 def render_geometry_stats(stats: GeometryStats) -> str:
@@ -196,18 +201,187 @@ def _selected_shards(directory: Path, source_names: Collection[str] | None) -> l
     return [path for path in paths if path.stem in stems]
 
 
+_SPILL_SCHEMA = pa.schema(
+    [
+        ("source_pbf", pa.string()),
+        ("osm_primary_tag", pa.string()),
+        ("area_m2", pa.float64()),
+        ("vertices", pa.float64()),
+        ("rings", pa.float64()),
+        ("components", pa.float64()),
+        ("width_degrees", pa.float64()),
+        ("height_degrees", pa.float64()),
+        ("width_m", pa.float64()),
+        ("height_m", pa.float64()),
+    ]
+)
+
+_SPILL_NUMERIC_COLUMNS = frozenset(
+    {
+        "area_m2",
+        "vertices",
+        "rings",
+        "components",
+        "width_degrees",
+        "height_degrees",
+        "width_m",
+        "height_m",
+    }
+)
+
+
+class _GeometryValueStore:
+    """Run-owned DuckDB store for exact, spillable numeric distributions."""
+
+    def __init__(self, run_dir: Path) -> None:
+        self._connection = fresh_connection(run_dir)
+        self._connection.execute(
+            """
+            CREATE TABLE geometry_stats_values (
+                source_pbf VARCHAR NOT NULL,
+                osm_primary_tag VARCHAR NOT NULL,
+                area_m2 DOUBLE,
+                vertices DOUBLE,
+                rings DOUBLE,
+                components DOUBLE,
+                width_degrees DOUBLE,
+                height_degrees DOUBLE,
+                width_m DOUBLE,
+                height_m DOUBLE
+            )
+            """
+        )
+
+    def append(self, rows: list[dict[str, Any]]) -> None:
+        """Append one bounded record batch to the external-memory table."""
+        if not rows:
+            return
+        table = pa.Table.from_pylist(rows, schema=_SPILL_SCHEMA)
+        view_name = "geometry_stats_batch"
+        self._connection.register(view_name, table)
+        try:
+            self._connection.execute(
+                "INSERT INTO geometry_stats_values SELECT * FROM geometry_stats_batch"
+            )
+        finally:
+            self._connection.unregister(view_name)
+
+    def summary(self, column: str) -> NumericSummary:
+        """Return an exact nearest-rank summary, sorting outside Python memory."""
+        if column not in _SPILL_NUMERIC_COLUMNS:
+            raise ValueError(f"unsupported geometry statistics column: {column}")
+        percentile_exprs = ", ".join(
+            f"MAX(value) FILTER (WHERE ordinal = CAST(CEIL(row_count * {percentile / 100}) AS BIGINT)) "
+            f"AS p{percentile}"
+            for percentile in PERCENTILES
+        )
+        row = self._connection.execute(
+            f"""
+            WITH ordered AS (
+                SELECT
+                    CAST({column} AS DOUBLE) AS value,
+                    ROW_NUMBER() OVER (ORDER BY {column}) AS ordinal,
+                    COUNT(*) OVER () AS row_count
+                FROM geometry_stats_values
+                WHERE {column} IS NOT NULL
+            )
+            SELECT
+                COUNT(*) AS row_count,
+                COALESCE(FSUM(value), 0.0) AS total,
+                COALESCE(MIN(value), 0.0) AS minimum,
+                COALESCE(MAX(value), 0.0) AS maximum,
+                {percentile_exprs}
+            FROM ordered
+            """  # noqa: S608
+        ).fetchone()
+        if row is None:
+            return NumericSummary()
+        return _summary_from_row(row)
+
+    def source_stats(self, source_pbf_names: Sequence[str]) -> list[SourceAreaStats]:
+        """Return exact per-source summaries in canonical source order."""
+        percentile_exprs = ", ".join(
+            f"MAX(value) FILTER (WHERE ordinal = CAST(CEIL(row_count * {percentile / 100}) AS BIGINT)) "
+            f"AS p{percentile}"
+            for percentile in PERCENTILES
+        )
+        rows = self._connection.execute(
+            f"""
+            WITH ordered AS (
+                SELECT
+                    source_pbf,
+                    CAST(area_m2 AS DOUBLE) AS value,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY source_pbf ORDER BY area_m2
+                    ) AS ordinal,
+                    COUNT(*) OVER (PARTITION BY source_pbf) AS row_count
+                FROM geometry_stats_values
+                WHERE area_m2 IS NOT NULL
+            )
+            SELECT
+                source_pbf,
+                COUNT(*) AS row_count,
+                COALESCE(FSUM(value), 0.0) AS total,
+                COALESCE(MIN(value), 0.0) AS minimum,
+                COALESCE(MAX(value), 0.0) AS maximum,
+                {percentile_exprs}
+            FROM ordered
+            GROUP BY source_pbf
+            ORDER BY source_pbf
+            """  # noqa: S608
+        ).fetchall()
+        summaries = {
+            str(row[0]): SourceAreaStats(
+                source_pbf=str(row[0]),
+                row_count=int(row[1]),
+                area_m2=_summary_from_row(row[1:]),
+            )
+            for row in rows
+        }
+        return [
+            summaries.get(
+                source_pbf,
+                SourceAreaStats(
+                    source_pbf=source_pbf,
+                    row_count=0,
+                    area_m2=NumericSummary(),
+                ),
+            )
+            for source_pbf in source_pbf_names
+        ]
+
+    def primary_tag_stats(self) -> list[PrimaryTagAreaStats]:
+        """Return exact per-tag counts and surface totals in stable order."""
+        rows = self._connection.execute(
+            """
+            SELECT
+                osm_primary_tag,
+                COUNT(*) AS row_count,
+                COALESCE(FSUM(area_m2), 0.0) AS total_area_m2
+            FROM geometry_stats_values
+            GROUP BY osm_primary_tag
+            ORDER BY row_count DESC, osm_primary_tag
+            """
+        ).fetchall()
+        return [
+            PrimaryTagAreaStats(
+                osm_primary_tag=str(row[0]),
+                row_count=int(row[1]),
+                total_area_m2=_round(float(row[2])),
+            )
+            for row in rows
+        ]
+
+    def close(self) -> None:
+        """Close the connection and release any run-owned spill files."""
+        self._connection.close()
+
+
 @dataclass
 class _Accumulator:
-    """Mutable, bounded accumulation state shared by every selected shard."""
+    """Mutable scalar counters shared by every selected shard."""
 
-    areas: array[float] = field(default_factory=lambda: array("d"))
-    vertices: array[float] = field(default_factory=lambda: array("d"))
-    rings: array[float] = field(default_factory=lambda: array("d"))
-    components: array[float] = field(default_factory=lambda: array("d"))
-    widths_degrees: array[float] = field(default_factory=lambda: array("d"))
-    heights_degrees: array[float] = field(default_factory=lambda: array("d"))
-    widths_m: array[float] = field(default_factory=lambda: array("d"))
-    heights_m: array[float] = field(default_factory=lambda: array("d"))
+    row_count: int = 0
     polygon_row_count: int = 0
     multipolygon_row_count: int = 0
     with_holes_row_count: int = 0
@@ -217,24 +391,39 @@ class _Accumulator:
     antimeridian_row_count: int = 0
     polar_row_count: int = 0
     buckets: Counter[str] = field(default_factory=Counter)
-    tag_row_counts: Counter[str] = field(default_factory=Counter)
-    tag_areas: dict[str, array[float]] = field(default_factory=dict)
     bbox: list[float] | None = None
 
 
-def _accumulate_shard(shard: Path, accumulator: _Accumulator) -> None:
-    """Fold one public shard into ``accumulator`` one record batch at a time."""
+def _accumulate_shard(
+    shard: Path,
+    accumulator: _Accumulator,
+    store: _GeometryValueStore,
+) -> None:
+    """Fold one public shard into scalar state and the spillable store."""
     parquet = pq.ParquetFile(shard)
     missing = [name for name in GEOMETRY_STATS_COLUMNS if name not in parquet.schema_arrow.names]
     if missing:
         raise ValueError(f"public shard {shard} lacks geometry columns: {sorted(missing)}")
     for batch in parquet.iter_batches(columns=list(GEOMETRY_STATS_COLUMNS), batch_size=BATCH_ROWS):
-        _accumulate_batch(accumulator, batch)
+        _accumulate_batch(
+            accumulator,
+            batch,
+            source_pbf=f"{shard.stem}.osm.pbf",
+            store=store,
+        )
 
 
-def _accumulate_batch(accumulator: _Accumulator, batch: Any) -> None:
+def _accumulate_batch(
+    accumulator: _Accumulator,
+    batch: Any,
+    *,
+    source_pbf: str,
+    store: _GeometryValueStore,
+) -> None:
     """Fold one record batch, decoding its geometry strings exactly once."""
     boxes = [_parse_bbox(value) for value in batch.column("bbox").to_pylist()]
+    widths_m, heights_m = _bbox_metre_values(boxes)
+    rows: list[dict[str, Any]] = []
     for geometry, box, area, tag in zip(
         batch.column("geometry").to_pylist(),
         boxes,
@@ -242,71 +431,84 @@ def _accumulate_batch(accumulator: _Accumulator, batch: Any) -> None:
         batch.column("osm_primary_tag").to_pylist(),
         strict=True,
     ):
-        _accumulate_area(accumulator, float(area), str(tag))
-        _accumulate_shape(accumulator, str(geometry))
-        _accumulate_extent(accumulator, box)
-    _accumulate_bbox_metres(accumulator, boxes)
+        area_value = float(area)
+        primary_tag = str(tag)
+        kind, components, rings, vertices = _accumulate_shape(accumulator, str(geometry))
+        _accumulate_area(accumulator, area_value, primary_tag)
+        width_degrees, height_degrees = _accumulate_extent(accumulator, box)
+        row_index = len(rows)
+        rows.append(
+            {
+                "source_pbf": source_pbf,
+                "osm_primary_tag": primary_tag,
+                "area_m2": area_value,
+                "vertices": float(vertices),
+                "rings": float(rings),
+                "components": float(components) if kind == "MultiPolygon" else None,
+                "width_degrees": width_degrees,
+                "height_degrees": height_degrees,
+                "width_m": widths_m[row_index],
+                "height_m": heights_m[row_index],
+            }
+        )
+    store.append(rows)
 
 
-def _accumulate_area(accumulator: _Accumulator, area_m2: float, primary_tag: str) -> None:
-    """Record one row's surface, its bucket, and its per-tag contribution."""
-    accumulator.areas.append(area_m2)
+def _accumulate_area(accumulator: _Accumulator, area_m2: float, _primary_tag: str) -> None:
+    """Record one row's surface and its bounded area counters."""
+    accumulator.row_count += 1
     accumulator.buckets[_area_bucket(area_m2)] += 1
     if area_m2 == 0.0:
         accumulator.zero_area_row_count += 1
     if area_m2 < TINY_AREA_M2:
         accumulator.below_one_m2_row_count += 1
-    accumulator.tag_row_counts[primary_tag] += 1
-    accumulator.tag_areas.setdefault(primary_tag, array("d")).append(area_m2)
 
 
-def _accumulate_shape(accumulator: _Accumulator, geometry: str) -> None:
+def _accumulate_shape(accumulator: _Accumulator, geometry: str) -> tuple[str, int, int, int]:
     """Record one row's component, ring, and vertex structure."""
     kind, components, rings, vertices = _geometry_shape(geometry)
     if kind == "MultiPolygon":
         accumulator.multipolygon_row_count += 1
-        accumulator.components.append(float(components))
     else:
         accumulator.polygon_row_count += 1
     holes = rings - components if rings else 0
     if holes > 0:
         accumulator.with_holes_row_count += 1
         accumulator.hole_ring_count += holes
-    accumulator.rings.append(float(rings))
-    accumulator.vertices.append(float(vertices))
+    return kind, components, rings, vertices
 
 
-def _accumulate_extent(accumulator: _Accumulator, box: tuple[float, float, float, float]) -> None:
+def _accumulate_extent(
+    accumulator: _Accumulator,
+    box: tuple[float, float, float, float],
+) -> tuple[float, float]:
     """Record one row's bounding box in degrees and widen the dataset extent."""
     min_lon, min_lat, max_lon, max_lat = box
-    accumulator.widths_degrees.append(max_lon - min_lon)
-    accumulator.heights_degrees.append(max_lat - min_lat)
-    if max_lon - min_lon > ANTIMERIDIAN_SPAN_DEGREES:
+    width_degrees = max_lon - min_lon
+    height_degrees = max_lat - min_lat
+    if width_degrees > ANTIMERIDIAN_SPAN_DEGREES:
         accumulator.antimeridian_row_count += 1
     if max(abs(min_lat), abs(max_lat)) >= POLAR_LATITUDE_DEGREES:
         accumulator.polar_row_count += 1
     accumulator.bbox = _widen_bbox(accumulator.bbox, box)
+    return width_degrees, height_degrees
 
 
-def _accumulate_bbox_metres(
-    accumulator: _Accumulator,
+def _bbox_metre_values(
     boxes: Sequence[tuple[float, float, float, float]],
-) -> None:
+) -> tuple[list[float], list[float]]:
     """Record geodesic bounding-box dimensions for one batch.
 
     Width is the geodesic distance across the box at its mid-latitude; height
     is the geodesic distance along its mid-longitude meridian.
     """
     if not boxes:
-        return
+        return [], []
     mid_lats = _midpoints(boxes, 1, 3)
     mid_lons = _midpoints(boxes, 0, 2)
-    accumulator.widths_m.extend(
-        _geodesic_lengths(_coordinates(boxes, 0), mid_lats, _coordinates(boxes, 2), mid_lats)
-    )
-    accumulator.heights_m.extend(
-        _geodesic_lengths(mid_lons, _coordinates(boxes, 1), mid_lons, _coordinates(boxes, 3))
-    )
+    widths = _geodesic_lengths(_coordinates(boxes, 0), mid_lats, _coordinates(boxes, 2), mid_lats)
+    heights = _geodesic_lengths(mid_lons, _coordinates(boxes, 1), mid_lons, _coordinates(boxes, 3))
+    return widths, heights
 
 
 def _coordinates(
@@ -396,32 +598,46 @@ def _area_bucket(area_m2: float) -> str:
     return AREA_BUCKET_LABELS[bisect_right(_AREA_BUCKET_EDGES, area_m2) + 1]
 
 
-def _summarize(values: Sequence[float]) -> NumericSummary:
-    """Return the exact summary of one distribution, zeroed when empty."""
-    if not values:
-        return NumericSummary()
-    ordered = sorted(values)
-    total = math.fsum(ordered)
-    percentiles = {f"p{percentile}": _percentile(ordered, percentile) for percentile in PERCENTILES}
+def _summary_from_row(row: Sequence[object]) -> NumericSummary:
+    """Convert one DuckDB summary row into the canonical numeric model."""
+    row_count = _as_int(row[0])
+    total = _as_float(row[1])
+    minimum = _as_float(row[2])
+    maximum = _as_float(row[3])
+    percentiles = _summary_percentiles(row, row_count)
     return NumericSummary(
-        row_count=len(ordered),
+        row_count=row_count,
         total=_round(total),
-        minimum=_round(ordered[0]),
-        maximum=_round(ordered[-1]),
-        mean=_round(total / len(ordered)),
-        median=percentiles["p50"],
-        percentiles=percentiles,
+        minimum=_round(minimum),
+        maximum=_round(maximum),
+        mean=_round(total / row_count) if row_count else 0.0,
+        median=percentiles["p50"] if row_count else 0.0,
+        percentiles=percentiles if row_count else {},
     )
 
 
-def _percentile(ordered: Sequence[float], percentile: int) -> float:
-    """Return the exact nearest-rank percentile of a sorted distribution.
+def _as_int(value: object) -> int:
+    """Convert a nullable DuckDB integer result to a plain integer."""
+    if value is None:
+        return 0
+    return int(cast(Any, value))
 
-    ``percentile`` is one of :data:`PERCENTILES`; every value there is at
-    least one, so the rank of a non-empty distribution is never zero.
-    """
-    rank = math.ceil(percentile / 100 * len(ordered))
-    return _round(ordered[rank - 1])
+
+def _as_float(value: object) -> float:
+    """Convert a nullable DuckDB numeric result to a plain float."""
+    if value is None:
+        return 0.0
+    return float(cast(Any, value))
+
+
+def _summary_percentiles(row: Sequence[object], row_count: int) -> dict[str, float]:
+    """Convert the percentile columns of a non-empty summary row."""
+    if not row_count:
+        return {}
+    return {
+        f"p{percentile}": _round(_as_float(row[index]))
+        for index, percentile in enumerate(PERCENTILES, start=4)
+    }
 
 
 def _round(value: float) -> float:
@@ -429,24 +645,16 @@ def _round(value: float) -> float:
     return round(value, ROUNDING_DECIMALS)
 
 
-def _source_stats(shard: Path, areas: Sequence[float]) -> SourceAreaStats:
-    """Summarize one shard's contribution, named by its source PBF."""
-    return SourceAreaStats(
-        source_pbf=f"{shard.stem}.osm.pbf",
-        row_count=len(areas),
-        area_m2=_summarize(areas),
-    )
-
-
 def _build_stats(
     accumulator: _Accumulator,
-    per_source: list[SourceAreaStats],
+    store: _GeometryValueStore,
+    source_pbf_names: Sequence[str],
 ) -> GeometryStats:
     """Convert accumulated state into the reported statistics."""
     return GeometryStats(
-        row_count=len(accumulator.areas),
+        row_count=accumulator.row_count,
         area=AreaStats(
-            summary=_summarize(accumulator.areas),
+            summary=store.summary("area_m2"),
             histogram=_histogram(accumulator.buckets),
             zero_area_row_count=accumulator.zero_area_row_count,
             below_one_m2_row_count=accumulator.below_one_m2_row_count,
@@ -456,21 +664,21 @@ def _build_stats(
             multipolygon_row_count=accumulator.multipolygon_row_count,
             with_holes_row_count=accumulator.with_holes_row_count,
             hole_ring_count=accumulator.hole_ring_count,
-            vertices_per_row=_summarize(accumulator.vertices),
-            rings_per_row=_summarize(accumulator.rings),
-            components_per_multipolygon=_summarize(accumulator.components),
+            vertices_per_row=store.summary("vertices"),
+            rings_per_row=store.summary("rings"),
+            components_per_multipolygon=store.summary("components"),
         ),
         extent=ExtentStats(
             bbox=_rounded_bbox(accumulator.bbox),
-            width_degrees=_summarize(accumulator.widths_degrees),
-            height_degrees=_summarize(accumulator.heights_degrees),
-            width_m=_summarize(accumulator.widths_m),
-            height_m=_summarize(accumulator.heights_m),
+            width_degrees=store.summary("width_degrees"),
+            height_degrees=store.summary("height_degrees"),
+            width_m=store.summary("width_m"),
+            height_m=store.summary("height_m"),
             antimeridian_row_count=accumulator.antimeridian_row_count,
             polar_row_count=accumulator.polar_row_count,
         ),
-        per_source=per_source,
-        per_osm_primary_tag=_primary_tag_stats(accumulator),
+        per_source=store.source_stats(source_pbf_names),
+        per_osm_primary_tag=store.primary_tag_stats(),
     )
 
 
@@ -482,19 +690,6 @@ def _rounded_bbox(bbox: list[float] | None) -> list[float] | None:
 def _histogram(buckets: Counter[str]) -> list[dict[str, Any]]:
     """Render every log-scale bucket in order, including empty ones."""
     return [{"bucket": label, "row_count": buckets[label]} for label in AREA_BUCKET_LABELS]
-
-
-def _primary_tag_stats(accumulator: _Accumulator) -> list[PrimaryTagAreaStats]:
-    """Summarize surface per primary OSM tag, most rows first."""
-    stats = [
-        PrimaryTagAreaStats(
-            osm_primary_tag=tag,
-            row_count=accumulator.tag_row_counts[tag],
-            total_area_m2=_round(math.fsum(areas)),
-        )
-        for tag, areas in accumulator.tag_areas.items()
-    ]
-    return sorted(stats, key=lambda item: (-item.row_count, item.osm_primary_tag))
 
 
 __all__ = [

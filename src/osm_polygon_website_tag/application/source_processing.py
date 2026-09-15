@@ -527,7 +527,7 @@ def _upload_public_shard(
             run_dir,
             repo_id=repo_id,
             repo_kind="dataset",
-            artifact_paths=[shard, run_dir / "README.md", run_dir / "dataset.yaml"],
+            artifact_paths=_initial_public_artifact_paths(run_dir, shard),
         )
         return
     incremental_publish_changed_shard(
@@ -538,6 +538,15 @@ def _upload_public_shard(
         dry_run=False,
         uploader=_upload_folder,
     )
+
+
+def _initial_public_artifact_paths(run_dir: Path, shard: Path) -> list[Path]:
+    """Return the initial shard upload plus any already-built card assets."""
+    paths = [shard, run_dir / "README.md", run_dir / "dataset.yaml"]
+    stats_path = run_dir / "stats.json"
+    if stats_path.is_file():
+        paths.append(stats_path)
+    return paths
 
 
 def _maybe_publish_enriched_shard(

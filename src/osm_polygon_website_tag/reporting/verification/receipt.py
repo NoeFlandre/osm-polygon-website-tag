@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
+from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
 
@@ -46,8 +47,10 @@ def _read_receipt(path: Path, errors: list[str]) -> dict[str, Any]:
 
 def _verify_card_contract(root: Path, contract_version: object, errors: list[str]) -> None:
     map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
-    if contract_version == 1:
+    if contract_version == CARD_CONTRACT_VERSION:
         _verify_current_card_contract(map_path, errors)
+    elif contract_version == 1:
+        errors.append("receipt has stale card_contract_version: 1")
     else:
         _verify_legacy_card_contract(map_path, errors)
 
@@ -55,6 +58,8 @@ def _verify_card_contract(root: Path, contract_version: object, errors: list[str
 def _verify_current_card_contract(map_path: Path, errors: list[str]) -> None:
     if not map_path.is_file():
         errors.append(f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}")
+    if not map_path.parent.parent.joinpath("stats.json").is_file():
+        errors.append("missing card artifact: stats.json")
 
 
 def _verify_legacy_card_contract(map_path: Path, errors: list[str]) -> None:

@@ -12,24 +12,22 @@ import pytest
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.reporting.geometry_stats import (
-    _Accumulator,
-    _accumulate_area,
-    _accumulate_bbox_metres,
-    _accumulate_extent,
-    _accumulate_shape,
-    _coordinates,
-    _geodesic_lengths,
-    _midpoints,
-    _widen_bbox,
     AREA_BUCKET_LABELS,
     GEOMETRY_STATS_SCHEMA_VERSION,
     NumericSummary,
     SourceAreaStats,
+    _accumulate_area,
+    _accumulate_extent,
+    _accumulate_shape,
+    _Accumulator,
     _area_bucket,
+    _bbox_metre_values,
+    _coordinates,
+    _geodesic_lengths,
     _geometry_shape,
+    _midpoints,
     _parse_bbox,
-    _percentile,
-    _summarize,
+    _widen_bbox,
     compute_geometry_stats,
     render_geometry_stats,
 )
@@ -316,19 +314,21 @@ def test_histogram_counts_every_bucket_of_a_run(tmp_path: Path) -> None:
     assert [entry["bucket"] for entry in stats.area.histogram] == list(AREA_BUCKET_LABELS)
 
 
-def test_percentiles_use_exact_nearest_rank_over_every_value() -> None:
-    ordered = [float(value) for value in range(1, 101)]
+def test_percentiles_use_exact_nearest_rank_over_every_value_in_a_shard(tmp_path: Path) -> None:
+    _write_shard(
+        tmp_path,
+        "a-latest",
+        [
+            _public_row(polygon_id=f"a:way/{value}", area_m2=float(value))
+            for value in range(1, 1001)
+        ],
+    )
 
-    assert _percentile(ordered, 1) == 1.0
-    assert _percentile(ordered, 50) == 50.0
-    assert _percentile(ordered, 99) == 99.0
-    assert _percentile([4.0], 1) == 4.0
+    summary = compute_geometry_stats(tmp_path).area.summary
 
-    # A thousand values separate the exact rank from any neighbouring scale.
-    thousand = [float(value) for value in range(1, 1001)]
-    assert _percentile(thousand, 1) == 10.0
-    assert _percentile(thousand, 50) == 500.0
-    assert _percentile(thousand, 99) == 990.0
+    assert summary.percentiles["p1"] == 10.0
+    assert summary.percentiles["p50"] == 500.0
+    assert summary.percentiles["p99"] == 990.0
 
 
 def test_area_accumulation_records_buckets_degenerates_and_tags() -> None:
@@ -338,56 +338,54 @@ def test_area_accumulation_records_buckets_degenerates_and_tags() -> None:
     _accumulate_area(accumulator, 0.5, "building")
     _accumulate_area(accumulator, 25.0, "amenity")
 
-    assert list(accumulator.areas) == [0.0, 0.5, 25.0]
+    assert accumulator.row_count == 3
     assert accumulator.zero_area_row_count == 1
     assert accumulator.below_one_m2_row_count == 2
     assert dict(accumulator.buckets) == {"0": 1, "<1e0": 1, "1e1-1e2": 1}
-    assert dict(accumulator.tag_row_counts) == {"building": 2, "amenity": 1}
-    assert list(accumulator.tag_areas["building"]) == [0.0, 0.5]
-    assert list(accumulator.tag_areas["amenity"]) == [25.0]
 
 
 def test_shape_accumulation_separates_polygons_multipolygons_and_holes() -> None:
     accumulator = _Accumulator()
 
-    _accumulate_shape(accumulator, json.dumps(_SQUARE))
-    _accumulate_shape(accumulator, json.dumps(_MULTIPOLYGON_WITH_HOLE))
-    _accumulate_shape(accumulator, json.dumps({"type": "Polygon", "coordinates": []}))
+    assert _accumulate_shape(accumulator, json.dumps(_SQUARE)) == ("Polygon", 1, 1, 5)
+    assert _accumulate_shape(accumulator, json.dumps(_MULTIPOLYGON_WITH_HOLE)) == (
+        "MultiPolygon",
+        2,
+        3,
+        15,
+    )
+    assert _accumulate_shape(accumulator, json.dumps({"type": "Polygon", "coordinates": []})) == (
+        "Polygon",
+        1,
+        0,
+        0,
+    )
 
     assert accumulator.polygon_row_count == 2
     assert accumulator.multipolygon_row_count == 1
     assert accumulator.with_holes_row_count == 1
     assert accumulator.hole_ring_count == 1
-    assert list(accumulator.components) == [2.0]
-    assert list(accumulator.rings) == [1.0, 3.0, 0.0]
-    assert list(accumulator.vertices) == [5.0, 15.0, 0.0]
+    assert accumulator.row_count == 0
 
 
 def test_extent_accumulation_widens_the_box_and_flags_edge_rows() -> None:
     accumulator = _Accumulator()
 
-    _accumulate_extent(accumulator, (1.0, 2.0, 3.0, 5.0))
-    _accumulate_extent(accumulator, (-179.0, -86.0, 179.0, -85.5))
-
-    assert list(accumulator.widths_degrees) == [2.0, 358.0]
-    assert list(accumulator.heights_degrees) == [3.0, 0.5]
+    assert _accumulate_extent(accumulator, (1.0, 2.0, 3.0, 5.0)) == (2.0, 3.0)
+    assert _accumulate_extent(accumulator, (-179.0, -86.0, 179.0, -85.5)) == (358.0, 0.5)
     assert accumulator.antimeridian_row_count == 1
     assert accumulator.polar_row_count == 1
     assert accumulator.bbox == [-179.0, -86.0, 179.0, 5.0]
 
 
 def test_bbox_metre_accumulation_measures_the_mid_axis_geodesics() -> None:
-    accumulator = _Accumulator()
+    assert _bbox_metre_values([]) == ([], [])
 
-    _accumulate_bbox_metres(accumulator, [])
-
-    assert list(accumulator.widths_m) == []
-
-    _accumulate_bbox_metres(accumulator, [(0.0, 0.0, 1.0, 2.0)])
+    widths_m, heights_m = _bbox_metre_values([(0.0, 0.0, 1.0, 2.0)])
 
     mid_lat, mid_lon = 1.0, 0.5
-    assert list(accumulator.widths_m) == _geodesic_lengths([0.0], [mid_lat], [1.0], [mid_lat])
-    assert list(accumulator.heights_m) == _geodesic_lengths([mid_lon], [0.0], [mid_lon], [2.0])
+    assert widths_m == _geodesic_lengths([0.0], [mid_lat], [1.0], [mid_lat])
+    assert heights_m == _geodesic_lengths([mid_lon], [0.0], [mid_lon], [2.0])
 
 
 def test_widen_bbox_returns_the_outer_envelope() -> None:
@@ -412,12 +410,23 @@ def test_geodesic_lengths_measure_each_segment_in_metres() -> None:
     assert lengths[1] == pytest.approx(111_319.5, abs=1.0)
 
 
-def test_summary_of_an_empty_distribution_is_zeroed() -> None:
-    assert _summarize([]) == NumericSummary()
+def test_summary_of_an_empty_distribution_is_zeroed(tmp_path: Path) -> None:
+    (tmp_path / "polygons").mkdir()
+
+    assert compute_geometry_stats(tmp_path).area.summary == NumericSummary()
 
 
-def test_summary_rounds_and_totals_exactly() -> None:
-    summary = _summarize([1.0, 2.0, 1e16])
+def test_summary_rounds_and_totals_exactly(tmp_path: Path) -> None:
+    _write_shard(
+        tmp_path,
+        "a-latest",
+        [
+            _public_row(polygon_id=f"a:way/{i}", area_m2=area)
+            for i, area in enumerate((1.0, 2.0, 1e16))
+        ],
+    )
+
+    summary = compute_geometry_stats(tmp_path).area.summary
 
     assert summary.total == 1e16 + 3.0
     assert summary.mean == round((1e16 + 3.0) / 3, 6)

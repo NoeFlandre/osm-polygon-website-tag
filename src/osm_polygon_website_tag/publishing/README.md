@@ -58,7 +58,7 @@ parsed/validated by small helpers in `incremental.py`
   load boundary has a single, documentable failure mode.
 - `global_bundle` is a `TypedDict` (`_GlobalBundleStateV2`,
   `total=False`) that permits an empty default and a partial set of the
-  four known keys: `readme_sha256`, `dataset_yaml_sha256`, `map_sha256`
+  five known keys: `readme_sha256`, `dataset_yaml_sha256`, `stats_sha256`, `map_sha256`
   (each a lowercase 64-character hex string), and
   `map_contract_version` (a non-bool integer). Any other field is
   rejected at the validation boundary.

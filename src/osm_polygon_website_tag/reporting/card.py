@@ -51,6 +51,8 @@ from osm_polygon_website_tag.runtime.config import (
 )
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
+CARD_CONTRACT_VERSION = 2
+
 
 def build_card(
     run_dir: Path | str,

@@ -47,7 +47,7 @@ _HEX_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 # Known keys for ``global_bundle``. Any other key is rejected to keep the
 # typed-checkpoint contract closed and reviewer-auditable.
 _GLOBAL_BUNDLE_HASH_KEYS: frozenset[str] = frozenset(
-    {"readme_sha256", "dataset_yaml_sha256", "map_sha256"}
+    {"readme_sha256", "dataset_yaml_sha256", "map_sha256", "stats_sha256"}
 )
 # Known fields for a per-source entry. ``polygon_sha256`` is the only
 # tracked field today; future fields expand this set.
@@ -70,6 +70,7 @@ class _GlobalBundleStateV2(TypedDict, total=False):
     readme_sha256: str
     dataset_yaml_sha256: str
     map_sha256: str
+    stats_sha256: str
     map_contract_version: int
 
 
@@ -381,6 +382,7 @@ def _bundle_state(run_dir: Path) -> _GlobalBundleStateV2:
         "readme_sha256": hash_shard(run_dir / "README.md"),
         "dataset_yaml_sha256": hash_shard(run_dir / "dataset.yaml"),
         "map_sha256": hash_shard(map_path),
+        "stats_sha256": hash_shard(run_dir / "stats.json"),
         "map_contract_version": MAP_CONTRACT_VERSION,
     }
 
@@ -438,7 +440,12 @@ def incremental_publish_changed_shard(
 
 def _validate_incremental_artifacts(root: Path) -> None:
     """Require non-empty card assets before computing an upload plan."""
-    for relative in ("README.md", "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH):
+    for relative in (
+        "README.md",
+        "dataset.yaml",
+        "stats.json",
+        POLYGON_DENSITY_ASSET_REL_PATH,
+    ):
         path = root / relative
         if not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"missing incremental artifact: {path}")
@@ -460,7 +467,12 @@ def _incremental_upload_paths(
     paths = [shard] if shard_changed else []
     if bundle_changed:
         paths.extend(
-            [root / "README.md", root / "dataset.yaml", root / POLYGON_DENSITY_ASSET_REL_PATH]
+            [
+                root / "README.md",
+                root / "dataset.yaml",
+                root / "stats.json",
+                root / POLYGON_DENSITY_ASSET_REL_PATH,
+            ]
         )
     return paths
 
