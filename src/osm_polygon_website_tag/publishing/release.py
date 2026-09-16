@@ -24,7 +24,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256 as compute_data_manifest_sha256,
 )
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
-from osm_polygon_website_tag.reporting.card import build_card
+from osm_polygon_website_tag.reporting.card import update_card_with_geometry
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
@@ -174,7 +174,7 @@ def _require_verified(report: VerificationReport, run_dir: Path) -> None:
 def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     """Rebuild the card and report; return whether their bytes changed."""
     before = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
-    _build_card_safely(run_dir)
+    _update_card_safely(run_dir)
     after = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
     _require_data_identity(run_dir, expected_data_identity)
     if before == after:
@@ -183,10 +183,10 @@ def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     return True
 
 
-def _build_card_safely(run_dir: Path) -> None:
-    """Normalize card-build failures to a release refusal."""
+def _update_card_safely(run_dir: Path) -> None:
+    """Normalize card-update failures to a release refusal."""
     try:
-        build_card(run_dir)
+        update_card_with_geometry(run_dir)
     except Exception as exc:
         raise ValueError(f"verification failed for {run_dir}; refusing to release: {exc}") from exc
 

@@ -20,6 +20,7 @@ mutable run state.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 
@@ -52,6 +53,9 @@ from osm_polygon_website_tag.runtime.config import (
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 CARD_CONTRACT_VERSION = 2
+_TOP_LEVEL_HEADING = re.compile(rb"(?m)^## [^\r\n]*(?:\r\n|\n|$)")
+_GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
+_GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
 
 
 def build_card(
@@ -94,21 +98,89 @@ def build_card(
             extracted_text_only=True,
         )
         staged_readme.write_text(readme, encoding="utf-8")
-        staged_yaml.write_text(front_matter, encoding="utf-8")
-        atomic_promote_bundle(
-            [
-                (staged_map, run_dir / POLYGON_DENSITY_ASSET_REL_PATH),
-                (staged_readme, path),
-                (staged_yaml, yaml_path),
-                *_staged_geometry_stats(staged_stats, run_dir, geometry),
-            ]
-        )
+        promotions = [
+            (staged_map, run_dir / POLYGON_DENSITY_ASSET_REL_PATH),
+            (staged_readme, path),
+        ]
+        if not yaml_path.is_file():
+            staged_yaml.write_text(front_matter, encoding="utf-8")
+            promotions.append((staged_yaml, yaml_path))
+        promotions.extend(_staged_geometry_stats(staged_stats, run_dir, geometry))
+        atomic_promote_bundle(promotions)
     finally:
         staged_map.unlink(missing_ok=True)
         staged_readme.unlink(missing_ok=True)
         staged_yaml.unlink(missing_ok=True)
         staged_stats.unlink(missing_ok=True)
     return path
+
+
+def update_card_with_geometry(
+    run_dir: Path | str,
+    *,
+    source_names: Collection[str] | None = None,
+) -> Path:
+    """Add the geometry summary while preserving an existing card bundle.
+
+    Release updates are intentionally narrower than a fresh :func:`build_card`.
+    An existing README is patched only at its geometry section, and an existing
+    ``dataset.yaml`` is never rewritten. A missing README falls back to the
+    complete builder so legacy runs can still regenerate missing metadata.
+    """
+    root = Path(run_dir)
+    readme = root / "README.md"
+    if not readme.is_file():
+        return build_card(root, source_names=source_names)
+
+    geometry = compute_geometry_stats(root, source_names=source_names)
+    original = readme.read_bytes()
+    updated = _update_geometry_section(original, geometry)
+    staged_readme = root / ".README.md.geometry.building"
+    staged_stats = root / ".stats.json.geometry.building"
+    promotions: list[tuple[Path, Path]] = []
+    try:
+        if updated != original:
+            staged_readme.write_bytes(updated)
+            promotions.append((staged_readme, readme))
+        promotions.extend(_staged_geometry_stats(staged_stats, root, geometry))
+        if promotions:
+            atomic_promote_bundle(promotions)
+    finally:
+        staged_readme.unlink(missing_ok=True)
+        staged_stats.unlink(missing_ok=True)
+    return readme
+
+
+def _update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
+    """Replace or insert one geometry block without rewriting other card bytes."""
+    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    block = _geometry_block_bytes(geometry, newline)
+    existing = _GEOMETRY_HEADING.search(card)
+    if existing is not None:
+        following = _TOP_LEVEL_HEADING.search(card, existing.end())
+        end = following.start() if following is not None else len(card)
+        return card[: existing.start()] + block + card[end:]
+
+    insertion = _GEOGRAPHIC_HEADING.search(card)
+    if insertion is not None:
+        return card[: insertion.start()] + block + card[insertion.start() :]
+    return _append_geometry_block(card, block, newline)
+
+
+def _geometry_block_bytes(geometry: GeometryStats, newline: bytes) -> bytes:
+    """Render the additive block using the existing card's newline convention."""
+    lines = _render_polygon_geometry_section(geometry)
+    return newline.join(line.encode("utf-8") for line in lines) + newline
+
+
+def _append_geometry_block(card: bytes, block: bytes, newline: bytes) -> bytes:
+    """Append a geometry block while retaining the existing card bytes."""
+    prefix = card
+    if prefix and not prefix.endswith(newline):
+        prefix += newline
+    if prefix:
+        prefix += newline
+    return prefix + block
 
 
 def _staged_geometry_stats(

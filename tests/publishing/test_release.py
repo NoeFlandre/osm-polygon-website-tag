@@ -164,6 +164,52 @@ def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> N
     assert '"schema_version"' in (run_dir / "stats.json").read_text(encoding="utf-8")
 
 
+def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
+    run_dir: Path,
+) -> None:
+    readme_prefix = (
+        "---\n"
+        "language:\n"
+        "  - eng\n"
+        "configs:\n"
+        "  - config_name: language-v1\n"
+        "    data_files:\n"
+        "      - split: train\n"
+        "        path: language-v1/*.parquet\n"
+        "---\n"
+        "# Existing dataset card\n\n"
+        "## Language v1\n\n"
+        "This pre-existing generated section must remain byte-for-byte.\n\n"
+    )
+    readme_suffix = (
+        "## Geographic distribution\n\n"
+        "The existing geographic section remains untouched.\n\n"
+        "## Unrelated metadata\n\n"
+        "Keep this section too.\n"
+    )
+    original_readme = readme_prefix + readme_suffix
+    original_yaml = (
+        "configs:\n"
+        "  - config_name: language-v1\n"
+        "    data_files:\n"
+        "      - split: train\n"
+        "        path: language-v1/*.parquet\n"
+        "language: eng\n"
+    )
+    (run_dir / "README.md").write_bytes(original_readme.encode("utf-8"))
+    (run_dir / "dataset.yaml").write_bytes(original_yaml.encode("utf-8"))
+
+    release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    updated_readme = (run_dir / "README.md").read_bytes().decode("utf-8")
+    geometry_start = updated_readme.index("## Polygon geometry")
+    geographic_start = updated_readme.index("## Geographic distribution")
+    assert updated_readme[:geometry_start] == readme_prefix
+    assert updated_readme[geographic_start:] == readme_suffix
+    assert "complete breakdown is published as [`stats.json`](stats.json)" in updated_readme
+    assert (run_dir / "dataset.yaml").read_bytes() == original_yaml.encode("utf-8")
+
+
 def test_unverified_run_is_refused(run_dir: Path) -> None:
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     receipt_before = receipt_path.read_bytes()
