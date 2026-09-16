@@ -1,9 +1,9 @@
 """Deterministic card/report release to the exact Hugging Face dataset.
 
 The release path recomputes the dataset card and ``stats.json`` from the
-complete verified run, publishes only those two documents, and verifies the
-remote files afterwards. Polygon shards, manifests, and unrelated Hub files are
-never touched by this path.
+complete verified run, publishes those files and the completion receipt as one metadata commit,
+and verifies the remote files afterwards. Polygon shards and unrelated Hub files
+are never touched by this path.
 
 Determinism: the card and the report are rendered from every published row of
 the verified run. Regeneration writes ``stats.json`` only when its bytes would
@@ -27,12 +27,15 @@ from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
 from osm_polygon_website_tag.reporting.card import update_card_with_geometry
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
-from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
+from osm_polygon_website_tag.reporting.verification.receipt import (
+    verify_receipt_before_card_refresh,
+)
+from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_release_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 from osm_polygon_website_tag.runtime.run_state import STATUS_COMPLETE, load_run
 
-CARD_RELEASE_FILES = ("README.md", "stats.json")
-_CARD_ARTIFACTS = (*CARD_RELEASE_FILES, "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH)
+CARD_RELEASE_FILES = ("README.md", "stats.json", "manifests/completion_receipt.json")
+_CARD_ARTIFACTS = ("README.md", "stats.json", "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH)
 
 
 @dataclass(frozen=True)
@@ -151,7 +154,14 @@ def _require_complete_release(root: Path) -> str:
     receipt = root / "manifests" / "completion_receipt.json"
     if receipt.is_symlink() or not receipt.is_file():
         raise ValueError(f"release requires a completion receipt: {receipt}")
-    return _completion_data_identity(receipt)
+    identity = _completion_data_identity(receipt)
+    receipt_errors: list[str] = []
+    verify_receipt_before_card_refresh(root, receipt_errors)
+    if receipt_errors:
+        raise ValueError(
+            f"release completion receipt verification failed; refusing to release: {receipt_errors}"
+        )
+    return identity
 
 
 def _completion_data_identity(receipt: Path) -> str:
@@ -287,10 +297,10 @@ def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str:
     try:
         receipt = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"remote completion receipt is invalid: {exc}") from exc
+        raise _RemoteArtifactMismatchError(f"remote completion receipt is invalid: {exc}") from exc
     identity = receipt.get("data_manifest_sha256") if isinstance(receipt, dict) else None
     if not isinstance(identity, str) or not identity:
-        raise ValueError("remote completion receipt has no data identity")
+        raise _RemoteArtifactMismatchError("remote completion receipt has no data identity")
     return identity
 
 
@@ -433,7 +443,7 @@ def release_card_and_stats(
     _require_exact_repo(confirm_repo, repo_id, repo_kind)
     expected_data_identity = _require_complete_release(root)
     recomputed = _recompute_card(root, expected_data_identity)
-    report = verify_results(root)
+    report = verify_release_results(root)
     _require_verified(report, root)
     identity = compute_data_manifest_sha256(root)
     files = build_card_release_plan(root, data_manifest_sha256=identity)

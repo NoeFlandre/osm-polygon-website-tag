@@ -20,7 +20,7 @@ from osm_polygon_website_tag.publishing.release import (
     release_card_and_stats,
 )
 from osm_polygon_website_tag.reporting.artifact_inventory import data_manifest_sha256
-from osm_polygon_website_tag.reporting.finalize import finalize_run
+from osm_polygon_website_tag.reporting.finalize import _write_completion_receipt, finalize_run
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 
 
@@ -160,7 +160,11 @@ def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> N
     report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
     assert report.recomputed is True
-    assert (run_dir / "README.md").read_text(encoding="utf-8").startswith("---\n")
+    assert (
+        (run_dir / "README.md")
+        .read_text(encoding="utf-8")
+        .startswith("stale\n\n## Polygon geometry\n")
+    )
     assert '"schema_version"' in (run_dir / "stats.json").read_text(encoding="utf-8")
 
 
@@ -198,6 +202,7 @@ def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     )
     (run_dir / "README.md").write_bytes(original_readme.encode("utf-8"))
     (run_dir / "dataset.yaml").write_bytes(original_yaml.encode("utf-8"))
+    _write_completion_receipt(run_dir)
 
     release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
@@ -217,6 +222,20 @@ def test_unverified_run_is_refused(run_dir: Path) -> None:
 
     with pytest.raises(ValueError, match="refusing to release"):
         release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+    assert receipt_path.read_bytes() == receipt_before
+
+
+def test_tampered_receipt_bound_failure_is_rejected_before_replacement(run_dir: Path) -> None:
+    failures = run_dir / "failures.jsonl"
+    failures.write_text('{"url": "https://example.com"}\n', encoding="utf-8")
+    _write_completion_receipt(run_dir)
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt_before = receipt_path.read_bytes()
+    failures.write_text('{"url": "https://tampered.example"}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="completion receipt"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
     assert receipt_path.read_bytes() == receipt_before
 
 
@@ -402,12 +421,6 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
         destination = remote_root / item.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((run_dir / item.relative_path).read_bytes())
-    receipt = remote_root / "manifests" / "completion_receipt.json"
-    receipt.parent.mkdir(parents=True, exist_ok=True)
-    receipt.write_text(
-        json.dumps({"data_manifest_sha256": files[0].data_manifest_sha256}),
-        encoding="utf-8",
-    )
 
     class _Api:
         def __init__(self, *, token: str) -> None:
@@ -477,7 +490,7 @@ def test_upload_card_files_passes_only_the_release_patterns(
     )
 
     assert captured["folder_path"] == str(run_dir)
-    assert captured["allow_patterns"] == ["README.md", "stats.json"]
+    assert captured["allow_patterns"] == list(CARD_RELEASE_FILES)
 
 
 def test_remote_release_helpers_fail_closed_on_invalid_remote_state(

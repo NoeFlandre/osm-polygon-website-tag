@@ -77,11 +77,16 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
             fig.colorbar(scalar, ax=axis, label="Polygons per H3 cell (log scale)")
         else:
             axis.text(
-                0.5, 0.5, "No public polygon centroids", transform=axis.transAxes, ha="center"
+                0.5,
+                0.5,
+                "No unique polygons with extracted text",
+                transform=axis.transAxes,
+                ha="center",
             )
         caption = (
             f"H3 resolution {summary.h3_resolution}; {summary.occupied_cell_count:,} occupied "
-            f"cells across {summary.polygon_row_count:,} polygon centroids; logarithmic scale. "
+            f"cells across {summary.polygon_row_count:,} unique polygons with extracted text; "
+            "logarithmic scale. "
             "Natural Earth 1:110m land backdrop."
         )
         fig.text(0.5, 0.01, caption, ha="center", fontsize=8)

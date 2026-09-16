@@ -79,7 +79,7 @@ def test_renderer_builds_caption_and_saves_nonempty_map_without_encoding_png(
     )
 
     assert "H3 resolution 5" in caption
-    assert "3 polygon centroids" in caption
+    assert "3 unique polygons with extracted text" in caption
     assert land_calls and saved and saved[0][1] == output
     assert len(saved[0][0].axes[0].patches) == 1
 

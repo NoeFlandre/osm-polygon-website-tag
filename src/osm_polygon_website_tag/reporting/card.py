@@ -98,13 +98,12 @@ def build_card(
             extracted_text_only=True,
         )
         staged_readme.write_text(readme, encoding="utf-8")
+        staged_yaml.write_text(front_matter, encoding="utf-8")
         promotions = [
             (staged_map, run_dir / POLYGON_DENSITY_ASSET_REL_PATH),
             (staged_readme, path),
+            (staged_yaml, yaml_path),
         ]
-        if not yaml_path.is_file():
-            staged_yaml.write_text(front_matter, encoding="utf-8")
-            promotions.append((staged_yaml, yaml_path))
         promotions.extend(_staged_geometry_stats(staged_stats, run_dir, geometry))
         atomic_promote_bundle(promotions)
     finally:
@@ -520,8 +519,9 @@ def _render_geographic_section(stats: CardStats) -> list[str]:
             f"![H3 polygon density]({POLYGON_DENSITY_ASSET_REL_PATH})\n\n"
             f"H3 resolution {stats.polygon_density_h3_resolution} contains "
             f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
-            f"**{stats.polygon_density_row_count:,}** polygon centroids with at least "
-            "one successfully extracted website text. "
+            f"**{stats.polygon_density_row_count:,}** unique polygons with successfully "
+            "extracted, non-empty website or contact:website text, globally deduplicated by "
+            "`(osm_type, osm_id)`. "
             "The color scale is logarithmic, counts are absolute, and a Natural Earth "
             "1:110m land backdrop provides geographic context."
         ),

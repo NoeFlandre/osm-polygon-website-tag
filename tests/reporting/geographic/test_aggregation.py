@@ -36,7 +36,31 @@ def _write_text_coords(
             {
                 "lat": [lat for lat, _lon, _website, _contact in rows],
                 "lon": [lon for _lat, lon, _website, _contact in rows],
+                "osm_type": ["way"] * len(rows),
+                "osm_id": list(range(1, len(rows) + 1)),
+                "website_text": pa.array(
+                    [
+                        "website text"
+                        if website == "success"
+                        else ""
+                        if website == "empty"
+                        else None
+                        for _lat, _lon, website, _contact in rows
+                    ],
+                    type=pa.string(),
+                ),
                 "website_text_status": [website for _lat, _lon, website, _contact in rows],
+                "contact_website_text": pa.array(
+                    [
+                        "contact text"
+                        if contact == "success"
+                        else ""
+                        if contact == "empty"
+                        else None
+                        for _lat, _lon, _website, contact in rows
+                    ],
+                    type=pa.string(),
+                ),
                 "contact_website_text_status": [contact for _lat, _lon, _website, contact in rows],
             }
         ),
@@ -138,6 +162,103 @@ def test_summary_can_filter_to_polygons_with_extracted_text(tmp_path: Path) -> N
 
     assert summary.polygon_row_count == 2
     assert sum(count for _cell, count in summary.cells) == 2
+
+
+def test_text_summary_deduplicates_osm_identity_and_requires_non_empty_text(
+    tmp_path: Path,
+) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    schema = pa.schema(
+        [
+            ("lat", pa.float64()),
+            ("lon", pa.float64()),
+            ("osm_type", pa.string()),
+            ("osm_id", pa.int64()),
+            ("website_text", pa.string()),
+            ("website_text_status", pa.string()),
+            ("contact_website_text", pa.string()),
+            ("contact_website_text_status", pa.string()),
+        ]
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "lat": 48.85,
+                    "lon": 2.35,
+                    "osm_type": "way",
+                    "osm_id": 42,
+                    "website_text": "same polygon",
+                    "website_text_status": "success",
+                    "contact_website_text": None,
+                    "contact_website_text_status": "absent",
+                },
+                {
+                    "lat": 40.7,
+                    "lon": -74.0,
+                    "osm_type": "way",
+                    "osm_id": 42,
+                    "website_text": "same polygon copy",
+                    "website_text_status": "success",
+                    "contact_website_text": None,
+                    "contact_website_text_status": "absent",
+                },
+                {
+                    "lat": 35.68,
+                    "lon": 139.69,
+                    "osm_type": "relation",
+                    "osm_id": 42,
+                    "website_text": " ",
+                    "website_text_status": "success",
+                    "contact_website_text": None,
+                    "contact_website_text_status": "absent",
+                },
+                {
+                    "lat": 35.7,
+                    "lon": 139.7,
+                    "osm_type": "way",
+                    "osm_id": 43,
+                    "website_text": "failed",
+                    "website_text_status": "fetch_error",
+                    "contact_website_text": None,
+                    "contact_website_text_status": "absent",
+                },
+            ],
+            schema=schema,
+        ),
+        polygons / "a.parquet",
+    )
+
+    summary = compute_polygon_density_summary(tmp_path, extracted_text_only=True)
+
+    assert summary.polygon_row_count == 1
+    assert sum(count for _cell, count in summary.cells) == 1
+
+
+def test_text_summary_uses_regional_copies_for_canonical_runs(tmp_path: Path) -> None:
+    regional_run = tmp_path / "regional"
+    (regional_run / "polygons").mkdir(parents=True)
+    _write_text_coords(
+        regional_run / "polygons" / "regional.parquet",
+        [(48.85, 2.35, "success", "absent"), (40.7, -74.0, "success", "absent")],
+    )
+
+    canonical_run = tmp_path / "canonical"
+    (canonical_run / "polygons").mkdir(parents=True)
+    (canonical_run / "analysis_observations").symlink_to(
+        regional_run / "analysis_observations",
+        target_is_directory=True,
+    )
+    (regional_run / "analysis_observations").mkdir()
+    _write_text_coords(
+        canonical_run / "polygons" / "canonical.parquet",
+        [(35.7, 139.7, "success", "absent")],
+    )
+
+    summary = compute_polygon_density_summary(canonical_run, extracted_text_only=True)
+
+    assert summary.polygon_row_count == 2
 
 
 def test_text_only_summary_excludes_shards_without_text_status_columns(tmp_path: Path) -> None:

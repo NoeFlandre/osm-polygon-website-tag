@@ -10,6 +10,9 @@ from typing import Any
 from osm_polygon_website_tag.reporting.verification.analysis import (
     verify_analysis_and_card as _verify_analysis_and_card,
 )
+from osm_polygon_website_tag.reporting.verification.analysis import (
+    verify_release_analysis_and_card as _verify_release_analysis_and_card,
+)
 from osm_polygon_website_tag.reporting.verification.language import (
     verify_language_invariants as _verify_language_invariants,
 )
@@ -46,7 +49,17 @@ def verify_results_modern(run_dir: Path | str) -> VerificationReport:
     return _verify_results(Path(run_dir), include_receipt=False)
 
 
-def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
+def verify_release_results(run_dir: Path | str) -> VerificationReport:
+    """Verify a complete release while preserving existing card sections."""
+    return _verify_results(Path(run_dir), include_receipt=True, preserve_card_sections=True)
+
+
+def _verify_results(
+    root: Path,
+    *,
+    include_receipt: bool,
+    preserve_card_sections: bool = False,
+) -> VerificationReport:
     errors: list[str] = []
     checked: list[str] = []
     metadata = _read_json_object(root / "manifests" / "run.json", errors)
@@ -63,7 +76,10 @@ def _verify_results(root: Path, *, include_receipt: bool) -> VerificationReport:
     _verify_text_invariants(root, status, errors)
     _verify_language_invariants(root, errors)
     _verify_sentence_invariants(root, errors)
-    _verify_status_artifacts(root, status, include_receipt, errors)
+    if preserve_card_sections:
+        _verify_release_status_artifacts(root, status, include_receipt, errors)
+    else:
+        _verify_status_artifacts(root, status, include_receipt, errors)
     return VerificationReport(not errors, errors, checked)
 
 
@@ -75,6 +91,19 @@ def _verify_status_artifacts(
 ) -> None:
     if status in {"card_built", "verified", "complete"}:
         _verify_analysis_and_card(root, errors)
+    if status == "complete" and include_receipt:
+        _verify_receipt(root, errors)
+
+
+def _verify_release_status_artifacts(
+    root: Path,
+    status: object,
+    include_receipt: bool,
+    errors: list[str],
+) -> None:
+    """Use release card compatibility checks without changing strict defaults."""
+    if status in {"card_built", "verified", "complete"}:
+        _verify_release_analysis_and_card(root, errors)
     if status == "complete" and include_receipt:
         _verify_receipt(root, errors)
 

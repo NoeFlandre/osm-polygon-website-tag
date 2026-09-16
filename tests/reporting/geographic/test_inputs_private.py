@@ -12,18 +12,30 @@ from osm_polygon_website_tag.reporting.geographic.inputs import (
     _coordinate_value,
     _path_columns,
     _row_is_eligible,
+    _select_polygon_parquets,
     _text_success_mask,
     _validated_coordinates,
 )
 
 
 def test_input_helpers_select_columns_and_validate_coordinates() -> None:
-    names = {"lat", "lon", "website_text_status", "contact_website_text_status"}
+    names = {
+        "lat",
+        "lon",
+        "osm_type",
+        "osm_id",
+        "website_text",
+        "website_text_status",
+        "contact_website_text",
+        "contact_website_text_status",
+    }
     assert _path_columns(Path("a.parquet"), names, extracted_text_only=False) == ["lat", "lon"]
     assert _path_columns(Path("a.parquet"), names, extracted_text_only=True) == [
         "lat",
         "lon",
+        "website_text",
         "website_text_status",
+        "contact_website_text",
         "contact_website_text_status",
     ]
     assert _row_is_eligible(None, 0)
@@ -42,10 +54,17 @@ def test_input_helpers_select_columns_and_validate_coordinates() -> None:
 def test_input_helpers_build_null_safe_text_mask_and_coordinate_iterator() -> None:
     batch = pa.record_batch(
         [
+            pa.array(["text", None, ""]),
             pa.array(["success", None, "absent"]),
+            pa.array([None, "contact", ""]),
             pa.array([None, "success", "absent"]),
         ],
-        names=["website_text_status", "contact_website_text_status"],
+        names=[
+            "website_text",
+            "website_text_status",
+            "contact_website_text",
+            "contact_website_text_status",
+        ],
     )
     assert _text_success_mask(batch).tolist() == [True, True, False]
     values = zip(
@@ -60,3 +79,18 @@ def test_input_helpers_build_null_safe_text_mask_and_coordinate_iterator() -> No
         (Path("a.parquet"), 12, 3.0, 6.0),
     ]
     assert call_arrow_kernel("equal", pa.array(["success"]), "success").to_pylist() == [True]
+
+
+def test_select_polygon_parquets_supports_unfiltered_and_source_scoped_reads(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "polygons"
+    directory.mkdir()
+    france = directory / "france-latest.parquet"
+    monaco = directory / "monaco-latest.parquet"
+    france.touch()
+    monaco.touch()
+
+    assert _select_polygon_parquets(directory, None) == [france, monaco]
+    assert _select_polygon_parquets(directory, {"monaco-latest.osm.pbf"}) == [monaco]
+    assert _select_polygon_parquets(directory, {"missing-latest.osm.pbf"}) == []

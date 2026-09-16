@@ -201,6 +201,22 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "Top `contact:website` hostnames" not in content
 
 
+def test_source_scoped_card_build_refreshes_existing_yaml(tmp_path: Path) -> None:
+    run_dir = _setup_minimal_run(tmp_path)
+    first_source = {"monaco-latest.osm.pbf"}
+    build_card(run_dir, source_names=first_source)
+
+    second = _public_row(polygon_id="p2", source_pbf="france-latest.osm.pbf")
+    pq.write_table(
+        pa.Table.from_pylist([second], schema=POLYGON_PUBLIC_SCHEMA),
+        run_dir / "polygons" / "france-latest.parquet",
+    )
+
+    build_card(run_dir, source_names={*first_source, "france-latest.osm.pbf"})
+
+    assert "public_row_count: 2" in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+
+
 def test_snapshot_section_renders_its_metrics_as_markdown_rows() -> None:
     stats = CardStats(
         snapshot_status="done",
@@ -334,7 +350,7 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
 
         ![H3 polygon density](assets/geographic_polygon_density.png)
 
-        H3 resolution 20 contains **21** occupied cells across **22** polygon centroids with at least one successfully extracted website text. The color scale is logarithmic, counts are absolute, and a Natural Earth 1:110m land backdrop provides geographic context.
+        H3 resolution 20 contains **21** occupied cells across **22** unique polygons with successfully extracted, non-empty website or contact:website text, globally deduplicated by `(osm_type, osm_id)`. The color scale is logarithmic, counts are absolute, and a Natural Earth 1:110m land backdrop provides geographic context.
 
         ## Links
 
@@ -749,7 +765,7 @@ def test_build_card_map_counts_only_polygons_with_extracted_text(tmp_path: Path)
     build_card(run_dir)
 
     card = (run_dir / "README.md").read_text()
-    assert "across **1** polygon centroids with at least one successfully extracted" in card
+    assert "across **1** unique polygons with successfully extracted, non-empty" in card
 
 
 def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
@@ -1073,7 +1089,7 @@ def test_card_explains_unique_polygon_text_metric(tmp_path: Path) -> None:
     content = build_card(_setup_minimal_run(tmp_path)).read_text()
 
     assert "Unique polygons with extracted text: **0**" in content
-    assert "across regional rows" in content
+    assert "globally deduplicated by `(osm_type, osm_id)`" in content
 
 
 def test_text_polygon_ids_preserves_osm_identity_and_skips_null_ids() -> None:

@@ -152,8 +152,9 @@ mode.
 
 `release-stats` is the statistics release wrapper. It verifies the complete
 published run, recomputes `README.md` and `stats.json` from every published
-row, and uploads only those two documents to the exact dataset. Polygon
-shards, manifests, and unrelated Hub files are never touched.
+row, and uploads those files together with the regenerated completion receipt
+to the exact dataset as one metadata commit. Polygon shards and unrelated Hub
+files are never touched.
 
 ```bash
 # 1. Dry run: verify, recompute, and print the exact plan. No network writes.
