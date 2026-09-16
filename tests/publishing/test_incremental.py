@@ -40,6 +40,7 @@ def _run(tmp_path: Path) -> tuple[Path, Path]:
     shard.write_bytes(b"shard-a")
     (run_dir / "README.md").write_text("card-a")
     (run_dir / "dataset.yaml").write_text("yaml-a")
+    (run_dir / "stats.json").write_text("stats-a")
     map_path = run_dir / "assets" / "geographic_polygon_density.png"
     map_path.parent.mkdir()
     map_path.write_bytes(b"\x89PNG\r\n\x1a\nmap-a")
@@ -62,6 +63,7 @@ def test_incremental_uploads_changed_shard_and_bundle(tmp_path: Path, monkeypatc
         shard,
         run_dir / "README.md",
         run_dir / "dataset.yaml",
+        run_dir / "stats.json",
         run_dir / "assets" / "geographic_polygon_density.png",
     ]
     checkpoint = json.loads((run_dir / "manifests" / "uploaded_polygons.json").read_text())
@@ -134,6 +136,7 @@ def test_incremental_bundle_only_upload_does_not_upload_shard(tmp_path: Path, mo
     assert captured == [
         run_dir / "README.md",
         run_dir / "dataset.yaml",
+        run_dir / "stats.json",
         run_dir / "assets" / "geographic_polygon_density.png",
     ]
 
@@ -182,6 +185,7 @@ def test_incremental_republishes_bundle_when_map_contract_changes(
     assert captured == [
         run_dir / "README.md",
         run_dir / "dataset.yaml",
+        run_dir / "stats.json",
         run_dir / "assets" / "geographic_polygon_density.png",
     ]
 
@@ -766,7 +770,8 @@ def test_load_upload_checkpoint_rejects_unknown_global_bundle_field(
     tmp_path: Path,
 ) -> None:
     """``global_bundle`` may only contain the documented keys
-    (readme_sha256, dataset_yaml_sha256, map_sha256, map_contract_version)."""
+    (readme_sha256, dataset_yaml_sha256, stats_sha256, map_sha256,
+    map_contract_version)."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     _write_checkpoint(

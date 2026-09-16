@@ -108,6 +108,7 @@ are not publishable.
   assets/geographic_polygon_density.png
   README.md
   dataset.yaml
+  stats.json                     # geometry statistics; written by build-card
 ```
 
 The shared production data root also contains
@@ -136,8 +137,11 @@ The opt-in v1.4 schema appends nullable `website_language` and
 and top-1 probability for successful text, or null when no successful text is
 available.
 
-Card tables, combined word totals, hostname tables, and the map are derived
-from the Parquets on each incremental update. The card intentionally omits
+Card tables, combined word totals, hostname tables, the map, and the
+`stats.json` geometry report are derived from the Parquets on each incremental
+update. The card's geometry block and `stats.json` come from one pass over the
+public shards, so they cannot disagree; see
+[Polygon geometry statistics](data-and-remotes.md#polygon-geometry-statistics). The card intentionally omits
 Hugging Face task metadata because this geographic source dataset does not map
 to an official machine-learning task. Current public totals belong to the
 generated card, not to this architecture overview.

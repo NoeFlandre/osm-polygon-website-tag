@@ -2,8 +2,8 @@
 
 Builds and validates public-facing local artifacts.
 
-- Modules: `artifact_inventory`, `card_stats`, `card`, `geographic`, `repair`,
-  `verify`, `finalize`.
+- Modules: `artifact_inventory`, `card_stats`, `geometry_stats`, `card`,
+  `geographic`, `repair`, `verify`, `finalize`.
 - Dependencies: `contracts`, `storage`, `pipeline`, and `runtime`.
 - `geographic` aggregates public centroids into H3 resolution-3 counts and
   atomically renders the logarithmic `assets/geographic_polygon_density.png`
@@ -32,6 +32,12 @@ Builds and validates public-facing local artifacts.
   validators live under `verification/` and are not public API. They cover
   rows, shards, text, language pairs, sentence segmentation, analysis and card
   output, and the completion receipt.
-- Entry points: `compute_card_stats`, `build_card`, `verify_results`,
-  `finalize_run`, `finalize_snapshot`, and `refresh_card_run`.
+- `geometry_stats` computes the deterministic polygon surface, shape, and
+  extent statistics of every validated public row, streaming geometry decoding
+  one record batch at a time. `build_card` writes them to `stats.json` and
+  renders the card's geometry block from the same result; the file is only
+  rewritten when its bytes change, and verification rejects a missing or stale
+  one.
+- Entry points: `compute_card_stats`, `compute_geometry_stats`, `build_card`,
+  `verify_results`, `finalize_run`, `finalize_snapshot`, and `refresh_card_run`.
 - Excludes: extraction, HTTP fetching, remote upload, and CLI dispatch.

@@ -13,13 +13,12 @@
 #   uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
 #   uv run --locked mutmut results --all true > results.txt
 #   uv run --locked python scripts/quality/mutation_baseline.py --results results.txt
-# Recorded mutants: 40
+# Recorded mutants: 39
 
 osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_10
 osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_7
 osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_8
 osm_polygon_website_tag.publishing.publish.x__add_directory_artifacts__mutmut_9
-osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_11
 osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_4
 osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_5
 osm_polygon_website_tag.publishing.publish.x__add_root_artifacts__mutmut_6

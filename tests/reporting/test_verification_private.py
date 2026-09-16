@@ -132,6 +132,7 @@ def test_receipt_helpers_validate_paths_files_and_digests(tmp_path: Path) -> Non
     map_path = tmp_path / "assets" / "map.png"
     map_path.parent.mkdir()
     map_path.write_bytes(b"map")
+    (tmp_path / "stats.json").write_text("stats")
     errors.clear()
     receipt._verify_current_card_contract(map_path, errors)
     assert errors == []

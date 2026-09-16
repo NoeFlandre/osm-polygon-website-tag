@@ -94,7 +94,7 @@ def _directory_artifacts(directory: Path) -> list[Path]:
 
 def _add_root_artifacts(plan: PublishPlan, run_dir: Path) -> None:
     """Add public root metadata and remember the README path."""
-    for name in ("README.md", "dataset.yaml", "failures.jsonl"):
+    for name in ("README.md", "dataset.yaml", "failures.jsonl", "stats.json"):
         path = run_dir / name
         if not path.is_file():
             continue

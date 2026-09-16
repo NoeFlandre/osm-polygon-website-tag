@@ -50,7 +50,11 @@ Each run owns a directory under the output root:
   assets/geographic_polygon_density.png
   README.md
   dataset.yaml
+  stats.json
 ```
+
+`stats.json` is the machine-readable polygon geometry report described in
+[Polygon geometry statistics](#polygon-geometry-statistics).
 
 These files are local run artifacts. Staging, DuckDB spill data, URL-cache
 files, and enrichment checkpoint parts support resume and are not part of the
@@ -130,3 +134,48 @@ from existing Parquets and performs no remote call.
 The derived dataset carries the ODbL 1.0 notice, OpenStreetMap contributor
 attribution, and Geofabrik extract-provider attribution in its generated card
 and `dataset.yaml`.
+
+## Polygon geometry statistics
+
+`build-card` writes `stats.json` next to `README.md`, from the same single
+pass over the validated public shards that produces the card's
+**Polygon geometry** block. Every value covers every row of the selected
+`polygons/*.parquet` shards -- no sampling, no truncation, no external lookup,
+and no recomputation from the raw PBFs. Only the `area_m2`, `bbox`,
+`geometry`, and `osm_primary_tag` columns are read, one record batch at a
+time. `osm-polygon-website-tag geometry-stats --run-dir <run>` prints the same
+document without writing anything.
+
+Regeneration from unchanged artifacts is byte-identical, and the existing
+file is left untouched rather than rewritten. Verification recomputes the
+report and rejects a missing or stale `stats.json`, exactly as it does for
+`README.md` and `dataset.yaml`. The file is receipt-bound and published.
+
+Fields, all computed on the WGS84 ellipsoid:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Contract version of this document (`v1`). |
+| `row_count` | Public polygon rows covered. |
+| `area.summary` | `area_m2` distribution: `row_count`, `total`, `minimum`, `maximum`, `mean`, `median`, and `percentiles` `p1`, `p5`, `p25`, `p50`, `p75`, `p95`, `p99`. |
+| `area.histogram` | Stable log-scale buckets, always all thirteen in order: `0`, `<1e0`, `1e0-1e1` … `1e9-1e10`, `>=1e10`. |
+| `area.zero_area_row_count` | Rows whose area is exactly zero (degenerate). |
+| `area.below_one_m2_row_count` | Rows below one square metre (suspiciously small). |
+| `shape.polygon_row_count` / `shape.multipolygon_row_count` | Rows by stored GeoJSON geometry type. |
+| `shape.with_holes_row_count` | Rows carrying at least one inner ring. |
+| `shape.hole_ring_count` | Total inner rings across every row. |
+| `shape.vertices_per_row` | Distribution of stored coordinate pairs per row. |
+| `shape.rings_per_row` | Distribution of rings (outer and inner) per row. |
+| `shape.components_per_multipolygon` | Distribution of components, over MultiPolygon rows only. |
+| `extent.bbox` | Dataset bounding box `[min_lon, min_lat, max_lon, max_lat]`, `null` when no row was covered. |
+| `extent.width_degrees` / `extent.height_degrees` | Per-row bounding-box span in decimal degrees. |
+| `extent.width_m` / `extent.height_m` | Geodesic span in metres: width across the box at its mid-latitude, height along its mid-longitude meridian. |
+| `extent.antimeridian_row_count` | Rows whose bounding box spans more than 180° of longitude. Extraction rejects antimeridian crossings, so this is zero for a current snapshot. |
+| `extent.polar_row_count` | Rows whose bounding box reaches 85° of latitude or beyond. |
+| `per_source` | One entry per source PBF, in sorted shard order, with `row_count` and the same `area_m2` summary. |
+| `per_osm_primary_tag` | One entry per `osm_primary_tag`, most rows first, with `row_count` and `total_area_m2`. |
+
+Every distribution summary is exact: totals use order-independent
+`math.fsum`, percentiles are exact nearest-rank values over every row, and
+each reported float is rounded to six decimals. Empty selections report zeroed
+summaries and a `null` bounding box.

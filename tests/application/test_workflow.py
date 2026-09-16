@@ -202,6 +202,7 @@ def _write_card_contract_fixture(run_dir: Path, receipt: object) -> None:
     map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
     map_path.parent.mkdir(parents=True)
     map_path.write_bytes(b"map")
+    (run_dir / "stats.json").write_text("stats")
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.write_text(json.dumps(receipt))
@@ -210,7 +211,7 @@ def _write_card_contract_fixture(run_dir: Path, receipt: object) -> None:
 @pytest.mark.parametrize(
     "receipt",
     [
-        {"card_contract_version": 2},
+        {"card_contract_version": 1},
         {"other": "value"},
         ["not", "a", "mapping"],
         "not a mapping",
@@ -227,13 +228,13 @@ def test_card_refresh_needed_rejects_every_non_current_receipt(
 def test_card_refresh_needed_accepts_current_receipt(
     tmp_path: Path,
 ) -> None:
-    _write_card_contract_fixture(tmp_path, {"card_contract_version": 1})
+    _write_card_contract_fixture(tmp_path, {"card_contract_version": 2})
     assert not workflow._card_refresh_needed(tmp_path)
 
 
 def test_card_refresh_needed_requires_the_map_and_readable_receipt(tmp_path: Path) -> None:
     assert workflow._card_refresh_needed(tmp_path)
-    _write_card_contract_fixture(tmp_path, {"card_contract_version": 1})
+    _write_card_contract_fixture(tmp_path, {"card_contract_version": 2})
     (tmp_path / "manifests" / "completion_receipt.json").unlink()
     assert workflow._card_refresh_needed(tmp_path)
     receipt_path = tmp_path / "manifests" / "completion_receipt.json"
@@ -250,12 +251,15 @@ def test_card_refresh_needed_uses_the_exact_contract_paths_and_encoding() -> Non
             return PathSpy((*self.parts, str(part)))
 
         def is_file(self) -> bool:
-            return self.parts == ("assets/geographic_polygon_density.png",)
+            return self.parts in {
+                ("assets/geographic_polygon_density.png",),
+                ("stats.json",),
+            }
 
         def read_text(self, *, encoding: str) -> str:
             assert self.parts == ("manifests", "completion_receipt.json")
             assert encoding == "utf-8"
-            return '{"card_contract_version": 1}'
+            return '{"card_contract_version": 2}'
 
     assert not workflow._card_refresh_needed(cast(Any, PathSpy()))
 
@@ -1133,7 +1137,7 @@ def test_run_all_refreshes_legacy_complete_card_without_reprocessing_sources(
 
     assert resumed.extracted_count == 0
     assert map_path.is_file()
-    assert json.loads(receipt_path.read_text())["card_contract_version"] == 1
+    assert json.loads(receipt_path.read_text())["card_contract_version"] == 2
 
 
 def test_run_all_does_not_resume_a_finalized_frozen_snapshot(
@@ -1546,6 +1550,7 @@ def test_incremental_upload_includes_shard_and_recomputed_card(
     pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA), shard)
     (run_dir / "README.md").write_text("card")
     (run_dir / "dataset.yaml").write_text("metadata")
+    (run_dir / "stats.json").write_text("stats")
     captured: list[Path] = []
 
     monkeypatch.setattr(
@@ -1555,7 +1560,12 @@ def test_incremental_upload_includes_shard_and_recomputed_card(
 
     source_processing._upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
 
-    assert captured == [shard, run_dir / "README.md", run_dir / "dataset.yaml"]
+    assert captured == [
+        shard,
+        run_dir / "README.md",
+        run_dir / "dataset.yaml",
+        run_dir / "stats.json",
+    ]
 
 
 def test_incremental_upload_includes_recomputed_map(
@@ -1568,6 +1578,7 @@ def test_incremental_upload_includes_recomputed_map(
     pq.write_table(pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA), shard)
     (run_dir / "README.md").write_text("card")
     (run_dir / "dataset.yaml").write_text("metadata")
+    (run_dir / "stats.json").write_text("stats")
     map_path = run_dir / "assets" / "geographic_polygon_density.png"
     map_path.parent.mkdir()
     map_path.write_bytes(b"map")
@@ -1580,7 +1591,13 @@ def test_incremental_upload_includes_recomputed_map(
 
     source_processing._upload_public_shard(run_dir, Path("source.osm.pbf"), "owner/dataset")
 
-    assert captured == [shard, run_dir / "README.md", run_dir / "dataset.yaml", map_path]
+    assert captured == [
+        shard,
+        run_dir / "README.md",
+        run_dir / "dataset.yaml",
+        run_dir / "stats.json",
+        map_path,
+    ]
 
 
 def test_resume_enriches_only_shards_with_retryable_text(

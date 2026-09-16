@@ -25,6 +25,14 @@ from osm_polygon_website_tag.reporting.card import (
     build_card,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
+from osm_polygon_website_tag.reporting.geometry_stats import (
+    AreaStats,
+    ExtentStats,
+    GeometryStats,
+    NumericSummary,
+    ShapeStats,
+    render_geometry_stats,
+)
 from osm_polygon_website_tag.runtime.run_state import initialise_run, load_run, upsert_run_metadata
 
 
@@ -221,6 +229,26 @@ def test_snapshot_section_renders_its_metrics_as_markdown_rows() -> None:
     ]
 
 
+def _golden_geometry_stats() -> GeometryStats:
+    return GeometryStats(
+        row_count=25,
+        area=AreaStats(
+            summary=NumericSummary(
+                row_count=25,
+                total=2_500_000.0,
+                minimum=26.0,
+                maximum=27.0,
+                mean=28.0,
+                median=29.0,
+                percentiles={"p95": 30.0},
+            ),
+            below_one_m2_row_count=31,
+        ),
+        shape=ShapeStats(multipolygon_row_count=32, with_holes_row_count=33),
+        extent=ExtentStats(bbox=[-1.5, -2.5, 3.5, 4.5]),
+    )
+
+
 def _golden_card_stats() -> CardStats:
     return CardStats(
         snapshot_status="in_progress",
@@ -284,6 +312,24 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy has successful, trimmed non-empty website or contact:website text.
         Combined extracted words: **31**
 
+        ## Polygon geometry
+
+        Surface and shape statistics computed over every published polygon row from the `area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 ellipsoid. The complete breakdown is published as [`stats.json`](stats.json).
+
+        | Metric | Value |
+        | --- | ---: |
+        | Polygons measured | 25 |
+        | Total area | 2.50 km² |
+        | Median area | 29.00 m² |
+        | Mean area | 28.00 m² |
+        | Smallest / largest area | 26.00 / 27.00 m² |
+        | p95 area | 30.00 m² |
+        | MultiPolygon rows | 32 |
+        | Rows with holes | 33 |
+        | Rows below 1 m² | 31 |
+
+        Dataset bounding box: `[-1.500000, -2.500000, 3.500000, 4.500000]` (min lon, min lat, max lon, max lat).
+
         ## Geographic distribution
 
         ![H3 polygon density](assets/geographic_polygon_density.png)
@@ -320,6 +366,7 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         - `polygons/*.parquet`: the public polygon split, one shard per source PBF.
         - `analysis/*.parquet`: detailed overlap, provenance, hostname, duplicate, conflict, and per-source statistics.
         - `deduplication_summary.json`: counts and tag-conflict totals from the global canonicalization pass.
+        - `stats.json`: complete machine-readable polygon geometry statistics.
         - `manifests/`: source inventory, upload checkpoints, and completion receipt.
 
         ## Public polygon schema
@@ -351,7 +398,12 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         "Unique polygons with extracted text: **19**  \n",
     )
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
-    assert card_module._render_markdown(_golden_card_stats(), schema=schema) == expected
+    assert (
+        card_module._render_markdown(
+            _golden_card_stats(), geometry=_golden_geometry_stats(), schema=schema
+        )
+        == expected
+    )
 
 
 def test_render_yaml_front_matter_has_a_stable_output_contract() -> None:
@@ -409,6 +461,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     source_names = {"monaco-latest.osm.pbf"}
     summary = object()
     stats = CardStats(public_row_count=3)
+    geometry = GeometryStats(row_count=4)
     calls: list[tuple[str, object]] = []
     writes: list[tuple[Path, str, str | None]] = []
     mkdirs: list[tuple[Path, bool, bool]] = []
@@ -442,9 +495,26 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     ) -> None:
         calls.append(("map", (path, summary, output_path, source_names, extracted_text_only)))
 
-    def fake_render_markdown(rendered_stats: CardStats, *, schema: pa.Schema) -> str:
-        calls.append(("markdown", (rendered_stats, schema)))
+    def fake_geometry_stats(
+        path: Path,
+        *,
+        source_names: Collection[str] | None,
+    ) -> GeometryStats:
+        calls.append(("geometry", (path, source_names)))
+        return geometry
+
+    def fake_render_markdown(
+        rendered_stats: CardStats,
+        *,
+        geometry: GeometryStats,
+        schema: pa.Schema,
+    ) -> str:
+        calls.append(("markdown", (rendered_stats, geometry, schema)))
         return "body"
+
+    def fake_render_geometry(rendered_geometry: GeometryStats) -> str:
+        calls.append(("geometry-json", rendered_geometry))
+        return "stats"
 
     def fake_public_schema(path: Path, names: Collection[str] | None) -> pa.Schema:
         calls.append(("schema", (path, names)))
@@ -476,6 +546,8 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
 
     monkeypatch.setattr(card_module, "compute_polygon_density_summary", fake_summary)
     monkeypatch.setattr(card_module, "compute_card_stats", fake_stats)
+    monkeypatch.setattr(card_module, "compute_geometry_stats", fake_geometry_stats)
+    monkeypatch.setattr(card_module, "render_geometry_stats", fake_render_geometry)
     monkeypatch.setattr(card_module, "build_polygon_density_map", fake_map)
     monkeypatch.setattr(card_module, "_render_markdown", fake_render_markdown)
     monkeypatch.setattr(card_module, "_render_yaml_front_matter", fake_render_yaml)
@@ -487,10 +559,11 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     assert card_module.build_card(run_dir, source_names=source_names) == run_dir / "README.md"
     assert calls[0] == ("summary", (run_dir, source_names, True))
     assert calls[1] == ("stats", (run_dir, summary, source_names))
-    assert calls[2] == ("schema", (run_dir, source_names))
-    assert calls[3] == ("markdown", (stats, schema))
-    assert calls[4] == ("yaml", stats)
-    assert calls[5] == (
+    assert calls[2] == ("geometry", (run_dir, source_names))
+    assert calls[3] == ("schema", (run_dir, source_names))
+    assert calls[4] == ("markdown", (stats, geometry, schema))
+    assert calls[5] == ("yaml", stats)
+    assert calls[6] == (
         "map",
         (
             run_dir,
@@ -503,6 +576,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     assert writes == [
         (run_dir / ".README.md.building", "front\nbody", "utf-8"),
         (run_dir / ".dataset.yaml.building", "front", "utf-8"),
+        (run_dir / ".stats.json.building", "stats", "utf-8"),
     ]
     assert mkdirs == [(run_dir / ".assets", True, True)]
     assert promoted == [
@@ -513,8 +587,28 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
             ),
             (run_dir / ".README.md.building", run_dir / "README.md"),
             (run_dir / ".dataset.yaml.building", run_dir / "dataset.yaml"),
+            (run_dir / ".stats.json.building", run_dir / "stats.json"),
         ]
     ]
+
+
+def test_geometry_report_is_staged_only_when_its_bytes_change(tmp_path: Path) -> None:
+    geometry = GeometryStats(row_count=7)
+    staged = tmp_path / ".stats.json.building"
+    target = tmp_path / "stats.json"
+
+    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
+    assert staged.read_text(encoding="utf-8") == render_geometry_stats(geometry)
+
+    target.write_text(render_geometry_stats(geometry), encoding="utf-8")
+    staged.unlink()
+
+    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == []
+    assert not staged.exists()
+
+    target.write_text("stale\n", encoding="utf-8")
+
+    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
 
 
 @pytest.mark.parametrize(
@@ -1266,7 +1360,7 @@ def test_language_front_matter_and_section_render_detected_labels() -> None:
     assert "website_language_count: 10" in front_matter
     assert "contact_website_language_count: 15" in front_matter
 
-    body = card_module._render_markdown(_language_card_stats())
+    body = card_module._render_markdown(_language_card_stats(), geometry=GeometryStats())
     assert "## Languages" in body
     assert "| `eng_Latn` | 25 |" in body
 
@@ -1275,7 +1369,9 @@ def test_language_section_is_absent_without_detected_languages() -> None:
     front_matter = card_module._render_yaml_front_matter(_golden_card_stats())
 
     assert "language:" not in front_matter
-    assert "## Languages" not in card_module._render_markdown(_golden_card_stats())
+    assert "## Languages" not in card_module._render_markdown(
+        _golden_card_stats(), geometry=GeometryStats()
+    )
 
 
 def _sentence_card_stats() -> CardStats:
@@ -1294,7 +1390,7 @@ def test_sentence_front_matter_and_section_render_segmentation_totals() -> None:
     assert "website_segmented_count: 8" in front_matter
     assert "contact_website_segmented_count: 4" in front_matter
 
-    body = card_module._render_markdown(_sentence_card_stats())
+    body = card_module._render_markdown(_sentence_card_stats(), geometry=GeometryStats())
     assert "## Sentences" in body
     assert "| Sentences | 60 |" in body
     assert "| Segmented `website` texts | 8 |" in body
@@ -1307,7 +1403,9 @@ def test_sentence_section_is_absent_without_segmentation() -> None:
     front_matter = card_module._render_yaml_front_matter(_language_card_stats())
 
     assert "sentence_count:" not in front_matter
-    assert "## Sentences" not in card_module._render_markdown(_language_card_stats())
+    assert "## Sentences" not in card_module._render_markdown(
+        _language_card_stats(), geometry=GeometryStats()
+    )
 
 
 def test_sentence_section_has_a_stable_line_contract() -> None:

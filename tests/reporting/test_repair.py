@@ -22,6 +22,6 @@ def test_refresh_card_is_idempotent_for_modern_complete_run(tmp_path: Path) -> N
     assert second.ok is True
     assert verify_results(run_dir).ok is True
     assert (
-        '"card_contract_version": 1'
+        '"card_contract_version": 2'
         in (run_dir / "manifests" / "completion_receipt.json").read_text()
     )

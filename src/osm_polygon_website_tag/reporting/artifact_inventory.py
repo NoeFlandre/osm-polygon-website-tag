@@ -15,7 +15,7 @@ _PUBLISHABLE_DIRECTORIES = (
     "analysis",
     "manifests",
 )
-_PUBLISHABLE_ROOT_FILES = ("README.md", "dataset.yaml", "failures.jsonl")
+_PUBLISHABLE_ROOT_FILES = ("README.md", "dataset.yaml", "failures.jsonl", "stats.json")
 
 
 def publishable_paths(root: Path) -> tuple[Path, ...]:

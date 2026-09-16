@@ -28,6 +28,10 @@ from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.reporting.card import build_card
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.finalize import finalize_run
+from osm_polygon_website_tag.reporting.geometry_stats import (
+    compute_geometry_stats,
+    render_geometry_stats,
+)
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.run_state import initialise_run
 
@@ -312,6 +316,32 @@ def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:
     assert "license: odbl" in text
     assert "task_categories:" not in text
 
+    # The geometry report covers every published row and matches the card.
+    stats_path = run_dir / "stats.json"
+    geometry = compute_geometry_stats(run_dir)
+    assert stats_path.read_text(encoding="utf-8") == render_geometry_stats(geometry)
+    assert geometry.row_count == 9
+    assert geometry.shape.with_holes_row_count == 1
+    assert geometry.shape.multipolygon_row_count == 0
+    assert sum(entry["row_count"] for entry in geometry.area.histogram) == 9
+    assert sum(entry.row_count for entry in geometry.per_source) == 9
+    assert [entry.source_pbf for entry in geometry.per_source] == [
+        "bretagne-latest.osm.pbf",
+        "monaco-latest.osm.pbf",
+        "rhone-alpes-latest.osm.pbf",
+    ]
+    assert "## Polygon geometry" in text
+    assert "| Polygons measured | 9 |" in text
+    assert f"| Rows with holes | {geometry.shape.with_holes_row_count} |" in text
+
+    # Rebuilding from unchanged artifacts leaves the report byte-identical and
+    # does not rewrite the file.
+    before = stats_path.stat()
+    build_card(run_dir)
+    assert stats_path.read_text(encoding="utf-8") == render_geometry_stats(geometry)
+    assert stats_path.stat().st_ino == before.st_ino
+    assert stats_path.stat().st_mtime_ns == before.st_mtime_ns
+
     transition_status(state, STATUS_CARD_BUILT)
 
     report = finalize_run(run_dir)
@@ -320,6 +350,17 @@ def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:
     # Verification passes on a clean run.
     v = verify_results(run_dir)
     assert v.ok is True, v.errors
+
+    # Verification detects a stale report, and a missing one.
+    original_stats = stats_path.read_text(encoding="utf-8")
+    stats_path.write_text(original_stats.replace('"row_count": 9', '"row_count": 8'), "utf-8")
+    stale = verify_results(run_dir)
+    assert stale.ok is False
+    assert "stats.json does not match artifact-derived statistics" in stale.errors
+    stats_path.unlink()
+    assert "missing card artifact: stats.json" in verify_results(run_dir).errors
+    stats_path.write_text(original_stats, encoding="utf-8")
+    assert verify_results(run_dir).ok is True
 
     # Verification detects a tampered shard.
     shard = run_dir / "polygons" / "monaco-latest.parquet"

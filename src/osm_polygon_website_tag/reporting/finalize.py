@@ -12,7 +12,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
-from osm_polygon_website_tag.reporting.card import build_card
+from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION, build_card
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verify import (
     VerificationReport,
@@ -183,8 +183,8 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         "sources_count": len(sources),
         "artifacts": artifacts,
     }
-    if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file():
-        receipt["card_contract_version"] = 1
+    if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file() and (root / "stats.json").is_file():
+        receipt["card_contract_version"] = CARD_CONTRACT_VERSION
     destination = root / "manifests" / "completion_receipt.json"
     temporary = destination.with_suffix(".json.tmp")
     temporary.write_text(

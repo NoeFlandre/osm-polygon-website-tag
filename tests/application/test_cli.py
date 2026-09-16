@@ -23,6 +23,7 @@ from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline import sentence_run
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
 from osm_polygon_website_tag.publishing import publish as publish_module
+from osm_polygon_website_tag.reporting.geometry_stats import compute_geometry_stats
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
     hash_shard,
@@ -143,6 +144,7 @@ def test_typer_help_lists_every_public_command() -> None:
         "publish",
         "create-repo",
         "card-stats",
+        "geometry-stats",
         "publish-trackio",
         "run-all",
         "detect-languages",
@@ -538,6 +540,17 @@ def test_cli_card_stats_runs(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     rc = main(["card-stats", "--run-dir", str(run_dir)])
     assert rc == 0
+
+
+def test_cli_geometry_stats_prints_the_machine_readable_report(tmp_path: Path, capsys) -> None:
+    run_dir = _setup_run(tmp_path)
+
+    rc = main(["geometry-stats", "--run-dir", str(run_dir)])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "v1"
+    assert payload["row_count"] == compute_geometry_stats(run_dir).row_count
 
 
 def test_cli_publish_plan_runs(tmp_path: Path) -> None:

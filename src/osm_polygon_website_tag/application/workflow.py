@@ -32,7 +32,7 @@ from osm_polygon_website_tag.publishing.incremental import (
     reconcile_upload_checkpoint,
 )
 from osm_polygon_website_tag.publishing.publish import create_repo, publish_to_hf
-from osm_polygon_website_tag.reporting.card import build_card
+from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION, build_card
 from osm_polygon_website_tag.reporting.finalize import finalize_run
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.repair import refresh_card_run
@@ -599,12 +599,17 @@ def _card_refresh_needed(run_dir: Path) -> bool:
     """Return whether a completed run lacks the current card contract."""
     if not (run_dir / POLYGON_DENSITY_ASSET_REL_PATH).is_file():
         return True
+    if not (run_dir / "stats.json").is_file():
+        return True
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return True
-    return not isinstance(receipt, dict) or receipt.get("card_contract_version") != 1
+    return (
+        not isinstance(receipt, dict)
+        or receipt.get("card_contract_version") != CARD_CONTRACT_VERSION
+    )
 
 
 __all__ = ["WorkflowResult", "discover_sources", "prioritize_sources", "run_all"]
