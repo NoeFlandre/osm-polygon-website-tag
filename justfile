@@ -61,6 +61,19 @@ acceptance:
 architecture:
     uv run --locked pytest tests/architecture
 
+# Verify and recompute the card and statistics report without uploading.
+release-stats-dry-run run_dir:
+    uv run --locked osm-polygon-website-tag release-stats \
+        --run-dir "{{ run_dir }}" \
+        --confirm-repo 'NoeFlandre/osm-polygon-website-tag'
+
+# Recompute, publish, and verify only the card and statistics report.
+release-stats run_dir:
+    uv run --locked osm-polygon-website-tag release-stats \
+        --run-dir "{{ run_dir }}" \
+        --confirm-repo 'NoeFlandre/osm-polygon-website-tag' \
+        --apply
+
 build:
     uv build --out-dir "{{ BUILD_OUTPUT_DIR }}"
 
