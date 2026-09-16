@@ -168,12 +168,14 @@ uv run --locked osm-polygon-website-tag release-stats \
   --apply
 ```
 
-`--confirm-repo` must equal `--repo-id` or the release is refused before any
-network call. The JSON report records the target repository, the verified
-remote revision, every published file with its SHA-256 and size, the verified
-shards, and whether recomputation changed anything. Recomputation rewrites
-`stats.json` only when its bytes change, so a second release over an unchanged
-run is a no-op.
+The release is bound to the canonical `NoeFlandre/osm-polygon-website-tag`
+dataset. Any `--repo-id` override is refused, and `--confirm-repo` must match
+that canonical value before any network call. A complete run and its completion
+receipt are required. The JSON report records the deterministic source/data
+manifest digest, the verified remote revision, every released file with its
+SHA-256 and size, and whether apply mode uploaded or found an exact remote
+no-op. Recomputation rewrites `stats.json` only when its bytes change, so a
+second apply over an unchanged remote is a no-op.
 
 Equivalent recipes: `just release-stats-dry-run '<run-dir>'` and
 `just release-stats '<run-dir>'`.

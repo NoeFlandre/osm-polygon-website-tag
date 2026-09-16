@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
+from osm_polygon_website_tag.reporting.artifact_inventory import (
+    data_manifest_sha256,
+    hash_file,
+    publishable_paths,
+)
 from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
@@ -31,6 +35,7 @@ def verify_receipt(root: Path, errors: list[str]) -> None:
     )
     _verify_receipt_inventory(root, seen, errors)
     _verify_receipt_digest(receipt, canonical_entries, errors)
+    _verify_data_manifest(root, receipt, errors)
 
 
 def _read_receipt(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -161,3 +166,9 @@ def _verify_receipt_digest(
     )
     if receipt.get("manifest_digest") != hashlib.sha256(canonical.encode()).hexdigest():
         errors.append("completion receipt digest mismatch")
+
+
+def _verify_data_manifest(root: Path, receipt: dict[str, Any], errors: list[str]) -> None:
+    """Ensure the receipt binds the current source and Parquet inventory."""
+    if receipt.get("data_manifest_sha256") != data_manifest_sha256(root):
+        errors.append("completion receipt data manifest mismatch")

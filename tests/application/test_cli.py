@@ -583,6 +583,23 @@ def test_cli_publish_dry_run(tmp_path: Path) -> None:
     assert rc == 0
 
 
+def test_cli_release_stats_refuses_noncanonical_repository(tmp_path: Path, capsys) -> None:
+    rc = main(
+        [
+            "release-stats",
+            "--run-dir",
+            str(tmp_path / "missing-run"),
+            "--confirm-repo",
+            "someone-else/osm-polygon-website-tag",
+            "--repo-id",
+            "someone-else/osm-polygon-website-tag",
+        ]
+    )
+
+    assert rc == 2
+    assert "canonical" in capsys.readouterr().err
+
+
 def test_cli_analyze_card_refresh_and_finalize_commands_delegate(
     tmp_path: Path,
     monkeypatch,
