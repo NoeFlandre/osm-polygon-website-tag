@@ -368,7 +368,7 @@ def _append_density_yaml_fields(text: str, fields: list[str], newline: str) -> s
     closing = f"{newline}---"
     closing_start = text.rfind(closing)
     addition = newline.join(fields) + newline
-    if closing_start >= 0 and text.endswith("---"):
+    if closing_start >= 0 and text.endswith(("---", f"---{newline}")):
         return text[:closing_start] + newline + addition + text[closing_start + len(newline) :]
     if text and not text.endswith(("\n", "\r")):
         text += newline

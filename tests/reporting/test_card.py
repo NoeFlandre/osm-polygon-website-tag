@@ -706,6 +706,24 @@ def test_update_geometry_section_replaces_inserts_and_appends_without_touching_n
     assert b"## Polygon geometry\n" not in crlf
 
 
+def test_update_density_yaml_inserts_missing_fields_before_newline_terminated_closure() -> None:
+    stats = CardStats(
+        polygon_density_h3_resolution=3,
+        polygon_density_row_count=7,
+        occupied_h3_cell_count=5,
+    )
+
+    updated = card_module._update_density_yaml_text("license: odbl\n---\n", stats).decode()
+
+    assert updated == (
+        "license: odbl\n"
+        "polygon_density_h3_resolution: 3\n"
+        "polygon_density_row_count: 7\n"
+        "occupied_h3_cell_count: 5\n"
+        "---\n"
+    )
+
+
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
     assert _render_language_section(_golden_card_stats()) == []
     assert _render_language_section(_language_card_stats()) == [

@@ -25,6 +25,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     publishable_paths,
 )
 from osm_polygon_website_tag.reporting.finalize import _write_completion_receipt, finalize_run
+from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 
 
@@ -266,10 +267,20 @@ def test_release_accepts_a_pre_pr_v12_receipt_without_data_identity(run_dir: Pat
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     del receipt["data_manifest_sha256"]
     receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    card_paths = tuple(
+        run_dir / path for path in CARD_RELEASE_FILES if path != "manifests/completion_receipt.json"
+    )
+    card_bytes_before = {path: path.read_bytes() for path in card_paths}
+
+    assert verify_results(run_dir).ok
 
     report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
     assert report.data_manifest_sha256 == data_manifest_sha256(run_dir)
+    assert report.recomputed is True
+    assert {path: path.read_bytes() for path in card_paths} == card_bytes_before
+    refreshed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert refreshed_receipt["data_manifest_sha256"] == data_manifest_sha256(run_dir)
 
 
 def test_unverified_run_is_refused(run_dir: Path) -> None:
@@ -433,6 +444,15 @@ def test_remote_verification_refuses_data_identity_mismatch(
         json.dumps({"data_manifest_sha256": "0" * 64}),
         encoding="utf-8",
     )
+    parquet_entries = [
+        SimpleNamespace(
+            path=path.relative_to(run_dir).as_posix(),
+            size=path.stat().st_size,
+            lfs=SimpleNamespace(sha256=hash_file(path)),
+        )
+        for path in publishable_paths(run_dir)
+        if path.suffix == ".parquet"
+    ]
 
     class _Api:
         def __init__(self, *, token: str) -> None:
@@ -452,10 +472,27 @@ def test_remote_verification_refuses_data_identity_mismatch(
             repo_type: str,
         ) -> str:
             assert repo_id == DEFAULT_HF_DATASET
-            assert filename == "manifests/completion_receipt.json"
             assert revision == "remote-revision"
             assert repo_type == "dataset"
-            return str(remote_receipt)
+            if filename == "manifests/completion_receipt.json":
+                return str(remote_receipt)
+            return str(run_dir / filename)
+
+        def list_repo_tree(
+            self,
+            _repo_id: str,
+            *,
+            path_in_repo: str,
+            recursive: bool,
+            expand: bool,
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert recursive is True
+            assert expand is False
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
 
     monkeypatch.setattr(
         "osm_polygon_website_tag.publishing.release.resolve_hf_token",
@@ -478,6 +515,10 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
         destination = remote_root / item.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
+        destination = remote_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / relative).read_bytes())
     parquet_entries = [
         SimpleNamespace(
             path=path.relative_to(run_dir).as_posix(),
@@ -550,6 +591,66 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
     assert default_hub_verifier(DEFAULT_HF_DATASET, files) == "remote-revision"
 
 
+def test_remote_verifier_rejects_changed_source_manifest_with_matching_receipt(
+    run_dir: Path,
+    tmp_path: Path,
+) -> None:
+    files = build_card_release_plan(run_dir)
+    remote_root = tmp_path / "remote"
+    for item in files:
+        destination = remote_root / item.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
+        destination = remote_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / relative).read_bytes())
+    (remote_root / "manifests" / "sources.json").write_text("[]\n", encoding="utf-8")
+    parquet_entries = [
+        SimpleNamespace(
+            path=path.relative_to(run_dir).as_posix(),
+            size=path.stat().st_size,
+            lfs=SimpleNamespace(sha256=hash_file(path)),
+        )
+        for path in publishable_paths(run_dir)
+        if path.suffix == ".parquet"
+    ]
+
+    class _Api:
+        def hf_hub_download(
+            self,
+            _repo_id: str,
+            filename: str,
+            *,
+            revision: str,
+            repo_type: str,
+        ) -> str:
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return str(remote_root / filename)
+
+        def list_repo_tree(
+            self,
+            _repo_id: str,
+            *,
+            path_in_repo: str,
+            recursive: bool,
+            expand: bool,
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert recursive is True
+            assert expand is False
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
+
+    with pytest.raises(ValueError, match="data manifest"):
+        release_module._verify_remote_data_identity(
+            _Api(), DEFAULT_HF_DATASET, "remote-revision", files
+        )
+
+
 def test_remote_verifier_detects_changed_parquet_with_an_unchanged_receipt(
     run_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -561,6 +662,10 @@ def test_remote_verifier_detects_changed_parquet_with_an_unchanged_receipt(
         destination = remote_root / item.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
+        destination = remote_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / relative).read_bytes())
     parquet_entries = []
     changed = False
     for path in publishable_paths(run_dir):
@@ -636,7 +741,7 @@ def test_remote_verifier_detects_changed_parquet_with_an_unchanged_receipt(
     )
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=_Api))
 
-    with pytest.raises(ValueError, match="Parquet data identity"):
+    with pytest.raises(ValueError, match="data manifest"):
         default_hub_verifier(DEFAULT_HF_DATASET, files)
 
 
@@ -780,6 +885,20 @@ def test_release_private_identity_and_remote_adapters_are_exact(
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((run_dir / item.relative_path).read_bytes())
 
+    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
+        destination = remote_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / relative).read_bytes())
+    parquet_entries = [
+        SimpleNamespace(
+            path=path.relative_to(run_dir).as_posix(),
+            size=path.stat().st_size,
+            lfs=SimpleNamespace(sha256=hash_file(path)),
+        )
+        for path in publishable_paths(run_dir)
+        if path.suffix == ".parquet"
+    ]
+
     class Api:
         def repo_info(self, repo_id: str, *, repo_type: str) -> SimpleNamespace:
             assert repo_id == DEFAULT_HF_DATASET
@@ -812,6 +931,23 @@ def test_release_private_identity_and_remote_adapters_are_exact(
             assert revision == "revision"
             assert repo_type == "dataset"
             return str(remote_root / filename)
+
+        def list_repo_tree(
+            self,
+            repo_id: str,
+            *,
+            path_in_repo: str,
+            recursive: bool,
+            expand: bool,
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert recursive is True
+            assert expand is False
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
 
     api = Api()
     assert release_module._remote_revision(api, DEFAULT_HF_DATASET) == "revision"

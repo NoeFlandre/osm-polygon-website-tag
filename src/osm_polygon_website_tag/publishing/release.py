@@ -46,6 +46,10 @@ CARD_RELEASE_FILES = (
     "manifests/completion_receipt.json",
 )
 _CARD_ARTIFACTS = ("README.md", "stats.json", "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH)
+_REMOTE_SOURCE_MANIFESTS = (
+    "manifests/expected_sources.json",
+    "manifests/sources.json",
+)
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,10 @@ class _PublicationResult:
 
 class _RemoteArtifactMismatchError(ValueError):
     """The remote metadata needs the planned upload."""
+
+
+class _RemoteDataMismatchError(ValueError):
+    """The remote data cannot be proven identical to the local release."""
 
 
 def build_card_release_plan(
@@ -242,7 +250,10 @@ def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     _update_card_safely(run_dir)
     after = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
     _require_data_identity(run_dir, expected_data_identity)
-    if before == after:
+    receipt_needs_data_identity = (
+        _completion_data_identity(_completion_receipt_path(run_dir)) is None
+    )
+    if before == after and not receipt_needs_data_identity:
         return False
     replace_receipt_atomic(run_dir)
     return True
@@ -362,14 +373,60 @@ def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str | None:
     )
     receipt = _read_receipt_payload(
         Path(path),
-        error_type=_RemoteArtifactMismatchError,
+        error_type=_RemoteDataMismatchError,
         label="remote completion receipt",
     )
     return _receipt_data_identity(
         receipt,
-        error_type=_RemoteArtifactMismatchError,
+        error_type=_RemoteDataMismatchError,
         label="remote completion receipt",
     )
+
+
+def _remote_source_manifest_entries(
+    api: Any,
+    repo_id: str,
+    revision: str,
+) -> list[dict[str, int | str]]:
+    """Read bounded identities for every remote source manifest."""
+    entries: list[dict[str, int | str]] = []
+    for relative_path in _REMOTE_SOURCE_MANIFESTS:
+        try:
+            downloaded = api.hf_hub_download(
+                repo_id,
+                relative_path,
+                revision=revision,
+                repo_type="dataset",
+            )
+            path = Path(downloaded)
+            if not path.is_file():
+                raise FileNotFoundError(path)
+        except Exception as exc:
+            raise _RemoteDataMismatchError(
+                f"remote source manifest unavailable: {relative_path}: {exc}"
+            ) from exc
+        entries.append(
+            {
+                "path": relative_path,
+                "size_bytes": path.stat().st_size,
+                "sha256": hash_file(path),
+            }
+        )
+    return entries
+
+
+def _remote_data_manifest_sha256(api: Any, repo_id: str, revision: str) -> str:
+    """Hash remote source manifests and Parquet metadata as one data identity."""
+    entries = [
+        *_remote_source_manifest_entries(api, repo_id, revision),
+        *_remote_parquet_entries(api, repo_id, revision).values(),
+    ]
+    canonical = json.dumps(
+        sorted(entries, key=lambda item: str(item["path"])),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _verify_remote_data_identity(
@@ -378,11 +435,18 @@ def _verify_remote_data_identity(
     revision: str,
     files: tuple[ReleasedFile, ...],
 ) -> None:
-    """Refuse a release when remote data differs from the local receipt."""
+    """Refuse a release when remote data differs from the local data manifest."""
     expected = _expected_data_identity(files)
-    actual = _remote_data_identity(api, repo_id, revision)
-    if actual is not None and actual != expected:
-        raise ValueError(f"remote data identity mismatch: local={expected}, remote={actual}")
+    actual = _remote_data_manifest_sha256(api, repo_id, revision)
+    if actual != expected:
+        raise _RemoteDataMismatchError(
+            f"remote data manifest mismatch: local={expected}, remote={actual}"
+        )
+    receipt_identity = _remote_data_identity(api, repo_id, revision)
+    if receipt_identity is not None and receipt_identity != expected:
+        raise _RemoteDataMismatchError(
+            f"remote data identity mismatch: local={expected}, remote={receipt_identity}"
+        )
 
 
 def _remote_parquet_data_identity(api: Any, repo_id: str, revision: str) -> str:
@@ -491,7 +555,7 @@ def _verify_remote_parquet_data_identity(
     expected = _expected_parquet_data_identity(files)
     actual = _remote_parquet_data_identity(api, repo_id, revision)
     if actual != expected:
-        raise _RemoteArtifactMismatchError(
+        raise _RemoteDataMismatchError(
             f"remote Parquet data identity mismatch: local={expected}, remote={actual}"
         )
 
