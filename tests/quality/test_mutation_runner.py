@@ -302,3 +302,43 @@ def test_mutation_root_remains_stable_when_running_inside_mutants(monkeypatch) -
     monkeypatch.chdir(project_root / "mutants")
 
     assert mutation_runner._mutants_directory() == project_root / "mutants"
+
+
+def test_scoped_mutation_config_limits_generation_to_selected_source_modules() -> None:
+    config = SimpleNamespace(only_mutate=["src/osm_polygon_website_tag"])
+
+    source_paths = mutation_runner._configure_source_scope(
+        [
+            "osm_polygon_website_tag.reporting.card.*",
+            "osm_polygon_website_tag.publishing.release.*",
+        ],
+        config=config,
+    )
+
+    assert source_paths == (
+        Path("src/osm_polygon_website_tag/publishing/release.py"),
+        Path("src/osm_polygon_website_tag/reporting/card.py"),
+    )
+    assert config.only_mutate == [
+        "src/osm_polygon_website_tag/publishing/release.py",
+        "src/osm_polygon_website_tag/reporting/card.py",
+    ]
+
+
+def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
+    config = SimpleNamespace(only_mutate=[])
+
+    source_paths = mutation_runner._configure_source_scope(
+        ["osm_polygon_website_tag.*"],
+        config=config,
+    )
+
+    assert source_paths == (Path("src/osm_polygon_website_tag/__init__.py"),)
+    assert config.only_mutate == ["src/osm_polygon_website_tag/__init__.py"]
+
+
+def test_scoped_mutation_config_rejects_unqualified_filters() -> None:
+    config = SimpleNamespace(only_mutate=["src/osm_polygon_website_tag"])
+
+    with pytest.raises(ValueError, match="fully qualified package filter"):
+        mutation_runner._configure_source_scope(["reporting.card.*"], config=config)

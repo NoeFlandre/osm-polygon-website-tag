@@ -124,7 +124,7 @@ smoke checks before changing `Dockerfile`.
 | Full mutation sweep | `just mutation` |
 | Changed-module mutation gate | `just mutation-scope <base>` |
 | Completion QA gate | `just qa-gauntlet` |
-| CI quality gates | `just qa-ci <base>` |
+| CI quality gates | `just qa-ci` plus one `just mutation-module <filter>` shard per changed module |
 | Strict docs build | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
 
 All Python tools run inside the locked `uv` environment. If a hook fails, run
@@ -140,10 +140,12 @@ core quality baseline, so all project-wide safeguards stay in place.
 ## Mutation testing
 
 A full sweep is about fourteen thousand mutants and several hours, which a
-hosted CI runner does not reliably survive, so CI runs `just qa-ci`: the same
-gates with mutation scoped to the modules a change touches, including the
-module a changed test file mirrors. Run the full `just mutation` sweep locally
-before a release or after broad refactoring.
+hosted CI runner does not reliably survive. CI first runs `just qa-ci` for the
+non-mutation gates, then resolves the changed/relevant module filters in sorted
+order and runs one `just mutation-module <filter>` job per filter. A changed
+test file mirrors its source module, so weakening a test still rechecks that
+module. Run the full `just mutation` sweep locally before a release or after
+broad refactoring.
 
 Both paths end in `just mutation-gate`, which fails on any unverified mutant
 that [`docs/quality/mutation-baseline.txt`](https://github.com/NoeFlandre/osm-polygon-website-tag/blob/main/docs/quality/mutation-baseline.txt)

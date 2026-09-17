@@ -71,6 +71,7 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "mutation:",
         "mutation-scope",
         "mutation-gate *scopes",
+        "mutation-module filter",
         "mutation-clean:",
         "qa-ci",
         "quality:",
@@ -101,10 +102,11 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     assert "--path src/osm_polygon_website_tag/application/workflow.py" not in justfile
     assert "python scripts/quality/mutation_runner.py" in justfile
     assert "python scripts/quality/mutation_scope.py" in justfile
-    ci = re.search(r"^qa-ci base=\"origin/main\":\s*(.*)$", justfile, re.MULTILINE)
+    ci = re.search(r"^qa-ci:\s*(.*)$", justfile, re.MULTILINE)
     assert ci is not None
     assert ci.group(1).strip() == "baseline ruff typecheck unit acceptance architecture crap"
-    assert 'just mutation-scope "{{ base }}"' in justfile
+    assert "just mutation-clean" in justfile
+    assert 'just mutation-gate --scope "{{ filter }}"' in justfile
     assert 'mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters' in justfile
     assert 'MUTATION_CHILDREN := env("MUTATION_CHILDREN", "4")' in justfile
 
@@ -167,10 +169,16 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
     assert "contents: read" in workflow
     assert "uv sync --locked" in workflow
     assert "run: just qa-ci" in workflow
+    assert "mutation_filters:" in workflow
+    assert "--json" in workflow
+    assert "fromJSON(needs.quality.outputs.mutation_filters)" in workflow
+    assert "fail-fast: false" in workflow
+    assert "max-parallel: 18" in workflow
+    assert 'run: just mutation-module "$MUTATION_FILTER"' in workflow
     assert "fetch-depth: 0" in workflow
     assert "HF_TOKEN" not in workflow
     uses = re.findall(r"uses: [^@\s]+@([^\s]+)", workflow)
-    assert len(uses) == 3
+    assert len(uses) == 6
     assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for revision in uses)
 
 
