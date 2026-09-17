@@ -579,3 +579,169 @@ def test_credentialed_release_uploader_requires_a_token(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(release_module, "resolve_hf_token", lambda: "token")
     assert release_module._require_credentialed_uploader() is release_module._upload_card_files
+
+
+def test_release_private_identity_and_remote_adapters_are_exact(
+    run_dir: Path,
+    tmp_path: Path,
+) -> None:
+    files = build_card_release_plan(run_dir)
+    identity = data_manifest_sha256(run_dir)
+    assert release_module._expected_data_identity(files) == identity
+
+    remote_root = tmp_path / "remote"
+    for item in files:
+        destination = remote_root / item.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / item.relative_path).read_bytes())
+
+    class Api:
+        def repo_info(self, repo_id: str, *, repo_type: str) -> SimpleNamespace:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert repo_type == "dataset"
+            return SimpleNamespace(sha="revision")
+
+        def get_paths_info(
+            self,
+            repo_id: str,
+            *,
+            paths: list[str],
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert paths in [[files[0].relative_path]]
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            return [SimpleNamespace(size=None)]
+
+        def hf_hub_download(
+            self,
+            repo_id: str,
+            filename: str,
+            *,
+            revision: str,
+            repo_type: str,
+        ) -> str:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            return str(remote_root / filename)
+
+    api = Api()
+    assert release_module._remote_revision(api, DEFAULT_HF_DATASET) == "revision"
+    release_module._verify_remote_size(api, DEFAULT_HF_DATASET, "revision", files[0])
+    release_module._verify_remote_digest(api, DEFAULT_HF_DATASET, "revision", files[0])
+    assert release_module._remote_data_identity(api, DEFAULT_HF_DATASET, "revision") == identity
+    release_module._verify_remote_data_identity(api, DEFAULT_HF_DATASET, "revision", files)
+
+
+def test_release_completion_and_card_update_fail_closed(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert release_module._completion_data_identity(
+        run_dir / "manifests" / "completion_receipt.json"
+    ) == data_manifest_sha256(run_dir)
+    assert release_module._require_complete_release(run_dir) == data_manifest_sha256(run_dir)
+
+    monkeypatch.setattr(
+        release_module,
+        "verify_receipt_before_card_refresh",
+        lambda _root, errors: errors.append("receipt mismatch"),
+    )
+    with pytest.raises(ValueError, match="verification failed"):
+        release_module._require_complete_release(run_dir)
+
+    monkeypatch.setattr(
+        release_module,
+        "update_card_with_geometry",
+        lambda _root: (_ for _ in ()).throw(RuntimeError("card failed")),
+    )
+    with pytest.raises(ValueError, match="refusing to release"):
+        release_module._update_card_safely(run_dir)
+
+    monkeypatch.setattr(release_module, "compute_data_manifest_sha256", lambda _root: "actual")
+    with pytest.raises(ValueError, match="data manifest changed"):
+        release_module._require_data_identity(run_dir, "expected")
+
+
+def test_release_publish_helpers_preserve_dry_run_noop_and_upload_contract(
+    run_dir: Path,
+) -> None:
+    files = build_card_release_plan(run_dir)
+    uploads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    verifications: list[tuple[str, tuple[ReleasedFile, ...]]] = []
+
+    def uploader(*args: object, **kwargs: object) -> None:
+        uploads.append((args, kwargs))
+
+    def verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
+        verifications.append((repo_id, files))
+        return "uploaded-revision"
+
+    result = release_module._upload_and_verify(
+        run_dir,
+        repo_id=DEFAULT_HF_DATASET,
+        repo_kind="dataset",
+        files=files,
+        uploader=uploader,
+        verifier=verifier,
+    )
+    assert result.revision == "uploaded-revision"
+    assert result.uploaded is True
+    assert uploads == [
+        (
+            (run_dir,),
+            {"repo_id": DEFAULT_HF_DATASET, "repo_kind": "dataset", "files": files},
+        )
+    ]
+    assert verifications == [(DEFAULT_HF_DATASET, files)]
+
+    noop = release_module._publish(
+        run_dir,
+        repo_id=DEFAULT_HF_DATASET,
+        repo_kind="dataset",
+        files=files,
+        uploader=lambda *_args, **_kwargs: pytest.fail("no-op must not upload"),
+        verifier=verifier,
+        remote_checker=lambda repo_id, files: "current-revision",
+    )
+    assert noop.revision == "current-revision"
+    assert noop.uploaded is False
+    assert (
+        release_module._publish_if_requested(
+            run_dir,
+            apply=False,
+            repo_id=DEFAULT_HF_DATASET,
+            repo_kind="dataset",
+            files=files,
+            uploader=uploader,
+            verifier=verifier,
+            remote_checker=None,
+        )
+        is None
+    )
+
+
+def test_release_upload_folder_includes_exact_repository_and_commit(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(upload_folder=lambda **kwargs: captured.update(kwargs)),
+    )
+
+    release_module._upload_card_files(
+        run_dir,
+        repo_id=DEFAULT_HF_DATASET,
+        repo_kind="dataset",
+        files=build_card_release_plan(run_dir),
+    )
+
+    assert captured["repo_id"] == DEFAULT_HF_DATASET
+    assert captured["repo_type"] == "dataset"
+    assert captured["commit_message"] == "Publish dataset card and polygon statistics report"

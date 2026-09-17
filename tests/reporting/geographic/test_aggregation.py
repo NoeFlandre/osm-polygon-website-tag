@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import osm_polygon_website_tag.reporting.geographic.aggregation as aggregation_module
 from osm_polygon_website_tag.reporting.geographic import inputs
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
@@ -236,6 +237,61 @@ def test_text_summary_deduplicates_osm_identity_and_requires_non_empty_text(
     assert sum(count for _cell, count in summary.cells) == 1
 
 
+def test_text_summary_deduplicates_same_identity_across_regional_shards(
+    tmp_path: Path,
+) -> None:
+    regional_run = tmp_path / "regional"
+    regional_polygons = regional_run / "polygons"
+    regional_polygons.mkdir(parents=True)
+    regional_schema = pa.schema(
+        [
+            ("lat", pa.float64()),
+            ("lon", pa.float64()),
+            ("osm_type", pa.string()),
+            ("osm_id", pa.int64()),
+            ("website_text", pa.string()),
+            ("website_text_status", pa.string()),
+            ("contact_website_text", pa.string()),
+            ("contact_website_text_status", pa.string()),
+        ]
+    )
+    for filename, lat, lon, text in (
+        ("bretagne.parquet", 48.85, 2.35, "  first regional copy  "),
+        ("monaco.parquet", 40.7, -74.0, "second regional copy"),
+    ):
+        pq.write_table(
+            pa.Table.from_pylist(
+                [
+                    {
+                        "lat": lat,
+                        "lon": lon,
+                        "osm_type": "way",
+                        "osm_id": 42,
+                        "website_text": text,
+                        "website_text_status": "success",
+                        "contact_website_text": None,
+                        "contact_website_text_status": "absent",
+                    }
+                ],
+                schema=regional_schema,
+            ),
+            regional_polygons / filename,
+        )
+
+    (regional_run / "analysis_observations").mkdir()
+    canonical_run = tmp_path / "canonical"
+    canonical_run.mkdir()
+    (canonical_run / "analysis_observations").symlink_to(
+        regional_run / "analysis_observations",
+        target_is_directory=True,
+    )
+
+    summary = compute_polygon_density_summary(canonical_run, extracted_text_only=True)
+
+    assert summary.polygon_row_count == 1
+    assert sum(count for _cell, count in summary.cells) == 1
+
+
 def test_text_summary_uses_regional_copies_for_canonical_runs(tmp_path: Path) -> None:
     regional_run = tmp_path / "regional"
     (regional_run / "polygons").mkdir(parents=True)
@@ -302,3 +358,73 @@ def test_summary_empty_run_is_zero(tmp_path: Path) -> None:
     assert summary.polygon_row_count == 0
     assert summary.occupied_cell_count == 0
     assert summary.cells == ()
+
+
+def test_summary_selects_the_requested_input_iterator_and_binds_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    standard = [(Path("standard.parquet"), 0, 1.0, 2.0)]
+    text_only = [(Path("text.parquet"), 4, 3.0, 4.0), (Path("text.parquet"), 5, 3.0, 4.0)]
+    calls: list[tuple[str, object, object]] = []
+
+    monkeypatch.setattr(
+        aggregation_module,
+        "iter_lat_lon_runs",
+        lambda run_dir, *, source_names: (
+            calls.append(("standard", run_dir, source_names)) or iter(standard)
+        ),
+    )
+    monkeypatch.setattr(
+        aggregation_module,
+        "iter_unique_text_lat_lon_runs",
+        lambda run_dir, *, source_names: (
+            calls.append(("text", run_dir, source_names)) or iter(text_only)
+        ),
+    )
+    monkeypatch.setattr(
+        aggregation_module,
+        "assign_h3_cell",
+        lambda lat, lon, *, resolution: f"{resolution}:{lat}:{lon}",
+    )
+
+    regular = aggregation_module.compute_polygon_density_summary(
+        tmp_path,
+        h3_resolution=7,
+        source_names={"source.osm.pbf"},
+    )
+    extracted = aggregation_module.compute_polygon_density_summary(
+        tmp_path,
+        h3_resolution=8,
+        extracted_text_only=True,
+    )
+
+    assert regular.polygon_row_count == 1
+    assert regular.cells == (("7:1.0:2.0", 1),)
+    assert extracted.polygon_row_count == 2
+    assert extracted.cells == (("8:3.0:4.0", 2),)
+    assert calls == [
+        ("standard", tmp_path, {"source.osm.pbf"}),
+        ("text", tmp_path, None),
+    ]
+
+
+def test_summary_wraps_geographic_errors_with_source_and_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        aggregation_module,
+        "iter_lat_lon_runs",
+        lambda _run_dir, *, source_names: iter([(Path("a.parquet"), 3, 91.0, 2.0)]),
+    )
+    monkeypatch.setattr(
+        aggregation_module,
+        "assign_h3_cell",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            aggregation_module.GeographicMapError("invalid coordinate")
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"a\.parquet row 3: invalid coordinate"):
+        aggregation_module.compute_polygon_density_summary(tmp_path)

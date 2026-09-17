@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Collection
+from dataclasses import replace
 from pathlib import Path
 from textwrap import dedent
 
@@ -21,8 +22,15 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.card import (
+    _append_geometry_block,
+    _geometry_block_bytes,
+    _render_bbox,
+    _render_language_section,
+    _render_polygon_geometry_section,
     _render_snapshot_section,
+    _update_geometry_section,
     build_card,
+    update_card_with_geometry,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.geometry_stats import (
@@ -625,6 +633,190 @@ def test_geometry_report_is_staged_only_when_its_bytes_change(tmp_path: Path) ->
     target.write_text("stale\n", encoding="utf-8")
 
     assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
+
+
+def test_geometry_renderers_have_stable_numeric_and_newline_contracts() -> None:
+    geometry = _golden_geometry_stats()
+    assert _render_bbox(None) == "none"
+    assert _render_bbox([-1.0, 2.0, 3.1234567, 4.0]) == "[-1.000000, 2.000000, 3.123457, 4.000000]"
+    assert _render_polygon_geometry_section(geometry) == [
+        "## Polygon geometry",
+        "",
+        (
+            "Surface and shape statistics computed over every published polygon row from the "
+            "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
+            "ellipsoid. The complete breakdown is published as [`stats.json`](stats.json)."
+        ),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        "| Polygons measured | 25 |",
+        "| Total area | 2.50 km² |",
+        "| Median area | 29.00 m² |",
+        "| Mean area | 28.00 m² |",
+        "| Smallest / largest area | 26.00 / 27.00 m² |",
+        "| p95 area | 30.00 m² |",
+        "| MultiPolygon rows | 32 |",
+        "| Rows with holes | 33 |",
+        "| Rows below 1 m² | 31 |",
+        "",
+        "Dataset bounding box: `[-1.500000, -2.500000, 3.500000, 4.500000]` (min lon, min lat, max lon, max lat).",
+        "",
+    ]
+    missing_p95 = replace(
+        geometry,
+        area=replace(geometry.area, summary=replace(geometry.area.summary, percentiles={})),
+    )
+    assert "| p95 area | 0.00 m² |" in _render_polygon_geometry_section(missing_p95)
+
+
+def test_geometry_block_preserves_prefix_and_card_newline_conventions() -> None:
+    geometry = GeometryStats(row_count=1)
+    block = _geometry_block_bytes(geometry, b"\n")
+    assert block.startswith(b"## Polygon geometry\n")
+    assert block.endswith(b"\n")
+    assert _append_geometry_block(b"prefix", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
+    assert _append_geometry_block(b"prefix\n", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
+    assert _append_geometry_block(b"", b"BLOCK\n", b"\n") == b"BLOCK\n"
+
+
+def test_update_geometry_section_replaces_inserts_and_appends_without_touching_neighbors() -> None:
+    geometry = GeometryStats(row_count=1)
+    block = _geometry_block_bytes(geometry, b"\n")
+    existing = _update_geometry_section(
+        b"prefix\n## Polygon geometry\nold\n## Next\nkeep\n",
+        geometry,
+    )
+    assert existing.startswith(b"prefix\n")
+    assert existing.count(b"## Polygon geometry\n") == 1
+    assert existing.endswith(b"## Next\nkeep\n")
+    assert block in existing
+
+    inserted = _update_geometry_section(
+        b"prefix\n## Geographic distribution\nkeep\n",
+        geometry,
+    )
+    assert inserted == b"prefix\n" + block + b"## Geographic distribution\nkeep\n"
+
+    appended = _update_geometry_section(b"prefix", geometry)
+    assert appended == b"prefix\n\n" + block
+
+    crlf = _update_geometry_section(b"prefix\r\n## Geographic distribution\r\nkeep\r\n", geometry)
+    assert b"## Polygon geometry\r\n" in crlf
+    assert b"## Polygon geometry\n" not in crlf
+
+
+def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
+    assert _render_language_section(_golden_card_stats()) == []
+    assert _render_language_section(_language_card_stats()) == [
+        "## Languages",
+        "",
+        (
+            "Detected with GlotLID v3 on successfully extracted text; labels are exact "
+            "script-aware `language_Script` codes with a top-1 probability column."
+        ),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        "| Distinct languages | 2 |",
+        "| Labeled `website` texts | 10 |",
+        "| Labeled `contact:website` texts | 15 |",
+        "",
+        "Top 2 labels across both tags:",
+        "",
+        "| Language | Texts |",
+        "| --- | ---: |",
+        "| `eng_Latn` | 25 |",
+        "| `deu_Latn` | 5 |",
+        "",
+    ]
+
+
+def test_update_card_with_geometry_falls_back_to_full_builder_for_missing_readme(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_names = {"source.osm.pbf"}
+    calls: list[tuple[Path, Collection[str] | None]] = []
+    expected = tmp_path / "README.md"
+    monkeypatch.setattr(
+        card_module,
+        "build_card",
+        lambda root, *, source_names: calls.append((root, source_names)) or expected,
+    )
+
+    assert update_card_with_geometry(tmp_path, source_names=source_names) == expected
+    assert calls == [(tmp_path, source_names)]
+
+
+def test_update_card_with_geometry_promotes_only_changed_staged_files_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_bytes(b"original")
+    geometry = GeometryStats(row_count=3)
+    source_names = {"source.osm.pbf"}
+    calls: list[tuple[str, object]] = []
+    promoted: list[list[tuple[Path, Path]]] = []
+
+    monkeypatch.setattr(
+        card_module,
+        "compute_geometry_stats",
+        lambda root, *, source_names: calls.append(("geometry", (root, source_names))) or geometry,
+    )
+    monkeypatch.setattr(
+        card_module,
+        "_update_geometry_section",
+        lambda original, received: calls.append(("update", (original, received))) or b"updated",
+    )
+
+    def stage(staged: Path, root: Path, received: GeometryStats) -> list[tuple[Path, Path]]:
+        calls.append(("stage", (staged, root, received)))
+        staged.write_text("stats", encoding="utf-8")
+        return [(staged, root / "stats.json")]
+
+    monkeypatch.setattr(card_module, "_staged_geometry_stats", stage)
+    monkeypatch.setattr(card_module, "atomic_promote_bundle", promoted.append)
+
+    assert update_card_with_geometry(tmp_path, source_names=source_names) == readme
+    staged_readme = tmp_path / ".README.md.geometry.building"
+    staged_stats = tmp_path / ".stats.json.geometry.building"
+    assert calls == [
+        ("geometry", (tmp_path, source_names)),
+        ("update", (b"original", geometry)),
+        ("stage", (staged_stats, tmp_path, geometry)),
+    ]
+    assert promoted == [[(staged_readme, readme), (staged_stats, tmp_path / "stats.json")]]
+    assert not staged_readme.exists()
+    assert not staged_stats.exists()
+
+
+def test_staged_geometry_stats_requires_explicit_utf8_for_existing_reports(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    geometry = GeometryStats(row_count=7)
+    staged = tmp_path / ".stats.json.building"
+    target = tmp_path / "stats.json"
+    rendered = render_geometry_stats(geometry)
+    target.write_text(rendered, encoding="utf-8")
+    encodings: list[str | None] = []
+    original_read_text = Path.read_text
+
+    def read_text(
+        path: Path,
+        *,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        encodings.append(encoding)
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == []
+    assert encodings == ["utf-8"]
+    assert not staged.exists()
 
 
 @pytest.mark.parametrize(
