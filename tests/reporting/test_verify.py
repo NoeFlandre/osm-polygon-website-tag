@@ -380,6 +380,54 @@ def test_verify_status_artifacts_selects_the_exact_status_contracts(
     ]
 
 
+def test_verify_release_status_artifacts_selects_release_and_receipt_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    errors: list[str] = []
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_release_analysis_and_card",
+        lambda root, received_errors: calls.append(("release", (root, received_errors))),
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_receipt",
+        lambda root, received_errors: calls.append(("receipt", (root, received_errors))),
+    )
+
+    for status in ("card_built", "verified", "complete", "analyzed"):
+        verify_module._verify_release_status_artifacts(tmp_path, status, True, errors)
+    verify_module._verify_release_status_artifacts(tmp_path, "complete", False, errors)
+
+    assert calls == [
+        ("release", (tmp_path, errors)),
+        ("release", (tmp_path, errors)),
+        ("release", (tmp_path, errors)),
+        ("receipt", (tmp_path, errors)),
+        ("release", (tmp_path, errors)),
+    ]
+
+
+def test_verify_release_results_forwards_preserve_card_sections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Path, bool, bool]] = []
+    expected = VerificationReport(True)
+
+    def verify(
+        root: Path, *, include_receipt: bool, preserve_card_sections: bool
+    ) -> VerificationReport:
+        calls.append((root, include_receipt, preserve_card_sections))
+        return expected
+
+    monkeypatch.setattr(verify_module, "_verify_results", verify)
+    assert verify_module.verify_release_results(tmp_path) is expected
+    assert calls == [(tmp_path, True, True)]
+
+
 def _manifest_identity(
     *,
     filename: str = "source.osm.pbf",

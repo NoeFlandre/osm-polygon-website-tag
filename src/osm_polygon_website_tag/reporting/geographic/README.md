@@ -1,14 +1,18 @@
 # Geographic reporting
 
 This package derives a deterministic H3 density summary from public polygon
-centroids and renders the dataset-card map. It reads only finalized Parquet
+centroids and renders the dataset-card map. The text-only dataset-card map
+counts one globally unique OSM polygon per ``(osm_type, osm_id)`` with a
+successful, trimmed non-empty ``website_text`` or ``contact_website_text``.
+It reads only finalized Parquet
 artifacts; it does not read PBFs, fetch websites, or publish remotely.
 
 The default summary includes every public polygon. Pass
-``extracted_text_only=True`` to include only rows whose ``website_text_status``
-or ``contact_website_text_status`` is ``success``; shards without these status
-columns are excluded because they cannot prove that text was extracted. The
-dataset-card map uses this text-only mode.
+``extracted_text_only=True`` to apply that unique, non-empty-text definition;
+shards without the required identity, text, or status columns are excluded
+because they cannot prove that a qualifying polygon exists. The dataset-card
+map uses this text-only mode. Regional duplicate rows remain separately
+reportable, but never inflate the map total or its caption.
 
 The public entry point is `build_polygon_density_map`. H3 resolution 3 and the
 canonical `assets/geographic_polygon_density.png` path are defined in `layout`.

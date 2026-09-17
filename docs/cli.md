@@ -19,6 +19,7 @@ development, recovery, and inspection of an existing run.
 | `finalize-snapshot` | Finish an explicitly frozen snapshot without retrying website enrichment. |
 | `publish-plan` | Show the receipt-bound files that would be uploaded. |
 | `publish` | Dry-run publication, or upload with explicit `--apply`. |
+| `release-stats` | Recompute and publish only the dataset card and the statistics report. |
 | `create-repo` | Explicitly create a public Hugging Face dataset repository. |
 | `card-stats` | Recompute and print card statistics for a run. |
 | `geometry-stats` | Recompute and print the polygon geometry statistics of a run. |
@@ -146,6 +147,39 @@ Hugging Face credential supplied through the environment or local `hf auth
 login`; the CLI never accepts a token flag. `create-repo` is separate and
 explicit, and `--ensure-repo` is rejected unless `run-all` is also in apply
 mode.
+
+### Releasing the card and statistics report
+
+`release-stats` is the statistics release wrapper. It verifies the complete
+published run, recomputes `README.md` and `stats.json` from every published
+row, and uploads those files together with the regenerated completion receipt
+to the exact dataset as one metadata commit. Polygon shards and unrelated Hub
+files are never touched.
+
+```bash
+# 1. Dry run: verify, recompute, and print the exact plan. No network writes.
+uv run --locked osm-polygon-website-tag release-stats \
+  --run-dir '<run-dir>' \
+  --confirm-repo 'NoeFlandre/osm-polygon-website-tag'
+
+# 2. Publish and verify the remote revision.
+uv run --locked osm-polygon-website-tag release-stats \
+  --run-dir '<run-dir>' \
+  --confirm-repo 'NoeFlandre/osm-polygon-website-tag' \
+  --apply
+```
+
+The release is bound to the canonical `NoeFlandre/osm-polygon-website-tag`
+dataset. Any `--repo-id` override is refused, and `--confirm-repo` must match
+that canonical value before any network call. A complete run and its completion
+receipt are required. The JSON report records the deterministic source/data
+manifest digest, the verified remote revision, every released file with its
+SHA-256 and size, and whether apply mode uploaded or found an exact remote
+no-op. Recomputation rewrites `stats.json` only when its bytes change, so a
+second apply over an unchanged remote is a no-op.
+
+Equivalent recipes: `just release-stats-dry-run '<run-dir>'` and
+`just release-stats '<run-dir>'`.
 
 ## Trackio metrics dashboard
 

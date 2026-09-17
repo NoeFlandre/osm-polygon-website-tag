@@ -26,6 +26,8 @@ from osm_polygon_website_tag.publishing import publish as publish_module
 from osm_polygon_website_tag.reporting.geometry_stats import compute_geometry_stats
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
+    RunState,
+    SourceManifestEntry,
     hash_shard,
     initialise_run,
     load_run,
@@ -583,6 +585,23 @@ def test_cli_publish_dry_run(tmp_path: Path) -> None:
     assert rc == 0
 
 
+def test_cli_release_stats_refuses_noncanonical_repository(tmp_path: Path, capsys) -> None:
+    rc = main(
+        [
+            "release-stats",
+            "--run-dir",
+            str(tmp_path / "missing-run"),
+            "--confirm-repo",
+            "someone-else/osm-polygon-website-tag",
+            "--repo-id",
+            "someone-else/osm-polygon-website-tag",
+        ]
+    )
+
+    assert rc == 2
+    assert "canonical" in capsys.readouterr().err
+
+
 def test_cli_analyze_card_refresh_and_finalize_commands_delegate(
     tmp_path: Path,
     monkeypatch,
@@ -852,3 +871,198 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
     assert calls[1][1] == (tmp_path / "bundle",)
     assert calls[2][1] == (tmp_path / "bundle", tmp_path / "run")
     assert "source.parquet" in capsys.readouterr().out
+
+
+def test_cli_json_serialization_is_sorted_and_path_safe(capsys) -> None:
+    cli._json({"z": Path("run"), "a": 1}, sort_keys=True)
+
+    assert capsys.readouterr().out == '{\n  "a": 1,\n  "z": "run"\n}\n'
+
+
+def test_cli_language_shard_runner_records_only_completed_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shards = [Path("a.parquet"), Path("b.parquet")]
+    detector = object()
+    state = RunState(Path("run"), "run")
+    results = iter(
+        (
+            SimpleNamespace(
+                row_count=3,
+                shard_sha256="a" * 64,
+                changed=True,
+                completed=True,
+                processed_rows=3,
+            ),
+            SimpleNamespace(
+                row_count=2,
+                shard_sha256="b" * 64,
+                changed=False,
+                completed=True,
+                processed_rows=2,
+            ),
+        )
+    )
+    calls: list[tuple[Path, object, int, float | None]] = []
+    records: list[tuple[Path, object]] = []
+
+    def detect(
+        shard: Path,
+        *,
+        detector: object,
+        batch_rows: int,
+        time_budget_seconds: float | None,
+    ) -> object:
+        calls.append((shard, detector, batch_rows, time_budget_seconds))
+        return next(results)
+
+    monkeypatch.setattr(cli, "detect_language_shard", detect)
+    monkeypatch.setattr(
+        cli,
+        "_record_completed_language_shard",
+        lambda received_state, shard, result: records.append((shard, result)),
+    )
+
+    assert cli._run_language_shards(
+        shards,
+        detector=detector,
+        state=state,
+        batch_rows=16,
+        time_budget_seconds=None,
+    ) == cli._LanguageRunProgress(1, 5, completed=True)
+    assert calls == [(shards[0], detector, 16, None), (shards[1], detector, 16, None)]
+    assert [shard for shard, _result in records] == shards
+
+
+def test_cli_language_shard_runner_stops_on_incomplete_or_exhausted_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard = Path("a.parquet")
+    detector = object()
+    state = RunState(Path("run"), "run")
+    records: list[object] = []
+    monkeypatch.setattr(
+        cli,
+        "detect_language_shard",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            row_count=4,
+            shard_sha256="a" * 64,
+            changed=True,
+            completed=False,
+            processed_rows=4,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_record_completed_language_shard",
+        lambda *_args: records.append(True),
+    )
+
+    assert cli._run_language_shards(
+        [shard],
+        detector=detector,
+        state=state,
+        batch_rows=8,
+        time_budget_seconds=None,
+    ) == cli._LanguageRunProgress(0, 4, completed=False)
+    assert records == []
+
+    monkeypatch.setattr(cli, "_remaining_language_budget", lambda *_args, **_kwargs: 0.0)
+    assert cli._run_language_shards(
+        [shard],
+        detector=detector,
+        state=state,
+        batch_rows=8,
+        time_budget_seconds=1.0,
+    ) == cli._LanguageRunProgress(0, 0, completed=False)
+
+
+def test_cli_language_private_helpers_preserve_budget_and_payload_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "monotonic", lambda: 8.5)
+    assert cli._language_start_time(None) is None
+    assert cli._language_start_time(2.0) == 8.5
+    assert cli._remaining_language_budget(None, started_at=None) is None
+    assert cli._remaining_language_budget(10.0, started_at=8.0) == 9.5
+    assert not cli._language_budget_exhausted(None)
+    assert not cli._language_budget_exhausted(0.1)
+    assert cli._language_budget_exhausted(0.0)
+    assert cli._language_budget_exhausted(-0.1)
+    assert cli._language_command_payload(
+        Path("run"), changed_shards=1, completed=True, processed_rows=2, bounded=False
+    ) == {"changed_shards": 1, "run_dir": "run"}
+    assert cli._language_command_payload(
+        Path("run"), changed_shards=1, completed=False, processed_rows=2, bounded=True
+    ) == {
+        "changed_shards": 1,
+        "completed": False,
+        "processed_rows": 2,
+        "run_dir": "run",
+    }
+
+
+def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = RunState(
+        Path("run"),
+        "run",
+        sources={"a.osm.pbf": SourceManifestEntry(filename="a.osm.pbf", size_bytes=0, mtime_ns=0)},
+        metadata={"status": cli.STATUS_ANALYZED},
+    )
+    cli._validate_language_shard_membership(state, [Path("a.parquet")])
+    with pytest.raises(ValueError, match="not in the source manifest"):
+        cli._validate_language_shard_membership(state, [Path("missing.parquet")])
+
+    frozen = RunState(
+        Path("run"),
+        "run",
+        metadata={"status": cli.STATUS_COMPLETE, "snapshot_status": "done"},
+    )
+    with pytest.raises(ValueError, match="frozen snapshot"):
+        cli._reject_frozen_language_run(frozen)
+    cli._reject_frozen_language_run(
+        RunState(Path("run"), "run", metadata={"status": cli.STATUS_COMPLETE})
+    )
+
+    transitions: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        cli,
+        "transition_status",
+        lambda received_state, status: transitions.append((received_state, status)),
+    )
+    cli._prepare_language_command_state(state)
+    assert transitions == [(state, cli.STATUS_ENRICHING)]
+    transitions.clear()
+    enriching = RunState(Path("run"), "run", metadata={"status": cli.STATUS_ENRICHING})
+    cli._prepare_language_command_state(enriching)
+    assert transitions == []
+    cli._finish_language_command_state(enriching)
+    assert transitions == [(enriching, cli.STATUS_ENRICHED)]
+    with pytest.raises(ValueError, match="extracted/enriched"):
+        cli._prepare_language_command_state(
+            RunState(Path("run"), "run", metadata={"status": "initialized"})
+        )
+
+
+def test_cli_records_completed_language_shard_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[object, dict[str, object]]] = []
+    monkeypatch.setattr(
+        cli,
+        "update_public_shard_metadata",
+        lambda state, **kwargs: calls.append((state, kwargs)),
+    )
+    state = RunState(Path("run"), "run")
+    result = SimpleNamespace(row_count=7, shard_sha256="a" * 64)
+
+    cli._record_completed_language_shard(state, Path("monaco-latest.parquet"), result)
+
+    assert calls == [
+        (
+            state,
+            {
+                "filename": "monaco-latest.osm.pbf",
+                "row_count": 7,
+                "shard_sha256": "a" * 64,
+            },
+        )
+    ]

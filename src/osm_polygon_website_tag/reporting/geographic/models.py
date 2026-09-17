@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_H3_RESOLUTION = 3
-MAP_CONTRACT_VERSION = 1
+MAP_CONTRACT_VERSION = 2
 
 
 class GeographicMapError(ValueError):
@@ -15,12 +15,13 @@ class GeographicMapError(ValueError):
 
 @dataclass(frozen=True)
 class PolygonDensitySummary:
-    """Deterministic counts of public polygon centroids by H3 cell."""
+    """Deterministic H3 counts with an explicit aggregation scope."""
 
     h3_resolution: int
     polygon_row_count: int
     occupied_cell_count: int
     cells: tuple[tuple[str, int], ...]
+    extracted_text_only: bool = False
 
 
 @dataclass(frozen=True)

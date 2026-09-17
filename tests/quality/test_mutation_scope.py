@@ -101,6 +101,29 @@ def test_main_prints_one_filter_per_line(
     assert capsys.readouterr().out == ""
 
 
+def test_main_can_emit_a_sorted_json_matrix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        mutation_scope,
+        "changed_paths",
+        lambda base: (
+            [
+                "src/osm_polygon_website_tag/reporting/card.py",
+                "src/osm_polygon_website_tag/publishing/release.py",
+            ]
+            if base == "main"
+            else []
+        ),
+    )
+
+    assert mutation_scope.main(["--base", "main", "--json"]) == 0
+    assert capsys.readouterr().out == (
+        '["osm_polygon_website_tag.publishing.release.*",'
+        '"osm_polygon_website_tag.reporting.card.*"]\n'
+    )
+
+
 def test_main_defaults_to_the_upstream_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     monkeypatch.setattr(mutation_scope, "changed_paths", lambda base: seen.append(base) or [])

@@ -25,11 +25,76 @@ from pathlib import Path
 from typing import Any, Final, cast
 
 MUTANTS_ROOT = Path("mutants")
+_PACKAGE_NAME: Final = "osm_polygon_website_tag"
+_PACKAGE_SOURCE_ROOT: Final = Path("src") / _PACKAGE_NAME
 _COVERAGE_FILE = ".mutmut-coverage"
 _STATS_FILE = ".mutmut-stats-child.json"
 _MPLCONFIGDIR: Final = (
     Path(tempfile.gettempdir()) / f"osm-polygon-website-tag-mutmut-mplconfig-{os.getpid()}"
 )
+
+
+def _source_path_for_mutant_name(mutant_name: str) -> Path:
+    """Map a mutmut module or mutant filter to its source file."""
+    if not (mutant_name == _PACKAGE_NAME or mutant_name.startswith(f"{_PACKAGE_NAME}.")):
+        raise ValueError(
+            f"mutation scope must use a fully qualified package filter: {mutant_name!r}"
+        )
+
+    module_name = mutant_name.removesuffix(".*")
+    mutation_marker = module_name.find(".x")
+    if mutation_marker >= 0:
+        module_name = module_name[:mutation_marker]
+    if "*" in module_name or module_name == "":
+        raise ValueError(f"mutation scope is not a source module: {mutant_name!r}")
+
+    if module_name == _PACKAGE_NAME:
+        return _PACKAGE_SOURCE_ROOT / "__init__.py"
+
+    relative_module = module_name.removeprefix(f"{_PACKAGE_NAME}.")
+    return _PACKAGE_SOURCE_ROOT.joinpath(*relative_module.split(".")).with_suffix(".py")
+
+
+def _source_paths_for_mutant_names(mutant_names: Iterable[str]) -> tuple[Path, ...]:
+    """Return the deterministic, deduplicated source scope for mutmut names."""
+    return tuple(sorted({_source_path_for_mutant_name(name) for name in mutant_names}))
+
+
+def _configure_source_scope(
+    mutant_names: Iterable[str], *, config: Any | None = None
+) -> tuple[Path, ...]:
+    """Limit mutmut's generation config to the requested source modules."""
+    source_paths = _source_paths_for_mutant_names(mutant_names)
+    if not source_paths:
+        return source_paths
+
+    if config is None:
+        from mutmut.configuration import Config
+
+        Config.ensure_loaded()
+        config = Config.get()
+    config.only_mutate = [str(path) for path in source_paths]
+    return source_paths
+
+
+def _mutant_names_from_cli(arguments: Iterable[str]) -> tuple[str, ...]:
+    """Extract positional mutmut filters from the adapter's ``run`` command."""
+    arguments = iter(arguments)
+    if next(arguments, None) != "run":
+        return ()
+
+    names: list[str] = []
+    skip_option_value = False
+    for argument in arguments:
+        if skip_option_value:
+            skip_option_value = False
+        elif argument == "--max-children":
+            skip_option_value = True
+        elif argument.startswith("--max-children=") or argument.startswith("-"):
+            continue
+        else:
+            names.append(argument)
+    return tuple(names)
 
 
 def _project_root() -> Path:
@@ -288,6 +353,9 @@ def main() -> None:
     mutmut_main.gather_coverage = cast(Any, gather_coverage)
     mutmut_main.PytestRunner.run_tests = cast(Any, run_tests)
     mutmut_main.PytestRunner.run_stats = cast(Any, run_stats)
+    mutant_names = _mutant_names_from_cli(sys.argv[1:])
+    if mutant_names:
+        _configure_source_scope(mutant_names)
     sys.argv[0] = "mutmut"
     mutmut_main.cli()
 

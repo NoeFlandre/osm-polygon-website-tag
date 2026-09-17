@@ -6,7 +6,10 @@ from collections.abc import Collection
 from pathlib import Path
 
 from osm_polygon_website_tag.reporting.geographic.h3_geometry import assign_h3_cell
-from osm_polygon_website_tag.reporting.geographic.inputs import iter_lat_lon_runs
+from osm_polygon_website_tag.reporting.geographic.inputs import (
+    iter_lat_lon_runs,
+    iter_unique_text_lat_lon_runs,
+)
 from osm_polygon_website_tag.reporting.geographic.models import (
     DEFAULT_H3_RESOLUTION,
     GeographicMapError,
@@ -21,18 +24,20 @@ def compute_polygon_density_summary(
     source_names: Collection[str] | None = None,
     extracted_text_only: bool = False,
 ) -> PolygonDensitySummary:
-    """Aggregate selected public polygon centroids into deterministic H3 counts.
+    """Aggregate selected polygon centroids into deterministic H3 counts.
 
-    Set ``extracted_text_only`` to count only rows with a successful
-    ``website`` or ``contact:website`` text extraction.
+    Set ``extracted_text_only`` to count globally unique ``(osm_type, osm_id)``
+    polygons with successful, trimmed non-empty ``website`` or
+    ``contact:website`` text.
     """
     counts: dict[str, int] = {}
     row_count = 0
-    for path, row_index, lat, lon in iter_lat_lon_runs(
-        run_dir,
-        source_names=source_names,
-        extracted_text_only=extracted_text_only,
-    ):
+    iterator = (
+        iter_unique_text_lat_lon_runs(run_dir, source_names=source_names)
+        if extracted_text_only
+        else iter_lat_lon_runs(run_dir, source_names=source_names)
+    )
+    for path, row_index, lat, lon in iterator:
         try:
             cell = assign_h3_cell(lat, lon, resolution=h3_resolution)
         except GeographicMapError as exc:
@@ -45,4 +50,5 @@ def compute_polygon_density_summary(
         polygon_row_count=row_count,
         occupied_cell_count=len(cells),
         cells=cells,
+        extracted_text_only=extracted_text_only,
     )

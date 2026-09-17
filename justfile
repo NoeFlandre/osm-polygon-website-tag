@@ -61,6 +61,19 @@ acceptance:
 architecture:
     uv run --locked pytest tests/architecture
 
+# Verify and recompute the card and statistics report without uploading.
+release-stats-dry-run run_dir:
+    uv run --locked osm-polygon-website-tag release-stats \
+        --run-dir "{{ run_dir }}" \
+        --confirm-repo 'NoeFlandre/osm-polygon-website-tag'
+
+# Recompute, publish, and verify only the card and statistics report.
+release-stats run_dir:
+    uv run --locked osm-polygon-website-tag release-stats \
+        --run-dir "{{ run_dir }}" \
+        --confirm-repo 'NoeFlandre/osm-polygon-website-tag' \
+        --apply
+
 build:
     uv build --out-dir "{{ BUILD_OUTPUT_DIR }}"
 
@@ -116,6 +129,16 @@ mutation-scope base="origin/main":
     while read -r filter; do scopes+=(--scope "$filter"); done <<< "$filters"
     just mutation-gate "${scopes[@]}"
 
+# Run one changed-module shard. CI fans these shards out as a deterministic
+# matrix so every selected module is evaluated without one job outliving its
+# hosted-runner budget.
+mutation-module filter:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just mutation-clean
+    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "{{ filter }}"
+    just mutation-gate --scope "{{ filter }}"
+
 # Fail on any unverified mutant the baseline does not already record, so a
 # long-standing backlog stays visible without blocking unrelated work.
 mutation-gate *scopes:
@@ -138,11 +161,10 @@ diff-review:
 
 qa-gauntlet: baseline ruff typecheck unit acceptance architecture crap mutation smoke diff-review
 
-# The gates CI runs: identical to `qa-gauntlet` except that mutation is scoped
-# to the modules the change touches, so the job finishes inside a hosted
-# runner's lifetime instead of being reclaimed mid-sweep.
-qa-ci base="origin/main": baseline ruff typecheck unit acceptance architecture crap
-    just mutation-scope "{{ base }}"
+# The non-mutation gates CI runs before the deterministic per-module mutation
+# matrix. The matrix invokes `mutation-module` once for every filter emitted
+# by `mutation_scope.py`.
+qa-ci: baseline ruff typecheck unit acceptance architecture crap
     just smoke
 
 install-hooks:

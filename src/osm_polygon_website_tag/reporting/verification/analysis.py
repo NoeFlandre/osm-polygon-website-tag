@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,15 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
 from osm_polygon_website_tag.reporting.card import (
     _public_schema_for_card,
+    _render_geographic_section,
     _render_markdown,
+    _render_polygon_geometry_section,
     _render_yaml_front_matter,
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
+from osm_polygon_website_tag.reporting.geographic.aggregation import (
+    compute_polygon_density_summary,
+)
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GEOMETRY_STATS_FILENAME,
@@ -25,6 +31,21 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
 
 def verify_analysis_and_card(root: Path, errors: list[str]) -> None:
     """Verify derived analysis files and deterministic card/map output."""
+    _verify_analysis_and_card(root, errors, preserve_card_sections=False)
+
+
+def verify_release_analysis_and_card(root: Path, errors: list[str]) -> None:
+    """Verify release-derived metadata while preserving legacy card sections."""
+    _verify_analysis_and_card(root, errors, preserve_card_sections=True)
+
+
+def _verify_analysis_and_card(
+    root: Path,
+    errors: list[str],
+    *,
+    preserve_card_sections: bool,
+) -> None:
+    """Run shared analysis checks with the selected card compatibility contract."""
     _verify_expected_source_inventory(root, errors)
     actual, expected = _verify_analysis_inventory(root, errors)
     _verify_card_files(root, errors)
@@ -34,8 +55,12 @@ def verify_analysis_and_card(root: Path, errors: list[str]) -> None:
             _verify_analysis_arithmetic(root, errors)
         except Exception as exc:
             errors.append(f"analysis arithmetic verification failed: {exc}")
-    _verify_card_statistics(root, errors)
-    _verify_map_artifact(root, errors)
+    if preserve_card_sections:
+        _verify_release_card_statistics(root, errors)
+        _verify_map_artifact(root, errors, require_readme_reference=False)
+    else:
+        _verify_card_statistics(root, errors)
+        _verify_map_artifact(root, errors)
 
 
 def _verify_expected_source_inventory(root: Path, errors: list[str]) -> None:
@@ -99,6 +124,81 @@ def _verify_card_statistics(root: Path, errors: list[str]) -> None:
         errors.append(f"card statistic verification failed: {exc}")
 
 
+def _verify_release_card_statistics(root: Path, errors: list[str]) -> None:
+    """Verify release-derived card values without rewriting legacy sections."""
+    try:
+        geometry = compute_geometry_stats(root)
+        _compare_card_file(
+            root / GEOMETRY_STATS_FILENAME,
+            render_geometry_stats(geometry),
+            GEOMETRY_STATS_FILENAME,
+            errors,
+        )
+        _verify_release_geometry_section(root, geometry, errors)
+        summary = compute_polygon_density_summary(root, extracted_text_only=True)
+        stats = compute_card_stats(root, summary=summary)
+        _verify_release_geographic_section(root, stats, errors)
+        _verify_release_density_yaml(root, stats, errors)
+    except Exception as exc:
+        errors.append(f"release card statistic verification failed: {exc}")
+
+
+def _verify_release_geometry_section(
+    root: Path,
+    geometry: Any,
+    errors: list[str],
+) -> None:
+    """Require the additive geometry section to match artifact-derived values."""
+    path = root / "README.md"
+    try:
+        content = path.read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"README geometry section is unreadable: {exc}")
+        return
+    expected = "\n".join(_render_polygon_geometry_section(geometry)) + "\n"
+    match = re.search(r"(?ms)^## Polygon geometry\n.*?(?=^## |\Z)", content)
+    if match is None or match.group(0) != expected:
+        errors.append("README Polygon geometry section does not match artifact-derived statistics")
+
+
+def _verify_release_geographic_section(
+    root: Path,
+    stats: Any,
+    errors: list[str],
+) -> None:
+    """Require release README geography values to match unique text identities."""
+    path = root / "README.md"
+    try:
+        content = path.read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"README geographic section is unreadable: {exc}")
+        return
+    expected = "\n".join(_render_geographic_section(stats)) + "\n"
+    match = re.search(r"(?ms)^## Geographic distribution\n.*?(?=^## |\Z)", content)
+    if match is None or match.group(0) != expected:
+        errors.append(
+            "README Geographic distribution section does not match the unique-text summary"
+        )
+
+
+def _verify_release_density_yaml(root: Path, stats: Any, errors: list[str]) -> None:
+    """Require machine-readable geographic values to match the same summary."""
+    path = root / "dataset.yaml"
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"dataset.yaml geographic fields are unreadable: {exc}")
+        return
+    expected = {
+        "polygon_density_h3_resolution": stats.polygon_density_h3_resolution,
+        "polygon_density_row_count": stats.polygon_density_row_count,
+        "occupied_h3_cell_count": stats.occupied_h3_cell_count,
+    }
+    for key, value in expected.items():
+        if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content):
+            errors.append(f"dataset.yaml {key} does not match the unique-text summary")
+
+
 def _compare_card_file(
     path: Path,
     expected: str,
@@ -109,16 +209,28 @@ def _compare_card_file(
         errors.append(f"{label} does not match artifact-derived statistics")
 
 
-def _verify_map_artifact(root: Path, errors: list[str]) -> None:
-    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
-    if not map_path.is_file():
+def _verify_map_artifact(
+    root: Path,
+    errors: list[str],
+    *,
+    require_readme_reference: bool = True,
+) -> None:
+    _verify_map_file(root / POLYGON_DENSITY_ASSET_REL_PATH, errors)
+    if require_readme_reference:
+        _verify_readme_map_reference(root / "README.md", errors)
+
+
+def _verify_map_file(path: Path, errors: list[str]) -> None:
+    """Verify that the generated map exists and has a PNG signature."""
+    if not path.is_file():
         errors.append(f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}")
-    elif map_path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+    elif path.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
         errors.append("map artifact is not a valid PNG")
-    readme_path = root / "README.md"
-    if readme_path.is_file() and POLYGON_DENSITY_ASSET_REL_PATH not in readme_path.read_text(
-        encoding="utf-8"
-    ):
+
+
+def _verify_readme_map_reference(path: Path, errors: list[str]) -> None:
+    """Verify that the standard card links to the generated map."""
+    if path.is_file() and POLYGON_DENSITY_ASSET_REL_PATH not in path.read_text(encoding="utf-8"):
         errors.append(f"README does not reference {POLYGON_DENSITY_ASSET_REL_PATH}")
 
 

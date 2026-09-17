@@ -13,6 +13,7 @@ Each printed line is one ``mutmut run`` filter, for example
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
@@ -83,14 +84,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Print one filter per line, or nothing when no module changed."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the sorted filters as one JSON array for a CI matrix",
+    )
     args = parser.parse_args(argv)
     try:
         paths = changed_paths(args.base)
     except subprocess.CalledProcessError as exc:
         print(f"error: cannot diff against {args.base!r}: {exc.stderr.strip()}", file=sys.stderr)
         return 2
-    for filter_expression in module_filters(paths):
-        print(filter_expression)
+    filters = module_filters(paths)
+    if args.json:
+        print(json.dumps(filters, separators=(",", ":")))
+    else:
+        for filter_expression in filters:
+            print(filter_expression)
     return 0
 
 

@@ -55,6 +55,7 @@ from osm_polygon_website_tag.publishing.publish import (
     create_repo,
     publish_to_hf,
 )
+from osm_polygon_website_tag.publishing.release import release_card_and_stats
 from osm_polygon_website_tag.publishing.trackio import (
     build_trackio_snapshot,
     publish_trackio_snapshot,
@@ -311,6 +312,30 @@ def publish_command(
     """Publish or dry-run a complete dataset."""
     plan = publish_to_hf(run_dir, repo_id=repo_id, dry_run=not apply)
     _json({"dry_run": not apply, "artifact_count": len(plan.artifact_paths)})
+    return 0
+
+
+@app.command("release-stats")
+def release_stats_command(
+    run_dir: RunDir,
+    confirm_repo: Annotated[
+        str,
+        typer.Option("--confirm-repo", help="Exact dataset repository confirmation."),
+    ],
+    repo_id: RepoId = DEFAULT_HF_DATASET,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="Publish and verify (default: dry-run)."),
+    ] = False,
+) -> int:
+    """Publish only the dataset card and the statistics report."""
+    report = release_card_and_stats(
+        run_dir,
+        confirm_repo=confirm_repo,
+        repo_id=repo_id,
+        apply=apply,
+    )
+    _json(report.to_payload(), sort_keys=True)
     return 0
 
 
