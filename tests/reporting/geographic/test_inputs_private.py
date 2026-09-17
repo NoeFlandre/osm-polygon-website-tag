@@ -343,7 +343,7 @@ def test_public_iterator_wrappers_forward_scope_and_text_mode(
 ) -> None:
     path = Path("source.parquet")
     path_calls: list[tuple[Path, bool]] = []
-    unique_calls: list[tuple[Path, set[tuple[str, int]]]] = []
+    coordinate_calls: list[tuple[object, object]] = []
     monkeypatch.setattr(
         "osm_polygon_website_tag.reporting.geographic.inputs.sorted_public_polygon_parquets",
         lambda run_dir, *, source_names: (
@@ -363,19 +363,13 @@ def test_public_iterator_wrappers_forward_scope_and_text_mode(
     assert path_calls == [(path, True)]
 
     monkeypatch.setattr(
-        "osm_polygon_website_tag.reporting.geographic.inputs._text_polygon_parquets",
+        "osm_polygon_website_tag.reporting.geographic.inputs.iter_canonical_text_coordinates",
         lambda run_dir, *, source_names: (
-            [path] if (run_dir, source_names) == ("run", {"source.osm.pbf"}) else []
-        ),
-    )
-    monkeypatch.setattr(
-        "osm_polygon_website_tag.reporting.geographic.inputs._iter_unique_text_path_rows",
-        lambda received_path, received_seen: (
-            unique_calls.append((received_path, received_seen)) or iter(())
+            coordinate_calls.append((run_dir, source_names)) or iter(())
         ),
     )
     assert list(iter_unique_text_lat_lon_runs("run", source_names={"source.osm.pbf"})) == []
-    assert unique_calls == [(path, set())]
+    assert coordinate_calls == [("run", {"source.osm.pbf"})]
 
 
 def test_text_polygon_iterator_prefers_regional_copies_and_falls_back_to_public(

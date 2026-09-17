@@ -28,6 +28,18 @@ def test_only_package_modules_become_filters() -> None:
     ]
 
 
+def test_package_initializers_map_to_their_package_module() -> None:
+    assert mutation_scope.module_filters(
+        ["src/osm_polygon_website_tag/reporting/geographic/__init__.py"], root=_ROOT
+    ) == ["osm_polygon_website_tag.reporting.geographic.*"]
+    assert mutation_scope.module_filters(
+        ["src/osm_polygon_website_tag/__init__.py"], root=_ROOT
+    ) == ["osm_polygon_website_tag.*"]
+    assert mutation_scope.module_filters(
+        ["src/osm_polygon_website_tag/reporting/geographic/aggregation.py"], root=_ROOT
+    ) == ["osm_polygon_website_tag.reporting.geographic.aggregation.*"]
+
+
 def test_filters_are_deduplicated_and_sorted() -> None:
     paths = [
         "src/osm_polygon_website_tag/pipeline/sat.py",

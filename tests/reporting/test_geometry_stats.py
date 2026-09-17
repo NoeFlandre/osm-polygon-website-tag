@@ -112,6 +112,7 @@ def test_empty_selection_reports_zeroed_statistics(tmp_path: Path) -> None:
     stats = compute_geometry_stats(tmp_path)
 
     assert stats.schema_version == GEOMETRY_STATS_SCHEMA_VERSION
+    assert stats.population_scope == "published polygon rows"
     assert stats.row_count == 0
     assert stats.area.summary == NumericSummary()
     assert stats.area.zero_area_row_count == 0

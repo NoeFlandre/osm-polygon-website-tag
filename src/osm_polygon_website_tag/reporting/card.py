@@ -614,10 +614,16 @@ def _render_website_text_section(stats: CardStats) -> list[str]:
             f"{stats.contact_website_total_words:,} |"
         ),
         "",
+        (
+            "Website-text table counts are unique `(osm_type, osm_id)` identities across "
+            "regional rows; regional overlap duplicates are removed globally."
+        ),
+        "",
         f"Unique polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
         (
             "Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy "
-            "has successful, trimmed non-empty website or contact:website text."
+            "has successful, trimmed non-empty website or contact:website text; regional "
+            "overlap duplicates removed globally."
         ),
         f"Combined extracted words: **{combined_words:,}**",
         "",
@@ -690,7 +696,7 @@ def _render_polygon_geometry_section(geometry: GeometryStats) -> list[str]:
         (
             "Surface and shape statistics computed over every published polygon row from the "
             "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
-            f"ellipsoid. The complete breakdown is published as [`{GEOMETRY_STATS_FILENAME}`]"
+            f"ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`{GEOMETRY_STATS_FILENAME}`]"
             f"({GEOMETRY_STATS_FILENAME})."
         ),
         "",
@@ -730,7 +736,7 @@ def _render_geographic_section(stats: CardStats) -> list[str]:
             f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
             f"**{stats.polygon_density_row_count:,}** unique polygons with successfully "
             "extracted, non-empty website or contact:website text, globally deduplicated by "
-            "`(osm_type, osm_id)`. "
+            "`(osm_type, osm_id)`; regional overlap duplicates removed globally. "
             "The color scale is logarithmic, counts are absolute, and a Natural Earth "
             "1:110m land backdrop provides geographic context."
         ),

@@ -7,9 +7,11 @@ Builds and validates public-facing local artifacts.
 - Dependencies: `contracts`, `storage`, `pipeline`, and `runtime`.
 - `geographic` aggregates public centroids into H3 resolution-3 counts and
   atomically renders the logarithmic `assets/geographic_polygon_density.png`
-  card asset without reading PBFs or contacting the network. The dataset-card
-  map explicitly counts only polygons with a successful website or
-  `contact:website` text extraction.
+  card asset without reading PBFs or contacting the network. The
+  `global_unique_text` mode reduces regional overlap by `(osm_type, osm_id)`
+  with deterministic canonical winners; the dataset-card map uses that mode
+  and explicitly counts only polygons with successful, non-empty website or
+  `contact:website` text.
 - `repair.refresh_card_run` migrates a legacy completed local run by rebuilding
   only the card/map/receipt bundle; it never re-extracts or re-enriches sources.
 - `finalize_snapshot` finishes an explicitly frozen (`snapshot_status: done`)
@@ -18,6 +20,9 @@ Builds and validates public-facing local artifacts.
   the analysis/card/map/receipt bundle.
 - Card text totals scan Parquet columns with bounded Arrow kernels rather than
   materializing one Python row dictionary per polygon.
+- Global card text populations use the same spillable DuckDB reducer as the
+  global geographic map, so tag-specific counts and combined identity counts
+  share one deterministic definition.
 - A source contributes to the card's enriched count only when every website and
   contact-website text status is terminal (`success` or `absent`), matching the
   workflow's resumable retry contract.

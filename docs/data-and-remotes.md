@@ -156,6 +156,7 @@ Fields, all computed on the WGS84 ellipsoid:
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Contract version of this document (`v1`). |
+| `population_scope` | The geometry population covered by the report: `published polygon rows`. |
 | `row_count` | Public polygon rows covered. |
 | `area.summary` | `area_m2` distribution: `row_count`, `total`, `minimum`, `maximum`, `mean`, `median`, and `percentiles` `p1`, `p5`, `p25`, `p50`, `p75`, `p95`, `p99`. |
 | `area.histogram` | Stable log-scale buckets, always all thirteen in order: `0`, `<1e0`, `1e0-1e1` … `1e9-1e10`, `>=1e10`. |

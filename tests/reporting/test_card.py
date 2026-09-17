@@ -332,13 +332,15 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         | `website` | 9 | 10 | 11 | 12 | 13 |
         | `contact:website` | 14 | 15 | 16 | 17 | 18 |
 
+        Website-text table counts are unique `(osm_type, osm_id)` identities across regional rows; regional overlap duplicates are removed globally.
+
         Unique polygons with extracted text: **19**
-        Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy has successful, trimmed non-empty website or contact:website text.
+        Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy has successful, trimmed non-empty website or contact:website text; regional overlap duplicates removed globally.
         Combined extracted words: **31**
 
         ## Polygon geometry
 
-        Surface and shape statistics computed over every published polygon row from the `area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 ellipsoid. The complete breakdown is published as [`stats.json`](stats.json).
+        Surface and shape statistics computed over every published polygon row from the `area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`stats.json`](stats.json).
 
         | Metric | Value |
         | --- | ---: |
@@ -358,7 +360,7 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
 
         ![H3 polygon density](assets/geographic_polygon_density.png)
 
-        H3 resolution 20 contains **21** occupied cells across **22** unique polygons with successfully extracted, non-empty website or contact:website text, globally deduplicated by `(osm_type, osm_id)`. The color scale is logarithmic, counts are absolute, and a Natural Earth 1:110m land backdrop provides geographic context.
+        H3 resolution 20 contains **21** occupied cells across **22** unique polygons with successfully extracted, non-empty website or contact:website text, globally deduplicated by `(osm_type, osm_id)`; regional overlap duplicates removed globally. The color scale is logarithmic, counts are absolute, and a Natural Earth 1:110m land backdrop provides geographic context.
 
         ## Links
 
@@ -645,7 +647,7 @@ def test_geometry_renderers_have_stable_numeric_and_newline_contracts() -> None:
         (
             "Surface and shape statistics computed over every published polygon row from the "
             "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
-            "ellipsoid. The complete breakdown is published as [`stats.json`](stats.json)."
+            "ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`stats.json`](stats.json)."
         ),
         "",
         "| Metric | Value |",
@@ -1201,7 +1203,7 @@ def test_card_counts_unique_polygons_with_trimmed_successful_text_across_regions
 
     assert stats.polygons_with_any_text == 2
     assert stats.public_row_count == 5
-    assert stats.website_text_success_count == 2
+    assert stats.website_text_success_count == 1
     assert stats.contact_website_text_success_count == 1
     assert stats.website_text_failure_count == 1
 
@@ -1430,6 +1432,7 @@ def test_card_stats_preserves_status_buckets_and_pending_semantics(tmp_path: Pat
                 if contact_status == "absent"
                 else "https://contact.example",
                 "schema_version": "v1.3",
+                "osm_id": 100 + index,
                 "website_text": "text" if website_status == "success" else None,
                 "website_word_count": website_words,
                 "website_text_status": website_status,

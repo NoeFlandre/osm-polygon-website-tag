@@ -153,6 +153,7 @@ class GeometryStats:
     """Complete, machine-readable polygon geometry statistics."""
 
     schema_version: str = GEOMETRY_STATS_SCHEMA_VERSION
+    population_scope: str = "published polygon rows"
     row_count: int = 0
     area: AreaStats = field(default_factory=AreaStats)
     shape: ShapeStats = field(default_factory=ShapeStats)

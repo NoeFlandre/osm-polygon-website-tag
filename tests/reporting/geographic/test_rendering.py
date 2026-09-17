@@ -458,7 +458,8 @@ def test_renderer_empty_branch_uses_exact_explanatory_text_and_caption(
     )
     assert figure_calls == [("text", (0.5, 0.01, caption), {"ha": "center", "fontsize": 8})]
     assert caption == (
-        "H3 resolution 5; 0 occupied cells across 0 regional rows/centroids; "
+        "H3 resolution 5; 0 occupied cells across 0 regional rows/centroids "
+        "(regional polygon rows/centroids); "
         "logarithmic scale. Natural Earth 1:110m land backdrop."
     )
     assert events == ["land", "save", ("close", figure)]

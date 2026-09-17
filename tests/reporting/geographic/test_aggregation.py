@@ -167,6 +167,33 @@ def test_summary_can_filter_to_polygons_with_extracted_text(tmp_path: Path) -> N
     assert summary.extracted_text_only is True
 
 
+def test_summary_exposes_explicit_global_and_regional_modes(tmp_path: Path) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    _write_text_coords(polygons / "source.parquet", [(48.85, 2.35, "success", "absent")])
+
+    global_summary = compute_polygon_density_summary(
+        tmp_path,
+        aggregation_mode="global_unique_text",
+    )
+    regional_summary = compute_polygon_density_summary(
+        tmp_path,
+        aggregation_mode="regional_rows",
+    )
+
+    assert global_summary.aggregation_mode == "global_unique_text"
+    assert regional_summary.aggregation_mode == "regional_rows"
+    assert global_summary.extracted_text_only is True
+    assert regional_summary.extracted_text_only is False
+
+    with pytest.raises(ValueError, match="conflicts"):
+        compute_polygon_density_summary(
+            tmp_path,
+            extracted_text_only=True,
+            aggregation_mode="regional_rows",
+        )
+
+
 def test_text_summary_deduplicates_osm_identity_and_requires_non_empty_text(
     tmp_path: Path,
 ) -> None:

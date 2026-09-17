@@ -65,8 +65,10 @@ def _source_parts(path: Path) -> list[str] | None:
     """Return the module parts of a changed package source file."""
     if PACKAGE_ROOT not in path.parents:
         return None
-    relative = path.relative_to(PACKAGE_ROOT).with_suffix("")
-    return [part for part in relative.parts if part != "__init__"]
+    relative = path.relative_to(PACKAGE_ROOT)
+    if relative.name == "__init__.py":
+        return list(relative.parent.parts)
+    return list(relative.with_suffix("").parts)
 
 
 def _mirrored_source_parts(path: Path, root: Path) -> list[str] | None:
