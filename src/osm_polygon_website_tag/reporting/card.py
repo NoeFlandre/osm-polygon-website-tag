@@ -39,6 +39,7 @@ from osm_polygon_website_tag.reporting.geographic.layout import (
     HERO_ASSET_REL_PATH,
     POLYGON_DENSITY_ASSET_REL_PATH,
 )
+from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GEOMETRY_STATS_FILENAME,
@@ -150,6 +151,139 @@ def update_card_with_geometry(
     return readme
 
 
+def refresh_card_for_release(
+    run_dir: Path | str,
+    *,
+    source_names: Collection[str] | None = None,
+) -> Path:
+    """Refresh every geography-bearing release artifact from one text summary.
+
+    Existing card sections outside the derived geography and geometry blocks
+    remain byte-for-byte intact. The map, README, YAML density fields, and
+    geometry report are promoted together so a release cannot retain stale
+    geographic metadata.
+    """
+    root = Path(run_dir)
+    readme = root / "README.md"
+    if not readme.is_file():
+        return build_card(root, source_names=source_names)
+
+    summary = compute_polygon_density_summary(
+        root,
+        source_names=source_names,
+        extracted_text_only=True,
+    )
+    stats = compute_card_stats(root, summary=summary, source_names=source_names)
+    geometry = compute_geometry_stats(root, source_names=source_names)
+    original_readme = readme.read_bytes()
+    updated_readme = _update_geographic_section(
+        _update_geometry_section(original_readme, geometry),
+        stats,
+    )
+    yaml_path = root / "dataset.yaml"
+    original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
+    updated_yaml = _update_density_yaml(original_yaml, stats) if original_yaml is not None else None
+    _promote_release_card_artifacts(
+        root,
+        source_names=source_names,
+        summary=summary,
+        geometry=geometry,
+        readme=readme,
+        original_readme=original_readme,
+        updated_readme=updated_readme,
+        yaml_path=yaml_path,
+        original_yaml=original_yaml,
+        updated_yaml=updated_yaml,
+    )
+    return readme
+
+
+def _promote_release_card_artifacts(
+    root: Path,
+    *,
+    source_names: Collection[str] | None,
+    summary: PolygonDensitySummary,
+    geometry: GeometryStats,
+    readme: Path,
+    original_readme: bytes,
+    updated_readme: bytes,
+    yaml_path: Path,
+    original_yaml: bytes | None,
+    updated_yaml: bytes | None,
+) -> None:
+    """Render and atomically promote the release-derived card artifacts."""
+    staged_readme = root / ".README.md.release.building"
+    staged_yaml = root / ".dataset.yaml.release.building"
+    staged_stats = root / ".stats.json.release.building"
+    staged_map = root / ".assets" / "geographic_polygon_density.png.release.building"
+    staged_map.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        build_polygon_density_map(
+            root,
+            summary=summary,
+            output_path=staged_map,
+            source_names=source_names,
+            extracted_text_only=True,
+        )
+        promotions = _release_card_promotions(
+            root,
+            readme=readme,
+            original_readme=original_readme,
+            updated_readme=updated_readme,
+            yaml_path=yaml_path,
+            original_yaml=original_yaml,
+            updated_yaml=updated_yaml,
+            staged_readme=staged_readme,
+            staged_yaml=staged_yaml,
+            staged_map=staged_map,
+            staged_stats=staged_stats,
+            geometry=geometry,
+        )
+        if promotions:
+            atomic_promote_bundle(promotions)
+    finally:
+        staged_map.unlink(missing_ok=True)
+        staged_readme.unlink(missing_ok=True)
+        staged_yaml.unlink(missing_ok=True)
+        staged_stats.unlink(missing_ok=True)
+
+
+def _release_card_promotions(
+    root: Path,
+    *,
+    readme: Path,
+    original_readme: bytes,
+    updated_readme: bytes,
+    yaml_path: Path,
+    original_yaml: bytes | None,
+    updated_yaml: bytes | None,
+    staged_readme: Path,
+    staged_yaml: Path,
+    staged_map: Path,
+    staged_stats: Path,
+    geometry: GeometryStats,
+) -> list[tuple[Path, Path]]:
+    """Stage only changed release metadata plus the derived geometry report."""
+    promotions: list[tuple[Path, Path]] = []
+    if updated_readme != original_readme:
+        staged_readme.write_bytes(updated_readme)
+        promotions.append((staged_readme, readme))
+    if original_yaml is not None and updated_yaml is not None and updated_yaml != original_yaml:
+        staged_yaml.write_bytes(updated_yaml)
+        promotions.append((staged_yaml, yaml_path))
+    promotions.extend(_stage_release_map(root, staged_map))
+    promotions.extend(_staged_geometry_stats(staged_stats, root, geometry))
+    return promotions
+
+
+def _stage_release_map(root: Path, staged_map: Path) -> list[tuple[Path, Path]]:
+    """Return a map promotion only when the rendered bytes differ."""
+    target = root / POLYGON_DENSITY_ASSET_REL_PATH
+    if target.is_file() and staged_map.read_bytes() == target.read_bytes():
+        return []
+    return [(staged_map, target)]
+
+
 def _update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
     """Replace or insert one geometry block without rewriting other card bytes."""
     newline = b"\r\n" if b"\r\n" in card else b"\n"
@@ -164,6 +298,81 @@ def _update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
     if insertion is not None:
         return card[: insertion.start()] + block + card[insertion.start() :]
     return _append_geometry_block(card, block, newline)
+
+
+def _update_geographic_section(card: bytes, stats: CardStats) -> bytes:
+    """Replace or insert the geography block using the card's newline style."""
+    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    block = newline.join(line.encode("utf-8") for line in _render_geographic_section(stats))
+    block += newline
+    existing = _GEOGRAPHIC_HEADING.search(card)
+    if existing is not None:
+        return _replace_section(card, existing, block)
+
+    geometry = _GEOMETRY_HEADING.search(card)
+    if geometry is not None:
+        return _insert_after_section(card, geometry, block)
+    return _append_geometry_block(card, block, newline)
+
+
+def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
+    """Replace a headed card section through the next top-level heading."""
+    following = _TOP_LEVEL_HEADING.search(card, heading.end())
+    end = following.start() if following is not None else len(card)
+    return card[: heading.start()] + block + card[end:]
+
+
+def _insert_after_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
+    """Insert a derived section after an existing headed section."""
+    following = _TOP_LEVEL_HEADING.search(card, heading.end())
+    insertion = following.start() if following is not None else len(card)
+    return card[:insertion] + block + card[insertion:]
+
+
+def _update_density_yaml(document: bytes | None, stats: CardStats) -> bytes:
+    """Update only the derived density fields in an existing dataset YAML."""
+    if document is None:
+        return b""
+    return _update_density_yaml_text(document.decode("utf-8"), stats)
+
+
+def _update_density_yaml_text(text: str, stats: CardStats) -> bytes:
+    """Update density fields in decoded YAML while preserving other content."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    values = {
+        "polygon_density_h3_resolution": stats.polygon_density_h3_resolution,
+        "polygon_density_row_count": stats.polygon_density_row_count,
+        "occupied_h3_cell_count": stats.occupied_h3_cell_count,
+    }
+    missing: list[str] = []
+    updated = text
+    for key, value in values.items():
+        replacement = f"{key}: {value}"
+        updated, found = _replace_density_yaml_field(updated, key, replacement)
+        if not found:
+            missing.append(replacement)
+    if missing:
+        updated = _append_density_yaml_fields(updated, missing, newline)
+    return updated.encode("utf-8")
+
+
+def _replace_density_yaml_field(text: str, key: str, replacement: str) -> tuple[str, bool]:
+    """Replace one top-level density field and report whether it existed."""
+    pattern = re.compile(rf"(?m)^{re.escape(key)}:[^\r\n]*")
+    updated, count = pattern.subn(replacement, text)
+    return updated, count > 0
+
+
+def _append_density_yaml_fields(text: str, fields: list[str], newline: str) -> str:
+    """Append missing density fields before YAML front-matter closure when present."""
+    closing = f"{newline}---"
+    closing_start = text.rfind(closing)
+    addition = newline.join(fields) + newline
+    if closing_start >= 0 and text.endswith("---"):
+        return text[:closing_start] + newline + addition + text[closing_start + len(newline) :]
+    if text and not text.endswith(("\n", "\r")):
+        text += newline
+    return text + addition
 
 
 def _geometry_block_bytes(geometry: GeometryStats, newline: bytes) -> bytes:

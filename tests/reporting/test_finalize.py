@@ -221,6 +221,21 @@ def test_finalize_run_writes_receipt(tmp_path: Path) -> None:
     assert "assets/geographic_polygon_density.png" in paths
 
 
+def test_v12_receipt_without_data_manifest_remains_compatible(tmp_path: Path) -> None:
+    run_dir, _ = _setup(tmp_path)
+    assert finalize_run(run_dir).ok
+
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["schema_version"] == "v1.2"
+    del receipt["data_manifest_sha256"]
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    report = verify_results(run_dir)
+
+    assert report.ok, report.errors
+
+
 def test_finalize_snapshot_finishes_existing_data_without_enrichment(
     tmp_path: Path,
     monkeypatch,

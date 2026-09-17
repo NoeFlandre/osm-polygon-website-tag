@@ -15,12 +15,13 @@ class GeographicMapError(ValueError):
 
 @dataclass(frozen=True)
 class PolygonDensitySummary:
-    """Deterministic counts of unique text-bearing polygon centroids by H3 cell."""
+    """Deterministic H3 counts with an explicit aggregation scope."""
 
     h3_resolution: int
     polygon_row_count: int
     occupied_cell_count: int
     cells: tuple[tuple[str, int], ...]
+    extracted_text_only: bool = False
 
 
 @dataclass(frozen=True)

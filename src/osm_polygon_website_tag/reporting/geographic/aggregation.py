@@ -50,4 +50,5 @@ def compute_polygon_density_summary(
         polygon_row_count=row_count,
         occupied_cell_count=len(cells),
         cells=cells,
+        extracted_text_only=extracted_text_only,
     )

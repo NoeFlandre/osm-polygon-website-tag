@@ -131,6 +131,7 @@ def test_summary_counts_rows_and_sorts_h3_cells(tmp_path: Path) -> None:
     assert list(summary.cells) == sorted(summary.cells)
     assert sum(count for _cell, count in summary.cells) == 3
     assert summary.h3_resolution == 3
+    assert summary.extracted_text_only is False
 
 
 def test_summary_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
@@ -163,6 +164,7 @@ def test_summary_can_filter_to_polygons_with_extracted_text(tmp_path: Path) -> N
 
     assert summary.polygon_row_count == 2
     assert sum(count for _cell, count in summary.cells) == 2
+    assert summary.extracted_text_only is True
 
 
 def test_text_summary_deduplicates_osm_identity_and_requires_non_empty_text(
@@ -235,6 +237,7 @@ def test_text_summary_deduplicates_osm_identity_and_requires_non_empty_text(
 
     assert summary.polygon_row_count == 1
     assert sum(count for _cell, count in summary.cells) == 1
+    assert summary.extracted_text_only is True
 
 
 def test_text_summary_deduplicates_same_identity_across_regional_shards(
@@ -403,6 +406,8 @@ def test_summary_selects_the_requested_input_iterator_and_binds_resolution(
     assert regular.cells == (("7:1.0:2.0", 1),)
     assert extracted.polygon_row_count == 2
     assert extracted.cells == (("8:3.0:4.0", 2),)
+    assert regular.extracted_text_only is False
+    assert extracted.extracted_text_only is True
     assert calls == [
         ("standard", tmp_path, {"source.osm.pbf"}),
         ("text", tmp_path, None),

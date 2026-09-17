@@ -79,13 +79,14 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
             axis.text(
                 0.5,
                 0.5,
-                "No unique polygons with extracted text",
+                _empty_scope_label(summary),
                 transform=axis.transAxes,
                 ha="center",
             )
+        scope_label = _scope_label(summary)
         caption = (
             f"H3 resolution {summary.h3_resolution}; {summary.occupied_cell_count:,} occupied "
-            f"cells across {summary.polygon_row_count:,} unique polygons with extracted text; "
+            f"cells across {summary.polygon_row_count:,} {scope_label}; "
             "logarithmic scale. "
             "Natural Earth 1:110m land backdrop."
         )
@@ -94,3 +95,17 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
         return caption
     finally:
         plt.close(fig)
+
+
+def _scope_label(summary: PolygonDensitySummary) -> str:
+    """Describe the aggregation scope without overstating regional rows."""
+    if summary.extracted_text_only:
+        return "unique polygons with extracted text"
+    return "regional rows/centroids"
+
+
+def _empty_scope_label(summary: PolygonDensitySummary) -> str:
+    """Describe an empty map using the same scope as its caption."""
+    if summary.extracted_text_only:
+        return "No unique polygons with extracted text"
+    return "No regional polygon rows/centroids"

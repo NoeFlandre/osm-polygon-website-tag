@@ -12,11 +12,15 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
 from osm_polygon_website_tag.reporting.card import (
     _public_schema_for_card,
+    _render_geographic_section,
     _render_markdown,
     _render_polygon_geometry_section,
     _render_yaml_front_matter,
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
+from osm_polygon_website_tag.reporting.geographic.aggregation import (
+    compute_polygon_density_summary,
+)
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GEOMETRY_STATS_FILENAME,
@@ -131,6 +135,10 @@ def _verify_release_card_statistics(root: Path, errors: list[str]) -> None:
             errors,
         )
         _verify_release_geometry_section(root, geometry, errors)
+        summary = compute_polygon_density_summary(root, extracted_text_only=True)
+        stats = compute_card_stats(root, summary=summary)
+        _verify_release_geographic_section(root, stats, errors)
+        _verify_release_density_yaml(root, stats, errors)
     except Exception as exc:
         errors.append(f"release card statistic verification failed: {exc}")
 
@@ -151,6 +159,44 @@ def _verify_release_geometry_section(
     match = re.search(r"(?ms)^## Polygon geometry\n.*?(?=^## |\Z)", content)
     if match is None or match.group(0) != expected:
         errors.append("README Polygon geometry section does not match artifact-derived statistics")
+
+
+def _verify_release_geographic_section(
+    root: Path,
+    stats: Any,
+    errors: list[str],
+) -> None:
+    """Require release README geography values to match unique text identities."""
+    path = root / "README.md"
+    try:
+        content = path.read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"README geographic section is unreadable: {exc}")
+        return
+    expected = "\n".join(_render_geographic_section(stats)) + "\n"
+    match = re.search(r"(?ms)^## Geographic distribution\n.*?(?=^## |\Z)", content)
+    if match is None or match.group(0) != expected:
+        errors.append(
+            "README Geographic distribution section does not match the unique-text summary"
+        )
+
+
+def _verify_release_density_yaml(root: Path, stats: Any, errors: list[str]) -> None:
+    """Require machine-readable geographic values to match the same summary."""
+    path = root / "dataset.yaml"
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"dataset.yaml geographic fields are unreadable: {exc}")
+        return
+    expected = {
+        "polygon_density_h3_resolution": stats.polygon_density_h3_resolution,
+        "polygon_density_row_count": stats.polygon_density_row_count,
+        "occupied_h3_cell_count": stats.occupied_h3_cell_count,
+    }
+    for key, value in expected.items():
+        if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content):
+            errors.append(f"dataset.yaml {key} does not match the unique-text summary")
 
 
 def _compare_card_file(

@@ -253,5 +253,8 @@ def _verify_receipt_digest(
 
 def _verify_data_manifest(root: Path, receipt: dict[str, Any], errors: list[str]) -> None:
     """Ensure the receipt binds the current source and Parquet inventory."""
-    if receipt.get("data_manifest_sha256") != data_manifest_sha256(root):
+    identity = receipt.get("data_manifest_sha256")
+    if receipt.get("schema_version") == "v1.2" and "data_manifest_sha256" not in receipt:
+        return
+    if identity != data_manifest_sha256(root):
         errors.append("completion receipt data manifest mismatch")

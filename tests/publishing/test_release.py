@@ -19,7 +19,11 @@ from osm_polygon_website_tag.publishing.release import (
     default_hub_verifier,
     release_card_and_stats,
 )
-from osm_polygon_website_tag.reporting.artifact_inventory import data_manifest_sha256
+from osm_polygon_website_tag.reporting.artifact_inventory import (
+    data_manifest_sha256,
+    hash_file,
+    publishable_paths,
+)
 from osm_polygon_website_tag.reporting.finalize import _write_completion_receipt, finalize_run
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 
@@ -168,6 +172,40 @@ def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> N
     assert '"schema_version"' in (run_dir / "stats.json").read_text(encoding="utf-8")
 
 
+def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summary(
+    run_dir: Path,
+) -> None:
+    readme = run_dir / "README.md"
+    current_readme = readme.read_text(encoding="utf-8")
+    geographic_start = current_readme.index("## Geographic distribution")
+    links_start = current_readme.index("## Links", geographic_start)
+    readme.write_text(
+        current_readme[:geographic_start]
+        + "## Geographic distribution\n\nSTALE geographic values.\n\n"
+        + current_readme[links_start:],
+        encoding="utf-8",
+    )
+    dataset_yaml = run_dir / "dataset.yaml"
+    dataset_yaml.write_text(
+        dataset_yaml.read_text(encoding="utf-8").replace(
+            "polygon_density_row_count: 1", "polygon_density_row_count: 999"
+        ),
+        encoding="utf-8",
+    )
+    map_path = run_dir / "assets" / "geographic_polygon_density.png"
+    map_path.write_bytes(b"stale-map")
+    _write_completion_receipt(run_dir)
+
+    report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    updated_readme = readme.read_text(encoding="utf-8")
+    assert report.recomputed is True
+    assert "STALE geographic values" not in updated_readme
+    assert "**1** unique polygons with successfully" in updated_readme
+    assert "polygon_density_row_count: 1" in dataset_yaml.read_text(encoding="utf-8")
+    assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     run_dir: Path,
 ) -> None:
@@ -209,10 +247,29 @@ def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     updated_readme = (run_dir / "README.md").read_bytes().decode("utf-8")
     geometry_start = updated_readme.index("## Polygon geometry")
     geographic_start = updated_readme.index("## Geographic distribution")
+    unrelated_start = updated_readme.index("## Unrelated metadata")
     assert updated_readme[:geometry_start] == readme_prefix
-    assert updated_readme[geographic_start:] == readme_suffix
+    assert updated_readme[geographic_start:unrelated_start].startswith(
+        "## Geographic distribution\n\n![H3 polygon density]"
+    )
+    assert "The existing geographic section remains untouched." not in updated_readme
+    assert updated_readme[unrelated_start:] == readme_suffix[readme_suffix.index("## Unrelated") :]
     assert "complete breakdown is published as [`stats.json`](stats.json)" in updated_readme
-    assert (run_dir / "dataset.yaml").read_bytes() == original_yaml.encode("utf-8")
+    updated_yaml = (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+    assert updated_yaml.startswith(original_yaml)
+    assert "polygon_density_row_count: 1" in updated_yaml
+    assert "occupied_h3_cell_count: 1" in updated_yaml
+
+
+def test_release_accepts_a_pre_pr_v12_receipt_without_data_identity(run_dir: Path) -> None:
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    del receipt["data_manifest_sha256"]
+    receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert report.data_manifest_sha256 == data_manifest_sha256(run_dir)
 
 
 def test_unverified_run_is_refused(run_dir: Path) -> None:
@@ -421,6 +478,16 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
         destination = remote_root / item.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    parquet_entries = [
+        SimpleNamespace(
+            path=path.relative_to(run_dir).as_posix(),
+            size=path.stat().st_size,
+            lfs=SimpleNamespace(sha256=hash_file(path)),
+        )
+        for path in publishable_paths(run_dir)
+        if path.suffix == ".parquet"
+    ]
+    assert parquet_entries
 
     class _Api:
         def __init__(self, *, token: str) -> None:
@@ -457,6 +524,23 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
             assert repo_type == "dataset"
             return str(remote_root / filename)
 
+        def list_repo_tree(
+            self,
+            repo_id: str,
+            *,
+            path_in_repo: str,
+            recursive: bool,
+            expand: bool,
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert recursive is True
+            assert expand is False
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
+
     monkeypatch.setattr(
         "osm_polygon_website_tag.publishing.release.resolve_hf_token",
         lambda: "token",
@@ -464,6 +548,96 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=_Api))
 
     assert default_hub_verifier(DEFAULT_HF_DATASET, files) == "remote-revision"
+
+
+def test_remote_verifier_detects_changed_parquet_with_an_unchanged_receipt(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    files = build_card_release_plan(run_dir)
+    remote_root = tmp_path / "remote"
+    for item in files:
+        destination = remote_root / item.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    parquet_entries = []
+    changed = False
+    for path in publishable_paths(run_dir):
+        if path.suffix != ".parquet":
+            continue
+        relative = path.relative_to(run_dir).as_posix()
+        digest = "0" * 64 if not changed else hash_file(path)
+        changed = True
+        parquet_entries.append(
+            SimpleNamespace(
+                path=relative,
+                size=path.stat().st_size,
+                lfs=SimpleNamespace(sha256=digest),
+            )
+        )
+    assert parquet_entries
+
+    class _Api:
+        def __init__(self, *, token: str) -> None:
+            assert token
+
+        def repo_info(self, repo_id: str, *, repo_type: str) -> SimpleNamespace:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert repo_type == "dataset"
+            return SimpleNamespace(sha="remote-revision")
+
+        def get_paths_info(
+            self,
+            repo_id: str,
+            *,
+            paths: list[str],
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return [SimpleNamespace(size=(remote_root / paths[0]).stat().st_size)]
+
+        def hf_hub_download(
+            self,
+            repo_id: str,
+            filename: str,
+            *,
+            revision: str,
+            repo_type: str,
+        ) -> str:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return str(remote_root / filename)
+
+        def list_repo_tree(
+            self,
+            repo_id: str,
+            *,
+            path_in_repo: str,
+            recursive: bool,
+            expand: bool,
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert repo_id == DEFAULT_HF_DATASET
+            assert recursive is True
+            assert expand is False
+            assert revision == "remote-revision"
+            assert repo_type == "dataset"
+            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.publishing.release.resolve_hf_token",
+        lambda: "token",
+    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=_Api))
+
+    with pytest.raises(ValueError, match="Parquet data identity"):
+        default_hub_verifier(DEFAULT_HF_DATASET, files)
 
 
 def test_upload_card_files_passes_only_the_release_patterns(
@@ -565,6 +739,17 @@ def test_remote_release_helpers_fail_closed_on_invalid_remote_state(
             "remote-revision",
         )
 
+    legacy_receipt = tmp_path / "legacy-receipt.json"
+    legacy_receipt.write_text('{"schema_version": "v1.2"}', encoding="utf-8")
+    assert (
+        release_module._remote_data_identity(
+            SimpleNamespace(hf_hub_download=lambda *_args, **_kwargs: str(legacy_receipt)),
+            DEFAULT_HF_DATASET,
+            "remote-revision",
+        )
+        is None
+    )
+
     def refuse_remote(*_args: object, **_kwargs: object) -> str:
         raise release_module._RemoteArtifactMismatchError("missing metadata")
 
@@ -655,7 +840,7 @@ def test_release_completion_and_card_update_fail_closed(
 
     monkeypatch.setattr(
         release_module,
-        "update_card_with_geometry",
+        "refresh_card_for_release",
         lambda _root: (_ for _ in ()).throw(RuntimeError("card failed")),
     )
     with pytest.raises(ValueError, match="refusing to release"):

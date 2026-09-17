@@ -1,18 +1,19 @@
 """Deterministic card/report release to the exact Hugging Face dataset.
 
-The release path recomputes the dataset card and ``stats.json`` from the
-complete verified run, publishes those files and the completion receipt as one metadata commit,
-and verifies the remote files afterwards. Polygon shards and unrelated Hub files
-are never touched by this path.
+The release path recomputes the dataset card, geographic map, and ``stats.json``
+from the complete verified run, publishes those metadata files and the completion
+receipt as one commit, and verifies the remote files afterwards. Polygon shards
+and unrelated Hub files are never touched by this path.
 
-Determinism: the card and the report are rendered from every published row of
-the verified run. Regeneration writes ``stats.json`` only when its bytes would
-change, so a second release over an unchanged run is a no-op that produces the
-same plan and the same remote revision.
+Determinism: the card and map's geographic values are rendered from one global,
+unique text-bearing identity summary of the verified run. Regeneration writes
+artifacts only when their bytes would change, so a second release over an
+unchanged run produces the same plan and the same remote revision.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,7 +25,10 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256 as compute_data_manifest_sha256,
 )
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
-from osm_polygon_website_tag.reporting.card import update_card_with_geometry
+from osm_polygon_website_tag.reporting.artifact_inventory import (
+    parquet_manifest_sha256 as compute_parquet_manifest_sha256,
+)
+from osm_polygon_website_tag.reporting.card import refresh_card_for_release
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verification.receipt import (
@@ -34,7 +38,13 @@ from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 from osm_polygon_website_tag.runtime.run_state import STATUS_COMPLETE, load_run
 
-CARD_RELEASE_FILES = ("README.md", "stats.json", "manifests/completion_receipt.json")
+CARD_RELEASE_FILES = (
+    "README.md",
+    "dataset.yaml",
+    "stats.json",
+    POLYGON_DENSITY_ASSET_REL_PATH,
+    "manifests/completion_receipt.json",
+)
 _CARD_ARTIFACTS = ("README.md", "stats.json", "dataset.yaml", POLYGON_DENSITY_ASSET_REL_PATH)
 
 
@@ -46,6 +56,7 @@ class ReleasedFile:
     sha256: str
     size_bytes: int
     data_manifest_sha256: str | None = None
+    parquet_manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +71,7 @@ class CardReleaseReport:
     published: bool
     revision: str | None
     data_manifest_sha256: str = ""
+    parquet_manifest_sha256: str = ""
     uploaded: bool = False
     no_op: bool = False
 
@@ -71,12 +83,14 @@ class CardReleaseReport:
                     "sha256": item.sha256,
                     "size_bytes": item.size_bytes,
                     "data_manifest_sha256": item.data_manifest_sha256,
+                    "parquet_manifest_sha256": item.parquet_manifest_sha256,
                 }
                 for item in self.files
             ],
             "published": self.published,
             "recomputed": self.recomputed,
             "data_manifest_sha256": self.data_manifest_sha256,
+            "parquet_manifest_sha256": self.parquet_manifest_sha256,
             "no_op": self.no_op,
             "repo_id": self.repo_id,
             "revision": self.revision,
@@ -118,6 +132,7 @@ def build_card_release_plan(
     """Return the exact card/report files that a release would upload."""
     root = Path(run_dir)
     identity = data_manifest_sha256 or compute_data_manifest_sha256(root)
+    parquet_identity = compute_parquet_manifest_sha256(root)
     items: list[ReleasedFile] = []
     for name in CARD_RELEASE_FILES:
         path = root / name
@@ -129,6 +144,7 @@ def build_card_release_plan(
                 sha256=hash_file(path),
                 size_bytes=path.stat().st_size,
                 data_manifest_sha256=identity,
+                parquet_manifest_sha256=parquet_identity,
             )
         )
     return tuple(items)
@@ -151,9 +167,7 @@ def _require_complete_release(root: Path) -> str:
     state = load_run(root)
     if state.metadata.get("status") != STATUS_COMPLETE:
         raise ValueError("release requires a COMPLETE run")
-    receipt = root / "manifests" / "completion_receipt.json"
-    if receipt.is_symlink() or not receipt.is_file():
-        raise ValueError(f"release requires a completion receipt: {receipt}")
+    receipt = _completion_receipt_path(root)
     identity = _completion_data_identity(receipt)
     receipt_errors: list[str] = []
     verify_receipt_before_card_refresh(root, receipt_errors)
@@ -161,19 +175,60 @@ def _require_complete_release(root: Path) -> str:
         raise ValueError(
             f"release completion receipt verification failed; refusing to release: {receipt_errors}"
         )
-    return identity
+    return identity or compute_data_manifest_sha256(root)
 
 
-def _completion_data_identity(receipt: Path) -> str:
-    """Read the data identity from a completion receipt."""
+def _completion_receipt_path(root: Path) -> Path:
+    """Return the trusted completion receipt path."""
+    receipt = root / "manifests" / "completion_receipt.json"
+    if receipt.is_symlink() or not receipt.is_file():
+        raise ValueError(f"release requires a completion receipt: {receipt}")
+    return receipt
+
+
+def _read_receipt_payload(
+    receipt: Path,
+    *,
+    error_type: type[ValueError],
+    label: str,
+) -> dict[str, Any]:
+    """Read a JSON completion receipt and require its object shape."""
     try:
         payload = json.loads(receipt.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"release completion receipt is invalid: {exc}") from exc
-    identity = payload.get("data_manifest_sha256") if isinstance(payload, dict) else None
-    if not isinstance(identity, str) or not identity:
-        raise ValueError("release completion receipt has no data identity")
-    return identity
+        raise error_type(f"{label} is invalid: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise error_type(f"{label} has no data identity")
+    return payload
+
+
+def _receipt_data_identity(
+    payload: dict[str, Any],
+    *,
+    error_type: type[ValueError],
+    label: str,
+) -> str | None:
+    """Return a receipt identity, accepting only the documented v1.2 omission."""
+    identity = payload.get("data_manifest_sha256")
+    if isinstance(identity, str) and identity:
+        return identity
+    if payload.get("schema_version") == "v1.2" and "data_manifest_sha256" not in payload:
+        return None
+    raise error_type(f"{label} has no data identity")
+
+
+def _completion_data_identity(receipt: Path) -> str | None:
+    """Read the data identity from a completion receipt."""
+    payload = _read_receipt_payload(
+        receipt,
+        error_type=ValueError,
+        label="release completion receipt",
+    )
+    return _receipt_data_identity(
+        payload,
+        error_type=ValueError,
+        label="release completion receipt",
+    )
 
 
 def _require_verified(report: VerificationReport, run_dir: Path) -> None:
@@ -196,7 +251,7 @@ def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
 def _update_card_safely(run_dir: Path) -> None:
     """Normalize card-update failures to a release refusal."""
     try:
-        update_card_with_geometry(run_dir)
+        refresh_card_for_release(run_dir)
     except Exception as exc:
         raise ValueError(f"verification failed for {run_dir}; refusing to release: {exc}") from exc
 
@@ -286,7 +341,18 @@ def _expected_data_identity(files: tuple[ReleasedFile, ...]) -> str:
     return identity
 
 
-def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str:
+def _expected_parquet_data_identity(files: tuple[ReleasedFile, ...]) -> str:
+    """Return the single Parquet-shard identity bound to every release file."""
+    identities = {item.parquet_manifest_sha256 for item in files}
+    if len(identities) != 1:
+        raise ValueError("release plan has no single Parquet data identity")
+    identity = next(iter(identities))
+    if identity is None:
+        raise ValueError("release plan has no single Parquet data identity")
+    return identity
+
+
+def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str | None:
     """Read the completion receipt's data identity at the remote revision."""
     path = api.hf_hub_download(
         repo_id,
@@ -294,14 +360,16 @@ def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str:
         revision=revision,
         repo_type="dataset",
     )
-    try:
-        receipt = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise _RemoteArtifactMismatchError(f"remote completion receipt is invalid: {exc}") from exc
-    identity = receipt.get("data_manifest_sha256") if isinstance(receipt, dict) else None
-    if not isinstance(identity, str) or not identity:
-        raise _RemoteArtifactMismatchError("remote completion receipt has no data identity")
-    return identity
+    receipt = _read_receipt_payload(
+        Path(path),
+        error_type=_RemoteArtifactMismatchError,
+        label="remote completion receipt",
+    )
+    return _receipt_data_identity(
+        receipt,
+        error_type=_RemoteArtifactMismatchError,
+        label="remote completion receipt",
+    )
 
 
 def _verify_remote_data_identity(
@@ -313,8 +381,119 @@ def _verify_remote_data_identity(
     """Refuse a release when remote data differs from the local receipt."""
     expected = _expected_data_identity(files)
     actual = _remote_data_identity(api, repo_id, revision)
-    if actual != expected:
+    if actual is not None and actual != expected:
         raise ValueError(f"remote data identity mismatch: local={expected}, remote={actual}")
+
+
+def _remote_parquet_data_identity(api: Any, repo_id: str, revision: str) -> str:
+    """Hash remote Parquet metadata without downloading potentially huge shards."""
+    entries = _remote_parquet_entries(api, repo_id, revision)
+    canonical = json.dumps(
+        sorted(entries.values(), key=lambda item: str(item["path"])),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _remote_parquet_entries(
+    api: Any,
+    repo_id: str,
+    revision: str,
+) -> dict[str, dict[str, int | str]]:
+    """Collect every remote Parquet entry from the managed data directories."""
+    list_repo_tree = getattr(api, "list_repo_tree", None)
+    if not callable(list_repo_tree):
+        raise _RemoteArtifactMismatchError("remote API cannot inspect Parquet shards")
+    entries: dict[str, dict[str, int | str]] = {}
+    for directory in ("polygons", "analysis_observations", "rejections", "analysis"):
+        remote_entries = _remote_parquet_tree(
+            list_repo_tree,
+            repo_id,
+            directory,
+            revision,
+        )
+        _merge_remote_parquet_entries(entries, remote_entries)
+    if not entries:
+        raise _RemoteArtifactMismatchError("remote Parquet inventory is empty")
+    return entries
+
+
+def _remote_parquet_tree(
+    list_repo_tree: Any,
+    repo_id: str,
+    directory: str,
+    revision: str,
+) -> list[Any]:
+    """Read one remote Parquet directory through the Hub tree API."""
+    try:
+        return list(
+            list_repo_tree(
+                repo_id,
+                path_in_repo=directory,
+                recursive=True,
+                expand=False,
+                revision=revision,
+                repo_type="dataset",
+            )
+        )
+    except Exception as exc:
+        raise _RemoteArtifactMismatchError(
+            f"remote Parquet inventory unavailable for {directory}: {exc}"
+        ) from exc
+
+
+def _merge_remote_parquet_entries(
+    entries: dict[str, dict[str, int | str]],
+    remote_entries: list[Any],
+) -> None:
+    """Validate and merge one remote tree response."""
+    for entry in remote_entries:
+        identity = _remote_parquet_entry_identity(entry)
+        if identity is None:
+            continue
+        path = str(identity["path"])
+        if path in entries:
+            raise _RemoteArtifactMismatchError(f"remote Parquet entry is duplicated: {path}")
+        entries[path] = identity
+
+
+def _remote_parquet_entry_identity(entry: Any) -> dict[str, int | str] | None:
+    """Return a bounded identity for a remote Parquet file, if it is one."""
+    path = str(getattr(entry, "path", "") or "")
+    if not path.endswith(".parquet"):
+        return None
+    return _validated_remote_parquet_identity(entry, path)
+
+
+def _validated_remote_parquet_identity(
+    entry: Any,
+    path: str,
+) -> dict[str, int | str]:
+    """Validate size and LFS SHA-256 metadata for one remote Parquet file."""
+    size = getattr(entry, "size", None)
+    lfs = getattr(entry, "lfs", None)
+    digest = getattr(lfs, "sha256", None)
+    if size is None or not isinstance(digest, str) or not digest:
+        raise _RemoteArtifactMismatchError(
+            f"remote Parquet entry lacks bounded identity: {path or '<unknown>'}"
+        )
+    return {"path": path, "size_bytes": int(size), "sha256": digest}
+
+
+def _verify_remote_parquet_data_identity(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    files: tuple[ReleasedFile, ...],
+) -> None:
+    """Refuse remote data whose bounded Parquet metadata differs from local."""
+    expected = _expected_parquet_data_identity(files)
+    actual = _remote_parquet_data_identity(api, repo_id, revision)
+    if actual != expected:
+        raise _RemoteArtifactMismatchError(
+            f"remote Parquet data identity mismatch: local={expected}, remote={actual}"
+        )
 
 
 def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
@@ -327,6 +506,7 @@ def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
     api = HfApi(token=token)
     revision = _remote_revision(api, repo_id)
     _verify_remote_data_identity(api, repo_id, revision, files)
+    _verify_remote_parquet_data_identity(api, repo_id, revision, files)
     for item in files:
         _verify_remote_size(api, repo_id, revision, item)
         _verify_remote_digest(api, repo_id, revision, item)
@@ -466,6 +646,7 @@ def release_card_and_stats(
         published=apply,
         revision=publication.revision if publication else None,
         data_manifest_sha256=identity,
+        parquet_manifest_sha256=compute_parquet_manifest_sha256(root),
         uploaded=publication.uploaded if publication else False,
         no_op=bool(publication and not publication.uploaded),
     )

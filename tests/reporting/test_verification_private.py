@@ -1151,6 +1151,12 @@ def test_release_card_statistics_and_geometry_section_are_exact_and_fail_closed(
             (path, expected, label, received_errors)
         ),
     )
+    monkeypatch.setattr(
+        analysis, "compute_polygon_density_summary", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(analysis, "compute_card_stats", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(analysis, "_verify_release_geographic_section", lambda *_args: None)
+    monkeypatch.setattr(analysis, "_verify_release_density_yaml", lambda *_args: None)
     analysis._verify_release_card_statistics(tmp_path, errors)
     assert errors == []
     assert calls == [

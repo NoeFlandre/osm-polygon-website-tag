@@ -77,6 +77,7 @@ def test_renderer_builds_caption_and_saves_nonempty_map_without_encoding_png(
             polygon_row_count=3,
             occupied_cell_count=1,
             cells=(("85283473fffffff", 3),),
+            extracted_text_only=True,
         ),
         output,
     )
@@ -85,6 +86,24 @@ def test_renderer_builds_caption_and_saves_nonempty_map_without_encoding_png(
     assert "3 unique polygons with extracted text" in caption
     assert land_calls and saved and saved[0][1] == output
     assert len(saved[0][0].axes[0].patches) == 1
+
+
+def test_renderer_default_caption_describes_regional_rows_and_centroids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import rendering
+
+    monkeypatch.setattr(rendering, "draw_landmasses", lambda *_args: None)
+    monkeypatch.setattr(rendering, "atomic_save_png", lambda *_args: None)
+
+    caption = rendering.render_polygon_density(
+        PolygonDensitySummary(5, 3, 1, (("85283473fffffff", 3),)),
+        tmp_path / "regional.png",
+    )
+
+    assert "3 regional rows/centroids" in caption
+    assert "unique polygons" not in caption
 
 
 def test_renderer_empty_summary_uses_explanatory_label_and_still_saves(
@@ -434,12 +453,12 @@ def test_renderer_empty_branch_uses_exact_explanatory_text_and_caption(
 
     assert axis_calls[-1] == (
         "text",
-        (0.5, 0.5, "No unique polygons with extracted text"),
+        (0.5, 0.5, "No regional polygon rows/centroids"),
         {"transform": axis.transAxes, "ha": "center"},
     )
     assert figure_calls == [("text", (0.5, 0.01, caption), {"ha": "center", "fontsize": 8})]
     assert caption == (
-        "H3 resolution 5; 0 occupied cells across 0 unique polygons with extracted text; "
+        "H3 resolution 5; 0 occupied cells across 0 regional rows/centroids; "
         "logarithmic scale. Natural Earth 1:110m land backdrop."
     )
     assert events == ["land", "save", ("close", figure)]
