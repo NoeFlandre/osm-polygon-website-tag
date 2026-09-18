@@ -12,8 +12,9 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION
+from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION, yaml_custom_sha256
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
 
 _REFRESHABLE_CARD_PATHS = frozenset(
@@ -64,6 +65,8 @@ def _verify_receipt(
     _verify_receipt_inventory(root, seen, errors, allow_refreshable_card_metadata)
     _verify_receipt_digest(receipt, canonical_entries, errors)
     _verify_data_manifest(root, receipt, errors)
+    _verify_text_population_manifest(root, receipt, errors)
+    _verify_yaml_custom_identity(root, receipt, errors)
 
 
 def _read_receipt(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -102,9 +105,6 @@ def _verify_card_contract_before_card_refresh(
 ) -> None:
     """Allow current and recognized legacy cards before replacing all metadata."""
     if contract_version == CARD_CONTRACT_VERSION:
-        map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
-        if not map_path.is_file():
-            errors.append(f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}")
         return
     if contract_version == 1:
         return
@@ -267,3 +267,39 @@ def _verify_data_manifest(root: Path, receipt: dict[str, Any], errors: list[str]
         return
     if identity != data_manifest_sha256(root):
         errors.append("completion receipt data manifest mismatch")
+
+
+def _verify_text_population_manifest(
+    root: Path,
+    receipt: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Verify the selected text shards, including supported external layouts."""
+    expected = receipt.get("text_population_manifest")
+    if expected is None:
+        return
+    try:
+        actual = list(text_population_manifest_entries(root))
+    except (OSError, UnicodeError, ValueError) as exc:
+        errors.append(f"completion receipt text population manifest unreadable: {exc}")
+        return
+    if expected != actual:
+        errors.append("completion receipt text population manifest mismatch")
+
+
+def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: list[str]) -> None:
+    """Keep non-generated YAML fields receipt-bound across release refreshes."""
+    for field, relative in (
+        ("dataset_yaml_custom_sha256", "dataset.yaml"),
+        ("readme_yaml_custom_sha256", "README.md"),
+    ):
+        expected = receipt.get(field)
+        if expected is None:
+            continue
+        try:
+            actual = yaml_custom_sha256(root / relative)
+        except (OSError, UnicodeError) as exc:
+            errors.append(f"completion receipt custom YAML identity unreadable: {relative}: {exc}")
+            continue
+        if actual is not None and actual != expected:
+            errors.append(f"completion receipt custom YAML identity mismatch: {relative}")

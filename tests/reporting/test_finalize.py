@@ -212,6 +212,9 @@ def test_finalize_run_writes_receipt(tmp_path: Path) -> None:
     receipt = json.loads(receipt_path.read_text())
     assert "manifest_digest" in receipt
     assert "data_manifest_sha256" in receipt
+    assert "dataset_yaml_custom_sha256" in receipt
+    assert "readme_yaml_custom_sha256" in receipt
+    assert "text_population_manifest" in receipt
     assert receipt["sources_count"] == 1
     paths = {entry["path"] for entry in receipt["artifacts"]}
     assert "README.md" in paths

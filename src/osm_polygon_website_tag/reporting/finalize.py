@@ -16,8 +16,13 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION, build_card
+from osm_polygon_website_tag.reporting.card import (
+    CARD_CONTRACT_VERSION,
+    build_card,
+    yaml_custom_sha256,
+)
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.reporting.verify import (
     VerificationReport,
     verify_results,
@@ -184,10 +189,17 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         "schema_version": "v1.2",
         "digest_algorithm": "sha256",
         "data_manifest_sha256": data_manifest_sha256(root),
+        "text_population_manifest": list(text_population_manifest_entries(root)),
         "manifest_digest": hashlib.sha256(canonical.encode()).hexdigest(),
         "sources_count": len(sources),
         "artifacts": artifacts,
     }
+    dataset_yaml_custom_sha256 = yaml_custom_sha256(root / "dataset.yaml")
+    readme_yaml_custom_sha256 = yaml_custom_sha256(root / "README.md")
+    if dataset_yaml_custom_sha256 is not None:
+        receipt["dataset_yaml_custom_sha256"] = dataset_yaml_custom_sha256
+    if readme_yaml_custom_sha256 is not None:
+        receipt["readme_yaml_custom_sha256"] = readme_yaml_custom_sha256
     if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file() and (root / "stats.json").is_file():
         receipt["card_contract_version"] = CARD_CONTRACT_VERSION
     destination = root / "manifests" / "completion_receipt.json"

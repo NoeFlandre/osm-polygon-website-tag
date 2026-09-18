@@ -20,6 +20,7 @@ mutable run state.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
@@ -60,6 +61,35 @@ _WEBSITE_TEXT_HEADING = re.compile(rb"(?m)^## Website text(?:\r\n|\n|$)")
 _LANGUAGE_HEADING = re.compile(rb"(?m)^## Languages(?:\r\n|\n|$)")
 _GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
 _GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
+_FRONT_MATTER = re.compile(rb"\A---(?:\r\n|\n).*?(?:\r\n|\n)---(?:\r\n|\n)?", re.DOTALL)
+_RELEASE_YAML_DERIVED_KEYS = frozenset(
+    {
+        "language",
+        "observation_count",
+        "public_row_count",
+        "rejection_count",
+        "duplicate_count",
+        "conflicting_snapshot_count",
+        "sources_count",
+        "expected_sources_count",
+        "enriched_sources_count",
+        "dataset_status",
+        "website_text_success_count",
+        "website_total_words",
+        "contact_website_text_success_count",
+        "contact_website_total_words",
+        "unique_text_identity_count",
+        "detected_language_count",
+        "website_language_count",
+        "contact_website_language_count",
+        "sentence_count",
+        "website_segmented_count",
+        "contact_website_segmented_count",
+        "polygon_density_h3_resolution",
+        "polygon_density_row_count",
+        "occupied_h3_cell_count",
+    }
+)
 
 
 def build_card(
@@ -199,14 +229,19 @@ def refresh_card_for_release(
         text_population=text_population,
     )
     original_readme = readme.read_bytes()
-    updated_readme = _update_website_text_section(original_readme, stats)
+    updated_readme = _update_readme_front_matter(original_readme, stats)
+    updated_readme = _update_website_text_section(updated_readme, stats)
     updated_readme = _update_language_section(updated_readme, stats)
     updated_readme = _update_geographic_section(
         _update_geometry_section(updated_readme, geometry), stats
     )
     yaml_path = root / "dataset.yaml"
     original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
-    updated_yaml = _update_release_yaml(original_yaml, stats) if original_yaml is not None else None
+    updated_yaml = (
+        _update_release_yaml(original_yaml, stats)
+        if original_yaml is not None
+        else _render_yaml_front_matter(stats).encode("utf-8")
+    )
     _promote_release_card_artifacts(
         root,
         source_names=source_names,
@@ -292,7 +327,7 @@ def _release_card_promotions(
     if updated_readme != original_readme:
         staged_readme.write_bytes(updated_readme)
         promotions.append((staged_readme, readme))
-    if original_yaml is not None and updated_yaml is not None and updated_yaml != original_yaml:
+    if updated_yaml is not None and (original_yaml is None or updated_yaml != original_yaml):
         staged_yaml.write_bytes(updated_yaml)
         promotions.append((staged_yaml, yaml_path))
     promotions.extend(_stage_release_map(root, staged_map))
@@ -411,6 +446,58 @@ def _update_release_yaml(document: bytes | None, stats: CardStats) -> bytes:
     if document is None:
         return b""
     return _update_release_yaml_text(document.decode("utf-8"), stats)
+
+
+def _update_readme_front_matter(document: bytes, stats: CardStats) -> bytes:
+    """Refresh existing generated README metadata without adding new fields."""
+    match = _FRONT_MATTER.match(document)
+    if match is None:
+        return document
+    updated = _update_existing_release_yaml(match.group(0), stats)
+    return updated + document[match.end() :]
+
+
+def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
+    """Replace only generated YAML fields already present in one document."""
+    text = _replace_release_language_tags(document.decode("utf-8"), stats)
+    values = {
+        **_release_yaml_values(stats),
+        "detected_language_count": stats.detected_language_count,
+        "website_language_count": stats.website_language_count,
+        "contact_website_language_count": stats.contact_website_language_count,
+        "sentence_count": stats.total_sentence_count,
+        "website_segmented_count": stats.website_sentence_row_count,
+        "contact_website_segmented_count": stats.contact_website_sentence_row_count,
+    }
+    for key, value in values.items():
+        text, _ = _replace_density_yaml_field(text, key, f"{key}: {value}")
+    return text.encode("utf-8")
+
+
+def yaml_custom_sha256(path: Path) -> str | None:
+    """Hash YAML content after removing release-generated fields."""
+    if not path.is_file():
+        return None
+    document = path.read_bytes()
+    if path.name == "README.md":
+        match = _FRONT_MATTER.match(document)
+        if match is None:
+            return None
+        document = match.group(0)
+    text = document.decode("utf-8").replace("\r\n", "\n")
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    skip_language_values = False
+    for line in lines:
+        if skip_language_values and re.match(r"^[ \t]+- ", line):
+            continue
+        skip_language_values = False
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
+        if match and match.group(1) in _RELEASE_YAML_DERIVED_KEYS:
+            skip_language_values = match.group(1) == "language"
+            continue
+        kept.append(line)
+    return hashlib.sha256("".join(kept).encode("utf-8")).hexdigest()
 
 
 def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:

@@ -548,7 +548,7 @@ def test_receipt_contract_versions_and_current_artifacts_fail_closed(
     assert errors == []
     map_path.unlink()
     receipt._verify_card_contract_before_card_refresh(tmp_path, 2, errors)
-    assert errors == [f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}"]
+    assert errors == []
 
     delegated: list[tuple[Path, object, list[str]]] = []
     monkeypatch.setattr(

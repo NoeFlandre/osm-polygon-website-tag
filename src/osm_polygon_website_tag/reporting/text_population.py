@@ -16,6 +16,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
 from osm_polygon_website_tag.storage.duckdb_engine import fresh_connection
 
 _REQUIRED_COLUMNS = frozenset(
@@ -150,6 +151,23 @@ def text_population_parquets(
     root = Path(run_dir)
     paths = sorted(_text_population_directory(root).glob("*.parquet"))
     return _contract_paths(_filter_source_paths(paths, source_names))
+
+
+def text_population_manifest_entries(
+    run_dir: Path | str,
+    *,
+    source_names: Collection[str] | None = None,
+) -> tuple[dict[str, int | str], ...]:
+    """Return receipt-bound identities for every selected text shard."""
+    entries = [
+        {
+            "path": f"polygons/{path.name}",
+            "size_bytes": path.stat().st_size,
+            "sha256": hash_file(path),
+        }
+        for path in text_population_parquets(run_dir, source_names=source_names)
+    ]
+    return tuple(sorted(entries, key=lambda item: str(item["path"])))
 
 
 def _text_population_directory(root: Path) -> Path:

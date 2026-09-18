@@ -12,6 +12,7 @@ from osm_polygon_website_tag.reporting.text_population import (
     TextCoordinate,
     compute_text_population_summary,
     iter_canonical_text_coordinates,
+    text_population_manifest_entries,
 )
 
 
@@ -274,6 +275,9 @@ def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> 
 
     assert population.unique_identity_count == 1
     assert population.website_total_words == 1
+    entries = text_population_manifest_entries(canonical)
+    assert [entry["path"] for entry in entries] == ["polygons/a.parquet"]
+    assert entries[0]["size_bytes"] == (regional / "polygons" / "a.parquet").stat().st_size
 
 
 def test_population_counts_null_status_as_a_failure_identity(tmp_path: Path) -> None:

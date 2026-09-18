@@ -57,6 +57,13 @@ def test_dry_run_plans_exactly_the_card_and_report(run_dir: Path) -> None:
     assert [item.relative_path for item in report.files] == list(CARD_RELEASE_FILES)
     assert report.verified_shards
     assert uploader.calls == []
+    assert report.files[0].text_population_entries == (
+        (
+            "polygons/monaco-latest.parquet",
+            (run_dir / "polygons" / "monaco-latest.parquet").stat().st_size,
+            hash_file(run_dir / "polygons" / "monaco-latest.parquet"),
+        ),
+    )
 
 
 def test_apply_uploads_only_the_card_and_report_then_verifies(run_dir: Path) -> None:
@@ -134,7 +141,7 @@ def test_release_rejects_external_text_population_shards(
     external = tmp_path.parent / "external-text" / "source.parquet"
     monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: [external])
 
-    with pytest.raises(ValueError, match="inside the run root"):
+    with pytest.raises(ValueError, match="external text population shards bound"):
         release_module._require_complete_release(run_dir)
 
 
@@ -181,6 +188,25 @@ def test_release_rebuilds_missing_metadata_before_verification(run_dir: Path) ->
     assert report.recomputed is True
     assert (run_dir / "README.md").is_file()
     assert (run_dir / "stats.json").is_file()
+
+
+def test_release_rebuilds_missing_dataset_yaml_before_verification(run_dir: Path) -> None:
+    (run_dir / "dataset.yaml").unlink()
+
+    report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert report.recomputed is True
+    assert (run_dir / "dataset.yaml").is_file()
+    assert "unique_text_identity_count: 1" in (run_dir / "dataset.yaml").read_text()
+
+
+def test_release_rebuilds_missing_map_before_verification(run_dir: Path) -> None:
+    (run_dir / "assets" / "geographic_polygon_density.png").unlink()
+
+    report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert report.recomputed is True
+    assert (run_dir / "assets" / "geographic_polygon_density.png").is_file()
 
 
 def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> None:
@@ -236,6 +262,33 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
     assert "polygon_density_row_count: 1" in dataset_yaml.read_text(encoding="utf-8")
     assert "unique_text_identity_count: 1" in dataset_yaml.read_text(encoding="utf-8")
     assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_release_refreshes_readme_front_matter_with_dataset_yaml(run_dir: Path) -> None:
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "website_total_words: 2", "website_total_words: 999"
+        ),
+        encoding="utf-8",
+    )
+
+    release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    refreshed = readme.read_text(encoding="utf-8")
+    assert "website_total_words: 2" in refreshed
+    assert "website_total_words: 999" not in refreshed
+
+
+def test_release_rejects_custom_dataset_yaml_tampering_before_refresh(run_dir: Path) -> None:
+    dataset_yaml = run_dir / "dataset.yaml"
+    dataset_yaml.write_text(
+        dataset_yaml.read_text(encoding="utf-8").replace("license: odbl", "license: mit"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
 def test_release_adds_geometry_without_replacing_existing_card_or_configuration(

@@ -31,7 +31,10 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
 from osm_polygon_website_tag.reporting.card import refresh_card_for_release
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
-from osm_polygon_website_tag.reporting.text_population import text_population_parquets
+from osm_polygon_website_tag.reporting.text_population import (
+    text_population_manifest_entries,
+    text_population_parquets,
+)
 from osm_polygon_website_tag.reporting.verification.receipt import (
     verify_receipt_before_card_refresh,
 )
@@ -62,6 +65,7 @@ class ReleasedFile:
     size_bytes: int
     data_manifest_sha256: str | None = None
     parquet_manifest_sha256: str | None = None
+    text_population_entries: tuple[tuple[str, int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,14 @@ class CardReleaseReport:
                     "size_bytes": item.size_bytes,
                     "data_manifest_sha256": item.data_manifest_sha256,
                     "parquet_manifest_sha256": item.parquet_manifest_sha256,
+                    "text_population_manifest": [
+                        {
+                            "path": path,
+                            "size_bytes": size,
+                            "sha256": digest,
+                        }
+                        for path, size, digest in item.text_population_entries
+                    ],
                 }
                 for item in self.files
             ],
@@ -175,6 +187,7 @@ def build_card_release_plan(
     root = Path(run_dir)
     identity = data_manifest_sha256 or compute_data_manifest_sha256(root)
     parquet_identity = compute_parquet_manifest_sha256(root)
+    text_population_entries = _text_population_release_entries(root)
     items: list[ReleasedFile] = []
     for name in CARD_RELEASE_FILES:
         path = root / name
@@ -187,6 +200,7 @@ def build_card_release_plan(
                 size_bytes=path.stat().st_size,
                 data_manifest_sha256=identity,
                 parquet_manifest_sha256=parquet_identity,
+                text_population_entries=text_population_entries,
             )
         )
     return tuple(items)
@@ -222,10 +236,36 @@ def _require_complete_release(root: Path) -> str:
 
 
 def _require_release_bound_text_population(root: Path) -> None:
-    """Refuse release-time reducers that read Parquets outside the run root."""
+    """Require every release-time reducer input to be receipt-bound."""
     population_paths = text_population_parquets(root)
-    _raise_for_external_text_population_paths(population_paths, root.resolve())
-    _raise_for_unbound_text_population_paths(root, population_paths)
+    external = _external_text_population_paths(population_paths, root.resolve())
+    if external:
+        receipt = _completion_receipt_path(root)
+        payload = _read_receipt_payload(
+            receipt,
+            error_type=ValueError,
+            label="release completion receipt",
+        )
+        expected = payload.get("text_population_manifest")
+        actual = list(text_population_manifest_entries(root))
+        if expected != actual:
+            raise ValueError(
+                "release requires external text population shards bound by the completion receipt"
+            )
+    else:
+        _raise_for_unbound_text_population_paths(root, population_paths)
+
+
+def _text_population_release_entries(root: Path) -> tuple[tuple[str, int, str], ...]:
+    """Normalize selected text-shard identities for release and remote checks."""
+    return tuple(
+        (
+            str(entry["path"]),
+            int(entry["size_bytes"]),
+            str(entry["sha256"]),
+        )
+        for entry in text_population_manifest_entries(root)
+    )
 
 
 def _raise_for_external_text_population_paths(
@@ -458,6 +498,16 @@ def _expected_parquet_data_identity(files: tuple[ReleasedFile, ...]) -> str:
     return identity
 
 
+def _expected_text_population_entries(
+    files: tuple[ReleasedFile, ...],
+) -> tuple[tuple[str, int, str], ...]:
+    """Return the selected text-shard identities bound to a release plan."""
+    entries = {item.text_population_entries for item in files}
+    if len(entries) != 1:
+        raise ValueError("release plan has no single text population manifest")
+    return next(iter(entries))
+
+
 def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str | None:
     """Read the completion receipt's data identity at the remote revision."""
     path = api.hf_hub_download(
@@ -655,6 +705,25 @@ def _verify_remote_parquet_data_identity(
         )
 
 
+def _verify_remote_text_population_identity(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    files: tuple[ReleasedFile, ...],
+) -> None:
+    """Independently verify every selected text shard exists remotely unchanged."""
+    expected = _expected_text_population_entries(files)
+    if not expected:
+        return
+    remote = _remote_parquet_entries(api, repo_id, revision)
+    for path, size_bytes, digest in expected:
+        actual = remote.get(path)
+        if actual is None:
+            raise _RemoteDataMismatchError(f"remote text population shard missing: {path}")
+        if actual["size_bytes"] != size_bytes or actual["sha256"] != digest:
+            raise _RemoteDataMismatchError(f"remote text population shard mismatch: {path}")
+
+
 def _remote_changed_files(
     api: Any,
     repo_id: str,
@@ -683,6 +752,7 @@ def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
     revision = _remote_revision(api, repo_id)
     _verify_remote_data_identity(api, repo_id, revision, files)
     _verify_remote_parquet_data_identity(api, repo_id, revision, files)
+    _verify_remote_text_population_identity(api, repo_id, revision, files)
     for item in files:
         _verify_remote_size(api, repo_id, revision, item)
         _verify_remote_digest(api, repo_id, revision, item)
@@ -700,6 +770,7 @@ def _default_remote_checker(repo_id: str, files: tuple[ReleasedFile, ...]) -> _R
     revision = _remote_revision(api, repo_id)
     _verify_remote_data_identity(api, repo_id, revision, files)
     _verify_remote_parquet_data_identity(api, repo_id, revision, files)
+    _verify_remote_text_population_identity(api, repo_id, revision, files)
     changed_files = _remote_changed_files(api, repo_id, revision, files)
     if not changed_files:
         return _RemoteCheck(revision)

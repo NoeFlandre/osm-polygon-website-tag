@@ -14,6 +14,7 @@ from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
 from osm_polygon_website_tag.reporting.card import (
     _public_schema_for_card,
     _render_geographic_section,
+    _render_language_section,
     _render_markdown,
     _render_polygon_geometry_section,
     _render_website_text_section,
@@ -269,14 +270,10 @@ def _verify_release_website_text_section(root: Path, stats: Any, errors: list[st
 
 
 def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None:
-    """Require release YAML text fields to expose the canonical population."""
+    """Require release YAML and README metadata to expose canonical values."""
     path = root / "dataset.yaml"
-    if not path.is_file():
-        return
-    try:
-        content = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        errors.append(f"dataset.yaml text fields are unreadable: {exc}")
+    readme = root / "README.md"
+    if not path.is_file() and not readme.is_file():
         return
     expected = {
         "website_text_success_count": stats.website_text_success_count,
@@ -285,9 +282,41 @@ def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None
         "contact_website_total_words": stats.contact_website_total_words,
         "unique_text_identity_count": stats.polygons_with_any_text,
     }
+    if path.is_file():
+        try:
+            _verify_release_yaml_fields(
+                path.read_text(encoding="utf-8"), "dataset.yaml", expected, errors
+            )
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"dataset.yaml text fields are unreadable: {exc}")
+    if not readme.is_file():
+        return
+    try:
+        readme_content = readme.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"README front matter text fields are unreadable: {exc}")
+        return
+    front_matter = re.match(r"\A---(?:\r?\n).*?(?:\r?\n)---(?:\r?\n|$)", readme_content, re.DOTALL)
+    if front_matter is not None:
+        _verify_release_yaml_fields(front_matter.group(0), "README front matter", expected, errors)
+    expected_languages = "\n".join(_render_language_section(stats)) + "\n"
+    language_match = re.search(
+        r"(?ms)^## Languages\n.*?(?=^## |\Z)", readme_content.replace("\r\n", "\n")
+    )
+    if language_match is not None and language_match.group(0) != expected_languages:
+        errors.append("README Languages section does not match canonical text statistics")
+
+
+def _verify_release_yaml_fields(
+    content: str,
+    label: str,
+    expected: dict[str, object],
+    errors: list[str],
+) -> None:
+    """Compare one YAML-like document's generated text fields."""
     for key, value in expected.items():
         if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content):
-            errors.append(f"dataset.yaml {key} does not match canonical text statistics")
+            errors.append(f"{label} {key} does not match canonical text statistics")
 
 
 def _compare_card_file(
