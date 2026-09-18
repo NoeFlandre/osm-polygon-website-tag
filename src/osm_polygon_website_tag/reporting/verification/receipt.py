@@ -289,25 +289,48 @@ def _verify_text_population_manifest(
 
 def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: list[str]) -> None:
     """Keep non-generated YAML fields receipt-bound across release refreshes."""
-    checked = False
-    for field, relative in (
-        ("dataset_yaml_custom_sha256", "dataset.yaml"),
-        ("readme_yaml_custom_sha256", "README.md"),
-    ):
-        expected = receipt.get(field)
-        if expected is None:
-            continue
-        checked = True
-        try:
-            actual = yaml_custom_sha256(root / relative)
-        except (OSError, UnicodeError) as exc:
-            errors.append(f"completion receipt custom YAML identity unreadable: {relative}: {exc}")
-            continue
-        if actual is not None and actual != expected:
-            errors.append(f"completion receipt custom YAML identity mismatch: {relative}")
+    checked = _verify_one_yaml_custom_identity(
+        root, receipt, "dataset_yaml_custom_sha256", "dataset.yaml", errors
+    )
+    checked = (
+        _verify_one_yaml_custom_identity(
+            root, receipt, "readme_yaml_custom_sha256", "README.md", errors
+        )
+        or checked
+    )
     if checked:
         return
-    dataset = yaml_custom_sha256(root / "dataset.yaml")
-    readme = yaml_custom_sha256(root / "README.md")
+    _verify_legacy_yaml_custom_identity(root, errors)
+
+
+def _verify_one_yaml_custom_identity(
+    root: Path,
+    receipt: dict[str, Any],
+    field: str,
+    relative: str,
+    errors: list[str],
+) -> bool:
+    """Verify one receipt-bound YAML identity and report whether it existed."""
+    expected = receipt.get(field)
+    if expected is None:
+        return False
+    try:
+        actual = yaml_custom_sha256(root / relative)
+    except (OSError, UnicodeError) as exc:
+        errors.append(f"completion receipt custom YAML identity unreadable: {relative}: {exc}")
+        return True
+    if actual is not None and actual != expected:
+        errors.append(f"completion receipt custom YAML identity mismatch: {relative}")
+    return True
+
+
+def _verify_legacy_yaml_custom_identity(root: Path, errors: list[str]) -> None:
+    """Cross-check legacy YAML documents that lack the stronger receipt fields."""
+    try:
+        dataset = yaml_custom_sha256(root / "dataset.yaml")
+        readme = yaml_custom_sha256(root / "README.md")
+    except (OSError, UnicodeError) as exc:
+        errors.append(f"completion receipt custom YAML identity unreadable: {exc}")
+        return
     if dataset is not None and readme is not None and dataset != readme:
         errors.append("completion receipt custom YAML identity mismatch")

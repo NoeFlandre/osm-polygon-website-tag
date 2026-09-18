@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -476,6 +476,15 @@ def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
 
 def yaml_custom_sha256(path: Path) -> str | None:
     """Hash YAML content after removing release-generated fields."""
+    document = _yaml_document_bytes(path)
+    if document is None:
+        return None
+    normalized = _yaml_custom_text(document.decode("utf-8"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _yaml_document_bytes(path: Path) -> bytes | None:
+    """Return the YAML document or README front matter to hash."""
     if not path.is_file():
         return None
     document = path.read_bytes()
@@ -484,20 +493,39 @@ def yaml_custom_sha256(path: Path) -> str | None:
         if match is None:
             return None
         document = match.group(0)
-    text = document.decode("utf-8").replace("\r\n", "\n")
-    lines = text.splitlines(keepends=True)
+    return document
+
+
+def _yaml_custom_text(document: str) -> str:
+    """Remove release-generated top-level fields before hashing."""
+    lines = document.replace("\r\n", "\n").splitlines(keepends=True)
+    return "".join(_iter_yaml_custom_lines(lines))
+
+
+def _iter_yaml_custom_lines(lines: list[str]) -> Iterator[str]:
+    """Yield YAML lines that belong to non-generated metadata."""
     kept: list[str] = []
     skip_language_values = False
     for line in lines:
-        if skip_language_values and re.match(r"^[ \t]+- ", line):
+        if skip_language_values and _is_yaml_list_value(line):
             continue
-        skip_language_values = False
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
-        if match and match.group(1) in _RELEASE_YAML_DERIVED_KEYS:
-            skip_language_values = match.group(1) == "language"
+        key = _yaml_top_level_key(line)
+        skip_language_values = key == "language"
+        if key in _RELEASE_YAML_DERIVED_KEYS:
             continue
         kept.append(line)
-    return hashlib.sha256("".join(kept).encode("utf-8")).hexdigest()
+    yield from kept
+
+
+def _is_yaml_list_value(line: str) -> bool:
+    """Return whether a line is an indented YAML list item."""
+    return bool(re.match(r"^[ \t]+- ", line))
+
+
+def _yaml_top_level_key(line: str) -> str | None:
+    """Return a top-level YAML key, if one is present."""
+    match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
+    return match.group(1) if match else None
 
 
 def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:

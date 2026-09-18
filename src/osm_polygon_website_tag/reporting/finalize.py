@@ -194,12 +194,7 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         "sources_count": len(sources),
         "artifacts": artifacts,
     }
-    dataset_yaml_custom_sha256 = yaml_custom_sha256(root / "dataset.yaml")
-    readme_yaml_custom_sha256 = yaml_custom_sha256(root / "README.md")
-    if dataset_yaml_custom_sha256 is not None:
-        receipt["dataset_yaml_custom_sha256"] = dataset_yaml_custom_sha256
-    if readme_yaml_custom_sha256 is not None:
-        receipt["readme_yaml_custom_sha256"] = readme_yaml_custom_sha256
+    receipt.update(_yaml_custom_receipt_fields(root))
     if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file() and (root / "stats.json").is_file():
         receipt["card_contract_version"] = CARD_CONTRACT_VERSION
     destination = root / "manifests" / "completion_receipt.json"
@@ -210,6 +205,19 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
     )
     temporary.replace(destination)
     return receipt
+
+
+def _yaml_custom_receipt_fields(root: Path) -> dict[str, str]:
+    """Return receipt fields binding non-generated card YAML metadata."""
+    fields: dict[str, str] = {}
+    for field, relative in (
+        ("dataset_yaml_custom_sha256", "dataset.yaml"),
+        ("readme_yaml_custom_sha256", "README.md"),
+    ):
+        digest = yaml_custom_sha256(root / relative)
+        if digest is not None:
+            fields[field] = digest
+    return fields
 
 
 def replace_receipt_atomic(run_dir: Path | str) -> dict[str, Any]:

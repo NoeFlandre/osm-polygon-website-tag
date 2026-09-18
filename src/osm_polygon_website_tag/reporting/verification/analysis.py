@@ -271,9 +271,7 @@ def _verify_release_website_text_section(root: Path, stats: Any, errors: list[st
 
 def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None:
     """Require release YAML and README metadata to expose canonical values."""
-    path = root / "dataset.yaml"
-    readme = root / "README.md"
-    if not path.is_file() and not readme.is_file():
+    if not (root / "dataset.yaml").is_file() and not (root / "README.md").is_file():
         return
     expected = {
         "website_text_success_count": stats.website_text_success_count,
@@ -282,17 +280,38 @@ def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None
         "contact_website_total_words": stats.contact_website_total_words,
         "unique_text_identity_count": stats.polygons_with_any_text,
     }
-    if path.is_file():
-        try:
-            _verify_release_yaml_fields(
-                path.read_text(encoding="utf-8"), "dataset.yaml", expected, errors
-            )
-        except (OSError, UnicodeDecodeError) as exc:
-            errors.append(f"dataset.yaml text fields are unreadable: {exc}")
-    if not readme.is_file():
+    _verify_release_yaml_path(root / "dataset.yaml", "dataset.yaml", expected, errors)
+    _verify_release_readme(root / "README.md", stats, expected, errors)
+
+
+def _verify_release_yaml_path(
+    path: Path,
+    label: str,
+    expected: dict[str, object],
+    errors: list[str],
+) -> None:
+    """Verify generated fields in one release YAML file when it exists."""
+    if not path.is_file():
         return
     try:
-        readme_content = readme.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"{label} text fields are unreadable: {exc}")
+        return
+    _verify_release_yaml_fields(content, label, expected, errors)
+
+
+def _verify_release_readme(
+    path: Path,
+    stats: Any,
+    expected: dict[str, object],
+    errors: list[str],
+) -> None:
+    """Verify README front matter and its generated language section."""
+    if not path.is_file():
+        return
+    try:
+        readme_content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         errors.append(f"README front matter text fields are unreadable: {exc}")
         return
@@ -305,10 +324,16 @@ def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None
             errors,
             require_present=False,
         )
+    _verify_release_language_section(readme_content, stats, errors)
+
+
+def _verify_release_language_section(content: str, stats: Any, errors: list[str]) -> None:
+    """Verify an existing README language section against canonical totals."""
+    normalized = content.replace("\r\n", "\n")
+    language_match = re.search(r"(?ms)^## Languages\n.*?(?=^## |\Z)", normalized)
+    if language_match is None:
+        return
     expected_languages = "\n".join(_render_language_section(stats)) + "\n"
-    language_match = re.search(
-        r"(?ms)^## Languages\n.*?(?=^## |\Z)", readme_content.replace("\r\n", "\n")
-    )
     if language_match is not None and language_match.group(0) != expected_languages:
         errors.append("README Languages section does not match canonical text statistics")
 

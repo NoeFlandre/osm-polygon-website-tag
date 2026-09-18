@@ -31,10 +31,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
 from osm_polygon_website_tag.reporting.card import refresh_card_for_release
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
-from osm_polygon_website_tag.reporting.text_population import (
-    text_population_manifest_entries,
-    text_population_parquets,
-)
+from osm_polygon_website_tag.reporting.text_population import text_population_parquets
 from osm_polygon_website_tag.reporting.verification.receipt import (
     verify_receipt_before_card_refresh,
 )
@@ -247,7 +244,7 @@ def _require_release_bound_text_population(root: Path) -> None:
             label="release completion receipt",
         )
         expected = payload.get("text_population_manifest")
-        actual = list(text_population_manifest_entries(root))
+        actual = list(_text_population_manifest_entries_from_paths(population_paths))
         if expected != actual:
             raise ValueError(
                 "release requires external text population shards bound by the completion receipt"
@@ -264,8 +261,23 @@ def _text_population_release_entries(root: Path) -> tuple[tuple[str, int, str], 
             int(entry["size_bytes"]),
             str(entry["sha256"]),
         )
-        for entry in text_population_manifest_entries(root)
+        for entry in _text_population_manifest_entries_from_paths(text_population_parquets(root))
     )
+
+
+def _text_population_manifest_entries_from_paths(
+    paths: list[Path],
+) -> tuple[dict[str, int | str], ...]:
+    """Build logical receipt entries from the exact selected shard paths."""
+    entries = [
+        {
+            "path": f"polygons/{path.name}",
+            "size_bytes": path.stat().st_size,
+            "sha256": hash_file(path),
+        }
+        for path in paths
+    ]
+    return tuple(sorted(entries, key=lambda item: str(item["path"])))
 
 
 def _raise_for_external_text_population_paths(
@@ -717,11 +729,21 @@ def _verify_remote_text_population_identity(
         return
     remote = _remote_parquet_entries(api, repo_id, revision)
     for path, size_bytes, digest in expected:
-        actual = remote.get(path)
-        if actual is None:
-            raise _RemoteDataMismatchError(f"remote text population shard missing: {path}")
-        if actual["size_bytes"] != size_bytes or actual["sha256"] != digest:
-            raise _RemoteDataMismatchError(f"remote text population shard mismatch: {path}")
+        _verify_remote_text_population_entry(remote, path, size_bytes, digest)
+
+
+def _verify_remote_text_population_entry(
+    remote: dict[str, dict[str, int | str]],
+    path: str,
+    size_bytes: int,
+    digest: str,
+) -> None:
+    """Verify one selected text shard against bounded remote metadata."""
+    actual = remote.get(path)
+    if actual is None:
+        raise _RemoteDataMismatchError(f"remote text population shard missing: {path}")
+    if actual["size_bytes"] != size_bytes or actual["sha256"] != digest:
+        raise _RemoteDataMismatchError(f"remote text population shard mismatch: {path}")
 
 
 def _remote_changed_files(

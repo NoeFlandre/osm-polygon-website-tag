@@ -979,6 +979,9 @@ def test_remote_release_helpers_fail_closed_on_invalid_remote_state(
     monkeypatch.setattr(release_module, "_verify_remote_data_identity", lambda *_args: None)
     monkeypatch.setattr(release_module, "_verify_remote_parquet_data_identity", lambda *_args: None)
     monkeypatch.setattr(
+        release_module, "_verify_remote_text_population_identity", lambda *_args: None
+    )
+    monkeypatch.setattr(
         release_module,
         "_remote_changed_files",
         lambda *_args: (item.relative_path,),
