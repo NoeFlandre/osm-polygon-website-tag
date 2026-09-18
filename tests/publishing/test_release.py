@@ -375,8 +375,10 @@ def test_repeated_apply_skips_upload_when_remote_is_already_current(run_dir: Pat
 
     assert first.uploaded is True
     assert first.no_op is False
+    assert first.to_payload()["changed_files"] == list(CARD_RELEASE_FILES)
     assert second.uploaded is False
     assert second.no_op is True
+    assert second.to_payload()["changed_files"] == []
     assert second.revision == "remote-revision"
     assert len(uploader.calls) == 1
     assert len(verifier_calls) == 1

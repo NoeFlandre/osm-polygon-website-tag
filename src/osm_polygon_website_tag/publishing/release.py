@@ -78,6 +78,7 @@ class CardReleaseReport:
     parquet_manifest_sha256: str = ""
     uploaded: bool = False
     no_op: bool = False
+    changed_files: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -96,6 +97,7 @@ class CardReleaseReport:
             "data_manifest_sha256": self.data_manifest_sha256,
             "parquet_manifest_sha256": self.parquet_manifest_sha256,
             "no_op": self.no_op,
+            "changed_files": list(self.changed_files),
             "repo_id": self.repo_id,
             "revision": self.revision,
             "run_dir": self.run_dir,
@@ -713,6 +715,11 @@ def release_card_and_stats(
         parquet_manifest_sha256=compute_parquet_manifest_sha256(root),
         uploaded=publication.uploaded if publication else False,
         no_op=bool(publication and not publication.uploaded),
+        changed_files=(
+            tuple(item.relative_path for item in files)
+            if publication and publication.uploaded
+            else ()
+        ),
     )
 
 
