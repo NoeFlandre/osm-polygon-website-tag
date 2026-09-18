@@ -161,3 +161,89 @@ def test_real_repository_diff_is_readable() -> None:
     paths = mutation_scope.changed_paths("HEAD", cwd=Path(__file__).resolve().parents[2])
 
     assert paths == []
+
+
+_SOURCE = '''\
+"""Module."""
+
+
+def kept() -> int:
+    """Untouched."""
+    return 1
+
+
+def changed() -> int:
+    """Touched."""
+    return 2
+
+
+class Holder:
+    """Holder."""
+
+    def method(self) -> int:
+        """Touched method."""
+        return 3
+'''
+
+
+def test_changed_functions_scope_to_their_own_mutants(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "sample.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(_SOURCE, encoding="utf-8")
+    relative = "src/osm_polygon_website_tag/reporting/sample.py"
+
+    filters = mutation_scope.function_filters({relative: {11, 19}}, root=tmp_path)
+
+    assert filters == {
+        "osm_polygon_website_tag.reporting.sample": [
+            "osm_polygon_website_tag.reporting.sample.x_changed__mutmut_*",
+            "osm_polygon_website_tag.reporting.sample.xǁHolderǁmethod__mutmut_*",
+        ]
+    }
+
+
+def test_a_change_outside_every_function_scopes_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "sample.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(_SOURCE, encoding="utf-8")
+    relative = "src/osm_polygon_website_tag/reporting/sample.py"
+
+    filters = mutation_scope.function_filters({relative: {1}}, root=tmp_path)
+
+    assert filters == {
+        "osm_polygon_website_tag.reporting.sample": ["osm_polygon_website_tag.reporting.sample.*"]
+    }
+
+
+def test_a_changed_import_does_not_charge_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "imports.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        '"""Module."""\n\nfrom pathlib import Path\n\n\ndef only(value: Path) -> Path:\n'
+        '    """Only."""\n    return value\n',
+        encoding="utf-8",
+    )
+    relative = "src/osm_polygon_website_tag/reporting/imports.py"
+
+    assert mutation_scope.function_filters({relative: {3}}, root=tmp_path) == {}
+    assert mutation_scope.function_filters({relative: {3, 8}}, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.imports": [
+            "osm_polygon_website_tag.reporting.imports.x_only__mutmut_*"
+        ]
+    }
+
+
+def test_a_changed_module_constant_still_charges_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "constant.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        '"""Module."""\n\nLIMIT = 3\n\n\ndef only() -> int:\n    """Only."""\n    return LIMIT\n',
+        encoding="utf-8",
+    )
+    relative = "src/osm_polygon_website_tag/reporting/constant.py"
+
+    assert mutation_scope.function_filters({relative: {3}}, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.constant": [
+            "osm_polygon_website_tag.reporting.constant.*"
+        ]
+    }
