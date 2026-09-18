@@ -126,6 +126,23 @@ class _PublicationResult:
     uploaded: bool
 
 
+def _publication_report_fields(
+    files: tuple[ReleasedFile, ...],
+    publication: _PublicationResult | None,
+) -> tuple[str | None, bool, bool, tuple[str, ...]]:
+    """Return stable report fields for dry-run, upload, and no-op outcomes."""
+    if publication is None:
+        return None, False, False, ()
+    if not publication.uploaded:
+        return publication.revision, False, True, ()
+    return (
+        publication.revision,
+        True,
+        False,
+        tuple(item.relative_path for item in files),
+    )
+
+
 class _RemoteArtifactMismatchError(ValueError):
     """The remote metadata needs the planned upload."""
 
@@ -703,6 +720,7 @@ def release_card_and_stats(
         verifier=verifier,
         remote_checker=remote_checker,
     )
+    revision, uploaded, no_op, changed_files = _publication_report_fields(files, publication)
     return CardReleaseReport(
         repo_id=repo_id,
         run_dir=str(root),
@@ -710,16 +728,12 @@ def release_card_and_stats(
         verified_shards=tuple(report.checked_shards),
         recomputed=recomputed,
         published=apply,
-        revision=publication.revision if publication else None,
+        revision=revision,
         data_manifest_sha256=identity,
         parquet_manifest_sha256=compute_parquet_manifest_sha256(root),
-        uploaded=publication.uploaded if publication else False,
-        no_op=bool(publication and not publication.uploaded),
-        changed_files=(
-            tuple(item.relative_path for item in files)
-            if publication and publication.uploaded
-            else ()
-        ),
+        uploaded=uploaded,
+        no_op=no_op,
+        changed_files=changed_files,
     )
 
 

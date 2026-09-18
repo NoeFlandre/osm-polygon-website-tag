@@ -377,7 +377,25 @@ def _update_release_yaml(document: bytes | None, stats: CardStats) -> bytes:
 
 def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:
     """Update all scalar metrics that the generated card front matter exposes."""
-    values = {
+    required_values = _release_yaml_values(stats)
+    optional_values = {
+        "detected_language_count": stats.detected_language_count,
+        "website_language_count": stats.website_language_count,
+        "contact_website_language_count": stats.contact_website_language_count,
+        "sentence_count": stats.total_sentence_count,
+        "website_segmented_count": stats.website_sentence_row_count,
+        "contact_website_segmented_count": stats.contact_website_sentence_row_count,
+    }
+    return _replace_release_yaml_fields(
+        text,
+        {**required_values, **optional_values},
+        required_keys=required_values,
+    )
+
+
+def _release_yaml_values(stats: CardStats) -> dict[str, object]:
+    """Return the required scalar values exposed in generated front matter."""
+    return {
         "observation_count": stats.observation_count,
         "public_row_count": stats.public_row_count,
         "rejection_count": stats.rejection_count,
@@ -396,28 +414,48 @@ def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:
         "polygon_density_row_count": stats.polygon_density_row_count,
         "occupied_h3_cell_count": stats.occupied_h3_cell_count,
     }
-    optional_values = {
-        "detected_language_count": stats.detected_language_count,
-        "website_language_count": stats.website_language_count,
-        "contact_website_language_count": stats.contact_website_language_count,
-        "sentence_count": stats.total_sentence_count,
-        "website_segmented_count": stats.website_sentence_row_count,
-        "contact_website_segmented_count": stats.contact_website_sentence_row_count,
-    }
+
+
+def _replace_release_yaml_fields(
+    text: str,
+    values: Mapping[str, object],
+    *,
+    required_keys: Collection[str],
+) -> bytes:
+    """Replace generated fields and append missing required or nonzero fields."""
+    newline = "\r\n" if "\r\n" in text else "\n"
     updated = text
     missing: list[str] = []
-    for key, value in (*values.items(), *optional_values.items()):
-        replacement = f"{key}: {value}"
-        updated, found = _replace_density_yaml_field(updated, key, replacement)
-        if not found and (key in values or value):
-            missing.append(replacement)
+    for key, value in values.items():
+        updated, addition = _replace_one_release_yaml_field(updated, key, value, required_keys)
+        if addition is not None:
+            missing.append(addition)
     if missing:
-        updated = _append_density_yaml_fields(
-            updated,
-            missing,
-            "\r\n" if "\r\n" in updated else "\n",
-        )
+        updated = _append_density_yaml_fields(updated, missing, newline)
     return updated.encode("utf-8")
+
+
+def _replace_one_release_yaml_field(
+    text: str,
+    key: str,
+    value: object,
+    required_keys: Collection[str],
+) -> tuple[str, str | None]:
+    """Replace one release field and return an optional missing-field addition."""
+    replacement = f"{key}: {value}"
+    updated, found = _replace_density_yaml_field(text, key, replacement)
+    if not found and _should_append_release_yaml_field(key, value, required_keys):
+        return updated, replacement
+    return updated, None
+
+
+def _should_append_release_yaml_field(
+    key: str,
+    value: object,
+    required_keys: Collection[str],
+) -> bool:
+    """Return whether a missing generated field belongs in the document."""
+    return key in required_keys or bool(value)
 
 
 def _update_density_yaml_text(text: str, stats: CardStats) -> bytes:

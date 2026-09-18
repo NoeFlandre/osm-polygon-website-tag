@@ -551,7 +551,7 @@ def test_cli_geometry_stats_prints_the_machine_readable_report(tmp_path: Path, c
 
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == "v1"
+    assert payload["schema_version"] == "v2"
     assert payload["row_count"] == compute_geometry_stats(run_dir).row_count
 
 

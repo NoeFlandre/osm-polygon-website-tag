@@ -148,17 +148,33 @@ def text_population_parquets(
 ) -> list[Path]:
     """Return selected shards that prove the global text contract."""
     root = Path(run_dir)
+    paths = sorted(_text_population_directory(root).glob("*.parquet"))
+    return _contract_paths(_filter_source_paths(paths, source_names))
+
+
+def _text_population_directory(root: Path) -> Path:
+    """Resolve regional polygon shards for canonical runs when available."""
     directory = root / "polygons"
     observations = root / "analysis_observations"
-    if observations.is_symlink():
-        with contextlib.suppress(OSError):
-            regional = observations.resolve().parent / "polygons"
-            if regional.is_dir():
-                directory = regional
-    paths = sorted(directory.glob("*.parquet"))
-    if source_names is not None:
-        stems = {name.removesuffix(".osm.pbf") for name in source_names}
-        paths = [path for path in paths if path.stem in stems]
+    if not observations.is_symlink():
+        return directory
+    try:
+        regional = observations.resolve().parent / "polygons"
+    except OSError:
+        return directory
+    return regional if regional.is_dir() else directory
+
+
+def _filter_source_paths(paths: list[Path], source_names: Collection[str] | None) -> list[Path]:
+    """Limit shards to the requested source names."""
+    if source_names is None:
+        return paths
+    stems = {name.removesuffix(".osm.pbf") for name in source_names}
+    return [path for path in paths if path.stem in stems]
+
+
+def _contract_paths(paths: Collection[Path]) -> list[Path]:
+    """Keep only shards containing the complete text contract."""
     return [path for path in paths if _REQUIRED_COLUMNS.issubset(pq.read_schema(path).names)]
 
 
@@ -175,28 +191,23 @@ def _canonical_connection(root: Path, paths: Collection[Path]) -> Iterator[Any]:
 
 def _create_views(connection: Any, paths: Collection[Path]) -> None:
     """Create source, qualifying, and canonical winner views."""
+    _create_source_view(connection, paths)
+    _create_population_views(connection)
+    _create_ranked_view(
+        connection,
+        "canonical_any",
+        "website_qualifies OR contact_website_qualifies",
+    )
+    _create_ranked_view(connection, "canonical_website", "website_qualifies")
+    _create_ranked_view(connection, "canonical_contact", "contact_website_qualifies")
+
+
+def _create_source_view(connection: Any, paths: Collection[Path]) -> None:
+    """Create the normalized source view with nullable optional columns."""
     available = set().union(*(set(pq.read_schema(path).names) for path in paths))
-    selected: list[str] = []
-    type_by_name = dict(_OPTIONAL_COLUMNS)
-    base_types = {
-        "lat": "DOUBLE",
-        "lon": "DOUBLE",
-        "osm_type": "VARCHAR",
-        "osm_id": "BIGINT",
-        "website_text": "VARCHAR",
-        "website_text_status": "VARCHAR",
-        "contact_website_text": "VARCHAR",
-        "contact_website_text_status": "VARCHAR",
-    }
-    type_by_name.update(base_types)
-    for name in (*base_types, *(column for column, _type in _OPTIONAL_COLUMNS)):
-        if name in selected:
-            continue
-        sql_type = type_by_name[name]
-        if name in available:
-            selected.append(f"CAST({name} AS {sql_type}) AS {name}")
-        else:
-            selected.append(f"CAST(NULL AS {sql_type}) AS {name}")
+    type_by_name = _text_column_types()
+    names = tuple(dict.fromkeys((*type_by_name, *(column for column, _ in _OPTIONAL_COLUMNS))))
+    selected = [_source_projection(name, available, type_by_name) for name in names]
     selected.append("filename AS __source_path")
     file_list = ", ".join(_sql_string(path) for path in paths)
     connection.execute(
@@ -206,6 +217,36 @@ def _create_views(connection: Any, paths: Collection[Path]) -> None:
         FROM read_parquet([{file_list}], union_by_name=true, filename=true)
         """,  # noqa: S608
     )
+
+
+def _text_column_types() -> dict[str, str]:
+    """Return the normalized types for required and optional text columns."""
+    types = dict(_OPTIONAL_COLUMNS)
+    types.update(
+        {
+            "lat": "DOUBLE",
+            "lon": "DOUBLE",
+            "osm_type": "VARCHAR",
+            "osm_id": "BIGINT",
+            "website_text": "VARCHAR",
+            "website_text_status": "VARCHAR",
+            "contact_website_text": "VARCHAR",
+            "contact_website_text_status": "VARCHAR",
+        }
+    )
+    return types
+
+
+def _source_projection(name: str, available: set[str], types: dict[str, str]) -> str:
+    """Return one normalized DuckDB projection expression."""
+    sql_type = types[name]
+    if name in available:
+        return f"CAST({name} AS {sql_type}) AS {name}"
+    return f"CAST(NULL AS {sql_type}) AS {name}"
+
+
+def _create_population_views(connection: Any) -> None:
+    """Create qualifying views from the normalized source rows."""
     connection.execute(
         """
         CREATE TEMP VIEW all_rows AS
@@ -234,13 +275,6 @@ def _create_views(connection: Any, paths: Collection[Path]) -> None:
         WHERE website_qualifies OR contact_website_qualifies
         """
     )
-    _create_ranked_view(
-        connection,
-        "canonical_any",
-        "website_qualifies OR contact_website_qualifies",
-    )
-    _create_ranked_view(connection, "canonical_website", "website_qualifies")
-    _create_ranked_view(connection, "canonical_contact", "contact_website_qualifies")
 
 
 def _create_ranked_view(connection: Any, name: str, predicate: str) -> None:

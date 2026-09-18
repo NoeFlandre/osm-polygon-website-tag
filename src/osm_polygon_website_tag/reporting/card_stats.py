@@ -224,17 +224,20 @@ def _add_enriched_source_count(stats: CardStats, shard: Path) -> None:
     parquet = pq.ParquetFile(shard)
     if not _TEXT_STATS_COLUMNS.issubset(parquet.schema_arrow.names):
         return
-    retryable = False
-    for batch in parquet.iter_batches(
-        columns=["website_text_status", "contact_website_text_status"], batch_size=8_192
-    ):
-        retryable = (
-            status_has_retryable_value(batch.column("website_text_status"))
-            or status_has_retryable_value(batch.column("contact_website_text_status"))
-            or retryable
-        )
-    if not retryable:
+    if not _has_retryable_text_status(parquet):
         stats.enriched_sources_count += 1
+
+
+def _has_retryable_text_status(parquet: pq.ParquetFile) -> bool:
+    """Return whether a shard contains a retryable text status."""
+    return any(
+        status_has_retryable_value(batch.column(column))
+        for batch in parquet.iter_batches(
+            columns=["website_text_status", "contact_website_text_status"],
+            batch_size=8_192,
+        )
+        for column in ("website_text_status", "contact_website_text_status")
+    )
 
 
 def _set_unique_polygon_text_count(stats: CardStats, public_shards: Collection[Path]) -> None:
