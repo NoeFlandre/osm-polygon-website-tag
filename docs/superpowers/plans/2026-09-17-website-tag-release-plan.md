@@ -281,4 +281,3 @@ Report issue/PR statuses, branch and merge commits, every gate result, selected 
 - Spec coverage: Tasks 1–3 cover identity, canonical selection, captions, card/map/report agreement, geometry, and README preservation. Task 4 covers legacy receipts, remote Parquet/manifests, changed-remote detection, and no-op release. Task 5 covers nested initializer scope and zero-mutant/no-test guards. Tasks 6–8 cover quality, review, merge, project, publication, and independent verification.
 - Placeholder scan: the only angle-bracket value is the runtime argument RUN_DIR, resolved from the verified HDD inventory in Task 8.
 - Type consistency: AggregationMode, TextCoordinate, TextPopulationSummary, and compute/iterator interfaces are introduced in Task 2 and consumed in Tasks 1 and 3; GeometryStats remains a separate population.
-
