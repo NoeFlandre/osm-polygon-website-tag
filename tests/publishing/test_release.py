@@ -24,7 +24,11 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.finalize import _write_completion_receipt, finalize_run
+from osm_polygon_website_tag.reporting.finalize import (
+    _write_completion_receipt,
+    finalize_run,
+    replace_receipt_atomic,
+)
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 
@@ -188,6 +192,42 @@ def test_release_rebuilds_missing_metadata_before_verification(run_dir: Path) ->
     assert report.recomputed is True
     assert (run_dir / "README.md").is_file()
     assert (run_dir / "stats.json").is_file()
+
+
+def test_release_rebuilds_missing_readme_from_trusted_dataset_yaml(run_dir: Path) -> None:
+    custom = (
+        "license: mit",
+        "path: custom/*.parquet",
+    )
+    for relative in ("README.md", "dataset.yaml"):
+        path = run_dir / relative
+        text = path.read_text(encoding="utf-8")
+        text = text.replace("license: odbl", custom[0]).replace(
+            "path: polygons/*.parquet", custom[1]
+        )
+        path.write_text(text, encoding="utf-8")
+    replace_receipt_atomic(run_dir)
+    (run_dir / "README.md").unlink()
+
+    release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert custom[0] in (run_dir / "README.md").read_text(encoding="utf-8")
+    assert custom[1] in (run_dir / "README.md").read_text(encoding="utf-8")
+    assert custom[0] in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+    assert custom[1] in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+
+
+def test_release_refuses_unrecoverable_missing_readme_metadata(run_dir: Path) -> None:
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace("license: odbl", "license: custom"),
+        encoding="utf-8",
+    )
+    replace_receipt_atomic(run_dir)
+    readme.unlink()
+
+    with pytest.raises(ValueError, match="missing README custom metadata"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
 def test_release_rebuilds_missing_dataset_yaml_before_verification(run_dir: Path) -> None:

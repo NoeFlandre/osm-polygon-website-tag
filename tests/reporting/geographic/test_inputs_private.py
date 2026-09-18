@@ -151,6 +151,30 @@ def test_path_columns_reject_missing_coordinates_and_skip_unproven_text() -> Non
         )
         is None
     )
+    assert _path_columns(
+        Path("identity.parquet"),
+        {
+            "lat",
+            "lon",
+            "osm_type",
+            "osm_id",
+            "website_text",
+            "website_text_status",
+            "contact_website_text",
+            "contact_website_text_status",
+        },
+        extracted_text_only=True,
+        include_identity=True,
+    ) == [
+        "osm_type",
+        "osm_id",
+        "lat",
+        "lon",
+        "website_text",
+        "website_text_status",
+        "contact_website_text",
+        "contact_website_text_status",
+    ]
 
 
 def test_unique_text_batch_rows_reserve_qualified_identities_once() -> None:
@@ -192,6 +216,33 @@ def test_unique_text_batch_rows_rejects_null_coordinates_after_text_selection() 
             pa.array([1]),
             pa.array([None], type=pa.float64()),
             pa.array([20.0]),
+            pa.array(["text"]),
+            pa.array(["success"]),
+            pa.array([None], type=pa.string()),
+            pa.array(["absent"]),
+        ],
+        names=[
+            "osm_type",
+            "osm_id",
+            "lat",
+            "lon",
+            "website_text",
+            "website_text_status",
+            "contact_website_text",
+            "contact_website_text_status",
+        ],
+    )
+    with pytest.raises(ValueError, match=r"null coordinate.*row 0"):
+        list(_iter_unique_text_batch_rows(Path("source.parquet"), batch, 0, set()))
+
+
+def test_unique_text_batch_rows_rejects_null_longitude_after_text_selection() -> None:
+    batch = pa.record_batch(
+        [
+            pa.array(["way"]),
+            pa.array([1]),
+            pa.array([10.0]),
+            pa.array([None], type=pa.float64()),
             pa.array(["text"]),
             pa.array(["success"]),
             pa.array([None], type=pa.string()),
@@ -359,6 +410,7 @@ def test_path_iterators_select_bounded_columns_and_accumulate_offsets(
     path = Path("source.parquet")
     first = pa.record_batch([pa.array([1.0, 2.0]), pa.array([3.0, 4.0])], names=["lat", "lon"])
     second = pa.record_batch([pa.array([5.0]), pa.array([6.0])], names=["lat", "lon"])
+    third = pa.record_batch([pa.array([7.0]), pa.array([8.0])], names=["lat", "lon"])
     calls: list[dict[str, object]] = []
     column_calls: list[tuple[Path, bool, bool]] = []
 
@@ -369,6 +421,7 @@ def test_path_iterators_select_bounded_columns_and_accumulate_offsets(
             calls.append(kwargs)
             yield first
             yield second
+            yield third
 
     monkeypatch.setattr(pq, "ParquetFile", lambda _path: FakeParquet())
     monkeypatch.setattr(
@@ -382,6 +435,7 @@ def test_path_iterators_select_bounded_columns_and_accumulate_offsets(
         (path, 0, 1.0, 3.0),
         (path, 1, 2.0, 4.0),
         (path, 2, 5.0, 6.0),
+        (path, 3, 7.0, 8.0),
     ]
     assert calls == [{"columns": ["lat", "lon"], "batch_size": 8192}]
     assert column_calls == [(path, False, False)]
@@ -474,7 +528,11 @@ def test_unique_text_path_iterator_forwards_exact_inputs_and_offsets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = Path("source.parquet")
-    batches = [SimpleNamespace(num_rows=2), SimpleNamespace(num_rows=1)]
+    batches = [
+        SimpleNamespace(num_rows=2),
+        SimpleNamespace(num_rows=1),
+        SimpleNamespace(num_rows=1),
+    ]
     parquet_paths: list[Path] = []
     column_calls: list[tuple[Path, set[str], bool, bool]] = []
     forwarded: list[tuple[Path, object, int, set[tuple[str, int]]]] = []
@@ -515,6 +573,7 @@ def test_unique_text_path_iterator_forwards_exact_inputs_and_offsets(
     assert forwarded == [
         (path, batches[0], 0, seen),
         (path, batches[1], 2, seen),
+        (path, batches[2], 3, seen),
     ]
 
 

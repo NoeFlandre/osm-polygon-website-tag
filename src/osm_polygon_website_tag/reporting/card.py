@@ -96,6 +96,7 @@ def build_card(
     run_dir: Path | str,
     *,
     source_names: Collection[str] | None = None,
+    _yaml_source: bytes | None = None,
 ) -> Path:
     """Build (or rebuild) the README card for ``run_dir``.
 
@@ -125,6 +126,10 @@ def build_card(
         stats, geometry=geometry, schema=_public_schema_for_card(run_dir, source_names)
     )
     front_matter = _render_yaml_front_matter(stats)
+    if _yaml_source is not None:
+        front_matter = _merge_yaml_custom_metadata(
+            front_matter.encode("utf-8"), _yaml_source
+        ).decode("utf-8")
     readme = front_matter + "\n" + body
     path = run_dir / "README.md"
     yaml_path = run_dir / "dataset.yaml"
@@ -173,7 +178,9 @@ def update_card_with_geometry(
     root = Path(run_dir)
     readme = root / "README.md"
     if not readme.is_file():
-        return build_card(root, source_names=source_names)
+        yaml_path = root / "dataset.yaml"
+        yaml_source = yaml_path.read_bytes() if yaml_path.is_file() else None
+        return build_card(root, source_names=source_names, _yaml_source=yaml_source)
 
     geometry = compute_geometry_stats(root, source_names=source_names)
     original = readme.read_bytes()
@@ -209,7 +216,9 @@ def refresh_card_for_release(
     root = Path(run_dir)
     readme = root / "README.md"
     if not readme.is_file():
-        return build_card(root, source_names=source_names)
+        yaml_path = root / "dataset.yaml"
+        yaml_source = yaml_path.read_bytes() if yaml_path.is_file() else None
+        return build_card(root, source_names=source_names, _yaml_source=yaml_source)
 
     text_population = compute_text_population_summary(root, source_names=source_names)
     summary = compute_polygon_density_summary(
@@ -455,6 +464,43 @@ def _update_readme_front_matter(document: bytes, stats: CardStats) -> bytes:
         return document
     updated = _update_existing_release_yaml(match.group(0), stats)
     return updated + document[match.end() :]
+
+
+def _merge_yaml_custom_metadata(generated: bytes, source: bytes) -> bytes:
+    """Combine trusted custom YAML with freshly generated release fields."""
+    custom = "\n".join(
+        line
+        for line in _yaml_custom_text(source.decode("utf-8")).replace("\r\n", "\n").splitlines()
+        if line.strip() != "---"
+    ).strip()
+    derived = "\n".join(_yaml_derived_lines(generated.decode("utf-8"))).strip()
+    content = "\n".join(part for part in (custom, derived) if part)
+    return f"---\n{content}\n---".encode()
+
+
+def _yaml_derived_lines(document: str) -> list[str]:
+    """Return generated YAML fields while retaining their list values."""
+    derived: list[str] = []
+    include_values = False
+    for line in document.replace("\r\n", "\n").splitlines():
+        key = _yaml_top_level_key(line)
+        if key is not None:
+            include_values = _is_derived_yaml_key(key)
+            if include_values:
+                derived.append(line)
+        elif _is_derived_yaml_list_value(include_values, line):
+            derived.append(line)
+    return derived
+
+
+def _is_derived_yaml_key(key: str) -> bool:
+    """Return whether a top-level YAML key is release-generated."""
+    return key in _RELEASE_YAML_DERIVED_KEYS
+
+
+def _is_derived_yaml_list_value(include_values: bool, line: str) -> bool:
+    """Return whether one continuation line belongs to a derived list."""
+    return include_values and _is_yaml_list_value(line)
 
 
 def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:

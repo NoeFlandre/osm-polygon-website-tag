@@ -28,7 +28,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publ
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     parquet_manifest_sha256 as compute_parquet_manifest_sha256,
 )
-from osm_polygon_website_tag.reporting.card import refresh_card_for_release
+from osm_polygon_website_tag.reporting.card import refresh_card_for_release, yaml_custom_sha256
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.text_population import text_population_parquets
@@ -384,7 +384,9 @@ def _require_verified(report: VerificationReport, run_dir: Path) -> None:
 def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     """Rebuild the card and report; return whether their bytes changed."""
     before = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
+    expected_readme_custom = _expected_missing_readme_custom_identity(run_dir)
     _update_card_safely(run_dir)
+    _verify_recreated_readme_custom_identity(run_dir, expected_readme_custom)
     after = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
     _require_data_identity(run_dir, expected_data_identity)
     receipt_needs_data_identity = (
@@ -394,6 +396,27 @@ def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
         return False
     replace_receipt_atomic(run_dir)
     return True
+
+
+def _verify_recreated_readme_custom_identity(root: Path, expected: str | None) -> None:
+    """Reject a regenerated README that cannot recover trusted custom metadata."""
+    if expected is not None and yaml_custom_sha256(root / "README.md") != expected:
+        raise ValueError("missing README custom metadata cannot be recovered")
+
+
+def _expected_missing_readme_custom_identity(root: Path) -> str | None:
+    """Return trusted README metadata identity when regeneration is required."""
+    if (root / "README.md").is_file():
+        return None
+    payload = _read_receipt_payload(
+        _completion_receipt_path(root),
+        error_type=ValueError,
+        label="release completion receipt",
+    )
+    expected = payload.get("readme_yaml_custom_sha256")
+    if not isinstance(expected, str) or not expected:
+        raise ValueError("missing README custom metadata cannot be recovered")
+    return expected
 
 
 def _update_card_safely(run_dir: Path) -> None:
