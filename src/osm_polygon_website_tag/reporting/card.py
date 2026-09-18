@@ -353,16 +353,36 @@ def _update_language_section(card: bytes, stats: CardStats) -> bytes:
     """Replace the generated language block with canonical population totals."""
     newline = b"\r\n" if b"\r\n" in card else b"\n"
     existing = _LANGUAGE_HEADING.search(card)
-    if not stats.detected_language_count:
-        return _replace_section(card, existing, b"") if existing is not None else card
-    block = newline.join(line.encode("utf-8") for line in _render_language_section(stats))
-    block += newline
     if existing is not None:
-        return _replace_section(card, existing, block)
+        return _replace_existing_language_section(card, existing, stats, newline)
+    if not stats.detected_language_count:
+        return card
+    return _insert_new_language_section(card, stats, newline)
+
+
+def _replace_existing_language_section(
+    card: bytes,
+    existing: re.Match[bytes],
+    stats: CardStats,
+    newline: bytes,
+) -> bytes:
+    """Replace or remove an existing generated language section."""
+    if not stats.detected_language_count:
+        return _replace_section(card, existing, b"")
+    return _replace_section(card, existing, _language_section_block(stats, newline))
+
+
+def _insert_new_language_section(card: bytes, stats: CardStats, newline: bytes) -> bytes:
+    """Insert a missing generated language section after website text."""
     website = _WEBSITE_TEXT_HEADING.search(card)
     if website is not None:
-        return _insert_after_section(card, website, block)
-    return _append_geometry_block(card, block, newline)
+        return _insert_after_section(card, website, _language_section_block(stats, newline))
+    return _append_geometry_block(card, _language_section_block(stats, newline), newline)
+
+
+def _language_section_block(stats: CardStats, newline: bytes) -> bytes:
+    """Render one language section using the card's newline convention."""
+    return newline.join(line.encode("utf-8") for line in _render_language_section(stats)) + newline
 
 
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
@@ -417,16 +437,30 @@ def _replace_release_language_tags(text: str, stats: CardStats) -> str:
     newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.splitlines(keepends=True)
     replacement = [f"{line}{newline}" for line in _language_tag_lines(stats)]
-    for index, line in enumerate(lines):
-        if not line.startswith("language:"):
-            continue
-        end = index + 1
-        while end < len(lines) and re.match(r"^[ \t]+- ", lines[end]):
-            end += 1
-        return "".join((*lines[:index], *replacement, *lines[end:]))
+    language_range = _language_yaml_range(lines)
+    if language_range is not None:
+        start, end = language_range
+        return "".join((*lines[:start], *replacement, *lines[end:]))
     if not replacement:
         return text
-    insertion = next(
+    insertion = _language_yaml_insertion_index(lines)
+    return "".join((*lines[:insertion], *replacement, *lines[insertion:]))
+
+
+def _language_yaml_range(lines: list[str]) -> tuple[int, int] | None:
+    """Return the top-level language field range, including its list values."""
+    for index, line in enumerate(lines):
+        if line.startswith("language:"):
+            end = index + 1
+            while end < len(lines) and re.match(r"^[ \t]+- ", lines[end]):
+                end += 1
+            return index, end
+    return None
+
+
+def _language_yaml_insertion_index(lines: list[str]) -> int:
+    """Return a stable insertion point for a missing language field."""
+    return next(
         (
             index
             for index, line in enumerate(lines)
@@ -434,7 +468,6 @@ def _replace_release_language_tags(text: str, stats: CardStats) -> str:
         ),
         len(lines),
     )
-    return "".join((*lines[:insertion], *replacement, *lines[insertion:]))
 
 
 def _release_yaml_values(stats: CardStats) -> dict[str, object]:

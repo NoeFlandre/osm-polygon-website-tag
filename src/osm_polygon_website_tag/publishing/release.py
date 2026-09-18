@@ -224,13 +224,7 @@ def _require_complete_release(root: Path) -> str:
 def _require_release_bound_text_population(root: Path) -> None:
     """Refuse release-time reducers that read Parquets outside the run root."""
     resolved_root = root.resolve()
-    external = []
-    for path in text_population_parquets(root):
-        try:
-            if not path.resolve().is_relative_to(resolved_root):
-                external.append(path)
-        except OSError as exc:
-            raise ValueError(f"release cannot resolve text population shard: {path}") from exc
+    external = _external_text_population_paths(root, resolved_root)
     if external:
         names = ", ".join(str(path) for path in external[:3])
         suffix = "..." if len(external) > 3 else ""
@@ -238,6 +232,23 @@ def _require_release_bound_text_population(root: Path) -> None:
             "release requires text population shards inside the run root; "
             f"external shards found: {names}{suffix}"
         )
+
+
+def _external_text_population_paths(root: Path, resolved_root: Path) -> list[Path]:
+    """Return reducer inputs that resolve outside the release root."""
+    return [
+        path
+        for path in text_population_parquets(root)
+        if _is_external_text_population_path(path, resolved_root)
+    ]
+
+
+def _is_external_text_population_path(path: Path, resolved_root: Path) -> bool:
+    """Return whether one reducer input resolves outside the release root."""
+    try:
+        return not path.resolve().is_relative_to(resolved_root)
+    except OSError as exc:
+        raise ValueError(f"release cannot resolve text population shard: {path}") from exc
 
 
 def _completion_receipt_path(root: Path) -> Path:
