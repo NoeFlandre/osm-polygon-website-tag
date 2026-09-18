@@ -762,6 +762,19 @@ def test_update_density_yaml_inserts_missing_fields_before_newline_terminated_cl
     )
 
 
+def test_update_density_yaml_wrapper_handles_bytes_and_missing_documents() -> None:
+    stats = CardStats(
+        polygon_density_h3_resolution=3,
+        polygon_density_row_count=7,
+        occupied_h3_cell_count=5,
+    )
+
+    assert card_module._update_density_yaml(None, stats) == b""
+    assert b"polygon_density_row_count: 7" in card_module._update_density_yaml(
+        b"license: odbl\n---\n", stats
+    )
+
+
 def test_update_release_yaml_refreshes_global_text_fields_and_preserves_custom_fields() -> None:
     stats = CardStats(
         observation_count=1,
