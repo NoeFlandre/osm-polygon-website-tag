@@ -285,21 +285,6 @@ def _text_population_manifest_entries_from_paths(
     return tuple(sorted(entries, key=lambda item: str(item["path"])))
 
 
-def _raise_for_external_text_population_paths(
-    paths: list[Path],
-    resolved_root: Path,
-) -> None:
-    """Reject reducer inputs whose resolved paths escape the release root."""
-    external = _external_text_population_paths(paths, resolved_root)
-    if external:
-        names = ", ".join(str(path) for path in external[:3])
-        suffix = "..." if len(external) > 3 else ""
-        raise ValueError(
-            "release requires text population shards inside the run root; "
-            f"external shards found: {names}{suffix}"
-        )
-
-
 def _raise_for_unbound_text_population_paths(root: Path, paths: list[Path]) -> None:
     """Reject reducer inputs missing from the hashed release inventory."""
     unbound = _unbound_text_population_paths(paths, _release_inventory(root))

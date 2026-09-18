@@ -182,6 +182,34 @@ def test_receipt_helpers_validate_paths_files_and_digests(tmp_path: Path) -> Non
     assert errors == ["duplicate completion receipt path: missing.txt"]
 
 
+def test_legacy_yaml_custom_identity_covers_compatibility_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: dict[str, str | None] = {"dataset.yaml": "same", "README.md": "same"}
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", lambda path: values[path.name])
+    errors: list[str] = []
+
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == []
+
+    values["README.md"] = "different"
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == ["completion receipt custom YAML identity mismatch"]
+
+    errors.clear()
+    values["README.md"] = None
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == []
+
+    def unreadable(_path: Path) -> str:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", unreadable)
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == ["completion receipt custom YAML identity unreadable: unreadable"]
+
+
 def test_analysis_and_row_verification_helpers_are_deterministic(tmp_path: Path) -> None:
     errors: list[str] = []
     expected = {"a", "b"}
