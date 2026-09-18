@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
+from osm_polygon_website_tag.reporting import text_population
 from osm_polygon_website_tag.reporting.text_population import (
     TextCoordinate,
     compute_text_population_summary,
@@ -363,3 +365,67 @@ def test_population_status_buckets_use_failure_precedence(tmp_path: Path) -> Non
 
     assert population.website_empty_identity_count == 0
     assert population.website_failure_identity_count == 1
+
+
+def test_population_breaks_a_prefix_tie_on_extracted_text(tmp_path: Path) -> None:
+    """Two rows identical up to their text must still pick the text-ordered winner."""
+    shared = {
+        "osm_id": 42,
+        "lat": 48.0,
+        "lon": 2.0,
+        "source_pbf": "a.osm.pbf",
+        "polygon_id": "a:way/42",
+        "osm_version": 1,
+        "website_status": "success",
+        "contact_text": None,
+        "contact_status": "absent",
+        "contact_words": None,
+    }
+    rows = [
+        _row(website_text="zulu", website_words=9, **shared),
+        _row(website_text="alpha", website_words=4, **shared),
+    ]
+    _write_run(tmp_path, rows, split=False)
+
+    population = compute_text_population_summary(tmp_path)
+
+    assert population.unique_identity_count == 1
+    assert population.website_identity_count == 1
+    assert population.website_total_words == 4
+
+
+def test_a_prefix_tie_restores_the_text_bearing_population(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The text tie-break path must be the one that resolves a prefix tie."""
+    restored: list[bool] = []
+    original = text_population._restore_text_population_view
+
+    def record(connection: object) -> None:
+        restored.append(True)
+        original(connection)
+
+    monkeypatch.setattr(text_population, "_restore_text_population_view", record)
+    shared = {
+        "osm_id": 42,
+        "lat": 48.0,
+        "lon": 2.0,
+        "source_pbf": "a.osm.pbf",
+        "polygon_id": "a:way/42",
+        "osm_version": 1,
+        "website_status": "success",
+        "contact_text": None,
+        "contact_status": "absent",
+        "contact_words": None,
+    }
+    _write_run(
+        tmp_path,
+        [
+            _row(website_text="zulu", website_words=9, **shared),
+            _row(website_text="alpha", website_words=4, **shared),
+        ],
+        split=False,
+    )
+
+    assert compute_text_population_summary(tmp_path).website_total_words == 4
+    assert restored == [True]

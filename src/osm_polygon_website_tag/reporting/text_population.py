@@ -44,6 +44,38 @@ _OPTIONAL_COLUMNS: tuple[tuple[str, str], ...] = (
     ("contact_website_language", "VARCHAR"),
 )
 _BATCH_ROWS = 8_192
+_TEXT_COLUMNS = ("website_text", "contact_website_text")
+_PREFIX_SQL = """
+    osm_version DESC NULLS LAST,
+    osm_timestamp DESC NULLS LAST,
+    source_pbf ASC NULLS LAST,
+    polygon_id ASC NULLS LAST,
+    lat ASC NULLS LAST,
+    lon ASC NULLS LAST
+"""
+_TAIL_SQL = """
+    website ASC NULLS LAST,
+    contact_website ASC NULLS LAST,
+    website_word_count DESC NULLS LAST,
+    contact_website_word_count DESC NULLS LAST,
+    website_language ASC NULLS LAST,
+    contact_website_language ASC NULLS LAST,
+    __source_path ASC NULLS LAST
+"""
+_NARROW_ORDER_SQL = f"{_PREFIX_SQL},{_TAIL_SQL}"
+# Text qualifies when it holds one character that is neither ASCII nor Unicode
+# whitespace. The match stops at that character, where rewriting the whole text
+# to test the same thing reads every extracted page in full.
+_QUALIFIES_SQL = r"""
+          (
+            website_text_status = 'success'
+            AND REGEXP_MATCHES(COALESCE(website_text, ''), '[^\s\pZ]')
+          ) AS website_qualifies,
+          (
+            contact_website_text_status = 'success'
+            AND REGEXP_MATCHES(COALESCE(contact_website_text, ''), '[^\s\pZ]')
+          ) AS contact_website_qualifies
+"""
 _ORDER_SQL = """
     osm_version DESC NULLS LAST,
     osm_timestamp DESC NULLS LAST,
@@ -208,16 +240,57 @@ def _canonical_connection(root: Path, paths: Collection[Path]) -> Iterator[Any]:
 
 
 def _create_views(connection: Any, paths: Collection[Path]) -> None:
-    """Create source, qualifying, and canonical winner views."""
+    """Create source, qualifying, and canonical winner views.
+
+    The winner order breaks ties on the extracted text, which for this dataset
+    is tens of gigabytes. Carrying it through the ranking sort spills for
+    hours, so the population is first reduced to a narrow table that drops the
+    text bodies, and the ranking orders by everything else. That is the same
+    winner whenever no identity has two rows sharing all of ``_PREFIX_SQL``,
+    because the full order decides those rows before it ever reaches the text.
+    When such a tie does exist the text-bearing view is restored and the full
+    order is used, so the result never depends on the shortcut.
+    """
     _create_source_view(connection, paths)
     _create_population_views(connection)
+    order = _ORDER_SQL if _has_prefix_ties(connection) else _NARROW_ORDER_SQL
+    if order is _ORDER_SQL:
+        _restore_text_population_view(connection)
     _create_ranked_view(
         connection,
         "canonical_any",
         "website_qualifies OR contact_website_qualifies",
+        order,
     )
-    _create_ranked_view(connection, "canonical_website", "website_qualifies")
-    _create_ranked_view(connection, "canonical_contact", "contact_website_qualifies")
+    _create_ranked_view(connection, "canonical_website", "website_qualifies", order)
+    _create_ranked_view(connection, "canonical_contact", "contact_website_qualifies", order)
+
+
+def _has_prefix_ties(connection: Any) -> bool:
+    """Return whether any identity has two qualifying rows sharing the prefix keys."""
+    row = connection.execute(
+        """
+        SELECT EXISTS (
+          SELECT 1 FROM all_rows
+          WHERE website_qualifies OR contact_website_qualifies
+          GROUP BY osm_type, osm_id, osm_version, osm_timestamp, source_pbf, polygon_id, lat, lon
+          HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def _restore_text_population_view(connection: Any) -> None:
+    """Replace the narrow population with one carrying the extracted text."""
+    connection.execute("DROP TABLE all_rows")
+    connection.execute(
+        f"""
+        CREATE TEMP VIEW all_rows AS
+        SELECT *, {_QUALIFIES_SQL}
+        FROM source_rows
+        """  # noqa: S608
+    )
 
 
 def _create_source_view(connection: Any, paths: Collection[Path]) -> None:
@@ -264,21 +337,18 @@ def _source_projection(name: str, available: set[str], types: dict[str, str]) ->
 
 
 def _create_population_views(connection: Any) -> None:
-    """Create qualifying views from the normalized source rows."""
+    """Reduce the source rows to the narrow population the ranking sorts.
+
+    One streaming pass reads the extracted text to decide what qualifies and
+    then drops it, so the ranking never sorts or spills the text bodies.
+    """
     connection.execute(
-        """
-        CREATE TEMP VIEW all_rows AS
-        SELECT *,
-          (
-            website_text_status = 'success'
-            AND TRIM(COALESCE(website_text, '')) <> ''
-          ) AS website_qualifies,
-          (
-            contact_website_text_status = 'success'
-            AND TRIM(COALESCE(contact_website_text, '')) <> ''
-          ) AS contact_website_qualifies
+        f"""
+        CREATE TEMP TABLE all_rows AS
+        SELECT * EXCLUDE ({", ".join(_TEXT_COLUMNS)}),
+        {_QUALIFIES_SQL}
         FROM source_rows
-        """
+        """  # noqa: S608
     )
     connection.execute(
         """
@@ -289,7 +359,7 @@ def _create_population_views(connection: Any) -> None:
     )
 
 
-def _create_ranked_view(connection: Any, name: str, predicate: str) -> None:
+def _create_ranked_view(connection: Any, name: str, predicate: str, order: str) -> None:
     """Create one deterministic winner view for a qualifying population."""
     connection.execute(
         f"""
@@ -298,7 +368,7 @@ def _create_ranked_view(connection: Any, name: str, predicate: str) -> None:
         FROM (
           SELECT *, ROW_NUMBER() OVER (
             PARTITION BY osm_type, osm_id
-            ORDER BY {_ORDER_SQL}
+            ORDER BY {order}
           ) AS winner_rank
           FROM all_rows
           WHERE {predicate}
