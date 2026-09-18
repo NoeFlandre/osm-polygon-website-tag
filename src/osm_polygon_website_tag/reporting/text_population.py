@@ -17,7 +17,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
-from osm_polygon_website_tag.storage.duckdb_engine import fresh_connection
+from osm_polygon_website_tag.storage.duckdb_engine import reporting_connection
 
 _REQUIRED_COLUMNS = frozenset(
     {
@@ -199,7 +199,7 @@ def _contract_paths(paths: Collection[Path]) -> list[Path]:
 @contextlib.contextmanager
 def _canonical_connection(root: Path, paths: Collection[Path]) -> Iterator[Any]:
     """Create canonical DuckDB views over a bounded path selection."""
-    connection = fresh_connection(root)
+    connection = reporting_connection(root)
     try:
         _create_views(connection, paths)
         yield connection
@@ -271,15 +271,11 @@ def _create_population_views(connection: Any) -> None:
         SELECT *,
           (
             website_text_status = 'success'
-            AND TRIM(
-              REGEXP_REPLACE(COALESCE(website_text, ''), '[[:space:]]+', '', 'g')
-            ) <> ''
+            AND TRIM(COALESCE(website_text, '')) <> ''
           ) AS website_qualifies,
           (
             contact_website_text_status = 'success'
-            AND TRIM(
-              REGEXP_REPLACE(COALESCE(contact_website_text, ''), '[[:space:]]+', '', 'g')
-            ) <> ''
+            AND TRIM(COALESCE(contact_website_text, '')) <> ''
           ) AS contact_website_qualifies
         FROM source_rows
         """

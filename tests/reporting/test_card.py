@@ -1795,3 +1795,13 @@ def test_sentence_metadata_has_a_stable_line_contract() -> None:
         "contact_website_segmented_count: 4",
     ]
     assert card_module._sentence_metadata_lines(_language_card_stats()) == []
+
+
+def test_yaml_custom_hash_ignores_a_trailing_document_newline(tmp_path: Path) -> None:
+    front_matter = "---\nlicense: odbl\nconfigs:\n  - config_name: default\n---"
+    yaml_path = tmp_path / "dataset.yaml"
+    readme_path = tmp_path / "README.md"
+    yaml_path.write_text(front_matter, encoding="utf-8")
+    readme_path.write_text(f"{front_matter}\n\n# Title\n", encoding="utf-8")
+
+    assert card_module.yaml_custom_sha256(yaml_path) == card_module.yaml_custom_sha256(readme_path)

@@ -545,7 +545,7 @@ def _yaml_document_bytes(path: Path) -> bytes | None:
 def _yaml_custom_text(document: str) -> str:
     """Remove release-generated top-level fields before hashing."""
     lines = document.replace("\r\n", "\n").splitlines(keepends=True)
-    return "".join(_iter_yaml_custom_lines(lines))
+    return "".join(_iter_yaml_custom_lines(lines)).rstrip("\n")
 
 
 def _iter_yaml_custom_lines(lines: list[str]) -> Iterator[str]:

@@ -37,17 +37,19 @@ from osm_polygon_website_tag.storage.atomic import atomic_write_file
 
 DEFAULT_MEMORY_LIMIT = "2GB"
 DUCKDB_THREADS = 1
+DUCKDB_REPORTING_THREADS = 4
 
 
 def _make_connection(
     temp_dir: Path,
     memory_limit: str | None = None,
+    threads: int = DUCKDB_THREADS,
 ) -> duckdb.DuckDBPyConnection:
     temp_dir.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(database=":memory:")
     effective_limit = DEFAULT_MEMORY_LIMIT if memory_limit is None else memory_limit
     con.execute(f"SET memory_limit = '{effective_limit}'")
-    con.execute(f"SET threads = {DUCKDB_THREADS}")
+    con.execute(f"SET threads = {threads}")
     con.execute(f"SET temp_directory = '{str(temp_dir).replace(chr(39), chr(39) + chr(39))}'")
     con.execute("SET enable_progress_bar = false")
     return con
@@ -57,6 +59,18 @@ def fresh_connection(run_dir: Path) -> duckdb.DuckDBPyConnection:
     """Return a fresh DuckDB connection configured for ``run_dir``."""
     staging = run_dir / "staging" / "duckdb"
     return _make_connection(staging)
+
+
+def reporting_connection(run_dir: Path) -> duckdb.DuckDBPyConnection:
+    """Return a parallel connection for read-only reporting aggregations.
+
+    Reporting reducers never write run artifacts, and every result they return
+    is ordered by an explicit total key, so their output does not depend on the
+    thread count. Analysis keeps ``DUCKDB_THREADS`` because it writes Parquet
+    whose row order must stay byte-stable.
+    """
+    staging = run_dir / "staging" / "duckdb"
+    return _make_connection(staging, threads=DUCKDB_REPORTING_THREADS)
 
 
 def register_comparison_parquets(
@@ -329,6 +343,7 @@ def cleanup_temp_dir(run_dir: Path) -> bool:
 
 __all__ = [
     "DEFAULT_MEMORY_LIMIT",
+    "DUCKDB_REPORTING_THREADS",
     "DUCKDB_THREADS",
     "EIGHT_CELL_EXPRESSIONS",
     "EIGHT_CELL_LABELS",
@@ -342,4 +357,5 @@ __all__ = [
     "register_comparison_parquets",
     "register_public_parquets",
     "register_rejection_parquets",
+    "reporting_connection",
 ]

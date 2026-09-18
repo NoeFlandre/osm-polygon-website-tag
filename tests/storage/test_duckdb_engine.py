@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -12,8 +13,10 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.storage.duckdb_engine import (
+    DUCKDB_REPORTING_THREADS,
     fresh_connection,
     register_public_parquets,
+    reporting_connection,
 )
 
 
@@ -81,3 +84,22 @@ def test_register_public_parquets_reads_mixed_current_schemas(tmp_path: Path) ->
         connection.close()
 
     assert rows == [("source:way/0", None), ("source:way/1", "eng_Latn")]
+
+
+def _threads(connection: duckdb.DuckDBPyConnection) -> int:
+    """Return the configured DuckDB thread count for one connection."""
+    row = connection.execute("SELECT current_setting('threads')").fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def test_reporting_connection_runs_parallel_while_analysis_stays_serial(tmp_path: Path) -> None:
+    analysis = fresh_connection(tmp_path)
+    reporting = reporting_connection(tmp_path)
+    try:
+        assert _threads(analysis) == 1
+        assert _threads(reporting) == DUCKDB_REPORTING_THREADS
+        assert DUCKDB_REPORTING_THREADS > 1
+    finally:
+        analysis.close()
+        reporting.close()
