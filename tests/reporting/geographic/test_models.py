@@ -9,6 +9,7 @@ import pytest
 from osm_polygon_website_tag.reporting.geographic.models import (
     AggregationMode,
     PolygonDensitySummary,
+    _resolve_aggregation_mode,
 )
 
 
@@ -58,3 +59,20 @@ def test_summary_rejects_unknown_aggregation_mode() -> None:
 
     with pytest.raises(ValueError, match="unsupported aggregation mode"):
         PolygonDensitySummary(3, 0, 0, (), aggregation_mode=invalid_mode)
+
+
+@pytest.mark.parametrize(
+    ("extracted_text_only", "aggregation_mode", "expected"),
+    [
+        (False, None, (False, "regional_rows")),
+        (True, None, (True, "global_unique_text")),
+        (False, "global_unique_text", (True, "global_unique_text")),
+        (True, "regional_rows", (False, "regional_rows")),
+    ],
+)
+def test_resolve_aggregation_mode_returns_consistent_legacy_values(
+    extracted_text_only: bool,
+    aggregation_mode: AggregationMode | None,
+    expected: tuple[bool, AggregationMode],
+) -> None:
+    assert _resolve_aggregation_mode(extracted_text_only, aggregation_mode) == expected
