@@ -459,7 +459,9 @@ def _update_readme_front_matter(document: bytes, stats: CardStats) -> bytes:
 
 def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
     """Replace only generated YAML fields already present in one document."""
-    text = _replace_release_language_tags(document.decode("utf-8"), stats)
+    text = document.decode("utf-8")
+    if stats.detected_language_count:
+        text = _replace_release_language_tags(text, stats)
     values = {
         **_release_yaml_values(stats),
         "detected_language_count": stats.detected_language_count,

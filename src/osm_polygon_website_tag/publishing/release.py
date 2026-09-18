@@ -244,7 +244,12 @@ def _require_release_bound_text_population(root: Path) -> None:
             label="release completion receipt",
         )
         expected = payload.get("text_population_manifest")
-        actual = list(_text_population_manifest_entries_from_paths(population_paths))
+        try:
+            actual = list(_text_population_manifest_entries_from_paths(population_paths))
+        except OSError as exc:
+            raise ValueError(
+                "release requires external text population shards bound by the completion receipt"
+            ) from exc
         if expected != actual:
             raise ValueError(
                 "release requires external text population shards bound by the completion receipt"
