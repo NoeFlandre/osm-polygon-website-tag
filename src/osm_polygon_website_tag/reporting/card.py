@@ -178,9 +178,7 @@ def update_card_with_geometry(
     root = Path(run_dir)
     readme = root / "README.md"
     if not readme.is_file():
-        yaml_path = root / "dataset.yaml"
-        yaml_source = yaml_path.read_bytes() if yaml_path.is_file() else None
-        return build_card(root, source_names=source_names, _yaml_source=yaml_source)
+        return build_card(root, source_names=source_names)
 
     geometry = compute_geometry_stats(root, source_names=source_names)
     original = readme.read_bytes()
