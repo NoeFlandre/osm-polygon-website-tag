@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -274,15 +275,16 @@ def test_coordinate_batch_iterators_request_copyable_arrays_and_strict_zip(
     calls: list[bool | None] = []
 
     class FakeArray:
-        def __init__(self, values: list[object]) -> None:
-            self.values = values
+        def __init__(self, values: Sequence[object], nulls: list[bool] | None = None) -> None:
+            self.values = list(values)
+            self.nulls = nulls if nulls is not None else [False] * len(values)
 
         def to_numpy(self, *, zero_copy_only: bool | None) -> list[object]:
             calls.append(zero_copy_only)
             return self.values
 
         def is_null(self) -> FakeArray:
-            return self
+            return FakeArray(self.nulls)
 
         def to_pylist(self) -> list[object]:
             return self.values
@@ -314,14 +316,15 @@ def test_coordinate_batch_iterators_request_copyable_arrays_and_strict_zip(
 
 def test_coordinate_batch_iterators_require_equal_arrow_lengths() -> None:
     class FakeArray:
-        def __init__(self, values: list[object]) -> None:
-            self.values = values
+        def __init__(self, values: Sequence[object], nulls: list[bool] | None = None) -> None:
+            self.values = list(values)
+            self.nulls = nulls if nulls is not None else [False] * len(values)
 
         def to_numpy(self, *, zero_copy_only: bool) -> list[object]:
             return self.values
 
         def is_null(self) -> FakeArray:
-            return self
+            return FakeArray(self.nulls)
 
         def to_pylist(self) -> list[object]:
             return self.values
@@ -602,10 +605,14 @@ def test_text_success_mask_fills_nulls_and_requests_copyable_output(
     )
     fill_values: list[object] = []
 
-    class FilledMask:
-        def to_numpy(self, *, zero_copy_only: bool) -> list[bool]:
-            assert zero_copy_only is False
+    class NumpyLike:
+        def tolist(self) -> list[bool]:
             return [False]
+
+    class FilledMask:
+        def to_numpy(self, *, zero_copy_only: bool) -> NumpyLike:
+            assert zero_copy_only is False
+            return NumpyLike()
 
     def fill_null(values: object, fill_value: object) -> FilledMask:
         del values
