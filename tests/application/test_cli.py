@@ -538,6 +538,19 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
     assert main(["detect-languages", "--run-dir", str(run_dir)]) == 2
 
 
+def test_cli_frozen_snapshot_error_message_is_stable() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        cli._reject_frozen_language_run(
+            RunState(
+                Path("run"),
+                "run",
+                metadata={"status": STATUS_COMPLETE, "snapshot_status": "done"},
+            )
+        )
+
+    assert str(exc_info.value) == "cannot add languages to a frozen snapshot"
+
+
 def test_cli_card_stats_runs(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     rc = main(["card-stats", "--run-dir", str(run_dir)])
@@ -1055,10 +1068,11 @@ def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -
     assert transitions == []
     cli._finish_language_command_state(enriching)
     assert transitions == [(enriching, cli.STATUS_ENRICHED)]
-    with pytest.raises(ValueError, match="extracted/enriched"):
+    with pytest.raises(ValueError) as exc_info:
         cli._prepare_language_command_state(
             RunState(Path("run"), "run", metadata={"status": "initialized"})
         )
+    assert str(exc_info.value) == "detect-languages requires an extracted/enriched run"
 
 
 @pytest.mark.parametrize(
@@ -1096,8 +1110,20 @@ def test_cli_main_preserves_app_exit_and_error_contracts(
     monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    monkeypatch.setattr(cli, "app", lambda **_kwargs: None)
+    calls: list[dict[str, object]] = []
+
+    def app_ok(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "app", app_ok)
     assert cli.main(["ok"]) == 0
+    assert calls == [
+        {
+            "args": ["ok"],
+            "prog_name": "osm-polygon-website-tag",
+            "standalone_mode": True,
+        }
+    ]
 
     monkeypatch.setattr(cli, "app", lambda **_kwargs: (_ for _ in ()).throw(SystemExit(None)))
     assert cli.main(["exit-none"]) == 0
