@@ -210,6 +210,81 @@ def test_legacy_yaml_custom_identity_covers_compatibility_paths(
     assert errors == ["completion receipt custom YAML identity unreadable: unreadable"]
 
 
+def test_text_population_manifest_binds_expected_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(receipt, "text_population_manifest_entries", lambda _root: ["one"])
+    errors: list[str] = []
+
+    receipt._verify_text_population_manifest(
+        tmp_path,
+        {"text_population_manifest": ["one"]},
+        errors,
+    )
+    assert errors == []
+
+    receipt._verify_text_population_manifest(
+        tmp_path,
+        {"text_population_manifest": ["two"]},
+        errors,
+    )
+    assert errors == ["completion receipt text population manifest mismatch"]
+
+    def unreadable(_root: Path) -> list[str]:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(receipt, "text_population_manifest_entries", unreadable)
+    errors.clear()
+    receipt._verify_text_population_manifest(
+        tmp_path,
+        {"text_population_manifest": ["one"]},
+        errors,
+    )
+    assert errors == ["completion receipt text population manifest unreadable: unreadable"]
+
+
+def test_yaml_custom_identity_dispatches_both_receipt_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str | None, str, list[str] | None]] = []
+    legacy_calls: list[Path] = []
+
+    def verify_one(
+        _root: Path,
+        _receipt: dict[str, object],
+        field: str | None,
+        relative: str,
+        errors: list[str] | None,
+    ) -> bool:
+        calls.append((field, relative, errors))
+        return field == "readme_yaml_custom_sha256"
+
+    monkeypatch.setattr(receipt, "_verify_one_yaml_custom_identity", verify_one)
+    monkeypatch.setattr(
+        receipt,
+        "_verify_legacy_yaml_custom_identity",
+        lambda root, _errors: legacy_calls.append(root),
+    )
+    errors: list[str] = []
+
+    receipt._verify_yaml_custom_identity(
+        tmp_path,
+        {
+            "dataset_yaml_custom_sha256": "dataset",
+            "readme_yaml_custom_sha256": "readme",
+        },
+        errors,
+    )
+
+    assert calls == [
+        ("dataset_yaml_custom_sha256", "dataset.yaml", errors),
+        ("readme_yaml_custom_sha256", "README.md", errors),
+    ]
+    assert legacy_calls == []
+
+
 def test_analysis_and_row_verification_helpers_are_deterministic(tmp_path: Path) -> None:
     errors: list[str] = []
     expected = {"a", "b"}
