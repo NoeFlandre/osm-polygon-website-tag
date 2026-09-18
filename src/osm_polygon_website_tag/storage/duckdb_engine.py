@@ -68,6 +68,10 @@ def reporting_connection(run_dir: Path) -> duckdb.DuckDBPyConnection:
     is ordered by an explicit total key, so their output does not depend on the
     thread count. Analysis keeps ``DUCKDB_THREADS`` because it writes Parquet
     whose row order must stay byte-stable.
+
+    Only counting reducers may use this. Floating-point aggregates must not:
+    parallel summation reorders the additions, and because that arithmetic is
+    not associative the total changes between runs.
     """
     staging = run_dir / "staging" / "duckdb"
     return _make_connection(staging, threads=DUCKDB_REPORTING_THREADS)

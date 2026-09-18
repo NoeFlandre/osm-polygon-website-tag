@@ -45,7 +45,7 @@ from osm_polygon_website_tag.reporting.text_population import (
     TextPopulationSummary,
     compute_text_population_summary,
 )
-from osm_polygon_website_tag.storage.duckdb_engine import reporting_connection
+from osm_polygon_website_tag.storage.duckdb_engine import fresh_connection
 
 GEOMETRY_STATS_FILENAME = "stats.json"
 GEOMETRY_STATS_SCHEMA_VERSION = "v2"
@@ -255,7 +255,9 @@ class _GeometryValueStore:
     """Run-owned DuckDB store for exact, spillable numeric distributions."""
 
     def __init__(self, run_dir: Path) -> None:
-        self._connection = reporting_connection(run_dir)
+        # Serial: these aggregates sum doubles, and parallel summation reorders
+        # the additions, which changes the last digits and breaks byte stability.
+        self._connection = fresh_connection(run_dir)
         self._connection.execute(
             """
             CREATE TABLE geometry_stats_values (

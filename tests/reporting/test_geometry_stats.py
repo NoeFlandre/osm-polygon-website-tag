@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.reporting import geometry_stats
 from osm_polygon_website_tag.reporting.geometry_stats import (
     AREA_BUCKET_LABELS,
     GEOMETRY_STATS_SCHEMA_VERSION,
@@ -511,3 +512,14 @@ def test_rows_without_geometry_still_report_an_empty_polygon_shape(tmp_path: Pat
     assert stats.shape.with_holes_row_count == 0
     assert stats.shape.rings_per_row.maximum == 0.0
     assert stats.shape.vertices_per_row.maximum == 0.0
+
+
+def test_geometry_values_are_computed_serially(tmp_path: Path) -> None:
+    """Float aggregates must stay serial: parallel summation is not associative."""
+    store = geometry_stats._GeometryValueStore(tmp_path)
+    try:
+        row = store._connection.execute("SELECT current_setting('threads')").fetchone()
+        assert row is not None
+        assert int(row[0]) == 1
+    finally:
+        store.close()
