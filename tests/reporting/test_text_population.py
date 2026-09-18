@@ -297,3 +297,65 @@ def test_population_counts_null_status_as_a_failure_identity(tmp_path: Path) -> 
 
     assert population.unique_identity_count == 0
     assert population.website_failure_identity_count == 1
+
+
+def test_population_ignores_unicode_whitespace_only_text(tmp_path: Path) -> None:
+    row = _row(
+        osm_id=10,
+        lat=48.0,
+        lon=2.0,
+        source_pbf="a.osm.pbf",
+        polygon_id="a:way/10",
+        osm_version=1,
+        website_text="\u00a0\u2003\u202f",
+        website_status="success",
+        website_words=0,
+        contact_text=None,
+        contact_status="absent",
+        contact_words=None,
+    )
+    _write_run(tmp_path, [row], split=False)
+
+    population = compute_text_population_summary(tmp_path)
+
+    assert population.unique_identity_count == 0
+    assert population.website_identity_count == 0
+
+
+def test_population_status_buckets_use_failure_precedence(tmp_path: Path) -> None:
+    rows = [
+        _row(
+            osm_id=11,
+            lat=48.0,
+            lon=2.0,
+            source_pbf="a.osm.pbf",
+            polygon_id="a:way/11",
+            osm_version=1,
+            website_text=None,
+            website_status="empty",
+            website_words=None,
+            contact_text=None,
+            contact_status="absent",
+            contact_words=None,
+        ),
+        _row(
+            osm_id=11,
+            lat=48.0,
+            lon=2.0,
+            source_pbf="b.osm.pbf",
+            polygon_id="b:way/11",
+            osm_version=1,
+            website_text=None,
+            website_status="fetch_error",
+            website_words=None,
+            contact_text=None,
+            contact_status="absent",
+            contact_words=None,
+        ),
+    ]
+    _write_run(tmp_path, rows, split=False)
+
+    population = compute_text_population_summary(tmp_path)
+
+    assert population.website_empty_identity_count == 0
+    assert population.website_failure_identity_count == 1

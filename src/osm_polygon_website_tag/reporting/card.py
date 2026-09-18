@@ -57,6 +57,7 @@ from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 CARD_CONTRACT_VERSION = 2
 _TOP_LEVEL_HEADING = re.compile(rb"(?m)^## [^\r\n]*(?:\r\n|\n|$)")
 _WEBSITE_TEXT_HEADING = re.compile(rb"(?m)^## Website text(?:\r\n|\n|$)")
+_LANGUAGE_HEADING = re.compile(rb"(?m)^## Languages(?:\r\n|\n|$)")
 _GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
 _GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
 
@@ -199,6 +200,7 @@ def refresh_card_for_release(
     )
     original_readme = readme.read_bytes()
     updated_readme = _update_website_text_section(original_readme, stats)
+    updated_readme = _update_language_section(updated_readme, stats)
     updated_readme = _update_geographic_section(
         _update_geometry_section(updated_readme, geometry), stats
     )
@@ -347,6 +349,22 @@ def _update_website_text_section(card: bytes, stats: CardStats) -> bytes:
     return _replace_section(card, existing, block + newline)
 
 
+def _update_language_section(card: bytes, stats: CardStats) -> bytes:
+    """Replace the generated language block with canonical population totals."""
+    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    existing = _LANGUAGE_HEADING.search(card)
+    if not stats.detected_language_count:
+        return _replace_section(card, existing, b"") if existing is not None else card
+    block = newline.join(line.encode("utf-8") for line in _render_language_section(stats))
+    block += newline
+    if existing is not None:
+        return _replace_section(card, existing, block)
+    website = _WEBSITE_TEXT_HEADING.search(card)
+    if website is not None:
+        return _insert_after_section(card, website, block)
+    return _append_geometry_block(card, block, newline)
+
+
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
     """Replace a headed card section through the next top-level heading."""
     following = _TOP_LEVEL_HEADING.search(card, heading.end())
@@ -377,6 +395,7 @@ def _update_release_yaml(document: bytes | None, stats: CardStats) -> bytes:
 
 def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:
     """Update all scalar metrics that the generated card front matter exposes."""
+    text = _replace_release_language_tags(text, stats)
     required_values = _release_yaml_values(stats)
     optional_values = {
         "detected_language_count": stats.detected_language_count,
@@ -391,6 +410,31 @@ def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:
         {**required_values, **optional_values},
         required_keys=required_values,
     )
+
+
+def _replace_release_language_tags(text: str, stats: CardStats) -> str:
+    """Refresh the generated top-level language list while preserving YAML."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    replacement = [f"{line}{newline}" for line in _language_tag_lines(stats)]
+    for index, line in enumerate(lines):
+        if not line.startswith("language:"):
+            continue
+        end = index + 1
+        while end < len(lines) and re.match(r"^[ \t]+- ", lines[end]):
+            end += 1
+        return "".join((*lines[:index], *replacement, *lines[end:]))
+    if not replacement:
+        return text
+    insertion = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith(("size_categories:", "configs:", "---"))
+        ),
+        len(lines),
+    )
+    return "".join((*lines[:insertion], *replacement, *lines[insertion:]))
 
 
 def _release_yaml_values(stats: CardStats) -> dict[str, object]:

@@ -31,6 +31,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
 from osm_polygon_website_tag.reporting.card import refresh_card_for_release
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.text_population import text_population_parquets
 from osm_polygon_website_tag.reporting.verification.receipt import (
     verify_receipt_before_card_refresh,
 )
@@ -112,10 +113,22 @@ class HubVerifier(Protocol):
     def __call__(self, repo_id: str, files: tuple[ReleasedFile, ...]) -> str: ...
 
 
+@dataclass(frozen=True)
+class _RemoteCheck:
+    """Remote metadata comparison before an upload."""
+
+    revision: str | None
+    changed_files: tuple[str, ...] = ()
+
+
 class RemoteChecker(Protocol):
     """Return the current revision when the remote already matches exactly."""
 
-    def __call__(self, repo_id: str, files: tuple[ReleasedFile, ...]) -> str | None: ...
+    def __call__(
+        self,
+        repo_id: str,
+        files: tuple[ReleasedFile, ...],
+    ) -> str | _RemoteCheck | None: ...
 
 
 @dataclass(frozen=True)
@@ -124,6 +137,7 @@ class _PublicationResult:
 
     revision: str
     uploaded: bool
+    changed_files: tuple[str, ...] = ()
 
 
 def _publication_report_fields(
@@ -135,11 +149,12 @@ def _publication_report_fields(
         return None, False, False, ()
     if not publication.uploaded:
         return publication.revision, False, True, ()
+    changed_files = publication.changed_files or tuple(item.relative_path for item in files)
     return (
         publication.revision,
         True,
         False,
-        tuple(item.relative_path for item in files),
+        changed_files,
     )
 
 
@@ -194,6 +209,7 @@ def _require_complete_release(root: Path) -> str:
     state = load_run(root)
     if state.metadata.get("status") != STATUS_COMPLETE:
         raise ValueError("release requires a COMPLETE run")
+    _require_release_bound_text_population(root)
     receipt = _completion_receipt_path(root)
     identity = _completion_data_identity(receipt)
     receipt_errors: list[str] = []
@@ -203,6 +219,25 @@ def _require_complete_release(root: Path) -> str:
             f"release completion receipt verification failed; refusing to release: {receipt_errors}"
         )
     return identity or compute_data_manifest_sha256(root)
+
+
+def _require_release_bound_text_population(root: Path) -> None:
+    """Refuse release-time reducers that read Parquets outside the run root."""
+    resolved_root = root.resolve()
+    external = []
+    for path in text_population_parquets(root):
+        try:
+            if not path.resolve().is_relative_to(resolved_root):
+                external.append(path)
+        except OSError as exc:
+            raise ValueError(f"release cannot resolve text population shard: {path}") from exc
+    if external:
+        names = ", ".join(str(path) for path in external[:3])
+        suffix = "..." if len(external) > 3 else ""
+        raise ValueError(
+            "release requires text population shards inside the run root; "
+            f"external shards found: {names}{suffix}"
+        )
 
 
 def _completion_receipt_path(root: Path) -> Path:
@@ -579,6 +614,23 @@ def _verify_remote_parquet_data_identity(
         )
 
 
+def _remote_changed_files(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    files: tuple[ReleasedFile, ...],
+) -> tuple[str, ...]:
+    """Return only card files whose remote bytes differ from the local plan."""
+    changed: list[str] = []
+    for item in files:
+        try:
+            _verify_remote_size(api, repo_id, revision, item)
+            _verify_remote_digest(api, repo_id, revision, item)
+        except _RemoteArtifactMismatchError:
+            changed.append(item.relative_path)
+    return tuple(changed)
+
+
 def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
     """Confirm each released file's remote identity and return the revision."""
     from huggingface_hub import HfApi
@@ -596,12 +648,21 @@ def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
     return revision
 
 
-def _default_remote_checker(repo_id: str, files: tuple[ReleasedFile, ...]) -> str | None:
-    """Return a revision for an exact remote no-op, or request an upload."""
-    try:
-        return default_hub_verifier(repo_id, files)
-    except _RemoteArtifactMismatchError:
-        return None
+def _default_remote_checker(repo_id: str, files: tuple[ReleasedFile, ...]) -> _RemoteCheck:
+    """Compare remote data and return exact card mismatches before upload."""
+    token = resolve_hf_token()
+    if not token:
+        raise ValueError("release requires Hugging Face environment/local credentials")
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=token)
+    revision = _remote_revision(api, repo_id)
+    _verify_remote_data_identity(api, repo_id, revision, files)
+    _verify_remote_parquet_data_identity(api, repo_id, revision, files)
+    changed_files = _remote_changed_files(api, repo_id, revision, files)
+    if not changed_files:
+        return _RemoteCheck(revision)
+    return _RemoteCheck(None, changed_files)
 
 
 def _require_credentialed_uploader() -> Callable[..., None]:
@@ -619,6 +680,7 @@ def _upload_and_verify(
     files: tuple[ReleasedFile, ...],
     uploader: Callable[..., None] | None,
     verifier: HubVerifier | None,
+    changed_files: tuple[str, ...] = (),
 ) -> _PublicationResult:
     """Upload the planned files and verify the resulting remote revision."""
     if uploader is None:
@@ -630,7 +692,7 @@ def _upload_and_verify(
     revision = verifier(repo_id, files)
     if not revision:
         raise ValueError("hub verification returned an empty revision")
-    return _PublicationResult(revision, uploaded=True)
+    return _PublicationResult(revision, uploaded=True, changed_files=changed_files)
 
 
 def _publish(
@@ -644,9 +706,14 @@ def _publish(
     remote_checker: RemoteChecker | None,
 ) -> _PublicationResult:
     """No-op an exact remote release, otherwise upload and verify it."""
+    changed_files: tuple[str, ...] = ()
     if remote_checker is not None:
         current = remote_checker(repo_id, files)
-        if current:
+        if isinstance(current, _RemoteCheck):
+            if current.revision:
+                return _PublicationResult(current.revision, uploaded=False)
+            changed_files = current.changed_files
+        elif current:
             return _PublicationResult(current, uploaded=False)
     return _upload_and_verify(
         run_dir,
@@ -655,6 +722,7 @@ def _publish(
         files=files,
         uploader=uploader,
         verifier=verifier,
+        changed_files=changed_files,
     )
 
 

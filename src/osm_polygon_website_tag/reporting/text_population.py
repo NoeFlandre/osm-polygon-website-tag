@@ -253,16 +253,14 @@ def _create_population_views(connection: Any) -> None:
         SELECT *,
           (
             website_text_status = 'success'
-            AND COALESCE(
-              REGEXP_REPLACE(website_text, '^[[:space:]]+|[[:space:]]+$', '', 'g'),
-              ''
+            AND TRIM(
+              REGEXP_REPLACE(COALESCE(website_text, ''), '[[:space:]]+', '', 'g')
             ) <> ''
           ) AS website_qualifies,
           (
             contact_website_text_status = 'success'
-            AND COALESCE(
-              REGEXP_REPLACE(contact_website_text, '^[[:space:]]+|[[:space:]]+$', '', 'g'),
-              ''
+            AND TRIM(
+              REGEXP_REPLACE(COALESCE(contact_website_text, ''), '[[:space:]]+', '', 'g')
             ) <> ''
           ) AS contact_website_qualifies
         FROM source_rows
@@ -396,8 +394,10 @@ def _status_counts(connection: Any) -> tuple[int, int, int, int]:
     row = connection.execute(
         """
         SELECT
-          COUNT(*) FILTER (WHERE NOT website_success AND website_empty),
-          COUNT(*) FILTER (WHERE NOT contact_success AND contact_empty),
+          COUNT(*) FILTER (WHERE NOT website_success AND website_empty AND NOT website_failure),
+          COUNT(*) FILTER (
+            WHERE NOT contact_success AND contact_empty AND NOT contact_failure
+          ),
           COUNT(*) FILTER (WHERE NOT website_success AND website_failure),
           COUNT(*) FILTER (WHERE NOT contact_success AND contact_failure)
         FROM (

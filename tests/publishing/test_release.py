@@ -126,6 +126,18 @@ def test_release_requires_complete_status_before_dry_run(tmp_path: Path) -> None
         release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
+def test_release_rejects_external_text_population_shards(
+    run_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external = tmp_path.parent / "external-text" / "source.parquet"
+    monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: [external])
+
+    with pytest.raises(ValueError, match="inside the run root"):
+        release_module._require_complete_release(run_dir)
+
+
 def test_release_requires_completion_receipt(run_dir: Path) -> None:
     (run_dir / "manifests" / "completion_receipt.json").unlink()
 
@@ -263,7 +275,8 @@ def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     assert updated_readme[unrelated_start:] == readme_suffix[readme_suffix.index("## Unrelated") :]
     assert "complete breakdown is published as [`stats.json`](stats.json)" in updated_readme
     updated_yaml = (run_dir / "dataset.yaml").read_text(encoding="utf-8")
-    assert updated_yaml.startswith(original_yaml)
+    assert updated_yaml.startswith(original_yaml.removesuffix("language: eng\n"))
+    assert "language: eng\n" not in updated_yaml
     assert "polygon_density_row_count: 1" in updated_yaml
     assert "occupied_h3_cell_count: 1" in updated_yaml
 
@@ -382,6 +395,22 @@ def test_repeated_apply_skips_upload_when_remote_is_already_current(run_dir: Pat
     assert second.revision == "remote-revision"
     assert len(uploader.calls) == 1
     assert len(verifier_calls) == 1
+
+
+def test_apply_reports_only_remote_metadata_changes(run_dir: Path) -> None:
+    uploader = _RecordingUploader()
+
+    report = release_card_and_stats(
+        run_dir,
+        confirm_repo=DEFAULT_HF_DATASET,
+        apply=True,
+        uploader=uploader,
+        verifier=lambda repo_id, files: "remote-revision",
+        remote_checker=lambda repo_id, files: release_module._RemoteCheck(None, ("README.md",)),
+    )
+
+    assert report.changed_files == ("README.md",)
+    assert report.to_payload()["changed_files"] == ["README.md"]
 
 
 def test_default_apply_checks_for_a_remote_no_op_before_upload(
@@ -863,11 +892,17 @@ def test_remote_release_helpers_fail_closed_on_invalid_remote_state(
         is None
     )
 
-    def refuse_remote(*_args: object, **_kwargs: object) -> str:
-        raise release_module._RemoteArtifactMismatchError("missing metadata")
-
-    monkeypatch.setattr(release_module, "default_hub_verifier", refuse_remote)
-    assert release_module._default_remote_checker(DEFAULT_HF_DATASET, (item,)) is None
+    monkeypatch.setattr(release_module, "resolve_hf_token", lambda: "token")
+    monkeypatch.setattr(release_module, "_remote_revision", lambda *_args: "remote-revision")
+    monkeypatch.setattr(release_module, "_verify_remote_data_identity", lambda *_args: None)
+    monkeypatch.setattr(release_module, "_verify_remote_parquet_data_identity", lambda *_args: None)
+    monkeypatch.setattr(
+        release_module,
+        "_remote_changed_files",
+        lambda *_args: (item.relative_path,),
+    )
+    checked = release_module._default_remote_checker(DEFAULT_HF_DATASET, (item,))
+    assert checked == release_module._RemoteCheck(None, (item.relative_path,))
 
 
 def test_credentialed_release_uploader_requires_a_token(monkeypatch: pytest.MonkeyPatch) -> None:

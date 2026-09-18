@@ -29,6 +29,7 @@ from osm_polygon_website_tag.reporting.card import (
     _render_polygon_geometry_section,
     _render_snapshot_section,
     _update_geometry_section,
+    _update_language_section,
     _update_website_text_section,
     build_card,
     update_card_with_geometry,
@@ -793,17 +794,35 @@ def test_update_release_yaml_refreshes_global_text_fields_and_preserves_custom_f
         polygon_density_h3_resolution=14,
         polygon_density_row_count=15,
         occupied_h3_cell_count=16,
+        detected_language_count=2,
+        website_language_count=9,
+        contact_website_language_count=4,
+        top_languages=[("eng_Latn", 9), ("deu_Latn", 4)],
     )
 
     updated = card_module._update_release_yaml_text(
-        "custom_field: keep\nwebsite_text_success_count: 99\n---\n", stats
+        "custom_field: keep\nlanguage:\n  - old\nwebsite_text_success_count: 99\n---\n", stats
     ).decode()
 
     assert "custom_field: keep\n" in updated
+    assert "language:\n  - eng\n  - deu\n" in updated
+    assert "  - old\n" not in updated
     assert "website_text_success_count: 9\n" in updated
     assert "unique_text_identity_count: 13\n" in updated
     assert "polygon_density_row_count: 15\n" in updated
     assert "website_text_success_count: 99" not in updated
+
+
+def test_update_language_section_replaces_only_the_generated_block() -> None:
+    updated = _update_language_section(
+        b"prefix\n## Website text\nkeep\n## Languages\nSTALE\n## Polygon geometry\nkeep\n",
+        _language_card_stats(),
+    )
+
+    assert b"STALE" not in updated
+    assert b"| `eng_Latn` | 25 |" in updated
+    assert updated.startswith(b"prefix\n## Website text\nkeep\n")
+    assert updated.endswith(b"## Polygon geometry\nkeep\n")
 
 
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
