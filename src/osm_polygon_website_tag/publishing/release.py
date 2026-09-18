@@ -24,7 +24,7 @@ from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256 as compute_data_manifest_sha256,
 )
-from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
+from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     parquet_manifest_sha256 as compute_parquet_manifest_sha256,
 )
@@ -223,8 +223,17 @@ def _require_complete_release(root: Path) -> str:
 
 def _require_release_bound_text_population(root: Path) -> None:
     """Refuse release-time reducers that read Parquets outside the run root."""
-    resolved_root = root.resolve()
-    external = _external_text_population_paths(root, resolved_root)
+    population_paths = text_population_parquets(root)
+    _raise_for_external_text_population_paths(population_paths, root.resolve())
+    _raise_for_unbound_text_population_paths(root, population_paths)
+
+
+def _raise_for_external_text_population_paths(
+    paths: list[Path],
+    resolved_root: Path,
+) -> None:
+    """Reject reducer inputs whose resolved paths escape the release root."""
+    external = _external_text_population_paths(paths, resolved_root)
     if external:
         names = ", ".join(str(path) for path in external[:3])
         suffix = "..." if len(external) > 3 else ""
@@ -234,13 +243,34 @@ def _require_release_bound_text_population(root: Path) -> None:
         )
 
 
-def _external_text_population_paths(root: Path, resolved_root: Path) -> list[Path]:
+def _raise_for_unbound_text_population_paths(root: Path, paths: list[Path]) -> None:
+    """Reject reducer inputs missing from the hashed release inventory."""
+    unbound = _unbound_text_population_paths(paths, _release_inventory(root))
+    if unbound:
+        names = ", ".join(str(path) for path in unbound[:3])
+        suffix = "..." if len(unbound) > 3 else ""
+        raise ValueError(
+            "release requires text population shards in the release artifact inventory; "
+            f"unbound shards found: {names}{suffix}"
+        )
+
+
+def _release_inventory(root: Path) -> set[Path]:
+    """Return resolved paths covered by the completion receipt inventory."""
+    return {path.resolve() for path in publishable_paths(root)}
+
+
+def _unbound_text_population_paths(paths: list[Path], inventory: set[Path]) -> list[Path]:
+    """Return reducer inputs absent from the resolved release inventory."""
+    return [path for path in paths if path.resolve() not in inventory]
+
+
+def _external_text_population_paths(
+    paths: list[Path],
+    resolved_root: Path,
+) -> list[Path]:
     """Return reducer inputs that resolve outside the release root."""
-    return [
-        path
-        for path in text_population_parquets(root)
-        if _is_external_text_population_path(path, resolved_root)
-    ]
+    return [path for path in paths if _is_external_text_population_path(path, resolved_root)]
 
 
 def _is_external_text_population_path(path: Path, resolved_root: Path) -> bool:

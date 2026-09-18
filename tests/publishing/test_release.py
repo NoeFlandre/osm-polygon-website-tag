@@ -138,6 +138,19 @@ def test_release_rejects_external_text_population_shards(
         release_module._require_complete_release(run_dir)
 
 
+def test_release_rejects_uninventoried_text_population_shards(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    regional = run_dir / "regional" / "polygons" / "source.parquet"
+    regional.parent.mkdir(parents=True)
+    regional.write_bytes(b"regional shard")
+    monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: [regional])
+
+    with pytest.raises(ValueError, match="release artifact inventory"):
+        release_module._require_complete_release(run_dir)
+
+
 def test_release_requires_completion_receipt(run_dir: Path) -> None:
     (run_dir / "manifests" / "completion_receipt.json").unlink()
 
@@ -903,6 +916,54 @@ def test_remote_release_helpers_fail_closed_on_invalid_remote_state(
     )
     checked = release_module._default_remote_checker(DEFAULT_HF_DATASET, (item,))
     assert checked == release_module._RemoteCheck(None, (item.relative_path,))
+
+
+def test_remote_changed_files_reports_only_mismatched_card_files(
+    tmp_path: Path,
+) -> None:
+    local_readme = tmp_path / "README.md"
+    local_yaml = tmp_path / "dataset.yaml"
+    local_readme.write_text("local card", encoding="utf-8")
+    local_yaml.write_text("local metadata", encoding="utf-8")
+    remote_readme = tmp_path / "remote-README.md"
+    remote_yaml = tmp_path / "remote-dataset.yaml"
+    remote_readme.write_text("stale card", encoding="utf-8")
+    remote_yaml.write_bytes(local_yaml.read_bytes())
+    files = (
+        ReleasedFile("README.md", hash_file(local_readme), local_readme.stat().st_size),
+        ReleasedFile("dataset.yaml", hash_file(local_yaml), local_yaml.stat().st_size),
+    )
+    remote_paths = {"README.md": remote_readme, "dataset.yaml": remote_yaml}
+
+    class Api:
+        def get_paths_info(
+            self,
+            _repo_id: str,
+            *,
+            paths: list[str],
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            path = remote_paths[paths[0]]
+            return [SimpleNamespace(size=path.stat().st_size)]
+
+        def hf_hub_download(
+            self,
+            _repo_id: str,
+            filename: str,
+            *,
+            revision: str,
+            repo_type: str,
+        ) -> str:
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            return str(remote_paths[filename])
+
+    assert release_module._remote_changed_files(Api(), "dataset", "revision", files) == (
+        "README.md",
+    )
 
 
 def test_credentialed_release_uploader_requires_a_token(monkeypatch: pytest.MonkeyPatch) -> None:

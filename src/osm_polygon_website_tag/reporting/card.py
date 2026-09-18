@@ -463,7 +463,7 @@ def _language_yaml_insertion_index(lines: list[str]) -> int:
     return next(
         (
             index
-            for index, line in enumerate(lines)
+            for index, line in enumerate(lines[1:], start=1)
             if line.startswith(("size_categories:", "configs:", "---"))
         ),
         len(lines),

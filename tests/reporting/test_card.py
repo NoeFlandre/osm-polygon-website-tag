@@ -813,6 +813,16 @@ def test_update_release_yaml_refreshes_global_text_fields_and_preserves_custom_f
     assert "website_text_success_count: 99" not in updated
 
 
+def test_update_release_yaml_inserts_missing_language_before_metadata_fields() -> None:
+    updated = card_module._update_release_yaml_text(
+        "---\nlicense: odbl\nsize_categories:\n  - n<1K\n---\n",
+        _language_card_stats(),
+    ).decode()
+
+    assert updated.startswith("---\nlicense: odbl\n")
+    assert "language:\n  - eng\n  - deu\nsize_categories:\n" in updated
+
+
 def test_update_language_section_replaces_only_the_generated_block() -> None:
     updated = _update_language_section(
         b"prefix\n## Website text\nkeep\n## Languages\nSTALE\n## Polygon geometry\nkeep\n",
@@ -823,6 +833,23 @@ def test_update_language_section_replaces_only_the_generated_block() -> None:
     assert b"| `eng_Latn` | 25 |" in updated
     assert updated.startswith(b"prefix\n## Website text\nkeep\n")
     assert updated.endswith(b"## Polygon geometry\nkeep\n")
+
+
+def test_update_language_section_inserts_missing_block_after_website_text() -> None:
+    updated = _update_language_section(
+        b"prefix\n## Website text\nkeep\n## Polygon geometry\nkeep\n",
+        _language_card_stats(),
+    )
+
+    assert b"## Website text\nkeep\n## Languages\n" in updated
+    assert updated.endswith(b"## Polygon geometry\nkeep\n")
+
+
+def test_update_language_section_appends_missing_block_without_website_text() -> None:
+    updated = _update_language_section(b"prefix\n", _language_card_stats())
+
+    assert updated.startswith(b"prefix\n\n## Languages\n")
+    assert b"| `eng_Latn` | 25 |" in updated
 
 
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
