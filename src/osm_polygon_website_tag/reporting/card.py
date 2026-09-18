@@ -10,8 +10,8 @@ writes:
 
 * ``<run_dir>/README.md`` -- the rendered card (with YAML front matter)
 * ``<run_dir>/dataset.yaml`` -- machine-readable dataset-card metadata
-* ``<run_dir>/stats.json`` -- the complete polygon geometry statistics, from
-  the same single pass that renders the card's geometry block; it is promoted
+* ``<run_dir>/stats.json`` -- the complete polygon geometry statistics plus the
+  canonical global text population used by the card and map; it is promoted
   only when its bytes change
 
 The card is read-only by construction -- it contains no pointers to
@@ -47,6 +47,7 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
     compute_geometry_stats,
     render_geometry_stats,
 )
+from osm_polygon_website_tag.reporting.text_population import compute_text_population_summary
 from osm_polygon_website_tag.runtime.config import (
     DEFAULT_GITHUB_REPO,
     TRACKIO_DASHBOARD_URL,
@@ -55,6 +56,7 @@ from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 CARD_CONTRACT_VERSION = 2
 _TOP_LEVEL_HEADING = re.compile(rb"(?m)^## [^\r\n]*(?:\r\n|\n|$)")
+_WEBSITE_TEXT_HEADING = re.compile(rb"(?m)^## Website text(?:\r\n|\n|$)")
 _GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
 _GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
 
@@ -71,13 +73,23 @@ def build_card(
     bytes.
     """
     run_dir = Path(run_dir)
+    text_population = compute_text_population_summary(run_dir, source_names=source_names)
     summary = compute_polygon_density_summary(
         run_dir,
         source_names=source_names,
-        extracted_text_only=True,
+        aggregation_mode="global_unique_text",
     )
-    stats = compute_card_stats(run_dir, summary=summary, source_names=source_names)
-    geometry = compute_geometry_stats(run_dir, source_names=source_names)
+    stats = compute_card_stats(
+        run_dir,
+        summary=summary,
+        text_population=text_population,
+        source_names=source_names,
+    )
+    geometry = compute_geometry_stats(
+        run_dir,
+        source_names=source_names,
+        text_population=text_population,
+    )
     body = _render_markdown(
         stats, geometry=geometry, schema=_public_schema_for_card(run_dir, source_names)
     )
@@ -96,7 +108,7 @@ def build_card(
             summary=summary,
             output_path=staged_map,
             source_names=source_names,
-            extracted_text_only=True,
+            aggregation_mode="global_unique_text",
         )
         staged_readme.write_text(readme, encoding="utf-8")
         staged_yaml.write_text(front_matter, encoding="utf-8")
@@ -168,21 +180,31 @@ def refresh_card_for_release(
     if not readme.is_file():
         return build_card(root, source_names=source_names)
 
+    text_population = compute_text_population_summary(root, source_names=source_names)
     summary = compute_polygon_density_summary(
         root,
         source_names=source_names,
-        extracted_text_only=True,
+        aggregation_mode="global_unique_text",
     )
-    stats = compute_card_stats(root, summary=summary, source_names=source_names)
-    geometry = compute_geometry_stats(root, source_names=source_names)
+    stats = compute_card_stats(
+        root,
+        summary=summary,
+        text_population=text_population,
+        source_names=source_names,
+    )
+    geometry = compute_geometry_stats(
+        root,
+        source_names=source_names,
+        text_population=text_population,
+    )
     original_readme = readme.read_bytes()
+    updated_readme = _update_website_text_section(original_readme, stats)
     updated_readme = _update_geographic_section(
-        _update_geometry_section(original_readme, geometry),
-        stats,
+        _update_geometry_section(updated_readme, geometry), stats
     )
     yaml_path = root / "dataset.yaml"
     original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
-    updated_yaml = _update_density_yaml(original_yaml, stats) if original_yaml is not None else None
+    updated_yaml = _update_release_yaml(original_yaml, stats) if original_yaml is not None else None
     _promote_release_card_artifacts(
         root,
         source_names=source_names,
@@ -223,7 +245,7 @@ def _promote_release_card_artifacts(
             summary=summary,
             output_path=staged_map,
             source_names=source_names,
-            extracted_text_only=True,
+            aggregation_mode="global_unique_text",
         )
         promotions = _release_card_promotions(
             root,
@@ -315,6 +337,16 @@ def _update_geographic_section(card: bytes, stats: CardStats) -> bytes:
     return _append_geometry_block(card, block, newline)
 
 
+def _update_website_text_section(card: bytes, stats: CardStats) -> bytes:
+    """Replace the generated website-text block without adding it to legacy cards."""
+    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    existing = _WEBSITE_TEXT_HEADING.search(card)
+    if existing is None:
+        return card
+    block = newline.join(line.encode("utf-8") for line in _render_website_text_section(stats))
+    return _replace_section(card, existing, block + newline)
+
+
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
     """Replace a headed card section through the next top-level heading."""
     following = _TOP_LEVEL_HEADING.search(card, heading.end())
@@ -334,6 +366,58 @@ def _update_density_yaml(document: bytes | None, stats: CardStats) -> bytes:
     if document is None:
         return b""
     return _update_density_yaml_text(document.decode("utf-8"), stats)
+
+
+def _update_release_yaml(document: bytes | None, stats: CardStats) -> bytes:
+    """Refresh generated card metrics while retaining all custom YAML fields."""
+    if document is None:
+        return b""
+    return _update_release_yaml_text(document.decode("utf-8"), stats)
+
+
+def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:
+    """Update all scalar metrics that the generated card front matter exposes."""
+    values = {
+        "observation_count": stats.observation_count,
+        "public_row_count": stats.public_row_count,
+        "rejection_count": stats.rejection_count,
+        "duplicate_count": stats.duplicate_count,
+        "conflicting_snapshot_count": stats.conflicting_snapshot_count,
+        "sources_count": stats.sources_count,
+        "expected_sources_count": stats.expected_sources_count,
+        "enriched_sources_count": stats.enriched_sources_count,
+        "dataset_status": _dataset_status_value(stats),
+        "website_text_success_count": stats.website_text_success_count,
+        "website_total_words": stats.website_total_words,
+        "contact_website_text_success_count": stats.contact_website_text_success_count,
+        "contact_website_total_words": stats.contact_website_total_words,
+        "unique_text_identity_count": stats.polygons_with_any_text,
+        "polygon_density_h3_resolution": stats.polygon_density_h3_resolution,
+        "polygon_density_row_count": stats.polygon_density_row_count,
+        "occupied_h3_cell_count": stats.occupied_h3_cell_count,
+    }
+    optional_values = {
+        "detected_language_count": stats.detected_language_count,
+        "website_language_count": stats.website_language_count,
+        "contact_website_language_count": stats.contact_website_language_count,
+        "sentence_count": stats.total_sentence_count,
+        "website_segmented_count": stats.website_sentence_row_count,
+        "contact_website_segmented_count": stats.contact_website_sentence_row_count,
+    }
+    updated = text
+    missing: list[str] = []
+    for key, value in (*values.items(), *optional_values.items()):
+        replacement = f"{key}: {value}"
+        updated, found = _replace_density_yaml_field(updated, key, replacement)
+        if not found and (key in values or value):
+            missing.append(replacement)
+    if missing:
+        updated = _append_density_yaml_fields(
+            updated,
+            missing,
+            "\r\n" if "\r\n" in updated else "\n",
+        )
+    return updated.encode("utf-8")
 
 
 def _update_density_yaml_text(text: str, stats: CardStats) -> bytes:
@@ -447,6 +531,7 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         f"website_total_words: {stats.website_total_words}",
         f"contact_website_text_success_count: {stats.contact_website_text_success_count}",
         f"contact_website_total_words: {stats.contact_website_total_words}",
+        f"unique_text_identity_count: {stats.polygons_with_any_text}",
         *_language_metadata_lines(stats),
         *_sentence_metadata_lines(stats),
         f"polygon_density_h3_resolution: {stats.polygon_density_h3_resolution}",

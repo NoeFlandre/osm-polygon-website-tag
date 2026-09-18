@@ -1065,12 +1065,12 @@ def test_card_statistics_verifiers_forward_all_artifact_renderers(
     monkeypatch.setattr(
         analysis,
         "compute_card_stats",
-        lambda root: calls.append(("stats", root)) or stats,
+        lambda root, **kwargs: calls.append(("stats", (root, sorted(kwargs)))) or stats,
     )
     monkeypatch.setattr(
         analysis,
         "compute_geometry_stats",
-        lambda root: calls.append(("geometry", root)) or geometry,
+        lambda root, **kwargs: calls.append(("geometry", (root, sorted(kwargs)))) or geometry,
     )
     monkeypatch.setattr(
         analysis,
@@ -1102,11 +1102,12 @@ def test_card_statistics_verifiers_forward_all_artifact_renderers(
             (path, expected, label, received_errors)
         ),
     )
+    monkeypatch.setattr(analysis, "_verify_text_population_agreement", lambda *args: None)
     analysis._verify_card_statistics(tmp_path, errors)
     assert errors == []
     assert calls == [
-        ("stats", tmp_path),
-        ("geometry", tmp_path),
+        ("stats", (tmp_path, ["summary", "text_population"])),
+        ("geometry", (tmp_path, ["text_population"])),
         ("yaml", stats),
         ("schema", tmp_path),
         ("markdown", (stats, geometry, "schema")),
@@ -1130,7 +1131,7 @@ def test_release_card_statistics_and_geometry_section_are_exact_and_fail_closed(
     monkeypatch.setattr(
         analysis,
         "compute_geometry_stats",
-        lambda root: calls.append(("geometry", root)) or geometry,
+        lambda root, **kwargs: calls.append(("geometry", (root, sorted(kwargs)))) or geometry,
     )
     monkeypatch.setattr(
         analysis,
@@ -1157,17 +1158,20 @@ def test_release_card_statistics_and_geometry_section_are_exact_and_fail_closed(
     monkeypatch.setattr(analysis, "compute_card_stats", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(analysis, "_verify_release_geographic_section", lambda *_args: None)
     monkeypatch.setattr(analysis, "_verify_release_density_yaml", lambda *_args: None)
+    monkeypatch.setattr(analysis, "_verify_text_population_agreement", lambda *args: None)
     analysis._verify_release_card_statistics(tmp_path, errors)
     assert errors == []
     assert calls == [
-        ("geometry", tmp_path),
+        ("geometry", (tmp_path, ["text_population"])),
         ("render", geometry),
         ("section", (tmp_path, geometry, errors)),
     ]
     assert compared == [(tmp_path / "stats.json", "stats", "stats.json", errors)]
 
     monkeypatch.setattr(
-        analysis, "compute_geometry_stats", lambda _root: (_ for _ in ()).throw(RuntimeError("bad"))
+        analysis,
+        "compute_geometry_stats",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad")),
     )
     errors.clear()
     analysis._verify_release_card_statistics(tmp_path, errors)
@@ -1200,3 +1204,23 @@ def test_release_geometry_section_normalizes_newlines_and_requires_exact_block(
     readme.write_bytes(b"\xff")
     analysis._verify_release_geometry_section(tmp_path, geometry, errors)
     assert errors and errors[0].startswith("README geometry section is unreadable: ")
+
+
+def test_map_verifier_rejects_bytes_from_a_different_global_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    map_path = tmp_path / "assets" / "geographic_polygon_density.png"
+    map_path.parent.mkdir()
+    map_path.write_bytes(b"actual")
+
+    def fake_render(_summary: object, output_path: Path) -> str:
+        output_path.write_bytes(b"expected")
+        return "caption"
+
+    monkeypatch.setattr(analysis, "render_polygon_density", fake_render)
+    errors: list[str] = []
+
+    analysis._verify_map_matches_summary(tmp_path, object(), errors)
+
+    assert errors == ["map artifact does not match the canonical global summary"]

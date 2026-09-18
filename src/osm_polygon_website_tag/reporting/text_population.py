@@ -51,7 +51,14 @@ _ORDER_SQL = """
     lat ASC NULLS LAST,
     lon ASC NULLS LAST,
     website_text ASC NULLS LAST,
-    contact_website_text ASC NULLS LAST
+    contact_website_text ASC NULLS LAST,
+    website ASC NULLS LAST,
+    contact_website ASC NULLS LAST,
+    website_word_count DESC NULLS LAST,
+    contact_website_word_count DESC NULLS LAST,
+    website_language ASC NULLS LAST,
+    contact_website_language ASC NULLS LAST,
+    __source_path ASC NULLS LAST
 """
 
 
@@ -366,12 +373,12 @@ def _status_counts(connection: Any) -> tuple[int, int, int, int]:
             BOOL_OR(website_text_status = 'empty') AS website_empty,
             BOOL_OR(contact_website_text_status = 'empty') AS contact_empty,
             BOOL_OR(
-              website_text_status IS NOT NULL
-              AND website_text_status NOT IN ('absent', 'pending', 'success', 'empty')
+              website_text_status IS NULL
+              OR website_text_status NOT IN ('absent', 'pending', 'success', 'empty')
             ) AS website_failure,
             BOOL_OR(
-              contact_website_text_status IS NOT NULL
-              AND contact_website_text_status NOT IN ('absent', 'pending', 'success', 'empty')
+              contact_website_text_status IS NULL
+              OR contact_website_text_status NOT IN ('absent', 'pending', 'success', 'empty')
             ) AS contact_failure
           FROM all_rows
           GROUP BY osm_type, osm_id

@@ -29,6 +29,7 @@ from osm_polygon_website_tag.reporting.card import (
     _render_polygon_geometry_section,
     _render_snapshot_section,
     _update_geometry_section,
+    _update_website_text_section,
     build_card,
     update_card_with_geometry,
 )
@@ -465,6 +466,7 @@ def test_render_yaml_front_matter_has_a_stable_output_contract() -> None:
         website_total_words: 13
         contact_website_text_success_count: 15
         contact_website_total_words: 18
+        unique_text_identity_count: 19
         polygon_density_h3_resolution: 20
         polygon_density_row_count: 22
         occupied_h3_cell_count: 21
@@ -485,6 +487,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     run_dir = tmp_path / "card"
     run_dir.mkdir()
     source_names = {"monaco-latest.osm.pbf"}
+    text_population = object()
     summary = object()
     stats = CardStats(public_row_count=3)
     geometry = GeometryStats(row_count=4)
@@ -497,18 +500,27 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
         path: Path,
         *,
         source_names: Collection[str] | None,
-        extracted_text_only: bool,
+        aggregation_mode: str,
     ) -> object:
-        calls.append(("summary", (path, source_names, extracted_text_only)))
+        calls.append(("summary", (path, source_names, aggregation_mode)))
         return summary
+
+    def fake_text_population(
+        path: Path,
+        *,
+        source_names: Collection[str] | None,
+    ) -> object:
+        calls.append(("text-population", (path, source_names)))
+        return text_population
 
     def fake_stats(
         path: Path,
         *,
         summary: object,
+        text_population: object,
         source_names: Collection[str] | None,
     ) -> CardStats:
-        calls.append(("stats", (path, summary, source_names)))
+        calls.append(("stats", (path, summary, text_population, source_names)))
         return stats
 
     def fake_map(
@@ -517,16 +529,17 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
         summary: object,
         output_path: Path,
         source_names: Collection[str] | None,
-        extracted_text_only: bool,
+        aggregation_mode: str,
     ) -> None:
-        calls.append(("map", (path, summary, output_path, source_names, extracted_text_only)))
+        calls.append(("map", (path, summary, output_path, source_names, aggregation_mode)))
 
     def fake_geometry_stats(
         path: Path,
         *,
+        text_population: object,
         source_names: Collection[str] | None,
     ) -> GeometryStats:
-        calls.append(("geometry", (path, source_names)))
+        calls.append(("geometry", (path, text_population, source_names)))
         return geometry
 
     def fake_render_markdown(
@@ -570,6 +583,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
 
     promoted: list[list[tuple[Path, Path]]] = []
 
+    monkeypatch.setattr(card_module, "compute_text_population_summary", fake_text_population)
     monkeypatch.setattr(card_module, "compute_polygon_density_summary", fake_summary)
     monkeypatch.setattr(card_module, "compute_card_stats", fake_stats)
     monkeypatch.setattr(card_module, "compute_geometry_stats", fake_geometry_stats)
@@ -583,20 +597,21 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     monkeypatch.setattr(card_module, "atomic_promote_bundle", promoted.append)
 
     assert card_module.build_card(run_dir, source_names=source_names) == run_dir / "README.md"
-    assert calls[0] == ("summary", (run_dir, source_names, True))
-    assert calls[1] == ("stats", (run_dir, summary, source_names))
-    assert calls[2] == ("geometry", (run_dir, source_names))
-    assert calls[3] == ("schema", (run_dir, source_names))
-    assert calls[4] == ("markdown", (stats, geometry, schema))
-    assert calls[5] == ("yaml", stats)
-    assert calls[6] == (
+    assert calls[0] == ("text-population", (run_dir, source_names))
+    assert calls[1] == ("summary", (run_dir, source_names, "global_unique_text"))
+    assert calls[2] == ("stats", (run_dir, summary, text_population, source_names))
+    assert calls[3] == ("geometry", (run_dir, text_population, source_names))
+    assert calls[4] == ("schema", (run_dir, source_names))
+    assert calls[5] == ("markdown", (stats, geometry, schema))
+    assert calls[6] == ("yaml", stats)
+    assert calls[7] == (
         "map",
         (
             run_dir,
             summary,
             run_dir / ".assets" / "geographic_polygon_density.png.building",
             source_names,
-            True,
+            "global_unique_text",
         ),
     )
     assert writes == [
@@ -708,6 +723,27 @@ def test_update_geometry_section_replaces_inserts_and_appends_without_touching_n
     assert b"## Polygon geometry\n" not in crlf
 
 
+def test_update_website_text_section_replaces_only_the_generated_block() -> None:
+    stats = CardStats(
+        website_urls_present=1,
+        website_text_success_count=2,
+        website_total_words=3,
+        contact_website_urls_present=4,
+        contact_website_text_success_count=5,
+        contact_website_total_words=6,
+        polygons_with_any_text=7,
+    )
+
+    updated = _update_website_text_section(
+        b"prefix\n## Website text\nSTALE\n## Languages\nkeep\n", stats
+    )
+
+    assert updated.startswith(b"prefix\n## Website text\n")
+    assert b"STALE" not in updated
+    assert b"Unique polygons with extracted text: **7**" in updated
+    assert updated.endswith(b"## Languages\nkeep\n")
+
+
 def test_update_density_yaml_inserts_missing_fields_before_newline_terminated_closure() -> None:
     stats = CardStats(
         polygon_density_h3_resolution=3,
@@ -724,6 +760,37 @@ def test_update_density_yaml_inserts_missing_fields_before_newline_terminated_cl
         "occupied_h3_cell_count: 5\n"
         "---\n"
     )
+
+
+def test_update_release_yaml_refreshes_global_text_fields_and_preserves_custom_fields() -> None:
+    stats = CardStats(
+        observation_count=1,
+        public_row_count=2,
+        rejection_count=3,
+        duplicate_count=4,
+        conflicting_snapshot_count=5,
+        sources_count=6,
+        expected_sources_count=7,
+        enriched_sources_count=8,
+        website_text_success_count=9,
+        website_total_words=10,
+        contact_website_text_success_count=11,
+        contact_website_total_words=12,
+        polygons_with_any_text=13,
+        polygon_density_h3_resolution=14,
+        polygon_density_row_count=15,
+        occupied_h3_cell_count=16,
+    )
+
+    updated = card_module._update_release_yaml_text(
+        "custom_field: keep\nwebsite_text_success_count: 99\n---\n", stats
+    ).decode()
+
+    assert "custom_field: keep\n" in updated
+    assert "website_text_success_count: 9\n" in updated
+    assert "unique_text_identity_count: 13\n" in updated
+    assert "polygon_density_row_count: 15\n" in updated
+    assert "website_text_success_count: 99" not in updated
 
 
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:

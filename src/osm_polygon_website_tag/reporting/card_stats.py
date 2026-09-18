@@ -127,9 +127,10 @@ def compute_card_stats(
     _set_shard_counts(stats, public_shards, observation_shards, rejection_shards)
     stats.expected_sources_count = _expected_source_count(run_dir, stats.sources_count)
     _add_public_shard_stats(stats, public_shards)
-    population = text_population or compute_text_population_summary(
-        run_dir,
-        source_names=source_names,
+    population = (
+        text_population
+        if text_population is not None
+        else compute_text_population_summary(run_dir, source_names=source_names)
     )
     _set_text_population_stats(stats, population)
     if source_names is None and analysis_dir.exists():

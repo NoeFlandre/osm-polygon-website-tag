@@ -178,6 +178,9 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
 ) -> None:
     readme = run_dir / "README.md"
     current_readme = readme.read_text(encoding="utf-8")
+    current_readme = current_readme.replace(
+        "## Website text\n", "## Website text\n\nSTALE website values.\n", 1
+    )
     geographic_start = current_readme.index("## Geographic distribution")
     links_start = current_readme.index("## Links", geographic_start)
     readme.write_text(
@@ -202,8 +205,11 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
     updated_readme = readme.read_text(encoding="utf-8")
     assert report.recomputed is True
     assert "STALE geographic values" not in updated_readme
+    assert "STALE website values" not in updated_readme
+    assert "regional overlap duplicates are removed globally" in updated_readme
     assert "**1** unique polygons with successfully" in updated_readme
     assert "polygon_density_row_count: 1" in dataset_yaml.read_text(encoding="utf-8")
+    assert "unique_text_identity_count: 1" in dataset_yaml.read_text(encoding="utf-8")
     assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 

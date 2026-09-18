@@ -39,10 +39,11 @@ Builds and validates public-facing local artifacts.
   output, and the completion receipt.
 - `geometry_stats` computes the deterministic polygon surface, shape, and
   extent statistics of every validated public row, streaming geometry decoding
-  one record batch at a time. `build_card` writes them to `stats.json` and
-  renders the card's geometry block from the same result; the file is only
-  rewritten when its bytes change, and verification rejects a missing or stale
-  one.
+  one record batch at a time. It also embeds the canonical global text
+  population used by the card and map. `build_card` writes the result to
+  `stats.json` and renders the card's geometry block from the same geometry
+  result; the file is only rewritten when its bytes change, and verification
+  rejects a missing or stale one.
 - Entry points: `compute_card_stats`, `compute_geometry_stats`, `build_card`,
   `verify_results`, `finalize_run`, `finalize_snapshot`, and `refresh_card_run`.
 - Excludes: extraction, HTTP fetching, remote upload, and CLI dispatch.

@@ -123,6 +123,52 @@ def test_empty_selection_reports_zeroed_statistics(tmp_path: Path) -> None:
     assert [entry["row_count"] for entry in stats.area.histogram] == [0] * len(AREA_BUCKET_LABELS)
 
 
+def test_report_includes_global_text_population_for_card_map_agreement(tmp_path: Path) -> None:
+    first = _public_row(polygon_id="a:way/42")
+    first.update(
+        osm_id=42,
+        website_text="old copy",
+        website_word_count=2,
+        website_text_status="success",
+    )
+    second = _public_row(polygon_id="b:way/42")
+    second.update(
+        osm_id=42,
+        website_text="new copy",
+        website_word_count=2,
+        website_text_status="success",
+        osm_version=2,
+        lat=48.0,
+        lon=2.0,
+    )
+    contact = _public_row(polygon_id="a:way/43")
+    contact.update(
+        osm_id=43,
+        website=None,
+        has_website=False,
+        website_text=None,
+        website_word_count=None,
+        website_text_status="absent",
+        contact_website="https://contact.example.org",
+        has_contact_website=True,
+        contact_website_text="contact copy",
+        contact_website_word_count=2,
+        contact_website_text_status="success",
+    )
+    _write_shard(tmp_path, "a", [first, contact])
+    _write_shard(tmp_path, "b", [second])
+
+    stats = compute_geometry_stats(tmp_path)
+    payload = json.loads(render_geometry_stats(stats))
+
+    assert stats.text_population.unique_identity_count == 2
+    assert stats.text_population.website_identity_count == 1
+    assert stats.text_population.contact_website_identity_count == 1
+    assert stats.text_population.website_total_words == 2
+    assert stats.text_population.contact_website_total_words == 2
+    assert payload["text_population"]["unique_identity_count"] == 2
+
+
 def test_missing_polygon_directory_is_reported_as_a_missing_artifact(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="polygons"):
         compute_geometry_stats(tmp_path)

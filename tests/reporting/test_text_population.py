@@ -24,10 +24,10 @@ def _row(
     polygon_id: str,
     osm_version: int,
     website_text: str | None,
-    website_status: str,
+    website_status: str | None,
     website_words: int | None,
     contact_text: str | None,
-    contact_status: str,
+    contact_status: str | None,
     contact_words: int | None,
 ) -> dict[str, object]:
     return {
@@ -193,6 +193,34 @@ def test_population_is_independent_of_file_and_row_order(tmp_path: Path) -> None
     assert next(iter(iter_canonical_text_coordinates(second))).lon == -74.0
 
 
+def test_population_breaks_payload_ties_without_using_row_order(tmp_path: Path) -> None:
+    first = _row(
+        osm_id=42,
+        lat=48.85,
+        lon=2.35,
+        source_pbf="same.osm.pbf",
+        polygon_id="same:way/42",
+        osm_version=1,
+        website_text="same copy",
+        website_status="success",
+        website_words=1,
+        contact_text=None,
+        contact_status="absent",
+        contact_words=None,
+    )
+    first["website"] = "https://z.example.org"
+    second = dict(first)
+    second["website"] = "https://a.example.org"
+    second["website_word_count"] = 2
+    first_run = tmp_path / "first"
+    second_run = tmp_path / "second"
+    _write_run(first_run, [first, second], split=False)
+    _write_run(second_run, [second, first], split=False)
+
+    assert compute_text_population_summary(first_run).website_total_words == 2
+    assert compute_text_population_summary(second_run).website_total_words == 2
+
+
 def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> None:
     regional = tmp_path / "regional"
     canonical = tmp_path / "canonical"
@@ -246,3 +274,26 @@ def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> 
 
     assert population.unique_identity_count == 1
     assert population.website_total_words == 1
+
+
+def test_population_counts_null_status_as_a_failure_identity(tmp_path: Path) -> None:
+    row = _row(
+        osm_id=9,
+        lat=48.0,
+        lon=2.0,
+        source_pbf="a.osm.pbf",
+        polygon_id="a:way/9",
+        osm_version=1,
+        website_text=None,
+        website_status=None,
+        website_words=None,
+        contact_text=None,
+        contact_status="absent",
+        contact_words=None,
+    )
+    _write_run(tmp_path, [row], split=False)
+
+    population = compute_text_population_summary(tmp_path)
+
+    assert population.unique_identity_count == 0
+    assert population.website_failure_identity_count == 1

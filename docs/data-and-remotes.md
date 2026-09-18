@@ -53,8 +53,8 @@ Each run owns a directory under the output root:
   stats.json
 ```
 
-`stats.json` is the machine-readable polygon geometry report described in
-[Polygon geometry statistics](#polygon-geometry-statistics).
+`stats.json` is the machine-readable geometry and global text-population report
+described in [Polygon geometry statistics](#polygon-geometry-statistics).
 
 These files are local run artifacts. Staging, DuckDB spill data, URL-cache
 files, and enrichment checkpoint parts support resume and are not part of the
@@ -137,14 +137,15 @@ and `dataset.yaml`.
 
 ## Polygon geometry statistics
 
-`build-card` writes `stats.json` next to `README.md`, from the same single
-pass over the validated public shards that produces the card's
-**Polygon geometry** block. Every value covers every row of the selected
-`polygons/*.parquet` shards -- no sampling, no truncation, no external lookup,
-and no recomputation from the raw PBFs. Only the `area_m2`, `bbox`,
-`geometry`, and `osm_primary_tag` columns are read, one record batch at a
-time. `osm-polygon-website-tag geometry-stats --run-dir <run>` prints the same
-document without writing anything.
+`build-card` writes `stats.json` next to `README.md`. Its geometry fields come
+from every row of the selected `polygons/*.parquet` shards; its text fields come
+from the same shards reduced to one deterministic canonical winner per global
+`(osm_type, osm_id)`. Both populations use no sampling, truncation, external
+lookup, or raw PBF recomputation. The geometry pass reads only the `area_m2`,
+`bbox`, `geometry`, and `osm_primary_tag` columns, one record batch at a time;
+the text reducer uses bounded DuckDB spill storage. `osm-polygon-website-tag
+geometry-stats --run-dir <run>` prints the same document without writing
+anything.
 
 Regeneration from unchanged artifacts is byte-identical, and the existing
 file is left untouched rather than rewritten. Verification recomputes the
@@ -155,8 +156,10 @@ Fields, all computed on the WGS84 ellipsoid:
 
 | Field | Meaning |
 | --- | --- |
-| `schema_version` | Contract version of this document (`v1`). |
+| `schema_version` | Contract version of this document (`v2`). |
 | `population_scope` | The geometry population covered by the report: `published polygon rows`. |
+| `text_population_scope` | The text/map population: global unique `(osm_type, osm_id)` identities with successful non-empty `website` or `contact:website` text. |
+| `text_population` | Canonical global counts, words, URLs, status buckets, and language totals shared by the card and map. Its `unique_identity_count` is the map/card population. |
 | `row_count` | Public polygon rows covered. |
 | `area.summary` | `area_m2` distribution: `row_count`, `total`, `minimum`, `maximum`, `mean`, `median`, and `percentiles` `p1`, `p5`, `p25`, `p50`, `p75`, `p95`, `p99`. |
 | `area.histogram` | Stable log-scale buckets, always all thirteen in order: `0`, `<1e0`, `1e0-1e1` … `1e9-1e10`, `>=1e10`. |
