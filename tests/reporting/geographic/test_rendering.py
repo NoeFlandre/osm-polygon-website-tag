@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
@@ -570,6 +571,31 @@ def test_renderer_uses_one_as_the_singleton_log_scale_upper_bound(
     )
 
     assert norm_calls == [{"vmin": 0.5, "vmax": 1.0}]
+
+
+def test_renderer_uses_exact_world_tick_range_bounds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import rendering
+
+    range_calls: list[tuple[int, ...]] = []
+    real_range = builtins.range
+
+    def range_spy(*args: int) -> range:
+        range_calls.append(args)
+        return real_range(*args)
+
+    monkeypatch.setattr(rendering, "range", range_spy, raising=False)
+    monkeypatch.setattr(rendering, "draw_landmasses", lambda *_args: None)
+    monkeypatch.setattr(rendering, "atomic_save_png", lambda *_args: None)
+
+    rendering.render_polygon_density(
+        PolygonDensitySummary(5, 0, 0, ()),
+        tmp_path / "ticks.png",
+    )
+
+    assert range_calls == [(-180, 181, 30), (-90, 91, 30)]
 
 
 def test_map_is_a_deterministic_png(tmp_path: Path) -> None:
