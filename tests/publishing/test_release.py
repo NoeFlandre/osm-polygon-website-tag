@@ -291,6 +291,22 @@ def test_release_rejects_custom_dataset_yaml_tampering_before_refresh(run_dir: P
         release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
+def test_release_rejects_custom_yaml_tampering_for_legacy_receipt(run_dir: Path) -> None:
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt.pop("dataset_yaml_custom_sha256", None)
+    receipt.pop("readme_yaml_custom_sha256", None)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    dataset_yaml = run_dir / "dataset.yaml"
+    dataset_yaml.write_text(
+        dataset_yaml.read_text(encoding="utf-8").replace("license: odbl", "license: mit"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+
 def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     run_dir: Path,
 ) -> None:

@@ -289,6 +289,7 @@ def _verify_text_population_manifest(
 
 def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: list[str]) -> None:
     """Keep non-generated YAML fields receipt-bound across release refreshes."""
+    checked = False
     for field, relative in (
         ("dataset_yaml_custom_sha256", "dataset.yaml"),
         ("readme_yaml_custom_sha256", "README.md"),
@@ -296,6 +297,7 @@ def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: li
         expected = receipt.get(field)
         if expected is None:
             continue
+        checked = True
         try:
             actual = yaml_custom_sha256(root / relative)
         except (OSError, UnicodeError) as exc:
@@ -303,3 +305,9 @@ def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: li
             continue
         if actual is not None and actual != expected:
             errors.append(f"completion receipt custom YAML identity mismatch: {relative}")
+    if checked:
+        return
+    dataset = yaml_custom_sha256(root / "dataset.yaml")
+    readme = yaml_custom_sha256(root / "README.md")
+    if dataset is not None and readme is not None and dataset != readme:
+        errors.append("completion receipt custom YAML identity mismatch")
