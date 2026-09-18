@@ -129,15 +129,19 @@ mutation-scope base="origin/main":
     while read -r filter; do scopes+=(--scope "$filter"); done <<< "$filters"
     just mutation-gate "${scopes[@]}"
 
-# Run one changed-module shard. CI fans these shards out as a deterministic
-# matrix so every selected module is evaluated without one job outliving its
-# hosted-runner budget.
-mutation-module filter:
+# Run one changed-module shard. `filters` is the shard's space-separated list
+# of mutmut filters, one per changed function. CI fans these shards out as a
+# deterministic matrix so every selected module is evaluated without one job
+# outliving its hosted-runner budget.
+mutation-module filters:
     #!/usr/bin/env bash
     set -euo pipefail
     just mutation-clean
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "{{ filter }}"
-    just mutation-gate --scope "{{ filter }}"
+    read -r -a shard <<< "{{ filters }}"
+    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"
+    scopes=()
+    for filter in "${shard[@]}"; do scopes+=(--scope "$filter"); done
+    just mutation-gate "${scopes[@]}"
 
 # Fail on any unverified mutant the baseline does not already record, so a
 # long-standing backlog stays visible without blocking unrelated work.
@@ -162,8 +166,8 @@ diff-review:
 qa-gauntlet: baseline ruff typecheck unit acceptance architecture crap mutation smoke diff-review
 
 # The non-mutation gates CI runs before the deterministic per-module mutation
-# matrix. The matrix invokes `mutation-module` once for every filter emitted
-# by `mutation_scope.py`.
+# matrix. The matrix invokes `mutation-module` once per module shard emitted
+# by `mutation_scope.py`, passing that shard's function filters.
 qa-ci: baseline ruff typecheck unit acceptance architecture crap
     just smoke
 

@@ -182,26 +182,31 @@ def _iter_functions(tree: ast.AST, class_name: str | None = None) -> Iterator[tu
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Print one filter per line, or nothing when no module changed."""
+    """Print one filter per line, or the CI matrix of one shard per module."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="origin/main")
     parser.add_argument(
         "--json",
         action="store_true",
-        help="emit the sorted filters as one JSON array for a CI matrix",
+        help="emit one JSON object per module, each with its own filters, for a CI matrix",
     )
     args = parser.parse_args(argv)
     try:
-        paths = changed_paths(args.base)
+        lines = changed_lines(args.base)
     except subprocess.CalledProcessError as exc:
         print(f"error: cannot diff against {args.base!r}: {exc.stderr.strip()}", file=sys.stderr)
         return 2
-    filters = module_filters(paths)
+    scoped = function_filters(lines)
     if args.json:
-        print(json.dumps(filters, separators=(",", ":")))
+        matrix = [
+            {"name": module, "filters": " ".join(filters)}
+            for module, filters in sorted(scoped.items())
+        ]
+        print(json.dumps(matrix, separators=(",", ":")))
     else:
-        for filter_expression in filters:
-            print(filter_expression)
+        for filters in (scoped[module] for module in sorted(scoped)):
+            for filter_expression in filters:
+                print(filter_expression)
     return 0
 
 
