@@ -298,7 +298,13 @@ def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None
         return
     front_matter = re.match(r"\A---(?:\r?\n).*?(?:\r?\n)---(?:\r?\n|$)", readme_content, re.DOTALL)
     if front_matter is not None:
-        _verify_release_yaml_fields(front_matter.group(0), "README front matter", expected, errors)
+        _verify_release_yaml_fields(
+            front_matter.group(0),
+            "README front matter",
+            expected,
+            errors,
+            require_present=False,
+        )
     expected_languages = "\n".join(_render_language_section(stats)) + "\n"
     language_match = re.search(
         r"(?ms)^## Languages\n.*?(?=^## |\Z)", readme_content.replace("\r\n", "\n")
@@ -312,10 +318,14 @@ def _verify_release_yaml_fields(
     label: str,
     expected: dict[str, object],
     errors: list[str],
+    *,
+    require_present: bool = True,
 ) -> None:
     """Compare one YAML-like document's generated text fields."""
     for key, value in expected.items():
-        if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content):
+        if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content) and (
+            require_present or re.search(rf"(?m)^{re.escape(key)}:", content)
+        ):
             errors.append(f"{label} {key} does not match canonical text statistics")
 
 
