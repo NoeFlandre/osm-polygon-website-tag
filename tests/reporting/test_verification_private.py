@@ -610,6 +610,27 @@ def test_receipt_read_and_entry_helpers_forward_valid_entries_exactly(
     assert metadata_calls == [("README.md", 2, errors)]
     assert artifact_calls == [("README.md", entry, errors, canonical, False)]
 
+    errors.clear()
+    receipt._verify_receipt_entry(tmp_path, "not-a-dict", 2, set(), errors, [])
+    assert errors == ["invalid completion receipt artifact entry"]
+
+
+def test_read_receipt_requires_explicit_utf8_decoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def read_text(_path: Path, *, encoding: object) -> str:
+        calls.append(encoding)
+        return '{"artifacts": []}'
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    errors: list[str] = []
+
+    assert receipt._read_receipt(tmp_path / "receipt.json", errors) == {"artifacts": []}
+    assert calls == ["utf-8"]
+
 
 def test_receipt_artifact_helpers_cover_refreshable_and_independent_digest_failures(
     tmp_path: Path,
@@ -684,6 +705,7 @@ def test_receipt_artifact_collection_and_canonical_entry_contracts(
     seen, canonical = receipt._verify_receipt_artifacts(tmp_path, ["one", "two"], 2, errors)
     assert seen == {"one", "two"}
     assert canonical == []
+    assert [call[2] for call in calls] == [2, 2]
     assert [call[-1] for call in calls] == [False, False]
     calls.clear()
     receipt._verify_receipt_artifacts(tmp_path, ["one"], 2, errors, True)
@@ -745,6 +767,13 @@ def test_receipt_inventory_digest_and_data_identity_are_deterministic(
     assert errors == []
     assert manifest_calls == [tmp_path]
     receipt._verify_data_manifest(tmp_path, {"data_manifest_sha256": "wrong"}, errors)
+    assert errors == ["completion receipt data manifest mismatch"]
+    errors.clear()
+    receipt._verify_data_manifest(
+        tmp_path,
+        {"schema_version": "v1.2", "data_manifest_sha256": "wrong"},
+        errors,
+    )
     assert errors == ["completion receipt data manifest mismatch"]
 
 

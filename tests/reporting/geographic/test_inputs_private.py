@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+from osm_polygon_website_tag.reporting.geographic import inputs
 from osm_polygon_website_tag.reporting.geographic.inputs import (
     _coordinate_value,
     _iter_batch_rows,
@@ -267,6 +268,88 @@ def test_batch_and_path_iterators_preserve_text_filter_and_row_offsets() -> None
     ]
 
 
+def test_coordinate_batch_iterators_request_copyable_arrays_and_strict_zip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool | None] = []
+
+    class FakeArray:
+        def __init__(self, values: list[object]) -> None:
+            self.values = values
+
+        def to_numpy(self, *, zero_copy_only: bool | None) -> list[object]:
+            calls.append(zero_copy_only)
+            return self.values
+
+        def is_null(self) -> FakeArray:
+            return self
+
+        def to_pylist(self) -> list[object]:
+            return self.values
+
+    arrays = {
+        "lat": FakeArray([1.0]),
+        "lon": FakeArray([2.0]),
+        "osm_type": FakeArray(["way"]),
+        "osm_id": FakeArray([1]),
+    }
+    batch = SimpleNamespace(column=lambda name: arrays[name])
+
+    assert list(_iter_batch_rows(Path("source.parquet"), batch, 0, extracted_text_only=False)) == [
+        (Path("source.parquet"), 0, 1.0, 2.0)
+    ]
+    assert calls == [False, False, False, False]
+
+    calls.clear()
+    monkeypatch.setattr(
+        inputs,
+        "_text_success_mask",
+        lambda _batch: SimpleNamespace(tolist=lambda: [True]),
+    )
+    assert list(_iter_unique_text_batch_rows(Path("source.parquet"), batch, 0, set())) == [
+        (Path("source.parquet"), 0, 1.0, 2.0)
+    ]
+    assert calls == [False, False, False, False]
+
+
+def test_coordinate_batch_iterators_require_equal_arrow_lengths() -> None:
+    class FakeArray:
+        def __init__(self, values: list[object]) -> None:
+            self.values = values
+
+        def to_numpy(self, *, zero_copy_only: bool) -> list[object]:
+            return self.values
+
+        def is_null(self) -> FakeArray:
+            return self
+
+        def to_pylist(self) -> list[object]:
+            return self.values
+
+    arrays = {
+        "lat": FakeArray([1.0]),
+        "lon": FakeArray([2.0, 3.0]),
+        "osm_type": FakeArray(["way"]),
+        "osm_id": FakeArray([1]),
+    }
+    batch = SimpleNamespace(column=lambda name: arrays[name])
+
+    with pytest.raises(ValueError, match=r"zip\(\) argument"):
+        list(_iter_batch_rows(Path("source.parquet"), batch, 0, extracted_text_only=False))
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        inputs,
+        "_text_success_mask",
+        lambda _batch: SimpleNamespace(tolist=lambda: [True]),
+    )
+    try:
+        with pytest.raises(ValueError, match=r"zip\(\) argument"):
+            list(_iter_unique_text_batch_rows(Path("source.parquet"), batch, 0, set()))
+    finally:
+        monkeypatch.undo()
+
+
 def test_path_iterators_select_bounded_columns_and_accumulate_offsets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -299,6 +382,52 @@ def test_path_iterators_select_bounded_columns_and_accumulate_offsets(
     ]
     assert calls == [{"columns": ["lat", "lon"], "batch_size": 8192}]
     assert column_calls == [(path, False, False)]
+
+
+def test_path_iterator_forwards_mode_and_accumulates_offsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = Path("source.parquet")
+    batches = [SimpleNamespace(num_rows=2), SimpleNamespace(num_rows=1)]
+    parquet_paths: list[Path] = []
+    forwarded: list[tuple[Path, object, int, bool]] = []
+
+    class FakeParquet:
+        schema_arrow = SimpleNamespace(names=["lat", "lon"])
+
+        def iter_batches(self, **kwargs: object):
+            assert kwargs == {"columns": ["lat", "lon"], "batch_size": 8192}
+            yield from batches
+
+    monkeypatch.setattr(
+        pq,
+        "ParquetFile",
+        lambda received: parquet_paths.append(received) or FakeParquet(),
+    )
+    monkeypatch.setattr(
+        inputs,
+        "_path_columns",
+        lambda received_path, names, *, extracted_text_only, include_identity=False: (
+            ["lat", "lon"]
+            if (received_path, names, extracted_text_only, include_identity)
+            == (path, {"lat", "lon"}, False, False)
+            else pytest.fail("unexpected path-column contract")
+        ),
+    )
+    monkeypatch.setattr(
+        inputs,
+        "_iter_batch_rows",
+        lambda received_path, batch, offset, *, extracted_text_only: (
+            forwarded.append((received_path, batch, offset, extracted_text_only)) or iter(())
+        ),
+    )
+
+    assert list(_iter_path_rows(path, extracted_text_only=False)) == []
+    assert parquet_paths == [path]
+    assert forwarded == [
+        (path, batches[0], 0, False),
+        (path, batches[1], 2, False),
+    ]
 
 
 def test_unique_text_path_iterator_forwards_identity_columns_and_offsets(
@@ -336,6 +465,54 @@ def test_unique_text_path_iterator_forwards_identity_columns_and_offsets(
     assert list(_iter_unique_text_path_rows(path, seen)) == []
     assert calls == [{"columns": ["osm_type", "osm_id", "lat", "lon"], "batch_size": 8192}]
     assert forwarded == [(path, batch, 0, seen)]
+
+
+def test_unique_text_path_iterator_forwards_exact_inputs_and_offsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = Path("source.parquet")
+    batches = [SimpleNamespace(num_rows=2), SimpleNamespace(num_rows=1)]
+    parquet_paths: list[Path] = []
+    column_calls: list[tuple[Path, set[str], bool, bool]] = []
+    forwarded: list[tuple[Path, object, int, set[tuple[str, int]]]] = []
+    seen: set[tuple[str, int]] = set()
+
+    class FakeParquet:
+        schema_arrow = SimpleNamespace(names=["all"])
+
+        def iter_batches(self, **kwargs: object):
+            assert kwargs == {
+                "columns": ["osm_type", "osm_id", "lat", "lon"],
+                "batch_size": 8192,
+            }
+            yield from batches
+
+    monkeypatch.setattr(
+        pq, "ParquetFile", lambda received: parquet_paths.append(received) or FakeParquet()
+    )
+    monkeypatch.setattr(
+        inputs,
+        "_path_columns",
+        lambda received_path, names, *, extracted_text_only, include_identity=False: (
+            column_calls.append((received_path, names, extracted_text_only, include_identity))
+            or ["osm_type", "osm_id", "lat", "lon"]
+        ),
+    )
+    monkeypatch.setattr(
+        inputs,
+        "_iter_unique_text_batch_rows",
+        lambda received_path, batch, offset, received_seen: (
+            forwarded.append((received_path, batch, offset, received_seen)) or iter(())
+        ),
+    )
+
+    assert list(_iter_unique_text_path_rows(path, seen)) == []
+    assert parquet_paths == [path]
+    assert column_calls == [(path, {"all"}, True, True)]
+    assert forwarded == [
+        (path, batches[0], 0, seen),
+        (path, batches[1], 2, seen),
+    ]
 
 
 def test_public_iterator_wrappers_forward_scope_and_text_mode(
@@ -398,3 +575,112 @@ def test_successful_non_empty_text_trims_whitespace_and_requires_success() -> No
         pa.array(["success", "success", "failed", "success"]),
     )
     assert mask.to_pylist() == [True, False, False, None]
+
+
+def test_validated_coordinates_rejects_null_longitude() -> None:
+    values = [(1.0, 2.0, False, True)]
+    with pytest.raises(ValueError, match=r"null coordinate.*row 0"):
+        list(_validated_coordinates(Path("source.parquet"), values, None, 0))
+
+
+def test_text_success_mask_fills_nulls_and_requests_copyable_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch = pa.record_batch(
+        [
+            pa.array([None], type=pa.string()),
+            pa.array([None], type=pa.string()),
+            pa.array([None], type=pa.string()),
+            pa.array([None], type=pa.string()),
+        ],
+        names=[
+            "website_text",
+            "website_text_status",
+            "contact_website_text",
+            "contact_website_text_status",
+        ],
+    )
+    fill_values: list[object] = []
+
+    class FilledMask:
+        def to_numpy(self, *, zero_copy_only: bool) -> list[bool]:
+            assert zero_copy_only is False
+            return [False]
+
+    def fill_null(values: object, fill_value: object) -> FilledMask:
+        del values
+        fill_values.append(fill_value)
+        return FilledMask()
+
+    monkeypatch.setattr(inputs.pc, "fill_null", fill_null)
+    assert _text_success_mask(batch).tolist() == [False]
+    assert fill_values == [False]
+
+
+def test_text_polygon_parquets_forwards_selected_roots_and_falls_back_on_resolve_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path
+    observations_dir = root / "analysis_observations"
+    regional_root = root / "regional"
+    regional_observations = regional_root / "analysis_observations"
+    (regional_root / "polygons").mkdir(parents=True)
+    observations_dir.symlink_to(regional_observations, target_is_directory=True)
+    source_names = {"source.osm.pbf"}
+    selected: list[tuple[Path, object]] = []
+    monkeypatch.setattr(
+        inputs,
+        "_select_polygon_parquets",
+        lambda directory, received_names: (
+            selected.append((directory, received_names)) or [directory / "source.parquet"]
+        ),
+    )
+
+    assert _text_polygon_parquets(root, source_names=source_names) == [
+        regional_root / "polygons" / "source.parquet"
+    ]
+    assert selected == [(regional_root / "polygons", source_names)]
+
+    observations_dir.unlink()
+    fallback: list[tuple[Path, object]] = []
+    monkeypatch.setattr(
+        inputs,
+        "sorted_public_polygon_parquets",
+        lambda received_root, *, source_names: (
+            fallback.append((received_root, source_names)) or [received_root / "public.parquet"]
+        ),
+    )
+    assert _text_polygon_parquets(root, source_names=source_names) == [root / "public.parquet"]
+    assert fallback == [(root, source_names)]
+
+
+def test_text_polygon_parquets_falls_back_when_regional_resolution_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path
+    observations_dir = root / "analysis_observations"
+    regional_target = root / "regional" / "analysis_observations"
+    regional_target.parent.mkdir()
+    observations_dir.symlink_to(regional_target, target_is_directory=True)
+    source_names = {"source.osm.pbf"}
+    fallback: list[tuple[Path, object]] = []
+    original_resolve = Path.resolve
+
+    def resolve(path: Path) -> Path:
+        if path == observations_dir:
+            raise OSError("unresolvable regional observations")
+        return original_resolve(path)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    monkeypatch.setattr(
+        inputs,
+        "sorted_public_polygon_parquets",
+        lambda received_root, *, source_names: (
+            fallback.append((received_root, source_names)) or [received_root / "public.parquet"]
+        ),
+    )
+
+    assert _text_polygon_parquets(root, source_names=source_names) == [root / "public.parquet"]
+    assert fallback == [(root, source_names)]

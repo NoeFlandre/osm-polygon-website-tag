@@ -186,12 +186,13 @@ def test_summary_exposes_explicit_global_and_regional_modes(tmp_path: Path) -> N
     assert global_summary.extracted_text_only is True
     assert regional_summary.extracted_text_only is False
 
-    with pytest.raises(ValueError, match="conflicts"):
+    with pytest.raises(ValueError) as exc_info:
         compute_polygon_density_summary(
             tmp_path,
             extracted_text_only=True,
             aggregation_mode="regional_rows",
         )
+    assert str(exc_info.value) == "extracted_text_only conflicts with regional_rows"
 
 
 def test_text_summary_deduplicates_osm_identity_and_requires_non_empty_text(
@@ -427,6 +428,7 @@ def test_summary_selects_the_requested_input_iterator_and_binds_resolution(
         tmp_path,
         h3_resolution=8,
         extracted_text_only=True,
+        source_names={"source.osm.pbf"},
     )
 
     assert regular.polygon_row_count == 1
@@ -437,7 +439,48 @@ def test_summary_selects_the_requested_input_iterator_and_binds_resolution(
     assert extracted.extracted_text_only is True
     assert calls == [
         ("standard", tmp_path, {"source.osm.pbf"}),
-        ("text", tmp_path, None),
+        ("text", tmp_path, {"source.osm.pbf"}),
+    ]
+
+
+def test_summary_constructs_the_exact_public_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class Summary:
+        def __init__(self, **kwargs: object) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(aggregation_module, "PolygonDensitySummary", Summary)
+    monkeypatch.setattr(
+        aggregation_module,
+        "iter_unique_text_lat_lon_runs",
+        lambda _run_dir, *, source_names: iter([(Path("source.parquet"), 2, 1.0, 2.0)]),
+    )
+    monkeypatch.setattr(
+        aggregation_module,
+        "assign_h3_cell",
+        lambda _lat, _lon, *, resolution: f"cell-{resolution}",
+    )
+
+    result = aggregation_module.compute_polygon_density_summary(
+        tmp_path,
+        h3_resolution=7,
+        aggregation_mode="global_unique_text",
+    )
+
+    assert result is not None
+    assert captured == [
+        {
+            "h3_resolution": 7,
+            "polygon_row_count": 1,
+            "occupied_cell_count": 1,
+            "cells": (("cell-7", 1),),
+            "extracted_text_only": True,
+            "aggregation_mode": "global_unique_text",
+        }
     ]
 
 
