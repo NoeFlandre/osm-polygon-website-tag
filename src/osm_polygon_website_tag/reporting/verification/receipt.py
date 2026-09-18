@@ -16,7 +16,14 @@ from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
 
-_REFRESHABLE_CARD_PATHS = frozenset(("README.md", "stats.json"))
+_REFRESHABLE_CARD_PATHS = frozenset(
+    (
+        "README.md",
+        "dataset.yaml",
+        "stats.json",
+        POLYGON_DENSITY_ASSET_REL_PATH,
+    )
+)
 
 
 def verify_receipt(root: Path, errors: list[str]) -> None:
@@ -93,13 +100,15 @@ def _verify_card_contract_before_card_refresh(
     contract_version: object,
     errors: list[str],
 ) -> None:
-    """Keep the map contract strict while allowing the two refresh targets."""
+    """Allow current and recognized legacy cards before replacing all metadata."""
     if contract_version == CARD_CONTRACT_VERSION:
         map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
         if not map_path.is_file():
             errors.append(f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}")
-    else:
-        _verify_card_contract(root, contract_version, errors)
+        return
+    if contract_version == 1:
+        return
+    _verify_card_contract(root, contract_version, errors)
 
 
 def _verify_legacy_card_contract(map_path: Path, errors: list[str]) -> None:

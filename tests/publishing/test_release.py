@@ -995,6 +995,15 @@ def test_release_completion_and_card_update_fail_closed(
         release_module._require_data_identity(run_dir, "expected")
 
 
+def test_release_accepts_legacy_card_receipt_before_refresh(run_dir: Path) -> None:
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["card_contract_version"] = 1
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    assert release_module._require_complete_release(run_dir) == data_manifest_sha256(run_dir)
+
+
 def test_release_publish_helpers_preserve_dry_run_noop_and_upload_contract(
     run_dir: Path,
 ) -> None:

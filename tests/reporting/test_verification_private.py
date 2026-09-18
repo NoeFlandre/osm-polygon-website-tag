@@ -558,7 +558,8 @@ def test_receipt_contract_versions_and_current_artifacts_fail_closed(
     )
     errors.clear()
     receipt._verify_card_contract_before_card_refresh(tmp_path, 1, errors)
-    assert delegated == [(tmp_path, 1, errors)]
+    assert delegated == []
+    assert errors == []
 
 
 def test_legacy_card_contract_reports_both_missing_version_cases(tmp_path: Path) -> None:
