@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from osm_polygon_website_tag.publishing.card_artifacts import refresh_card_for_release
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256 as compute_data_manifest_sha256,
@@ -28,7 +29,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publ
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     parquet_manifest_sha256 as compute_parquet_manifest_sha256,
 )
-from osm_polygon_website_tag.reporting.card import refresh_card_for_release, yaml_custom_sha256
+from osm_polygon_website_tag.reporting.card import yaml_custom_sha256
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.text_population import text_population_parquets
