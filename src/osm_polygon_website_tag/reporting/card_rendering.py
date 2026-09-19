@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 import pyarrow as pa
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
+from osm_polygon_website_tag.reporting.card_metadata import _dataset_status_value
 from osm_polygon_website_tag.reporting.card_stats import CardStats
 from osm_polygon_website_tag.reporting.geographic.layout import (
     HERO_ASSET_REL_PATH,
@@ -420,18 +421,6 @@ def _schema_rows(schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> list[str]:
             f"{'yes' if field.nullable else 'no'} | {description} |"
         )
     return rows
-
-
-def _dataset_status_value(stats: CardStats) -> str:
-    """Return the stable machine-readable status shown in card metadata."""
-    if stats.snapshot_status == "done":
-        return "done"
-    if (
-        stats.expected_sources_count > 0
-        and stats.enriched_sources_count == stats.expected_sources_count
-    ):
-        return "complete"
-    return "in_progress"
 
 
 def _dataset_status_label(stats: CardStats) -> str:

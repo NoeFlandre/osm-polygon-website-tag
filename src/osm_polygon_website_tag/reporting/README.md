@@ -2,8 +2,9 @@
 
 Builds and validates public-facing local artifacts.
 
-- Modules: `artifact_inventory`, `card_stats`, `geometry_stats`, `card`,
-  `geographic`, `repair`, `verify`, `finalize`.
+- Modules: `artifact_inventory`, `card`, `card_rendering`, `card_metadata`,
+  `card_patching`, `card_stats`, `geometry_stats`, `geographic`, `repair`,
+  `verify`, and `finalize`.
 - Dependencies: `contracts`, `storage`, `pipeline`, and `runtime`.
 - `geographic` aggregates public centroids into H3 resolution-3 counts and
   atomically renders the logarithmic `assets/geographic_polygon_density.png`
@@ -33,6 +34,11 @@ Builds and validates public-facing local artifacts.
 - `artifact_inventory` is the shared source of truth for deterministic
   publishable paths and bounded SHA-256 hashing used by both finalization and
   receipt verification.
+- `card` is the compatibility-preserving orchestration entry point for fresh
+  card builds and legacy geometry updates. `card_rendering` owns pure Markdown
+  sections, `card_metadata` owns YAML/front-matter contracts, and
+  `card_patching` owns byte-preserving legacy-card updates. Release-time map,
+  README, YAML, and geometry promotion lives under `publishing/card_artifacts`.
 - `verify` is the stable verification entry point; its internal section
   validators live under `verification/` and are not public API. They cover
   rows, shards, text, language pairs, sentence segmentation, analysis and card

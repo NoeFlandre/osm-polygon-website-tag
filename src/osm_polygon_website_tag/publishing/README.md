@@ -2,7 +2,8 @@
 
 Adapts verified artifacts to Hugging Face publication.
 
-- Modules: `hf_token`, `incremental`, `publish`, `trackio`.
+- Modules: `card_artifacts`, `hf_token`, `incremental`, `publish`, `release`,
+  and `trackio`.
 - Dependencies: `reporting` and `runtime`.
 - `incremental` compares content hashes for one polygon shard and the global
   README/YAML/map bundle. It uploads only changed files and atomically records
@@ -13,7 +14,9 @@ Adapts verified artifacts to Hugging Face publication.
   publication decision scans its managed artifacts once; standalone checkpoint
   calls still compute their own hashes when no plan is supplied.
 - Entry points: `resolve_hf_token`, `build_publish_plan`, `publish_to_hf`, and
-  `incremental_publish_changed_shard`.
+  `incremental_publish_changed_shard`. `refresh_card_for_release` and
+  `promote_release_card_artifacts` own the atomic release-time card/map/YAML/
+  geometry bundle refresh.
 - `trackio` is an optional, explicit publisher for the public dataset metrics
   dashboard. It reads only a complete run's receipt-bound Parquets and uses the
   same `CardStats` source as the generated dataset card. The normal pipeline
