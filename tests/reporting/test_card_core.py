@@ -9,6 +9,7 @@ from textwrap import dedent
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import yaml
 from tests.fixtures.card import (
     _golden_card_stats,
     _golden_geometry_stats,
@@ -340,6 +341,17 @@ def test_render_yaml_front_matter_has_a_stable_output_contract() -> None:
     )
 
     assert card_module._render_yaml_front_matter(_golden_card_stats()) == expected
+
+
+def test_rendered_front_matter_is_valid_yaml_with_declared_dataset_contract() -> None:
+    front_matter = card_module._render_yaml_front_matter(_golden_card_stats())
+    document = yaml.safe_load(front_matter.removeprefix("---\n").removesuffix("\n---"))
+
+    assert document["license"] == "odbl"
+    assert document["configs"][0]["data_files"] == [
+        {"split": "polygons", "path": "polygons/*.parquet"}
+    ]
+    assert document["public_row_count"] == 3
 
 
 def test_build_card_preserves_collaborator_and_staging_contracts(
