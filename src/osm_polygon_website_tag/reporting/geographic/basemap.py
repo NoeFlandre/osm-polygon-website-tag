@@ -6,14 +6,25 @@ import json
 from pathlib import Path
 from typing import Any
 
-import matplotlib.patches as patches
-
 BUNDLED_LAND_FILENAME = "ne_110m_admin_0_countries.geojson"
 BUNDLED_LAND_PATH = Path(__file__).with_name(BUNDLED_LAND_FILENAME)
 
 OCEAN_COLOR = "#cfe2f3"
 LAND_COLOR = "#e8e0d0"
 LAND_EDGE_COLOR = "#b8aa90"
+
+
+def _matplotlib_patches() -> Any:
+    """Load Matplotlib patches only when the backdrop is rendered."""
+    patches_module = globals().get("patches")
+    if patches_module is None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.patches as patches_module
+
+        globals()["patches"] = patches_module
+    return patches_module
 
 
 def draw_landmasses(axis: Any, geojson_path: Path = BUNDLED_LAND_PATH) -> None:
@@ -53,8 +64,9 @@ def _draw_multipolygon_feature(axis: Any, coordinates: Any) -> None:
 def _draw_polygon(axis: Any, rings: list[list[list[float]]]) -> None:
     if not rings:
         return
+    patches_module = _matplotlib_patches()
     axis.add_patch(
-        patches.Polygon(
+        patches_module.Polygon(
             rings[0],
             closed=True,
             facecolor=LAND_COLOR,
@@ -65,7 +77,7 @@ def _draw_polygon(axis: Any, rings: list[list[list[float]]]) -> None:
     )
     for hole in rings[1:]:
         axis.add_patch(
-            patches.Polygon(
+            patches_module.Polygon(
                 hole,
                 closed=True,
                 facecolor=OCEAN_COLOR,

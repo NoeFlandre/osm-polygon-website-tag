@@ -337,6 +337,20 @@ def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
     assert config.only_mutate == ["src/osm_polygon_website_tag/__init__.py"]
 
 
+def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> None:
+    config = SimpleNamespace(only_mutate=[])
+
+    source_paths = mutation_runner._configure_source_scope(
+        ["osm_polygon_website_tag.reporting.geographic.*"],
+        config=config,
+    )
+
+    assert source_paths == (Path("src/osm_polygon_website_tag/reporting/geographic/__init__.py"),)
+    assert config.only_mutate == [
+        "src/osm_polygon_website_tag/reporting/geographic/__init__.py",
+    ]
+
+
 def test_scoped_mutation_config_rejects_unqualified_filters() -> None:
     config = SimpleNamespace(only_mutate=["src/osm_polygon_website_tag"])
 

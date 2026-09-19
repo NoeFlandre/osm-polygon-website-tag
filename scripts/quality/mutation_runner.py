@@ -52,7 +52,10 @@ def _source_path_for_mutant_name(mutant_name: str) -> Path:
         return _PACKAGE_SOURCE_ROOT / "__init__.py"
 
     relative_module = module_name.removeprefix(f"{_PACKAGE_NAME}.")
-    return _PACKAGE_SOURCE_ROOT.joinpath(*relative_module.split(".")).with_suffix(".py")
+    candidate = _PACKAGE_SOURCE_ROOT.joinpath(*relative_module.split("."))
+    if candidate.is_dir():
+        return candidate / "__init__.py"
+    return candidate.with_suffix(".py")
 
 
 def _source_paths_for_mutant_names(mutant_names: Iterable[str]) -> tuple[Path, ...]:

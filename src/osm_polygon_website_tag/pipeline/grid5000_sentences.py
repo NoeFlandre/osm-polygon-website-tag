@@ -57,6 +57,7 @@ from osm_polygon_website_tag.pipeline.sentences import SentenceSplitter
 from osm_polygon_website_tag.pipeline.split_sentences import (
     DEFAULT_BATCH_ROWS,
     SentenceSegmentationResult,
+    segment_sentence_shard,
     shard_needs_sentence_segmentation,
 )
 from osm_polygon_website_tag.runtime.run_state import (
@@ -416,8 +417,6 @@ def _segment_staged_shards(
     clock: Callable[[], float] | None,
 ) -> list[tuple[Path, SentenceSegmentationResult]]:
     """Segment staged shards under one shared budget, keeping every outcome."""
-    from osm_polygon_website_tag.pipeline.split_sentences import segment_sentence_shard
-
     touched: list[tuple[Path, SentenceSegmentationResult]] = []
 
     def segment(

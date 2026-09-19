@@ -7,8 +7,13 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from osm_polygon_website_tag.reporting import file_hashing as _file_hashing
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
+
+hash_file = _file_hashing.hash_file
+_hash_identified_file = _file_hashing._hash_identified_file
 
 _PUBLISHABLE_DIRECTORIES = (
     "polygons",
@@ -54,21 +59,21 @@ def _root_publishable_paths(root: Path) -> list[Path]:
     return [path for name in _PUBLISHABLE_ROOT_FILES if (path := root / name).is_file()]
 
 
-def hash_file(path: Path) -> str:
-    """Return the SHA-256 digest of a file using bounded reads."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def data_manifest_sha256(root: Path) -> str:
     """Return the deterministic identity of source manifests and data shards."""
-    return _manifest_sha256(
-        root,
-        lambda relative_path: _is_data_manifest_path(relative_path),
+    text_entries = list(text_population_manifest_entries(root))
+    if not text_entries:
+        return _manifest_sha256(root, _is_data_manifest_path)
+    entries = _manifest_entries(root, _is_data_manifest_path)
+    entries.extend(
+        {
+            "path": f"text_population/{entry['path']}",
+            "size_bytes": entry["size_bytes"],
+            "sha256": entry["sha256"],
+        }
+        for entry in text_entries
     )
+    return _manifest_digest(entries)
 
 
 def parquet_manifest_sha256(root: Path) -> str:
@@ -78,7 +83,17 @@ def parquet_manifest_sha256(root: Path) -> str:
 
 def _manifest_sha256(root: Path, include: Callable[[str], bool]) -> str:
     """Hash selected publishable paths using their relative path and bytes."""
-    entries = [
+    canonical = json.dumps(
+        _manifest_entries(root, include),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _manifest_entries(root: Path, include: Callable[[str], bool]) -> list[dict[str, int | str]]:
+    """Return selected publishable identities in deterministic order."""
+    return [
         {
             "path": relative_path,
             "size_bytes": path.stat().st_size,
@@ -87,7 +102,15 @@ def _manifest_sha256(root: Path, include: Callable[[str], bool]) -> str:
         for path in publishable_paths(root)
         if (relative_path := path.relative_to(root).as_posix()) and include(relative_path)
     ]
-    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+
+
+def _manifest_digest(entries: list[dict[str, int | str]]) -> str:
+    """Hash canonical manifest entries."""
+    canonical = json.dumps(
+        sorted(entries, key=lambda item: str(item["path"])),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

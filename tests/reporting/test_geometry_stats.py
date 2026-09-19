@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.reporting import geometry_stats
 from osm_polygon_website_tag.reporting.geometry_stats import (
     AREA_BUCKET_LABELS,
     GEOMETRY_STATS_SCHEMA_VERSION,
@@ -112,6 +113,7 @@ def test_empty_selection_reports_zeroed_statistics(tmp_path: Path) -> None:
     stats = compute_geometry_stats(tmp_path)
 
     assert stats.schema_version == GEOMETRY_STATS_SCHEMA_VERSION
+    assert stats.population_scope == "published polygon rows"
     assert stats.row_count == 0
     assert stats.area.summary == NumericSummary()
     assert stats.area.zero_area_row_count == 0
@@ -120,6 +122,52 @@ def test_empty_selection_reports_zeroed_statistics(tmp_path: Path) -> None:
     assert stats.per_source == []
     assert stats.per_osm_primary_tag == []
     assert [entry["row_count"] for entry in stats.area.histogram] == [0] * len(AREA_BUCKET_LABELS)
+
+
+def test_report_includes_global_text_population_for_card_map_agreement(tmp_path: Path) -> None:
+    first = _public_row(polygon_id="a:way/42")
+    first.update(
+        osm_id=42,
+        website_text="old copy",
+        website_word_count=2,
+        website_text_status="success",
+    )
+    second = _public_row(polygon_id="b:way/42")
+    second.update(
+        osm_id=42,
+        website_text="new copy",
+        website_word_count=2,
+        website_text_status="success",
+        osm_version=2,
+        lat=48.0,
+        lon=2.0,
+    )
+    contact = _public_row(polygon_id="a:way/43")
+    contact.update(
+        osm_id=43,
+        website=None,
+        has_website=False,
+        website_text=None,
+        website_word_count=None,
+        website_text_status="absent",
+        contact_website="https://contact.example.org",
+        has_contact_website=True,
+        contact_website_text="contact copy",
+        contact_website_word_count=2,
+        contact_website_text_status="success",
+    )
+    _write_shard(tmp_path, "a", [first, contact])
+    _write_shard(tmp_path, "b", [second])
+
+    stats = compute_geometry_stats(tmp_path)
+    payload = json.loads(render_geometry_stats(stats))
+
+    assert stats.text_population.unique_identity_count == 2
+    assert stats.text_population.website_identity_count == 1
+    assert stats.text_population.contact_website_identity_count == 1
+    assert stats.text_population.website_total_words == 2
+    assert stats.text_population.contact_website_total_words == 2
+    assert payload["text_population"]["unique_identity_count"] == 2
 
 
 def test_missing_polygon_directory_is_reported_as_a_missing_artifact(tmp_path: Path) -> None:
@@ -464,3 +512,14 @@ def test_rows_without_geometry_still_report_an_empty_polygon_shape(tmp_path: Pat
     assert stats.shape.with_holes_row_count == 0
     assert stats.shape.rings_per_row.maximum == 0.0
     assert stats.shape.vertices_per_row.maximum == 0.0
+
+
+def test_geometry_values_are_computed_serially(tmp_path: Path) -> None:
+    """Float aggregates must stay serial: parallel summation is not associative."""
+    store = geometry_stats._GeometryValueStore(tmp_path)
+    try:
+        row = store._connection.execute("SELECT current_setting('threads')").fetchone()
+        assert row is not None
+        assert int(row[0]) == 1
+    finally:
+        store.close()

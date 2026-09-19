@@ -428,6 +428,33 @@ def test_verify_release_results_forwards_preserve_card_sections(
     assert calls == [(tmp_path, True, True)]
 
 
+def test_release_verification_scans_the_selected_text_population_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = [tmp_path / "regional" / "polygons" / "source.parquet"]
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(verify_module, "text_population_parquets", lambda _root: selected)
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_text_paths",
+        lambda paths, status, errors: calls.append(("text", (paths, status, errors))),
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_language_paths",
+        lambda paths, errors: calls.append(("language", (paths, errors))),
+    )
+    errors: list[str] = []
+
+    verify_module._verify_release_text_inputs(tmp_path, STATUS_COMPLETE, errors)
+
+    assert calls == [
+        ("text", (selected, STATUS_COMPLETE, errors)),
+        ("language", (selected, errors)),
+    ]
+
+
 def _manifest_identity(
     *,
     filename: str = "source.osm.pbf",
