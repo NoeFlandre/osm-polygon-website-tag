@@ -29,6 +29,47 @@ def _implicit_text_io_calls() -> list[str]:
     return violations
 
 
+def _nested_first_party_imports() -> list[str]:
+    violations: list[str] = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.function_depth = 0
+            self.violations: list[str] = []
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self.function_depth += 1
+            self.generic_visit(node)
+            self.function_depth -= 1
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self.function_depth += 1
+            self.generic_visit(node)
+            self.function_depth -= 1
+
+        def visit_Import(self, node: ast.Import) -> None:
+            if self.function_depth:
+                self.violations.extend(
+                    alias.name
+                    for alias in node.names
+                    if alias.name.startswith("osm_polygon_website_tag.")
+                    or alias.name == "osm_polygon_website_tag"
+                )
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            module = node.module or ""
+            if self.function_depth and (
+                module.startswith("osm_polygon_website_tag.") or module == "osm_polygon_website_tag"
+            ):
+                self.violations.append(module)
+
+    for source in sorted((ROOT / "src").rglob("*.py")):
+        visitor = Visitor()
+        visitor.visit(ast.parse(source.read_text(encoding="utf-8"), filename=str(source)))
+        violations.extend(f"{source}:{name}" for name in visitor.violations)
+    return sorted(violations)
+
+
 def test_requested_python_tools_are_direct_dependencies() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     runtime = "\n".join(project["project"]["dependencies"])
@@ -184,6 +225,10 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
 
 def test_production_text_io_declares_utf8_encoding() -> None:
     assert _implicit_text_io_calls() == []
+
+
+def test_production_code_does_not_defer_first_party_imports() -> None:
+    assert _nested_first_party_imports() == []
 
 
 def test_a_full_sweep_starts_from_a_clean_workspace() -> None:

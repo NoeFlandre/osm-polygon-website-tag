@@ -9,7 +9,11 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.reporting.card import build_card
-from osm_polygon_website_tag.reporting.finalize import FinalizationReport, replace_receipt_atomic
+from osm_polygon_website_tag.reporting.finalize import (
+    FinalizationReport,
+    finalize_run,
+    replace_receipt_atomic,
+)
 from osm_polygon_website_tag.reporting.verify import (
     VerificationReport,
     verify_results,
@@ -112,8 +116,6 @@ def refresh_card_run(run_dir: Path | str) -> FinalizationReport:
 
 def _finalize_after_receipt(root: Path) -> FinalizationReport:
     """Validate the new receipt and complete/rebind the run lifecycle."""
-    from osm_polygon_website_tag.reporting.finalize import finalize_run
-
     strict = verify_results(root)
     if not strict.ok:
         return FinalizationReport(False, {}, strict)

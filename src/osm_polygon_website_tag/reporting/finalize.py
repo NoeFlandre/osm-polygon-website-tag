@@ -11,6 +11,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256,
     hash_file,
@@ -106,8 +107,6 @@ def _snapshot_preflight_error(metadata: dict[str, Any], status: object) -> str |
 
 def _advance_snapshot_state(root: Path, state: Any) -> None:
     """Advance a frozen run through analysis/card steps without enrichment."""
-    from osm_polygon_website_tag.pipeline.analyze import analyze_results
-
     steps: tuple[tuple[str, str, Callable[[], object] | None], ...] = (
         (STATUS_EXTRACTING, STATUS_EXTRACTED, None),
         (STATUS_EXTRACTED, STATUS_ENRICHING, None),

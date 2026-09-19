@@ -345,9 +345,7 @@ def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> N
         config=config,
     )
 
-    assert source_paths == (
-        Path("src/osm_polygon_website_tag/reporting/geographic/__init__.py"),
-    )
+    assert source_paths == (Path("src/osm_polygon_website_tag/reporting/geographic/__init__.py"),)
     assert config.only_mutate == [
         "src/osm_polygon_website_tag/reporting/geographic/__init__.py",
     ]
