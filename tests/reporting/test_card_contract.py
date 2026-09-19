@@ -27,6 +27,7 @@ from osm_polygon_website_tag.reporting.card import (
     _render_bbox,
     _render_language_section,
     _render_polygon_geometry_section,
+    _update_geographic_section,
     _update_geometry_section,
     _update_language_section,
     _update_website_text_section,
@@ -128,6 +129,23 @@ def test_update_geometry_section_replaces_inserts_and_appends_without_touching_n
     crlf = _update_geometry_section(b"prefix\r\n## Geographic distribution\r\nkeep\r\n", geometry)
     assert b"## Polygon geometry\r\n" in crlf
     assert b"## Polygon geometry\n" not in crlf
+
+
+def test_update_geographic_section_replaces_inserts_and_appends() -> None:
+    stats = CardStats(occupied_h3_cell_count=3, polygon_density_row_count=7)
+
+    replaced = _update_geographic_section(
+        b"prefix\n## Geographic distribution\nstale\n## Links\nkeep\n", stats
+    )
+    assert b"stale" not in replaced
+    assert b"**3** occupied cells" in replaced
+    assert replaced.endswith(b"## Links\nkeep\n")
+
+    inserted = _update_geographic_section(b"prefix\n## Polygon geometry\nkeep\n", stats)
+    assert b"## Polygon geometry\nkeep\n## Geographic distribution\n" in inserted
+
+    appended = _update_geographic_section(b"prefix", stats)
+    assert appended.startswith(b"prefix\n\n## Geographic distribution\n")
 
 
 def test_update_website_text_section_replaces_only_the_generated_block() -> None:

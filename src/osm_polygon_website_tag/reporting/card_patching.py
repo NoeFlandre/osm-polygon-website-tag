@@ -45,6 +45,11 @@ def _update_geographic_section(card: bytes, stats: CardStats) -> bytes:
     if existing is not None:
         return _replace_section(card, existing, block)
 
+    return _insert_geographic_section(card, block, newline)
+
+
+def _insert_geographic_section(card: bytes, block: bytes, newline: bytes) -> bytes:
+    """Insert geography after geometry or append it to the card."""
     geometry = _GEOMETRY_HEADING.search(card)
     if geometry is not None:
         return _insert_after_section(card, geometry, block)
