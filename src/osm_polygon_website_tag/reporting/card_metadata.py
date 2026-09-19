@@ -40,6 +40,15 @@ _RELEASE_YAML_DERIVED_KEYS = frozenset(
 )
 
 CARD_LANGUAGE_TAG_LIMIT = 20
+_README_HEADING = re.compile(rb"(?m)^## [^\r\n]*(?:\r\n|\n|$)")
+_DERIVED_README_HEADINGS = frozenset(
+    {
+        b"## Website text",
+        b"## Languages",
+        b"## Polygon geometry",
+        b"## Geographic distribution",
+    }
+)
 
 
 def _update_density_yaml(document: bytes | None, stats: CardStats) -> bytes:
@@ -105,7 +114,7 @@ def _is_derived_yaml_list_value(include_values: bool, line: str) -> bool:
 def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
     """Replace only generated YAML fields already present in one document."""
     text = document.decode("utf-8")
-    if stats.detected_language_count:
+    if _should_replace_existing_languages(text, stats):
         text = _replace_release_language_tags(text, stats)
     values = {
         **_release_yaml_values(stats),
@@ -121,13 +130,61 @@ def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
     return text.encode("utf-8")
 
 
+def _should_replace_existing_languages(text: str, stats: CardStats) -> bool:
+    """Return whether a README's existing language list is release-generated."""
+    language_range = _language_yaml_range(text.splitlines(keepends=True))
+    has_language_metrics = any(
+        f"{key}:" in text for key in ("detected_language_count", "website_language_count")
+    )
+    return (
+        language_range is not None
+        and language_range[1] > language_range[0] + 1
+        and (has_language_metrics or bool(stats.detected_language_count))
+    )
+
+
 def yaml_custom_sha256(path: Path) -> str | None:
     """Hash YAML content after removing release-generated fields."""
     document = _yaml_document_bytes(path)
     if document is None:
         return None
+    return yaml_custom_sha256_bytes(document, readme=path.name == "README.md")
+
+
+def yaml_custom_sha256_bytes(document: bytes, *, readme: bool = False) -> str | None:
+    """Hash one already-read YAML document after removing generated fields."""
+    if readme:
+        match = _FRONT_MATTER.match(document)
+        if match is None:
+            return None
+        document = match.group(0)
     normalized = _yaml_custom_text(document.decode("utf-8"))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def readme_preserved_sha256(path: Path) -> str | None:
+    """Hash README body sections that a release refresh must preserve."""
+    if not path.is_file():
+        return None
+    return readme_preserved_sha256_bytes(path.read_bytes())
+
+
+def readme_preserved_sha256_bytes(document: bytes) -> str:
+    """Hash README body bytes after removing release-derived sections."""
+    match = _FRONT_MATTER.match(document)
+    body = document[match.end() :] if match is not None else document
+    preserved: list[bytes] = []
+    cursor = 0
+    headings = list(_README_HEADING.finditer(body))
+    for index, heading in enumerate(headings):
+        title = heading.group(0).rstrip(b"\r\n")
+        if title not in _DERIVED_README_HEADINGS:
+            continue
+        preserved.append(body[cursor : heading.start()])
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+        cursor = end
+    preserved.append(body[cursor:])
+    return hashlib.sha256(b"".join(preserved)).hexdigest()
 
 
 def _yaml_document_bytes(path: Path) -> bytes | None:

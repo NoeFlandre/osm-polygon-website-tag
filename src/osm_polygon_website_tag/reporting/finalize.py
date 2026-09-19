@@ -20,6 +20,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
 from osm_polygon_website_tag.reporting.card import (
     CARD_CONTRACT_VERSION,
     build_card,
+    readme_preserved_sha256,
     yaml_custom_sha256,
 )
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
@@ -216,6 +217,9 @@ def _yaml_custom_receipt_fields(root: Path) -> dict[str, str]:
         digest = yaml_custom_sha256(root / relative)
         if digest is not None:
             fields[field] = digest
+    preserved = readme_preserved_sha256(root / "README.md")
+    if preserved is not None:
+        fields["readme_preserved_sha256"] = preserved
     return fields
 
 

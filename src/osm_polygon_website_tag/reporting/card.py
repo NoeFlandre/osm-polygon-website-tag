@@ -8,6 +8,7 @@ patches, and release promotion live in dedicated modules.
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
@@ -51,7 +52,10 @@ from osm_polygon_website_tag.reporting.card_metadata import (  # noqa: F401
     _yaml_derived_lines,
     _yaml_document_bytes,
     _yaml_top_level_key,
+    readme_preserved_sha256,
+    readme_preserved_sha256_bytes,
     yaml_custom_sha256,
+    yaml_custom_sha256_bytes,
 )
 from osm_polygon_website_tag.reporting.card_patching import (  # noqa: F401
     _GEOGRAPHIC_HEADING,
@@ -99,6 +103,7 @@ from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GEOMETRY_STATS_FILENAME,
@@ -106,19 +111,33 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
     compute_geometry_stats,
     render_geometry_stats,
 )
-from osm_polygon_website_tag.reporting.text_population import compute_text_population_summary
+from osm_polygon_website_tag.reporting.text_population import (
+    TextPopulationSummary,
+    compute_text_population_summary,
+)
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 CARD_CONTRACT_VERSION = 2
 
 
-def build_card(
+@dataclass(frozen=True)
+class CardBundle:
+    """Purely rendered card metadata and the summaries that produced it."""
+
+    readme: bytes
+    dataset_yaml: bytes
+    summary: PolygonDensitySummary
+    text_population: TextPopulationSummary
+    geometry: GeometryStats
+
+
+def render_card_bundle(
     run_dir: Path | str,
     *,
     source_names: Collection[str] | None = None,
     _yaml_source: bytes | None = None,
-) -> Path:
-    """Build or rebuild the README card and its derived metadata."""
+) -> CardBundle:
+    """Render card metadata without touching the filesystem outputs."""
     root = Path(run_dir)
     text_population = compute_text_population_summary(root, source_names=source_names)
     summary = compute_polygon_density_summary(
@@ -147,7 +166,24 @@ def build_card(
         front_matter = _merge_yaml_custom_metadata(
             front_matter.encode("utf-8"), _yaml_source
         ).decode("utf-8")
-    readme = front_matter + "\n" + body
+    return CardBundle(
+        readme=(front_matter + "\n" + body).encode("utf-8"),
+        dataset_yaml=front_matter.encode("utf-8"),
+        summary=summary,
+        text_population=text_population,
+        geometry=geometry,
+    )
+
+
+def build_card(
+    run_dir: Path | str,
+    *,
+    source_names: Collection[str] | None = None,
+    _yaml_source: bytes | None = None,
+) -> Path:
+    """Build or rebuild the README card and its derived metadata."""
+    root = Path(run_dir)
+    bundle = render_card_bundle(root, source_names=source_names, _yaml_source=_yaml_source)
     readme_path = root / "README.md"
     yaml_path = root / "dataset.yaml"
     staged_readme = root / ".README.md.building"
@@ -158,19 +194,19 @@ def build_card(
     try:
         build_polygon_density_map(
             root,
-            summary=summary,
+            summary=bundle.summary,
             output_path=staged_map,
             source_names=source_names,
             aggregation_mode="global_unique_text",
         )
-        staged_readme.write_text(readme, encoding="utf-8")
-        staged_yaml.write_text(front_matter, encoding="utf-8")
+        staged_readme.write_text(bundle.readme.decode("utf-8"), encoding="utf-8")
+        staged_yaml.write_text(bundle.dataset_yaml.decode("utf-8"), encoding="utf-8")
         promotions = [
             (staged_map, root / POLYGON_DENSITY_ASSET_REL_PATH),
             (staged_readme, readme_path),
             (staged_yaml, yaml_path),
         ]
-        promotions.extend(_staged_geometry_stats(staged_stats, root, geometry))
+        promotions.extend(_staged_geometry_stats(staged_stats, root, bundle.geometry))
         atomic_promote_bundle(promotions)
     finally:
         staged_map.unlink(missing_ok=True)
@@ -267,4 +303,14 @@ def _staged_geometry_stats(
     return [(staged, target)]
 
 
-__all__ = ["CARD_CONTRACT_VERSION", "build_card", "update_card_with_geometry"]
+__all__ = [
+    "CARD_CONTRACT_VERSION",
+    "CardBundle",
+    "build_card",
+    "readme_preserved_sha256",
+    "readme_preserved_sha256_bytes",
+    "render_card_bundle",
+    "update_card_with_geometry",
+    "yaml_custom_sha256",
+    "yaml_custom_sha256_bytes",
+]

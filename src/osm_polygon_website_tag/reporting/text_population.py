@@ -14,9 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
-from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
+from osm_polygon_website_tag.reporting.file_hashing import hash_file
 from osm_polygon_website_tag.storage.duckdb_engine import reporting_connection
 
 _REQUIRED_COLUMNS = frozenset(
@@ -191,28 +192,81 @@ def text_population_manifest_entries(
     source_names: Collection[str] | None = None,
 ) -> tuple[dict[str, int | str], ...]:
     """Return receipt-bound identities for every selected text shard."""
-    entries = [
-        {
-            "path": f"polygons/{path.name}",
-            "size_bytes": path.stat().st_size,
-            "sha256": hash_file(path),
-        }
-        for path in text_population_parquets(run_dir, source_names=source_names)
-    ]
+    root = Path(run_dir)
+    entries = text_population_manifest_entries_for_paths(
+        root,
+        text_population_parquets(root, source_names=source_names),
+    )
     return tuple(sorted(entries, key=lambda item: str(item["path"])))
+
+
+def text_population_manifest_entries_for_paths(
+    run_dir: Path | str,
+    paths: Collection[Path],
+) -> tuple[dict[str, int | str], ...]:
+    """Bind exact reducer paths to stable source and remote identities."""
+    root = Path(run_dir).resolve()
+    regional_root = _regional_text_population_root(root)
+    entries = [_text_population_manifest_entry(root, regional_root, path) for path in paths]
+    _validate_unique_text_population_paths(entries)
+    return tuple(sorted(entries, key=lambda item: str(item["path"])))
+
+
+def _text_population_manifest_entry(
+    root: Path,
+    regional_root: Path | None,
+    path: Path,
+) -> dict[str, int | str]:
+    """Return one exact reducer path's logical and remote identities."""
+    logical, remote_path = _text_population_logical_identity(root, regional_root, path)
+    return {
+        "path": logical,
+        "remote_path": remote_path,
+        "size_bytes": path.stat().st_size,
+        "sha256": hash_file(path),
+    }
+
+
+def _text_population_logical_identity(
+    root: Path,
+    regional_root: Path | None,
+    path: Path,
+) -> tuple[str, str]:
+    """Return stable local-receipt and remote identities for one shard."""
+    resolved = path.resolve()
+    if resolved.is_relative_to(root):
+        logical = resolved.relative_to(root).as_posix()
+        return logical, logical
+    if regional_root is not None and resolved.is_relative_to(regional_root):
+        remote_path = resolved.relative_to(regional_root).as_posix()
+        return f"regional/{remote_path}", remote_path
+    return f"external/{path.name}", f"polygons/{path.name}"
+
+
+def _validate_unique_text_population_paths(entries: Collection[dict[str, int | str]]) -> None:
+    """Reject ambiguous reducer identities before they enter a receipt."""
+    logical_paths = [str(entry["path"]) for entry in entries]
+    if len(set(logical_paths)) != len(logical_paths):
+        raise ValueError("text population manifest has duplicate logical paths")
 
 
 def _text_population_directory(root: Path) -> Path:
     """Resolve regional polygon shards for canonical runs when available."""
     directory = root / "polygons"
+    regional = _regional_text_population_root(root)
+    return regional / "polygons" if regional is not None else directory
+
+
+def _regional_text_population_root(root: Path) -> Path | None:
+    """Return the regional run root referenced by a canonical observation link."""
     observations = root / "analysis_observations"
     if not observations.is_symlink():
-        return directory
+        return None
     try:
-        regional = observations.resolve().parent / "polygons"
+        regional = observations.resolve().parent
     except OSError:
-        return directory
-    return regional if regional.is_dir() else directory
+        return None
+    return regional if (regional / "polygons").is_dir() else None
 
 
 def _filter_source_paths(paths: list[Path], source_names: Collection[str] | None) -> list[Path]:
@@ -225,7 +279,15 @@ def _filter_source_paths(paths: list[Path], source_names: Collection[str] | None
 
 def _contract_paths(paths: Collection[Path]) -> list[Path]:
     """Keep only shards containing the complete text contract."""
-    return [path for path in paths if _REQUIRED_COLUMNS.issubset(pq.read_schema(path).names)]
+    return [path for path in paths if _has_text_contract(path)]
+
+
+def _has_text_contract(path: Path) -> bool:
+    """Return whether a Parquet file is readable and has every text column."""
+    try:
+        return _REQUIRED_COLUMNS.issubset(pq.read_schema(path).names)
+    except (OSError, pa.ArrowException):
+        return False
 
 
 @contextlib.contextmanager

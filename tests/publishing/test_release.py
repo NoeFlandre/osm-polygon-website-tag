@@ -230,6 +230,30 @@ def test_release_refuses_unrecoverable_missing_readme_metadata(run_dir: Path) ->
         release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
+def test_release_does_not_mutate_bundle_when_missing_readme_body_cannot_be_recovered(
+    run_dir: Path,
+) -> None:
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        .replace("Code and README", "Tampered preserved body")
+        .replace("website_total_words: 2", "website_total_words: 999"),
+        encoding="utf-8",
+    )
+    replace_receipt_atomic(run_dir)
+    readme.unlink()
+    before = {
+        relative: (run_dir / relative).read_bytes()
+        for relative in ("dataset.yaml", "stats.json", "assets/geographic_polygon_density.png")
+    }
+
+    with pytest.raises(ValueError, match="README body"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert not readme.exists()
+    assert {relative: (run_dir / relative).read_bytes() for relative in before} == before
+
+
 def test_release_rebuilds_missing_dataset_yaml_before_verification(run_dir: Path) -> None:
     (run_dir / "dataset.yaml").unlink()
 
@@ -238,6 +262,34 @@ def test_release_rebuilds_missing_dataset_yaml_before_verification(run_dir: Path
     assert report.recomputed is True
     assert (run_dir / "dataset.yaml").is_file()
     assert "unique_text_identity_count: 1" in (run_dir / "dataset.yaml").read_text()
+
+
+def test_release_rebuilds_missing_dataset_yaml_from_readme_custom_metadata(
+    run_dir: Path,
+) -> None:
+    custom = ("license: mit", "path: custom/*.parquet")
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        .replace("license: odbl", custom[0])
+        .replace("path: polygons/*.parquet", custom[1]),
+        encoding="utf-8",
+    )
+    dataset_yaml = run_dir / "dataset.yaml"
+    dataset_yaml.write_text(
+        dataset_yaml.read_text(encoding="utf-8")
+        .replace("license: odbl", custom[0])
+        .replace("path: polygons/*.parquet", custom[1]),
+        encoding="utf-8",
+    )
+    replace_receipt_atomic(run_dir)
+    dataset_yaml.unlink()
+
+    release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    rebuilt = (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+    assert custom[0] in rebuilt
+    assert custom[1] in rebuilt
 
 
 def test_release_rebuilds_missing_map_before_verification(run_dir: Path) -> None:
@@ -250,18 +302,27 @@ def test_release_rebuilds_missing_map_before_verification(run_dir: Path) -> None
 
 
 def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> None:
-    (run_dir / "README.md").write_text("stale", encoding="utf-8")
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "website_total_words: 2", "website_total_words: 999"
+        ),
+        encoding="utf-8",
+    )
     (run_dir / "stats.json").write_text("{}\n", encoding="utf-8")
 
     report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
     assert report.recomputed is True
-    assert (
-        (run_dir / "README.md")
-        .read_text(encoding="utf-8")
-        .startswith("stale\n\n## Polygon geometry\n")
-    )
+    assert "website_total_words: 2" in readme.read_text(encoding="utf-8")
     assert '"schema_version"' in (run_dir / "stats.json").read_text(encoding="utf-8")
+
+
+def test_release_rejects_existing_readme_without_front_matter(run_dir: Path) -> None:
+    (run_dir / "README.md").write_text("body-only README", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
 def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summary(
@@ -344,6 +405,40 @@ def test_release_rejects_custom_yaml_tampering_for_legacy_receipt(run_dir: Path)
     )
 
     with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+
+def test_release_rejects_identical_custom_yaml_tampering_for_legacy_receipt(
+    run_dir: Path,
+) -> None:
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt.pop("dataset_yaml_custom_sha256", None)
+    receipt.pop("readme_yaml_custom_sha256", None)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    for relative in ("README.md", "dataset.yaml"):
+        path = run_dir / relative
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            .replace("license: odbl", "license: mit")
+            .replace("website_total_words: 2", "website_total_words: 999"),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+
+def test_release_rejects_preserved_readme_body_tampering(run_dir: Path) -> None:
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        .replace("Code and README", "Tampered preserved body")
+        .replace("website_total_words: 2", "website_total_words: 999"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="README body identity"):
         release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 

@@ -29,10 +29,12 @@ from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publ
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     parquet_manifest_sha256 as compute_parquet_manifest_sha256,
 )
-from osm_polygon_website_tag.reporting.card import yaml_custom_sha256
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
-from osm_polygon_website_tag.reporting.text_population import text_population_parquets
+from osm_polygon_website_tag.reporting.text_population import (
+    text_population_manifest_entries_for_paths,
+    text_population_parquets,
+)
 from osm_polygon_website_tag.reporting.verification.receipt import (
     verify_receipt_before_card_refresh,
 )
@@ -246,7 +248,7 @@ def _require_release_bound_text_population(root: Path) -> None:
         )
         expected = payload.get("text_population_manifest")
         try:
-            actual = list(_text_population_manifest_entries_from_paths(population_paths))
+            actual = list(_text_population_manifest_entries_from_paths(root, population_paths))
         except OSError as exc:
             raise ValueError(
                 "release requires external text population shards bound by the completion receipt"
@@ -263,27 +265,22 @@ def _text_population_release_entries(root: Path) -> tuple[tuple[str, int, str], 
     """Normalize selected text-shard identities for release and remote checks."""
     return tuple(
         (
-            str(entry["path"]),
+            str(entry.get("remote_path", entry["path"])),
             int(entry["size_bytes"]),
             str(entry["sha256"]),
         )
-        for entry in _text_population_manifest_entries_from_paths(text_population_parquets(root))
+        for entry in _text_population_manifest_entries_from_paths(
+            root, text_population_parquets(root)
+        )
     )
 
 
 def _text_population_manifest_entries_from_paths(
+    root: Path,
     paths: list[Path],
 ) -> tuple[dict[str, int | str], ...]:
     """Build logical receipt entries from the exact selected shard paths."""
-    entries = [
-        {
-            "path": f"polygons/{path.name}",
-            "size_bytes": path.stat().st_size,
-            "sha256": hash_file(path),
-        }
-        for path in paths
-    ]
-    return tuple(sorted(entries, key=lambda item: str(item["path"])))
+    return text_population_manifest_entries_for_paths(root, paths)
 
 
 def _raise_for_unbound_text_population_paths(root: Path, paths: list[Path]) -> None:
@@ -385,9 +382,8 @@ def _require_verified(report: VerificationReport, run_dir: Path) -> None:
 def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     """Rebuild the card and report; return whether their bytes changed."""
     before = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
-    expected_readme_custom = _expected_missing_readme_custom_identity(run_dir)
-    _update_card_safely(run_dir)
-    _verify_recreated_readme_custom_identity(run_dir, expected_readme_custom)
+    identities = _card_refresh_identities(run_dir)
+    _update_card_safely(run_dir, **identities)
     after = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
     _require_data_identity(run_dir, expected_data_identity)
     receipt_needs_data_identity = (
@@ -399,31 +395,56 @@ def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     return True
 
 
-def _verify_recreated_readme_custom_identity(root: Path, expected: str | None) -> None:
-    """Reject a regenerated README that cannot recover trusted custom metadata."""
-    if expected is not None and yaml_custom_sha256(root / "README.md") != expected:
-        raise ValueError("missing README custom metadata cannot be recovered")
-
-
-def _expected_missing_readme_custom_identity(root: Path) -> str | None:
-    """Return trusted README metadata identity when regeneration is required."""
-    if (root / "README.md").is_file():
-        return None
+def _card_refresh_identities(root: Path) -> dict[str, str | None]:
+    """Read receipt identities needed to validate a staged card refresh."""
     payload = _read_receipt_payload(
         _completion_receipt_path(root),
         error_type=ValueError,
         label="release completion receipt",
     )
-    expected = payload.get("readme_yaml_custom_sha256")
-    if not isinstance(expected, str) or not expected:
+    identities = _receipt_card_refresh_identities(payload)
+    _require_recoverable_card_identities(root, identities)
+    return identities
+
+
+def _receipt_card_refresh_identities(payload: dict[str, Any]) -> dict[str, str | None]:
+    """Extract and validate the card identities recorded in a receipt."""
+    identities = {
+        "expected_readme_custom_sha256": payload.get("readme_yaml_custom_sha256"),
+        "expected_dataset_custom_sha256": payload.get("dataset_yaml_custom_sha256"),
+        "expected_readme_preserved_sha256": payload.get("readme_preserved_sha256"),
+    }
+    if not all(value is None or isinstance(value, str) for value in identities.values()):
+        raise ValueError("release completion receipt has invalid card identities")
+
+    return identities
+
+
+def _require_recoverable_card_identities(root: Path, identities: dict[str, str | None]) -> None:
+    """Require receipt evidence before reconstructing a missing README."""
+    if (root / "README.md").is_file():
+        return
+    if not identities["expected_readme_custom_sha256"]:
         raise ValueError("missing README custom metadata cannot be recovered")
-    return expected
+    if not identities["expected_readme_preserved_sha256"]:
+        raise ValueError("missing README body cannot be recovered")
 
 
-def _update_card_safely(run_dir: Path) -> None:
+def _update_card_safely(
+    run_dir: Path,
+    *,
+    expected_readme_custom_sha256: str | None = None,
+    expected_dataset_custom_sha256: str | None = None,
+    expected_readme_preserved_sha256: str | None = None,
+) -> None:
     """Normalize card-update failures to a release refusal."""
     try:
-        refresh_card_for_release(run_dir)
+        refresh_card_for_release(
+            run_dir,
+            expected_readme_custom_sha256=expected_readme_custom_sha256,
+            expected_dataset_custom_sha256=expected_dataset_custom_sha256,
+            expected_readme_preserved_sha256=expected_readme_preserved_sha256,
+        )
     except Exception as exc:
         raise ValueError(f"verification failed for {run_dir}; refusing to release: {exc}") from exc
 
@@ -588,9 +609,11 @@ def _remote_source_manifest_entries(
 
 def _remote_data_manifest_sha256(api: Any, repo_id: str, revision: str) -> str:
     """Hash remote source manifests and Parquet metadata as one data identity."""
+    parquet_entries = _remote_parquet_entries(api, repo_id, revision)
     entries = [
         *_remote_source_manifest_entries(api, repo_id, revision),
-        *_remote_parquet_entries(api, repo_id, revision).values(),
+        *parquet_entries.values(),
+        *_remote_text_population_manifest_entries(api, repo_id, revision, parquet_entries),
     ]
     canonical = json.dumps(
         sorted(entries, key=lambda item: str(item["path"])),
@@ -598,6 +621,64 @@ def _remote_data_manifest_sha256(api: Any, repo_id: str, revision: str) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _remote_text_population_manifest_entries(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    parquet_entries: dict[str, dict[str, int | str]],
+) -> list[dict[str, int | str]]:
+    """Project the receipt-bound reducer inputs onto remote published shards."""
+    payload = _remote_text_population_receipt(api, repo_id, revision)
+    expected = payload.get("text_population_manifest")
+    if not isinstance(expected, list):
+        return []
+    return [_remote_text_population_entry(item, parquet_entries) for item in expected]
+
+
+def _remote_text_population_receipt(api: Any, repo_id: str, revision: str) -> dict[str, Any]:
+    """Download and validate the remote completion receipt."""
+    try:
+        downloaded = api.hf_hub_download(
+            repo_id,
+            "manifests/completion_receipt.json",
+            revision=revision,
+            repo_type="dataset",
+        )
+        payload = _read_receipt_payload(
+            Path(downloaded),
+            error_type=_RemoteDataMismatchError,
+            label="remote completion receipt",
+        )
+    except _RemoteDataMismatchError:
+        raise
+    except Exception as exc:
+        raise _RemoteDataMismatchError(
+            f"remote completion receipt unavailable for text population identity: {exc}"
+        ) from exc
+    return payload
+
+
+def _remote_text_population_entry(
+    item: Any,
+    parquet_entries: dict[str, dict[str, int | str]],
+) -> dict[str, int | str]:
+    """Project one receipt-bound text shard onto its remote Parquet identity."""
+    if not isinstance(item, dict):
+        raise _RemoteDataMismatchError("remote text population manifest entry is invalid")
+    logical = item.get("path")
+    remote_path = item.get("remote_path", logical)
+    if not isinstance(logical, str) or not isinstance(remote_path, str):
+        raise _RemoteDataMismatchError("remote text population manifest path is invalid")
+    remote = parquet_entries.get(remote_path)
+    if remote is None:
+        raise _RemoteDataMismatchError(f"remote text population shard missing: {remote_path}")
+    return {
+        "path": f"text_population/{logical}",
+        "size_bytes": remote["size_bytes"],
+        "sha256": remote["sha256"],
+    }
 
 
 def _verify_remote_data_identity(
@@ -611,7 +692,7 @@ def _verify_remote_data_identity(
     actual = _remote_data_manifest_sha256(api, repo_id, revision)
     if actual != expected:
         raise _RemoteDataMismatchError(
-            f"remote data manifest mismatch: local={expected}, remote={actual}"
+            f"remote data identity mismatch (data manifest): local={expected}, remote={actual}"
         )
     receipt_identity = _remote_data_identity(api, repo_id, revision)
     if receipt_identity is not None and receipt_identity != expected:

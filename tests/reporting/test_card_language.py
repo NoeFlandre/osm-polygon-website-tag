@@ -212,6 +212,16 @@ def test_language_section_is_absent_without_detected_languages() -> None:
     )
 
 
+def test_release_yaml_removes_stale_language_tags_when_detection_is_empty() -> None:
+    document = "---\nlanguage:\n  - eng\ndetected_language_count: 1\nlicense: odbl\n---\n"
+
+    updated = card_module._update_existing_release_yaml(document.encode(), _golden_card_stats())
+    updated = updated.decode()
+
+    assert "language:" not in updated
+    assert "license: odbl" in updated
+
+
 def test_sentence_front_matter_and_section_render_segmentation_totals() -> None:
     front_matter = card_module._render_yaml_front_matter(_sentence_card_stats())
 

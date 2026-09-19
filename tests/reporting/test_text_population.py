@@ -10,12 +10,15 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.reporting import text_population
+from osm_polygon_website_tag.reporting.artifact_inventory import data_manifest_sha256
 from osm_polygon_website_tag.reporting.text_population import (
     TextCoordinate,
     compute_text_population_summary,
     iter_canonical_text_coordinates,
     text_population_manifest_entries,
 )
+from osm_polygon_website_tag.reporting.verification.language import verify_language_paths
+from osm_polygon_website_tag.reporting.verification.text import verify_text_paths
 
 
 def _row(
@@ -278,8 +281,67 @@ def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> 
     assert population.unique_identity_count == 1
     assert population.website_total_words == 1
     entries = text_population_manifest_entries(canonical)
-    assert [entry["path"] for entry in entries] == ["polygons/a.parquet"]
+    assert [entry["path"] for entry in entries] == ["regional/polygons/a.parquet"]
+    assert [entry["remote_path"] for entry in entries] == ["polygons/a.parquet"]
     assert entries[0]["size_bytes"] == (regional / "polygons" / "a.parquet").stat().st_size
+
+    before = data_manifest_sha256(canonical)
+    regional_path = regional / "polygons" / "a.parquet"
+    regional_table = pq.read_table(regional_path)
+    regional_table = regional_table.set_column(
+        regional_table.schema.get_field_index("website_text"),
+        "website_text",
+        pa.array(["changed regional input"]),
+    )
+    pq.write_table(regional_table, regional_path)
+
+    assert data_manifest_sha256(canonical) != before
+
+
+def test_release_text_validation_rejects_invalid_word_counts(tmp_path: Path) -> None:
+    path = tmp_path / "source.parquet"
+    row = _row(
+        osm_id=7,
+        lat=48.0,
+        lon=2.0,
+        source_pbf="a.osm.pbf",
+        polygon_id="a:way/7",
+        osm_version=1,
+        website_text="one two",
+        website_status="success",
+        website_words=99,
+        contact_text=None,
+        contact_status="absent",
+        contact_words=None,
+    )
+    pq.write_table(pa.Table.from_pylist([row]), path)
+    errors: list[str] = []
+
+    verify_text_paths([path], "complete", errors)
+
+    assert any("word count does not match" in error for error in errors)
+
+
+def test_release_language_validation_rejects_incomplete_language_pairs(tmp_path: Path) -> None:
+    path = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "website_text_status": ["success"],
+                "website_language": ["eng_Latn"],
+                "website_language_probability": [None],
+                "contact_website_text_status": ["absent"],
+                "contact_website_language": [None],
+                "contact_website_language_probability": [None],
+            }
+        ),
+        path,
+    )
+    errors: list[str] = []
+
+    verify_language_paths([path], errors)
+
+    assert any("language probability is invalid" in error for error in errors)
 
 
 def test_population_counts_null_status_as_a_failure_identity(tmp_path: Path) -> None:

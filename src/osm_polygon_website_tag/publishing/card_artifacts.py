@@ -9,11 +9,18 @@ from __future__ import annotations
 from collections.abc import Collection
 from pathlib import Path
 
-from osm_polygon_website_tag.reporting.card import atomic_promote_bundle, build_card
+from osm_polygon_website_tag.reporting.card import (
+    atomic_promote_bundle,
+    render_card_bundle,
+)
 from osm_polygon_website_tag.reporting.card_metadata import (
+    _FRONT_MATTER,
+    _merge_yaml_custom_metadata,
     _render_yaml_front_matter,
     _update_readme_front_matter,
     _update_release_yaml,
+    readme_preserved_sha256_bytes,
+    yaml_custom_sha256_bytes,
 )
 from osm_polygon_website_tag.reporting.card_patching import (
     _update_geographic_section,
@@ -41,6 +48,9 @@ def refresh_card_for_release(
     run_dir: Path | str,
     *,
     source_names: Collection[str] | None = None,
+    expected_readme_custom_sha256: str | None = None,
+    expected_dataset_custom_sha256: str | None = None,
+    expected_readme_preserved_sha256: str | None = None,
 ) -> Path:
     """Refresh every geography-bearing release artifact from one text summary.
 
@@ -53,8 +63,32 @@ def refresh_card_for_release(
     readme = root / "README.md"
     if not readme.is_file():
         yaml_path = root / "dataset.yaml"
-        yaml_source = yaml_path.read_bytes() if yaml_path.is_file() else None
-        return build_card(root, source_names=source_names, _yaml_source=yaml_source)
+        original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
+        bundle = render_card_bundle(
+            root,
+            source_names=source_names,
+            _yaml_source=original_yaml,
+        )
+        _validate_trusted_card_identity(
+            bundle.readme,
+            bundle.dataset_yaml,
+            expected_readme_custom_sha256=expected_readme_custom_sha256,
+            expected_dataset_custom_sha256=expected_dataset_custom_sha256,
+            expected_readme_preserved_sha256=expected_readme_preserved_sha256,
+        )
+        promote_release_card_artifacts(
+            root,
+            source_names=source_names,
+            summary=bundle.summary,
+            geometry=bundle.geometry,
+            readme=readme,
+            original_readme=None,
+            updated_readme=bundle.readme,
+            yaml_path=yaml_path,
+            original_yaml=original_yaml,
+            updated_yaml=bundle.dataset_yaml,
+        )
+        return readme
 
     text_population = compute_text_population_summary(root, source_names=source_names)
     summary = compute_polygon_density_summary(
@@ -85,7 +119,17 @@ def refresh_card_for_release(
     updated_yaml = (
         _update_release_yaml(original_yaml, stats)
         if original_yaml is not None
-        else _render_yaml_front_matter(stats).encode("utf-8")
+        else _merge_yaml_custom_metadata(
+            _render_yaml_front_matter(stats).encode("utf-8"),
+            _readme_front_matter(original_readme),
+        )
+    )
+    _validate_trusted_card_identity(
+        updated_readme,
+        updated_yaml,
+        expected_readme_custom_sha256=expected_readme_custom_sha256,
+        expected_dataset_custom_sha256=expected_dataset_custom_sha256,
+        expected_readme_preserved_sha256=expected_readme_preserved_sha256,
     )
     promote_release_card_artifacts(
         root,
@@ -109,7 +153,7 @@ def promote_release_card_artifacts(
     summary: PolygonDensitySummary,
     geometry: GeometryStats,
     readme: Path,
-    original_readme: bytes,
+    original_readme: bytes | None,
     updated_readme: bytes,
     yaml_path: Path,
     original_yaml: bytes | None,
@@ -156,7 +200,7 @@ def _release_card_promotions(
     root: Path,
     *,
     readme: Path,
-    original_readme: bytes,
+    original_readme: bytes | None,
     updated_readme: bytes,
     yaml_path: Path,
     original_yaml: bytes | None,
@@ -168,16 +212,93 @@ def _release_card_promotions(
     geometry: GeometryStats,
 ) -> list[tuple[Path, Path]]:
     """Stage only changed release metadata plus the derived geometry report."""
-    promotions: list[tuple[Path, Path]] = []
-    if updated_readme != original_readme:
-        staged_readme.write_bytes(updated_readme)
-        promotions.append((staged_readme, readme))
-    if updated_yaml is not None and (original_yaml is None or updated_yaml != original_yaml):
-        staged_yaml.write_bytes(updated_yaml)
-        promotions.append((staged_yaml, yaml_path))
-    promotions.extend(_stage_release_map(root, staged_map))
-    promotions.extend(_stage_geometry_stats(staged_stats, root, geometry))
-    return promotions
+    return [
+        *_stage_readme_promotion(
+            readme,
+            original_readme,
+            updated_readme,
+            staged_readme,
+        ),
+        *_stage_yaml_promotion(
+            yaml_path,
+            original_yaml,
+            updated_yaml,
+            staged_yaml,
+        ),
+        *_stage_release_map(root, staged_map),
+        *_stage_geometry_stats(staged_stats, root, geometry),
+    ]
+
+
+def _stage_readme_promotion(
+    target: Path,
+    original: bytes | None,
+    updated: bytes,
+    staged: Path,
+) -> list[tuple[Path, Path]]:
+    """Stage README bytes when the release has changed or rebuilt them."""
+    if original is not None and updated == original:
+        return []
+    staged.write_bytes(updated)
+    return [(staged, target)]
+
+
+def _stage_yaml_promotion(
+    target: Path,
+    original: bytes | None,
+    updated: bytes | None,
+    staged: Path,
+) -> list[tuple[Path, Path]]:
+    """Stage dataset YAML bytes when a release artifact is available and changed."""
+    if updated is None or (original is not None and updated == original):
+        return []
+    staged.write_bytes(updated)
+    return [(staged, target)]
+
+
+def _readme_front_matter(document: bytes) -> bytes:
+    """Return the surviving README metadata source, without its body."""
+    match = _FRONT_MATTER.match(document)
+    return match.group(0) if match is not None else b""
+
+
+def _validate_trusted_card_identity(
+    readme: bytes,
+    dataset_yaml: bytes,
+    *,
+    expected_readme_custom_sha256: str | None,
+    expected_dataset_custom_sha256: str | None,
+    expected_readme_preserved_sha256: str | None,
+) -> None:
+    """Validate recoverable metadata before any release artifact is promoted."""
+    actual_readme_custom = yaml_custom_sha256_bytes(readme, readme=True)
+    _validate_readme_custom_identity(actual_readme_custom, expected_readme_custom_sha256)
+    _validate_dataset_custom_identity(dataset_yaml, expected_dataset_custom_sha256)
+    _validate_readme_body_identity(readme, actual_readme_custom, expected_readme_preserved_sha256)
+
+
+def _validate_readme_custom_identity(actual: str | None, expected: str | None) -> None:
+    """Reject a staged README whose trusted custom YAML identity changed."""
+    if expected is not None and actual != expected:
+        raise ValueError("missing README custom metadata cannot be recovered")
+
+
+def _validate_dataset_custom_identity(document: bytes, expected: str | None) -> None:
+    """Reject a staged dataset YAML whose trusted custom identity changed."""
+    if expected is not None and yaml_custom_sha256_bytes(document) != expected:
+        raise ValueError("dataset YAML custom metadata cannot be recovered")
+
+
+def _validate_readme_body_identity(
+    document: bytes,
+    custom_identity: str | None,
+    expected: str | None,
+) -> None:
+    """Reject a staged README whose preserved body identity changed."""
+    if expected is not None and custom_identity is not None:
+        actual = readme_preserved_sha256_bytes(document)
+        if actual != expected:
+            raise ValueError("missing README body cannot be recovered")
 
 
 def _stage_release_map(root: Path, staged_map: Path) -> list[tuple[Path, Path]]:

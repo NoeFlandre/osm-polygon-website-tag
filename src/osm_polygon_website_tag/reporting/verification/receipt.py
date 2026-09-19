@@ -12,7 +12,11 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION, yaml_custom_sha256
+from osm_polygon_website_tag.reporting.card import (
+    CARD_CONTRACT_VERSION,
+    readme_preserved_sha256,
+    yaml_custom_sha256,
+)
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
@@ -66,7 +70,18 @@ def _verify_receipt(
     _verify_receipt_digest(receipt, canonical_entries, errors)
     _verify_data_manifest(root, receipt, errors)
     _verify_text_population_manifest(root, receipt, errors)
-    _verify_yaml_custom_identity(root, receipt, errors)
+    _verify_yaml_custom_identity(
+        root,
+        receipt,
+        errors,
+        allow_refreshable_card_metadata=allow_refreshable_card_metadata,
+    )
+    _verify_readme_preserved_identity(
+        root,
+        receipt,
+        errors,
+        allow_refreshable_card_metadata=allow_refreshable_card_metadata,
+    )
 
 
 def _read_receipt(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -287,7 +302,13 @@ def _verify_text_population_manifest(
         errors.append("completion receipt text population manifest mismatch")
 
 
-def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: list[str]) -> None:
+def _verify_yaml_custom_identity(
+    root: Path,
+    receipt: dict[str, Any],
+    errors: list[str],
+    *,
+    allow_refreshable_card_metadata: bool = False,
+) -> None:
     """Keep non-generated YAML fields receipt-bound across release refreshes."""
     checked = _verify_one_yaml_custom_identity(
         root, receipt, "dataset_yaml_custom_sha256", "dataset.yaml", errors
@@ -299,6 +320,9 @@ def _verify_yaml_custom_identity(root: Path, receipt: dict[str, Any], errors: li
         or checked
     )
     if checked:
+        return
+    if allow_refreshable_card_metadata:
+        errors.append("completion receipt has no trusted custom YAML identity")
         return
     _verify_legacy_yaml_custom_identity(root, errors)
 
@@ -314,14 +338,79 @@ def _verify_one_yaml_custom_identity(
     expected = receipt.get(field)
     if expected is None:
         return False
-    try:
-        actual = yaml_custom_sha256(root / relative)
-    except (OSError, UnicodeError) as exc:
-        errors.append(f"completion receipt custom YAML identity unreadable: {relative}: {exc}")
+    unreadable, actual = _read_yaml_custom_identity(root / relative, relative, errors)
+    if unreadable:
         return True
-    if actual is not None and actual != expected:
+    if actual is None:
+        _report_missing_yaml_identity(root / relative, relative, errors)
+        return True
+    if actual != expected:
         errors.append(f"completion receipt custom YAML identity mismatch: {relative}")
     return True
+
+
+def _report_missing_yaml_identity(path: Path, relative: str, errors: list[str]) -> None:
+    """Reject an existing YAML artifact that cannot provide front matter."""
+    if path.is_file():
+        errors.append(f"completion receipt custom YAML identity mismatch: {relative}")
+
+
+def _read_yaml_custom_identity(
+    path: Path,
+    relative: str,
+    errors: list[str],
+) -> tuple[bool, str | None]:
+    """Read one YAML identity and report filesystem or decoding failures."""
+    try:
+        return False, yaml_custom_sha256(path)
+    except (OSError, UnicodeError) as exc:
+        errors.append(f"completion receipt custom YAML identity unreadable: {relative}: {exc}")
+        return True, None
+
+
+def _verify_readme_preserved_identity(
+    root: Path,
+    receipt: dict[str, Any],
+    errors: list[str],
+    *,
+    allow_refreshable_card_metadata: bool,
+) -> None:
+    """Bind non-generated README body sections across release refreshes."""
+    expected = receipt.get("readme_preserved_sha256")
+    if expected is None:
+        _report_missing_readme_body_identity(root, errors, allow_refreshable_card_metadata)
+        return
+    if not isinstance(expected, str) or not expected:
+        errors.append("completion receipt has invalid README body identity")
+        return
+    _verify_existing_readme_body_identity(root, expected, errors, allow_refreshable_card_metadata)
+
+
+def _report_missing_readme_body_identity(
+    root: Path,
+    errors: list[str],
+    allow_refreshable_card_metadata: bool,
+) -> None:
+    """Reject refresh of an existing README without receipt-bound body data."""
+    if allow_refreshable_card_metadata and (root / "README.md").is_file():
+        errors.append("completion receipt has no trusted README body identity")
+
+
+def _verify_existing_readme_body_identity(
+    root: Path,
+    expected: str,
+    errors: list[str],
+    allow_refreshable_card_metadata: bool,
+) -> None:
+    """Compare the preserved body of a front-matter README to its receipt."""
+    actual = readme_preserved_sha256(root / "README.md")
+    if yaml_custom_sha256(root / "README.md") is None:
+        return
+    if actual is None:
+        if not allow_refreshable_card_metadata:
+            errors.append("missing receipt-bound artifact: README.md")
+    elif actual != expected:
+        errors.append("completion receipt README body identity mismatch")
 
 
 def _verify_legacy_yaml_custom_identity(root: Path, errors: list[str]) -> None:

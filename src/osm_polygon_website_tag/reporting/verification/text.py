@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -11,6 +12,15 @@ from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, count_w
 
 def verify_text_invariants(root: Path, status: object, errors: list[str]) -> None:
     """Verify text/status relationships in public polygon shards."""
+    verify_text_paths(
+        sorted((root / "polygons").glob("*.parquet")),
+        status,
+        errors,
+    )
+
+
+def verify_text_paths(paths: Collection[Path], status: object, errors: list[str]) -> None:
+    """Verify text/status relationships for an exact reducer input selection."""
     pending_forbidden = status in {
         "enriched",
         "analyzed",
@@ -18,7 +28,7 @@ def verify_text_invariants(root: Path, status: object, errors: list[str]) -> Non
         "verified",
         "complete",
     }
-    for shard in sorted((root / "polygons").glob("*.parquet")):
+    for shard in sorted(paths):
         _verify_text_shard(shard, pending_forbidden, errors)
 
 
