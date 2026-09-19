@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import builtins
+import os
+import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
@@ -23,6 +26,28 @@ from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySu
 from osm_polygon_website_tag.reporting.geographic.polygon_density import (
     build_polygon_density_map,
 )
+
+
+def test_reporting_card_import_defers_matplotlib_until_map_rendering() -> None:
+    root = Path(__file__).resolve().parents[3]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(root / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import osm_polygon_website_tag.reporting.card; "
+            "print('matplotlib' in sys.modules)",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "False"
 
 
 def test_bundled_land_backdrop_is_present() -> None:

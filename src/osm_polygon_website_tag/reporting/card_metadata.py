@@ -78,7 +78,7 @@ def _merge_yaml_custom_metadata(generated: bytes, source: bytes) -> bytes:
     """Combine trusted custom YAML with freshly generated release fields."""
     custom = "\n".join(
         line
-        for line in _yaml_custom_text(source.decode("utf-8")).replace("\r\n", "\n").splitlines()
+        for line in _yaml_custom_text(source.decode("utf-8")).splitlines()
         if line.strip() != "---"
     ).strip()
     derived = "\n".join(_yaml_derived_lines(generated.decode("utf-8"))).strip()
@@ -90,7 +90,7 @@ def _yaml_derived_lines(document: str) -> list[str]:
     """Return generated YAML fields while retaining their list values."""
     derived: list[str] = []
     include_values = False
-    for line in document.replace("\r\n", "\n").splitlines():
+    for line in document.splitlines():
         key = _yaml_top_level_key(line)
         if key is not None:
             include_values = _is_derived_yaml_key(key)
@@ -132,7 +132,7 @@ def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
 
 def _should_replace_existing_languages(text: str, stats: CardStats) -> bool:
     """Return whether a README's existing language list is release-generated."""
-    language_range = _language_yaml_range(text.splitlines(keepends=True))
+    language_range = _language_yaml_range(text.splitlines())
     has_language_metrics = any(
         f"{key}:" in text for key in ("detected_language_count", "website_language_count")
     )
@@ -148,7 +148,7 @@ def yaml_custom_sha256(path: Path) -> str | None:
     document = _yaml_document_bytes(path)
     if document is None:
         return None
-    return yaml_custom_sha256_bytes(document, readme=path.name == "README.md")
+    return yaml_custom_sha256_bytes(document)
 
 
 def yaml_custom_sha256_bytes(document: bytes, *, readme: bool = False) -> str | None:

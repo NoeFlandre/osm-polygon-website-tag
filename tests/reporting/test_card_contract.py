@@ -100,6 +100,10 @@ def test_geometry_block_preserves_prefix_and_card_newline_conventions() -> None:
     block = _geometry_block_bytes(geometry, b"\n")
     assert block.startswith(b"## Polygon geometry\n")
     assert block.endswith(b"\n")
+    crlf_block = _geometry_block_bytes(geometry, b"\r\n")
+    assert crlf_block.startswith(b"## Polygon geometry\r\n")
+    assert crlf_block.endswith(b"\r\n")
+    assert b"\n" not in crlf_block.replace(b"\r\n", b"")
     assert _append_geometry_block(b"prefix", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
     assert _append_geometry_block(b"prefix\n", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
     assert _append_geometry_block(b"", b"BLOCK\n", b"\n") == b"BLOCK\n"
@@ -146,6 +150,33 @@ def test_update_geographic_section_replaces_inserts_and_appends() -> None:
 
     appended = _update_geographic_section(b"prefix", stats)
     assert appended.startswith(b"prefix\n\n## Geographic distribution\n")
+
+    crlf = _update_geographic_section(
+        b"prefix\r\n## Geographic distribution\r\nstale\r\n## Links\r\nkeep\r\n",
+        stats,
+    )
+    assert b"stale" not in crlf
+    assert b"## Geographic distribution\r\n" in crlf
+    assert b"## Links\r\nkeep\r\n" in crlf
+
+
+def test_generated_section_patchers_noop_when_legacy_heading_is_missing() -> None:
+    stats = CardStats(
+        detected_language_count=1,
+        top_languages=[("eng_Latn", 2)],
+        website_text_success_count=2,
+        website_total_words=3,
+        polygons_with_any_text=4,
+    )
+    card = b"prefix\r\n## Links\r\nkeep\r\n"
+
+    assert _update_website_text_section(card, stats) == card
+
+    language = _update_language_section(b"prefix\r\n## Links\r\nkeep\r\n", stats)
+    assert b"## Languages\r\n" in language
+    assert b"## Links\r\nkeep\r\n" in language
+    assert language.endswith(b"\r\n")
+    assert b"\n" not in language.replace(b"\r\n", b"")
 
 
 def test_update_website_text_section_replaces_only_the_generated_block() -> None:
