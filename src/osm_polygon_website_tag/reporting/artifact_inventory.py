@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 from collections.abc import Callable
@@ -55,7 +56,21 @@ def _root_publishable_paths(root: Path) -> list[Path]:
 
 
 def hash_file(path: Path) -> str:
-    """Return the SHA-256 digest of a file using bounded reads."""
+    """Return the SHA-256 digest of a file using bounded reads.
+
+    One release hashes the same shards for the data manifest, the Parquet
+    manifest and the completion receipt. Reading them once and keying the
+    result on the file's identity turns those repeated passes over the whole
+    published inventory into a single one. The key carries size and
+    modification time, so a file the release rewrites is hashed again.
+    """
+    status = path.stat()
+    return _hash_identified_file(path, status.st_size, status.st_mtime_ns)
+
+
+@functools.cache
+def _hash_identified_file(path: Path, size: int, mtime_ns: int) -> str:
+    """Return the SHA-256 digest of one file revision using bounded reads."""
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
