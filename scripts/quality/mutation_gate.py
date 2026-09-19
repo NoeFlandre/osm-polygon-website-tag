@@ -32,6 +32,7 @@ UNVERIFIED_VERDICTS = (
 )
 _RESULT_LINE = re.compile(rf"^\s*(?P<name>\S+):\s*(?P<verdict>{'|'.join(UNVERIFIED_VERDICTS)})\s*$")
 _KILLED_LINE = re.compile(r"^\s*(?P<name>\S+):\s*killed\s*$")
+_NOT_CHECKED_LINE = re.compile(r"^\s*(?P<name>\S+):\s*not checked\s*$")
 
 
 def unverified_mutants(lines: Iterable[str]) -> list[str]:
@@ -47,6 +48,18 @@ def unverified_mutants(lines: Iterable[str]) -> list[str]:
 def killed_mutants(lines: Iterable[str]) -> set[str]:
     """Return the mutants a run killed."""
     return {match.group("name") for line in lines if (match := _KILLED_LINE.match(line))}
+
+
+def reported_mutants(lines: Iterable[str]) -> set[str]:
+    """Return every mutant with a verdict, including explicitly unchecked ones."""
+    found: set[str] = set()
+    for line in lines:
+        for pattern in (_RESULT_LINE, _KILLED_LINE, _NOT_CHECKED_LINE):
+            match = pattern.match(line)
+            if match:
+                found.add(match.group("name"))
+                break
+    return found
 
 
 def in_scope(name: str, scopes: Sequence[str]) -> bool:
@@ -84,6 +97,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     unverified = [name for name in unverified_mutants(lines) if in_scope(name, args.scope)]
     regressions = [name for name in unverified if name not in baseline]
     healed = sorted(name for name in baseline & killed_mutants(lines) if in_scope(name, args.scope))
+    reported = {name for name in reported_mutants(lines) if in_scope(name, args.scope)}
+    unchecked = {
+        match.group("name")
+        for line in lines
+        if (match := _NOT_CHECKED_LINE.match(line)) and in_scope(match.group("name"), args.scope)
+    }
+    if not reported or reported <= unchecked:
+        scope = ", ".join(args.scope) if args.scope else "the full mutation run"
+        print(
+            f"Mutation gate failed: no mutation verdicts were generated for {scope}; "
+            "the scope may have produced zero mutants or zero associated tests.",
+            file=sys.stderr,
+        )
+        return 1
     if healed:
         print(f"{len(healed)} baseline mutant(s) are now killed; remove them from {args.baseline}:")
         for name in healed:

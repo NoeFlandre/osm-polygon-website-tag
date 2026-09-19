@@ -28,6 +28,18 @@ def test_only_package_modules_become_filters() -> None:
     ]
 
 
+def test_package_initializers_map_to_their_package_module() -> None:
+    assert mutation_scope.module_filters(
+        ["src/osm_polygon_website_tag/reporting/geographic/__init__.py"], root=_ROOT
+    ) == ["osm_polygon_website_tag.reporting.geographic.*"]
+    assert mutation_scope.module_filters(
+        ["src/osm_polygon_website_tag/__init__.py"], root=_ROOT
+    ) == ["osm_polygon_website_tag.*"]
+    assert mutation_scope.module_filters(
+        ["src/osm_polygon_website_tag/reporting/geographic/aggregation.py"], root=_ROOT
+    ) == ["osm_polygon_website_tag.reporting.geographic.aggregation.*"]
+
+
 def test_filters_are_deduplicated_and_sorted() -> None:
     paths = [
         "src/osm_polygon_website_tag/pipeline/sat.py",
@@ -90,8 +102,17 @@ def test_main_prints_one_filter_per_line(
 ) -> None:
     monkeypatch.setattr(
         mutation_scope,
-        "changed_paths",
-        lambda base: ["src/osm_polygon_website_tag/pipeline/sat.py"] if base == "main" else [],
+        "changed_lines",
+        lambda base: {"src/osm_polygon_website_tag/pipeline/sat.py": {1}} if base == "main" else {},
+    )
+    monkeypatch.setattr(
+        mutation_scope,
+        "function_filters",
+        lambda lines: (
+            {"osm_polygon_website_tag.pipeline.sat": ["osm_polygon_website_tag.pipeline.sat.*"]}
+            if lines
+            else {}
+        ),
     )
 
     assert mutation_scope.main(["--base", "main"]) == 0
@@ -104,29 +125,30 @@ def test_main_prints_one_filter_per_line(
 def test_main_can_emit_a_sorted_json_matrix(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    monkeypatch.setattr(mutation_scope, "changed_lines", lambda base: {"x": {1}})
     monkeypatch.setattr(
         mutation_scope,
-        "changed_paths",
-        lambda base: (
-            [
-                "src/osm_polygon_website_tag/reporting/card.py",
-                "src/osm_polygon_website_tag/publishing/release.py",
-            ]
-            if base == "main"
-            else []
-        ),
+        "function_filters",
+        lambda lines: {
+            "osm_polygon_website_tag.reporting.card": ["osm_polygon_website_tag.reporting.card.*"],
+            "osm_polygon_website_tag.publishing.release": [
+                "osm_polygon_website_tag.publishing.release.x_publish__mutmut_*"
+            ],
+        },
     )
 
     assert mutation_scope.main(["--base", "main", "--json"]) == 0
     assert capsys.readouterr().out == (
-        '["osm_polygon_website_tag.publishing.release.*",'
-        '"osm_polygon_website_tag.reporting.card.*"]\n'
+        '[{"name":"osm_polygon_website_tag.publishing.release",'
+        '"filters":"osm_polygon_website_tag.publishing.release.x_publish__mutmut_*"},'
+        '{"name":"osm_polygon_website_tag.reporting.card",'
+        '"filters":"osm_polygon_website_tag.reporting.card.*"}]\n'
     )
 
 
 def test_main_defaults_to_the_upstream_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
-    monkeypatch.setattr(mutation_scope, "changed_paths", lambda base: seen.append(base) or [])
+    monkeypatch.setattr(mutation_scope, "changed_lines", lambda base: seen.append(base) or {})
 
     assert mutation_scope.main([]) == 0
     assert seen == ["origin/main"]
@@ -135,10 +157,10 @@ def test_main_defaults_to_the_upstream_branch(monkeypatch: pytest.MonkeyPatch) -
 def test_main_reports_an_unusable_base(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def explode(base: str) -> list[str]:
+    def explode(base: str) -> dict[str, set[int]]:
         raise subprocess.CalledProcessError(128, ["git"], stderr="bad revision\n")
 
-    monkeypatch.setattr(mutation_scope, "changed_paths", explode)
+    monkeypatch.setattr(mutation_scope, "changed_lines", explode)
 
     assert mutation_scope.main(["--base", "nope"]) == 2
     assert "cannot diff against 'nope'" in capsys.readouterr().err
@@ -149,3 +171,110 @@ def test_real_repository_diff_is_readable() -> None:
     paths = mutation_scope.changed_paths("HEAD", cwd=Path(__file__).resolve().parents[2])
 
     assert paths == []
+
+
+_SOURCE = '''\
+"""Module."""
+
+
+def kept() -> int:
+    """Untouched."""
+    return 1
+
+
+def changed() -> int:
+    """Touched."""
+    return 2
+
+
+class Holder:
+    """Holder."""
+
+    def method(self) -> int:
+        """Touched method."""
+        return 3
+'''
+
+
+def test_changed_functions_scope_to_their_own_mutants(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "sample.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(_SOURCE, encoding="utf-8")
+    relative = "src/osm_polygon_website_tag/reporting/sample.py"
+
+    filters = mutation_scope.function_filters({relative: {11, 19}}, root=tmp_path)
+
+    assert filters == {
+        "osm_polygon_website_tag.reporting.sample": [
+            "osm_polygon_website_tag.reporting.sample.x_changed__mutmut_*",
+            "osm_polygon_website_tag.reporting.sample.xǁHolderǁmethod__mutmut_*",
+        ]
+    }
+
+
+def test_a_change_outside_every_function_scopes_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "sample.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(_SOURCE, encoding="utf-8")
+    relative = "src/osm_polygon_website_tag/reporting/sample.py"
+
+    filters = mutation_scope.function_filters({relative: {1}}, root=tmp_path)
+
+    assert filters == {
+        "osm_polygon_website_tag.reporting.sample": ["osm_polygon_website_tag.reporting.sample.*"]
+    }
+
+
+def test_a_changed_import_does_not_charge_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "imports.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        '"""Module."""\n\nfrom pathlib import Path\n\n\ndef only(value: Path) -> Path:\n'
+        '    """Only."""\n    return value\n',
+        encoding="utf-8",
+    )
+    relative = "src/osm_polygon_website_tag/reporting/imports.py"
+
+    assert mutation_scope.function_filters({relative: {3}}, root=tmp_path) == {}
+    assert mutation_scope.function_filters({relative: {3, 8}}, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.imports": [
+            "osm_polygon_website_tag.reporting.imports.x_only__mutmut_*"
+        ]
+    }
+
+
+def test_a_changed_module_constant_still_charges_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "constant.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        '"""Module."""\n\nLIMIT = 3\n\n\ndef only() -> int:\n    """Only."""\n    return LIMIT\n',
+        encoding="utf-8",
+    )
+    relative = "src/osm_polygon_website_tag/reporting/constant.py"
+
+    assert mutation_scope.function_filters({relative: {3}}, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.constant": [
+            "osm_polygon_website_tag.reporting.constant.*"
+        ]
+    }
+
+
+def test_the_json_matrix_carries_a_name_and_its_filters(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        mutation_scope,
+        "changed_lines",
+        lambda base: {"src/osm_polygon_website_tag/reporting/card.py": {1}},
+    )
+    monkeypatch.setattr(
+        mutation_scope,
+        "function_filters",
+        lambda lines: {"osm_polygon_website_tag.reporting.card": ["a.x_one__mutmut_*", "a.x_b*"]},
+    )
+
+    assert mutation_scope.main(["--json"]) == 0
+
+    assert capsys.readouterr().out.strip() == (
+        '[{"name":"osm_polygon_website_tag.reporting.card","filters":"a.x_one__mutmut_* a.x_b*"}]'
+    )

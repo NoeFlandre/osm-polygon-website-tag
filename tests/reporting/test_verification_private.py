@@ -182,6 +182,109 @@ def test_receipt_helpers_validate_paths_files_and_digests(tmp_path: Path) -> Non
     assert errors == ["duplicate completion receipt path: missing.txt"]
 
 
+def test_legacy_yaml_custom_identity_covers_compatibility_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: dict[str, str | None] = {"dataset.yaml": "same", "README.md": "same"}
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", lambda path: values[path.name])
+    errors: list[str] = []
+
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == []
+
+    values["README.md"] = "different"
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == ["completion receipt custom YAML identity mismatch"]
+
+    errors.clear()
+    values["README.md"] = None
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == []
+
+    def unreadable(_path: Path) -> str:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", unreadable)
+    receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
+    assert errors == ["completion receipt custom YAML identity unreadable: unreadable"]
+
+
+def test_text_population_manifest_binds_expected_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(receipt, "text_population_manifest_entries", lambda _root: ["one"])
+    errors: list[str] = []
+
+    receipt._verify_text_population_manifest(
+        tmp_path,
+        {"text_population_manifest": ["one"]},
+        errors,
+    )
+    assert errors == []
+
+    receipt._verify_text_population_manifest(
+        tmp_path,
+        {"text_population_manifest": ["two"]},
+        errors,
+    )
+    assert errors == ["completion receipt text population manifest mismatch"]
+
+    def unreadable(_root: Path) -> list[str]:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(receipt, "text_population_manifest_entries", unreadable)
+    errors.clear()
+    receipt._verify_text_population_manifest(
+        tmp_path,
+        {"text_population_manifest": ["one"]},
+        errors,
+    )
+    assert errors == ["completion receipt text population manifest unreadable: unreadable"]
+
+
+def test_yaml_custom_identity_dispatches_both_receipt_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str | None, str, list[str] | None]] = []
+    legacy_calls: list[Path] = []
+
+    def verify_one(
+        _root: Path,
+        _receipt: dict[str, object],
+        field: str | None,
+        relative: str,
+        errors: list[str] | None,
+    ) -> bool:
+        calls.append((field, relative, errors))
+        return field == "readme_yaml_custom_sha256"
+
+    monkeypatch.setattr(receipt, "_verify_one_yaml_custom_identity", verify_one)
+    monkeypatch.setattr(
+        receipt,
+        "_verify_legacy_yaml_custom_identity",
+        lambda root, _errors: legacy_calls.append(root),
+    )
+    errors: list[str] = []
+
+    receipt._verify_yaml_custom_identity(
+        tmp_path,
+        {
+            "dataset_yaml_custom_sha256": "dataset",
+            "readme_yaml_custom_sha256": "readme",
+        },
+        errors,
+    )
+
+    assert calls == [
+        ("dataset_yaml_custom_sha256", "dataset.yaml", errors),
+        ("readme_yaml_custom_sha256", "README.md", errors),
+    ]
+    assert legacy_calls == []
+
+
 def test_analysis_and_row_verification_helpers_are_deterministic(tmp_path: Path) -> None:
     errors: list[str] = []
     expected = {"a", "b"}
@@ -548,7 +651,7 @@ def test_receipt_contract_versions_and_current_artifacts_fail_closed(
     assert errors == []
     map_path.unlink()
     receipt._verify_card_contract_before_card_refresh(tmp_path, 2, errors)
-    assert errors == [f"missing map artifact: {POLYGON_DENSITY_ASSET_REL_PATH}"]
+    assert errors == []
 
     delegated: list[tuple[Path, object, list[str]]] = []
     monkeypatch.setattr(
@@ -558,7 +661,8 @@ def test_receipt_contract_versions_and_current_artifacts_fail_closed(
     )
     errors.clear()
     receipt._verify_card_contract_before_card_refresh(tmp_path, 1, errors)
-    assert delegated == [(tmp_path, 1, errors)]
+    assert delegated == []
+    assert errors == []
 
 
 def test_legacy_card_contract_reports_both_missing_version_cases(tmp_path: Path) -> None:
@@ -608,6 +712,27 @@ def test_receipt_read_and_entry_helpers_forward_valid_entries_exactly(
     assert seen == {"README.md"}
     assert metadata_calls == [("README.md", 2, errors)]
     assert artifact_calls == [("README.md", entry, errors, canonical, False)]
+
+    errors.clear()
+    receipt._verify_receipt_entry(tmp_path, "not-a-dict", 2, set(), errors, [])
+    assert errors == ["invalid completion receipt artifact entry"]
+
+
+def test_read_receipt_requires_explicit_utf8_decoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def read_text(_path: Path, *, encoding: object) -> str:
+        calls.append(encoding)
+        return '{"artifacts": []}'
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    errors: list[str] = []
+
+    assert receipt._read_receipt(tmp_path / "receipt.json", errors) == {"artifacts": []}
+    assert calls == ["utf-8"]
 
 
 def test_receipt_artifact_helpers_cover_refreshable_and_independent_digest_failures(
@@ -683,6 +808,7 @@ def test_receipt_artifact_collection_and_canonical_entry_contracts(
     seen, canonical = receipt._verify_receipt_artifacts(tmp_path, ["one", "two"], 2, errors)
     assert seen == {"one", "two"}
     assert canonical == []
+    assert [call[2] for call in calls] == [2, 2]
     assert [call[-1] for call in calls] == [False, False]
     calls.clear()
     receipt._verify_receipt_artifacts(tmp_path, ["one"], 2, errors, True)
@@ -744,6 +870,13 @@ def test_receipt_inventory_digest_and_data_identity_are_deterministic(
     assert errors == []
     assert manifest_calls == [tmp_path]
     receipt._verify_data_manifest(tmp_path, {"data_manifest_sha256": "wrong"}, errors)
+    assert errors == ["completion receipt data manifest mismatch"]
+    errors.clear()
+    receipt._verify_data_manifest(
+        tmp_path,
+        {"schema_version": "v1.2", "data_manifest_sha256": "wrong"},
+        errors,
+    )
     assert errors == ["completion receipt data manifest mismatch"]
 
 
@@ -1065,12 +1198,12 @@ def test_card_statistics_verifiers_forward_all_artifact_renderers(
     monkeypatch.setattr(
         analysis,
         "compute_card_stats",
-        lambda root: calls.append(("stats", root)) or stats,
+        lambda root, **kwargs: calls.append(("stats", (root, sorted(kwargs)))) or stats,
     )
     monkeypatch.setattr(
         analysis,
         "compute_geometry_stats",
-        lambda root: calls.append(("geometry", root)) or geometry,
+        lambda root, **kwargs: calls.append(("geometry", (root, sorted(kwargs)))) or geometry,
     )
     monkeypatch.setattr(
         analysis,
@@ -1102,11 +1235,12 @@ def test_card_statistics_verifiers_forward_all_artifact_renderers(
             (path, expected, label, received_errors)
         ),
     )
+    monkeypatch.setattr(analysis, "_verify_text_population_agreement", lambda *args: None)
     analysis._verify_card_statistics(tmp_path, errors)
     assert errors == []
     assert calls == [
-        ("stats", tmp_path),
-        ("geometry", tmp_path),
+        ("stats", (tmp_path, ["summary", "text_population"])),
+        ("geometry", (tmp_path, ["text_population"])),
         ("yaml", stats),
         ("schema", tmp_path),
         ("markdown", (stats, geometry, "schema")),
@@ -1130,7 +1264,7 @@ def test_release_card_statistics_and_geometry_section_are_exact_and_fail_closed(
     monkeypatch.setattr(
         analysis,
         "compute_geometry_stats",
-        lambda root: calls.append(("geometry", root)) or geometry,
+        lambda root, **kwargs: calls.append(("geometry", (root, sorted(kwargs)))) or geometry,
     )
     monkeypatch.setattr(
         analysis,
@@ -1157,17 +1291,20 @@ def test_release_card_statistics_and_geometry_section_are_exact_and_fail_closed(
     monkeypatch.setattr(analysis, "compute_card_stats", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(analysis, "_verify_release_geographic_section", lambda *_args: None)
     monkeypatch.setattr(analysis, "_verify_release_density_yaml", lambda *_args: None)
+    monkeypatch.setattr(analysis, "_verify_text_population_agreement", lambda *args: None)
     analysis._verify_release_card_statistics(tmp_path, errors)
     assert errors == []
     assert calls == [
-        ("geometry", tmp_path),
+        ("geometry", (tmp_path, ["text_population"])),
         ("render", geometry),
         ("section", (tmp_path, geometry, errors)),
     ]
     assert compared == [(tmp_path / "stats.json", "stats", "stats.json", errors)]
 
     monkeypatch.setattr(
-        analysis, "compute_geometry_stats", lambda _root: (_ for _ in ()).throw(RuntimeError("bad"))
+        analysis,
+        "compute_geometry_stats",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("bad")),
     )
     errors.clear()
     analysis._verify_release_card_statistics(tmp_path, errors)
@@ -1200,3 +1337,23 @@ def test_release_geometry_section_normalizes_newlines_and_requires_exact_block(
     readme.write_bytes(b"\xff")
     analysis._verify_release_geometry_section(tmp_path, geometry, errors)
     assert errors and errors[0].startswith("README geometry section is unreadable: ")
+
+
+def test_map_verifier_rejects_bytes_from_a_different_global_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    map_path = tmp_path / "assets" / "geographic_polygon_density.png"
+    map_path.parent.mkdir()
+    map_path.write_bytes(b"actual")
+
+    def fake_render(_summary: object, output_path: Path) -> str:
+        output_path.write_bytes(b"expected")
+        return "caption"
+
+    monkeypatch.setattr(analysis, "render_polygon_density", fake_render)
+    errors: list[str] = []
+
+    analysis._verify_map_matches_summary(tmp_path, object(), errors)
+
+    assert errors == ["map artifact does not match the canonical global summary"]

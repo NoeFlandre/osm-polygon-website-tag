@@ -538,6 +538,19 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
     assert main(["detect-languages", "--run-dir", str(run_dir)]) == 2
 
 
+def test_cli_frozen_snapshot_error_message_is_stable() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        cli._reject_frozen_language_run(
+            RunState(
+                Path("run"),
+                "run",
+                metadata={"status": STATUS_COMPLETE, "snapshot_status": "done"},
+            )
+        )
+
+    assert str(exc_info.value) == "cannot add languages to a frozen snapshot"
+
+
 def test_cli_card_stats_runs(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
     rc = main(["card-stats", "--run-dir", str(run_dir)])
@@ -551,7 +564,7 @@ def test_cli_geometry_stats_prints_the_machine_readable_report(tmp_path: Path, c
 
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == "v1"
+    assert payload["schema_version"] == "v2"
     assert payload["row_count"] == compute_geometry_stats(run_dir).row_count
 
 
@@ -879,6 +892,12 @@ def test_cli_json_serialization_is_sorted_and_path_safe(capsys) -> None:
     assert capsys.readouterr().out == '{\n  "a": 1,\n  "z": "run"\n}\n'
 
 
+def test_cli_json_serialization_preserves_order_by_default(capsys) -> None:
+    cli._json({"z": 1, "a": 2})
+
+    assert capsys.readouterr().out == '{\n  "z": 1,\n  "a": 2\n}\n'
+
+
 def test_cli_language_shard_runner_records_only_completed_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1002,6 +1021,17 @@ def test_cli_language_private_helpers_preserve_budget_and_payload_contract(
     }
 
 
+@pytest.mark.parametrize(
+    ("time_budget_seconds", "started_at"),
+    [(None, 8.0), (10.0, None)],
+)
+def test_cli_remaining_budget_requires_both_clock_inputs(
+    time_budget_seconds: float | None,
+    started_at: float | None,
+) -> None:
+    assert cli._remaining_language_budget(time_budget_seconds, started_at=started_at) is None
+
+
 def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
     state = RunState(
         Path("run"),
@@ -1038,10 +1068,75 @@ def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -
     assert transitions == []
     cli._finish_language_command_state(enriching)
     assert transitions == [(enriching, cli.STATUS_ENRICHED)]
-    with pytest.raises(ValueError, match="extracted/enriched"):
+    with pytest.raises(ValueError) as exc_info:
         cli._prepare_language_command_state(
             RunState(Path("run"), "run", metadata={"status": "initialized"})
         )
+    assert str(exc_info.value) == "detect-languages requires an extracted/enriched run"
+
+
+@pytest.mark.parametrize(
+    ("status", "snapshot_status"),
+    [(cli.STATUS_COMPLETE, "pending"), (cli.STATUS_ENRICHED, "done")],
+)
+def test_cli_frozen_snapshot_guard_requires_both_markers(
+    status: str,
+    snapshot_status: str,
+) -> None:
+    cli._reject_frozen_language_run(
+        RunState(
+            Path("run"),
+            "run",
+            metadata={"status": status, "snapshot_status": snapshot_status},
+        )
+    )
+
+
+@pytest.mark.parametrize("status", [cli.STATUS_CARD_BUILT, cli.STATUS_COMPLETE])
+def test_cli_language_state_preparation_accepts_late_statuses(
+    status: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = RunState(Path("run"), "run", metadata={"status": status})
+    transitions: list[str] = []
+    monkeypatch.setattr(cli, "transition_status", lambda _state, value: transitions.append(value))
+
+    cli._prepare_language_command_state(state)
+
+    assert transitions == [cli.STATUS_ENRICHING]
+
+
+def test_cli_main_preserves_app_exit_and_error_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def app_ok(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli, "app", app_ok)
+    assert cli.main(["ok"]) == 0
+    assert calls == [
+        {
+            "args": ["ok"],
+            "prog_name": "osm-polygon-website-tag",
+            "standalone_mode": True,
+        }
+    ]
+
+    monkeypatch.setattr(cli, "app", lambda **_kwargs: (_ for _ in ()).throw(SystemExit(None)))
+    assert cli.main(["exit-none"]) == 0
+    monkeypatch.setattr(cli, "app", lambda **_kwargs: (_ for _ in ()).throw(SystemExit(7)))
+    assert cli.main(["exit-seven"]) == 7
+
+    monkeypatch.setattr(
+        cli,
+        "app",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("bad input")),
+    )
+    assert cli.main(["bad"]) == 2
+    assert capsys.readouterr().err == "error: bad input\n"
 
 
 def test_cli_records_completed_language_shard_metadata(monkeypatch: pytest.MonkeyPatch) -> None:

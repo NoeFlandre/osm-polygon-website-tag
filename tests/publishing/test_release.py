@@ -24,7 +24,11 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.finalize import _write_completion_receipt, finalize_run
+from osm_polygon_website_tag.reporting.finalize import (
+    _write_completion_receipt,
+    finalize_run,
+    replace_receipt_atomic,
+)
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 
@@ -57,6 +61,13 @@ def test_dry_run_plans_exactly_the_card_and_report(run_dir: Path) -> None:
     assert [item.relative_path for item in report.files] == list(CARD_RELEASE_FILES)
     assert report.verified_shards
     assert uploader.calls == []
+    assert report.files[0].text_population_entries == (
+        (
+            "polygons/monaco-latest.parquet",
+            (run_dir / "polygons" / "monaco-latest.parquet").stat().st_size,
+            hash_file(run_dir / "polygons" / "monaco-latest.parquet"),
+        ),
+    )
 
 
 def test_apply_uploads_only_the_card_and_report_then_verifies(run_dir: Path) -> None:
@@ -126,6 +137,31 @@ def test_release_requires_complete_status_before_dry_run(tmp_path: Path) -> None
         release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
+def test_release_rejects_external_text_population_shards(
+    run_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external = tmp_path.parent / "external-text" / "source.parquet"
+    monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: [external])
+
+    with pytest.raises(ValueError, match="external text population shards bound"):
+        release_module._require_complete_release(run_dir)
+
+
+def test_release_rejects_uninventoried_text_population_shards(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    regional = run_dir / "regional" / "polygons" / "source.parquet"
+    regional.parent.mkdir(parents=True)
+    regional.write_bytes(b"regional shard")
+    monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: [regional])
+
+    with pytest.raises(ValueError, match="release artifact inventory"):
+        release_module._require_complete_release(run_dir)
+
+
 def test_release_requires_completion_receipt(run_dir: Path) -> None:
     (run_dir / "manifests" / "completion_receipt.json").unlink()
 
@@ -158,6 +194,61 @@ def test_release_rebuilds_missing_metadata_before_verification(run_dir: Path) ->
     assert (run_dir / "stats.json").is_file()
 
 
+def test_release_rebuilds_missing_readme_from_trusted_dataset_yaml(run_dir: Path) -> None:
+    custom = (
+        "license: mit",
+        "path: custom/*.parquet",
+    )
+    for relative in ("README.md", "dataset.yaml"):
+        path = run_dir / relative
+        text = path.read_text(encoding="utf-8")
+        text = text.replace("license: odbl", custom[0]).replace(
+            "path: polygons/*.parquet", custom[1]
+        )
+        path.write_text(text, encoding="utf-8")
+    replace_receipt_atomic(run_dir)
+    (run_dir / "README.md").unlink()
+
+    release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert custom[0] in (run_dir / "README.md").read_text(encoding="utf-8")
+    assert custom[1] in (run_dir / "README.md").read_text(encoding="utf-8")
+    assert custom[0] in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+    assert custom[1] in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+
+
+def test_release_refuses_unrecoverable_missing_readme_metadata(run_dir: Path) -> None:
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace("license: odbl", "license: custom"),
+        encoding="utf-8",
+    )
+    replace_receipt_atomic(run_dir)
+    readme.unlink()
+
+    with pytest.raises(ValueError, match="missing README custom metadata"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+
+def test_release_rebuilds_missing_dataset_yaml_before_verification(run_dir: Path) -> None:
+    (run_dir / "dataset.yaml").unlink()
+
+    report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert report.recomputed is True
+    assert (run_dir / "dataset.yaml").is_file()
+    assert "unique_text_identity_count: 1" in (run_dir / "dataset.yaml").read_text()
+
+
+def test_release_rebuilds_missing_map_before_verification(run_dir: Path) -> None:
+    (run_dir / "assets" / "geographic_polygon_density.png").unlink()
+
+    report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    assert report.recomputed is True
+    assert (run_dir / "assets" / "geographic_polygon_density.png").is_file()
+
+
 def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> None:
     (run_dir / "README.md").write_text("stale", encoding="utf-8")
     (run_dir / "stats.json").write_text("{}\n", encoding="utf-8")
@@ -178,6 +269,9 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
 ) -> None:
     readme = run_dir / "README.md"
     current_readme = readme.read_text(encoding="utf-8")
+    current_readme = current_readme.replace(
+        "## Website text\n", "## Website text\n\nSTALE website values.\n", 1
+    )
     geographic_start = current_readme.index("## Geographic distribution")
     links_start = current_readme.index("## Links", geographic_start)
     readme.write_text(
@@ -202,9 +296,55 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
     updated_readme = readme.read_text(encoding="utf-8")
     assert report.recomputed is True
     assert "STALE geographic values" not in updated_readme
+    assert "STALE website values" not in updated_readme
+    assert "regional overlap duplicates are removed globally" in updated_readme
     assert "**1** unique polygons with successfully" in updated_readme
     assert "polygon_density_row_count: 1" in dataset_yaml.read_text(encoding="utf-8")
+    assert "unique_text_identity_count: 1" in dataset_yaml.read_text(encoding="utf-8")
     assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_release_refreshes_readme_front_matter_with_dataset_yaml(run_dir: Path) -> None:
+    readme = run_dir / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "website_total_words: 2", "website_total_words: 999"
+        ),
+        encoding="utf-8",
+    )
+
+    release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+    refreshed = readme.read_text(encoding="utf-8")
+    assert "website_total_words: 2" in refreshed
+    assert "website_total_words: 999" not in refreshed
+
+
+def test_release_rejects_custom_dataset_yaml_tampering_before_refresh(run_dir: Path) -> None:
+    dataset_yaml = run_dir / "dataset.yaml"
+    dataset_yaml.write_text(
+        dataset_yaml.read_text(encoding="utf-8").replace("license: odbl", "license: mit"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
+
+
+def test_release_rejects_custom_yaml_tampering_for_legacy_receipt(run_dir: Path) -> None:
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt.pop("dataset_yaml_custom_sha256", None)
+    receipt.pop("readme_yaml_custom_sha256", None)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    dataset_yaml = run_dir / "dataset.yaml"
+    dataset_yaml.write_text(
+        dataset_yaml.read_text(encoding="utf-8").replace("license: odbl", "license: mit"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="custom YAML identity"):
+        release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
 
 def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
@@ -257,7 +397,8 @@ def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     assert updated_readme[unrelated_start:] == readme_suffix[readme_suffix.index("## Unrelated") :]
     assert "complete breakdown is published as [`stats.json`](stats.json)" in updated_readme
     updated_yaml = (run_dir / "dataset.yaml").read_text(encoding="utf-8")
-    assert updated_yaml.startswith(original_yaml)
+    assert updated_yaml.startswith(original_yaml.removesuffix("language: eng\n"))
+    assert "language: eng\n" not in updated_yaml
     assert "polygon_density_row_count: 1" in updated_yaml
     assert "occupied_h3_cell_count: 1" in updated_yaml
 
@@ -369,11 +510,29 @@ def test_repeated_apply_skips_upload_when_remote_is_already_current(run_dir: Pat
 
     assert first.uploaded is True
     assert first.no_op is False
+    assert first.to_payload()["changed_files"] == list(CARD_RELEASE_FILES)
     assert second.uploaded is False
     assert second.no_op is True
+    assert second.to_payload()["changed_files"] == []
     assert second.revision == "remote-revision"
     assert len(uploader.calls) == 1
     assert len(verifier_calls) == 1
+
+
+def test_apply_reports_only_remote_metadata_changes(run_dir: Path) -> None:
+    uploader = _RecordingUploader()
+
+    report = release_card_and_stats(
+        run_dir,
+        confirm_repo=DEFAULT_HF_DATASET,
+        apply=True,
+        uploader=uploader,
+        verifier=lambda repo_id, files: "remote-revision",
+        remote_checker=lambda repo_id, files: release_module._RemoteCheck(None, ("README.md",)),
+    )
+
+    assert report.changed_files == ("README.md",)
+    assert report.to_payload()["changed_files"] == ["README.md"]
 
 
 def test_default_apply_checks_for_a_remote_no_op_before_upload(
@@ -855,11 +1014,68 @@ def test_remote_release_helpers_fail_closed_on_invalid_remote_state(
         is None
     )
 
-    def refuse_remote(*_args: object, **_kwargs: object) -> str:
-        raise release_module._RemoteArtifactMismatchError("missing metadata")
+    monkeypatch.setattr(release_module, "resolve_hf_token", lambda: "token")
+    monkeypatch.setattr(release_module, "_remote_revision", lambda *_args: "remote-revision")
+    monkeypatch.setattr(release_module, "_verify_remote_data_identity", lambda *_args: None)
+    monkeypatch.setattr(release_module, "_verify_remote_parquet_data_identity", lambda *_args: None)
+    monkeypatch.setattr(
+        release_module, "_verify_remote_text_population_identity", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        release_module,
+        "_remote_changed_files",
+        lambda *_args: (item.relative_path,),
+    )
+    checked = release_module._default_remote_checker(DEFAULT_HF_DATASET, (item,))
+    assert checked == release_module._RemoteCheck(None, (item.relative_path,))
 
-    monkeypatch.setattr(release_module, "default_hub_verifier", refuse_remote)
-    assert release_module._default_remote_checker(DEFAULT_HF_DATASET, (item,)) is None
+
+def test_remote_changed_files_reports_only_mismatched_card_files(
+    tmp_path: Path,
+) -> None:
+    local_readme = tmp_path / "README.md"
+    local_yaml = tmp_path / "dataset.yaml"
+    local_readme.write_text("local card", encoding="utf-8")
+    local_yaml.write_text("local metadata", encoding="utf-8")
+    remote_readme = tmp_path / "remote-README.md"
+    remote_yaml = tmp_path / "remote-dataset.yaml"
+    remote_readme.write_text("stale card", encoding="utf-8")
+    remote_yaml.write_bytes(local_yaml.read_bytes())
+    files = (
+        ReleasedFile("README.md", hash_file(local_readme), local_readme.stat().st_size),
+        ReleasedFile("dataset.yaml", hash_file(local_yaml), local_yaml.stat().st_size),
+    )
+    remote_paths = {"README.md": remote_readme, "dataset.yaml": remote_yaml}
+
+    class Api:
+        def get_paths_info(
+            self,
+            _repo_id: str,
+            *,
+            paths: list[str],
+            revision: str,
+            repo_type: str,
+        ) -> list[SimpleNamespace]:
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            path = remote_paths[paths[0]]
+            return [SimpleNamespace(size=path.stat().st_size)]
+
+        def hf_hub_download(
+            self,
+            _repo_id: str,
+            filename: str,
+            *,
+            revision: str,
+            repo_type: str,
+        ) -> str:
+            assert revision == "revision"
+            assert repo_type == "dataset"
+            return str(remote_paths[filename])
+
+    assert release_module._remote_changed_files(Api(), "dataset", "revision", files) == (
+        "README.md",
+    )
 
 
 def test_credentialed_release_uploader_requires_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -985,6 +1201,15 @@ def test_release_completion_and_card_update_fail_closed(
     monkeypatch.setattr(release_module, "compute_data_manifest_sha256", lambda _root: "actual")
     with pytest.raises(ValueError, match="data manifest changed"):
         release_module._require_data_identity(run_dir, "expected")
+
+
+def test_release_accepts_legacy_card_receipt_before_refresh(run_dir: Path) -> None:
+    receipt_path = run_dir / "manifests" / "completion_receipt.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["card_contract_version"] = 1
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    assert release_module._require_complete_release(run_dir) == data_manifest_sha256(run_dir)
 
 
 def test_release_publish_helpers_preserve_dry_run_noop_and_upload_contract(

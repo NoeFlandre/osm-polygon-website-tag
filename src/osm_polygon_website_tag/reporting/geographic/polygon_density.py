@@ -11,6 +11,7 @@ from osm_polygon_website_tag.reporting.geographic.aggregation import (
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.geographic.models import (
     DEFAULT_H3_RESOLUTION,
+    AggregationMode,
     PolygonDensityRenderResult,
     PolygonDensitySummary,
 )
@@ -25,10 +26,12 @@ def build_polygon_density_map(
     h3_resolution: int = DEFAULT_H3_RESOLUTION,
     source_names: Collection[str] | None = None,
     extracted_text_only: bool = False,
+    aggregation_mode: AggregationMode | None = None,
 ) -> PolygonDensityRenderResult:
     """Aggregate and render the map, reusing a supplied summary when present.
 
-    Set ``extracted_text_only`` to map only rows with successful website text.
+    ``aggregation_mode`` selects regional observations or globally unique text
+    identities. ``extracted_text_only`` remains a compatibility alias.
     """
     root = Path(run_dir)
     resolved_summary = summary or compute_polygon_density_summary(
@@ -36,6 +39,7 @@ def build_polygon_density_map(
         h3_resolution=h3_resolution,
         source_names=source_names,
         extracted_text_only=extracted_text_only,
+        aggregation_mode=aggregation_mode,
     )
     destination = output_path or root / POLYGON_DENSITY_ASSET_REL_PATH
     caption = render_polygon_density(resolved_summary, destination)
@@ -45,4 +49,5 @@ def build_polygon_density_map(
         polygon_row_count=resolved_summary.polygon_row_count,
         occupied_cell_count=resolved_summary.occupied_cell_count,
         caption=caption,
+        aggregation_mode=resolved_summary.aggregation_mode or "regional_rows",
     )

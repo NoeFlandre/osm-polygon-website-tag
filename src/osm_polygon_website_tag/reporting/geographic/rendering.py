@@ -100,12 +100,17 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
 def _scope_label(summary: PolygonDensitySummary) -> str:
     """Describe the aggregation scope without overstating regional rows."""
     if summary.extracted_text_only:
-        return "unique polygons with extracted text"
-    return "regional rows/centroids"
+        return (
+            "unique polygons with extracted text (successful non-empty website or contact:website "
+            "text; regional overlap duplicates removed globally)"
+        )
+    return "regional rows/centroids (regional polygon rows/centroids)"
 
 
 def _empty_scope_label(summary: PolygonDensitySummary) -> str:
     """Describe an empty map using the same scope as its caption."""
     if summary.extracted_text_only:
-        return "No unique polygons with extracted text"
+        return (
+            "No unique polygons with extracted text; regional overlap duplicates removed globally"
+        )
     return "No regional polygon rows/centroids"

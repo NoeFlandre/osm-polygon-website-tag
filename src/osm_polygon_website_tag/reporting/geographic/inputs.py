@@ -10,6 +10,9 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+from osm_polygon_website_tag.reporting.text_population import (
+    iter_canonical_text_coordinates,
+)
 
 _TEXT_STATUS_COLUMNS = ("website_text_status", "contact_website_text_status")
 _TEXT_COLUMNS = (
@@ -62,14 +65,12 @@ def iter_unique_text_lat_lon_runs(
 ) -> Iterator[tuple[Path, int, float, float]]:
     """Yield one centroid per globally unique OSM polygon with non-empty text.
 
-    Regional copies are read in deterministic path and row order. An identity
-    is reserved only after a row has successful, trimmed non-empty website or
-    contact:website text, so a failed or empty copy cannot hide a later
-    successful copy. The first qualifying copy supplies the centroid.
+    Regional copies are reduced with the same deterministic winner order as
+    the canonical pipeline. A failed or empty copy cannot hide a later
+    successful copy, and input path or row order cannot change the centroid.
     """
-    seen: set[tuple[str, int]] = set()
-    for path in _text_polygon_parquets(run_dir, source_names=source_names):
-        yield from _iter_unique_text_path_rows(path, seen)
+    for coordinate in iter_canonical_text_coordinates(run_dir, source_names=source_names):
+        yield coordinate.source_path, coordinate.row_index, coordinate.lat, coordinate.lon
 
 
 def _iter_path_rows(

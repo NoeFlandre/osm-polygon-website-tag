@@ -10,8 +10,8 @@ writes:
 
 * ``<run_dir>/README.md`` -- the rendered card (with YAML front matter)
 * ``<run_dir>/dataset.yaml`` -- machine-readable dataset-card metadata
-* ``<run_dir>/stats.json`` -- the complete polygon geometry statistics, from
-  the same single pass that renders the card's geometry block; it is promoted
+* ``<run_dir>/stats.json`` -- the complete polygon geometry statistics plus the
+  canonical global text population used by the card and map; it is promoted
   only when its bytes change
 
 The card is read-only by construction -- it contains no pointers to
@@ -20,8 +20,9 @@ mutable run state.
 
 from __future__ import annotations
 
+import hashlib
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -47,6 +48,7 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
     compute_geometry_stats,
     render_geometry_stats,
 )
+from osm_polygon_website_tag.reporting.text_population import compute_text_population_summary
 from osm_polygon_website_tag.runtime.config import (
     DEFAULT_GITHUB_REPO,
     TRACKIO_DASHBOARD_URL,
@@ -55,14 +57,46 @@ from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 CARD_CONTRACT_VERSION = 2
 _TOP_LEVEL_HEADING = re.compile(rb"(?m)^## [^\r\n]*(?:\r\n|\n|$)")
+_WEBSITE_TEXT_HEADING = re.compile(rb"(?m)^## Website text(?:\r\n|\n|$)")
+_LANGUAGE_HEADING = re.compile(rb"(?m)^## Languages(?:\r\n|\n|$)")
 _GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
 _GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
+_FRONT_MATTER = re.compile(rb"\A---(?:\r\n|\n).*?(?:\r\n|\n)---(?:\r\n|\n)?", re.DOTALL)
+_RELEASE_YAML_DERIVED_KEYS = frozenset(
+    {
+        "language",
+        "observation_count",
+        "public_row_count",
+        "rejection_count",
+        "duplicate_count",
+        "conflicting_snapshot_count",
+        "sources_count",
+        "expected_sources_count",
+        "enriched_sources_count",
+        "dataset_status",
+        "website_text_success_count",
+        "website_total_words",
+        "contact_website_text_success_count",
+        "contact_website_total_words",
+        "unique_text_identity_count",
+        "detected_language_count",
+        "website_language_count",
+        "contact_website_language_count",
+        "sentence_count",
+        "website_segmented_count",
+        "contact_website_segmented_count",
+        "polygon_density_h3_resolution",
+        "polygon_density_row_count",
+        "occupied_h3_cell_count",
+    }
+)
 
 
 def build_card(
     run_dir: Path | str,
     *,
     source_names: Collection[str] | None = None,
+    _yaml_source: bytes | None = None,
 ) -> Path:
     """Build (or rebuild) the README card for ``run_dir``.
 
@@ -71,17 +105,31 @@ def build_card(
     bytes.
     """
     run_dir = Path(run_dir)
+    text_population = compute_text_population_summary(run_dir, source_names=source_names)
     summary = compute_polygon_density_summary(
         run_dir,
         source_names=source_names,
-        extracted_text_only=True,
+        aggregation_mode="global_unique_text",
     )
-    stats = compute_card_stats(run_dir, summary=summary, source_names=source_names)
-    geometry = compute_geometry_stats(run_dir, source_names=source_names)
+    stats = compute_card_stats(
+        run_dir,
+        summary=summary,
+        text_population=text_population,
+        source_names=source_names,
+    )
+    geometry = compute_geometry_stats(
+        run_dir,
+        source_names=source_names,
+        text_population=text_population,
+    )
     body = _render_markdown(
         stats, geometry=geometry, schema=_public_schema_for_card(run_dir, source_names)
     )
     front_matter = _render_yaml_front_matter(stats)
+    if _yaml_source is not None:
+        front_matter = _merge_yaml_custom_metadata(
+            front_matter.encode("utf-8"), _yaml_source
+        ).decode("utf-8")
     readme = front_matter + "\n" + body
     path = run_dir / "README.md"
     yaml_path = run_dir / "dataset.yaml"
@@ -96,7 +144,7 @@ def build_card(
             summary=summary,
             output_path=staged_map,
             source_names=source_names,
-            extracted_text_only=True,
+            aggregation_mode="global_unique_text",
         )
         staged_readme.write_text(readme, encoding="utf-8")
         staged_yaml.write_text(front_matter, encoding="utf-8")
@@ -166,23 +214,41 @@ def refresh_card_for_release(
     root = Path(run_dir)
     readme = root / "README.md"
     if not readme.is_file():
-        return build_card(root, source_names=source_names)
+        yaml_path = root / "dataset.yaml"
+        yaml_source = yaml_path.read_bytes() if yaml_path.is_file() else None
+        return build_card(root, source_names=source_names, _yaml_source=yaml_source)
 
+    text_population = compute_text_population_summary(root, source_names=source_names)
     summary = compute_polygon_density_summary(
         root,
         source_names=source_names,
-        extracted_text_only=True,
+        aggregation_mode="global_unique_text",
     )
-    stats = compute_card_stats(root, summary=summary, source_names=source_names)
-    geometry = compute_geometry_stats(root, source_names=source_names)
+    stats = compute_card_stats(
+        root,
+        summary=summary,
+        text_population=text_population,
+        source_names=source_names,
+    )
+    geometry = compute_geometry_stats(
+        root,
+        source_names=source_names,
+        text_population=text_population,
+    )
     original_readme = readme.read_bytes()
+    updated_readme = _update_readme_front_matter(original_readme, stats)
+    updated_readme = _update_website_text_section(updated_readme, stats)
+    updated_readme = _update_language_section(updated_readme, stats)
     updated_readme = _update_geographic_section(
-        _update_geometry_section(original_readme, geometry),
-        stats,
+        _update_geometry_section(updated_readme, geometry), stats
     )
     yaml_path = root / "dataset.yaml"
     original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
-    updated_yaml = _update_density_yaml(original_yaml, stats) if original_yaml is not None else None
+    updated_yaml = (
+        _update_release_yaml(original_yaml, stats)
+        if original_yaml is not None
+        else _render_yaml_front_matter(stats).encode("utf-8")
+    )
     _promote_release_card_artifacts(
         root,
         source_names=source_names,
@@ -223,7 +289,7 @@ def _promote_release_card_artifacts(
             summary=summary,
             output_path=staged_map,
             source_names=source_names,
-            extracted_text_only=True,
+            aggregation_mode="global_unique_text",
         )
         promotions = _release_card_promotions(
             root,
@@ -268,7 +334,7 @@ def _release_card_promotions(
     if updated_readme != original_readme:
         staged_readme.write_bytes(updated_readme)
         promotions.append((staged_readme, readme))
-    if original_yaml is not None and updated_yaml is not None and updated_yaml != original_yaml:
+    if updated_yaml is not None and (original_yaml is None or updated_yaml != original_yaml):
         staged_yaml.write_bytes(updated_yaml)
         promotions.append((staged_yaml, yaml_path))
     promotions.extend(_stage_release_map(root, staged_map))
@@ -315,6 +381,52 @@ def _update_geographic_section(card: bytes, stats: CardStats) -> bytes:
     return _append_geometry_block(card, block, newline)
 
 
+def _update_website_text_section(card: bytes, stats: CardStats) -> bytes:
+    """Replace the generated website-text block without adding it to legacy cards."""
+    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    existing = _WEBSITE_TEXT_HEADING.search(card)
+    if existing is None:
+        return card
+    block = newline.join(line.encode("utf-8") for line in _render_website_text_section(stats))
+    return _replace_section(card, existing, block + newline)
+
+
+def _update_language_section(card: bytes, stats: CardStats) -> bytes:
+    """Replace the generated language block with canonical population totals."""
+    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    existing = _LANGUAGE_HEADING.search(card)
+    if existing is not None:
+        return _replace_existing_language_section(card, existing, stats, newline)
+    if not stats.detected_language_count:
+        return card
+    return _insert_new_language_section(card, stats, newline)
+
+
+def _replace_existing_language_section(
+    card: bytes,
+    existing: re.Match[bytes],
+    stats: CardStats,
+    newline: bytes,
+) -> bytes:
+    """Replace or remove an existing generated language section."""
+    if not stats.detected_language_count:
+        return _replace_section(card, existing, b"")
+    return _replace_section(card, existing, _language_section_block(stats, newline))
+
+
+def _insert_new_language_section(card: bytes, stats: CardStats, newline: bytes) -> bytes:
+    """Insert a missing generated language section after website text."""
+    website = _WEBSITE_TEXT_HEADING.search(card)
+    if website is not None:
+        return _insert_after_section(card, website, _language_section_block(stats, newline))
+    return _append_geometry_block(card, _language_section_block(stats, newline), newline)
+
+
+def _language_section_block(stats: CardStats, newline: bytes) -> bytes:
+    """Render one language section using the card's newline convention."""
+    return newline.join(line.encode("utf-8") for line in _render_language_section(stats)) + newline
+
+
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
     """Replace a headed card section through the next top-level heading."""
     following = _TOP_LEVEL_HEADING.search(card, heading.end())
@@ -334,6 +446,254 @@ def _update_density_yaml(document: bytes | None, stats: CardStats) -> bytes:
     if document is None:
         return b""
     return _update_density_yaml_text(document.decode("utf-8"), stats)
+
+
+def _update_release_yaml(document: bytes | None, stats: CardStats) -> bytes:
+    """Refresh generated card metrics while retaining all custom YAML fields."""
+    if document is None:
+        return b""
+    return _update_release_yaml_text(document.decode("utf-8"), stats)
+
+
+def _update_readme_front_matter(document: bytes, stats: CardStats) -> bytes:
+    """Refresh existing generated README metadata without adding new fields."""
+    match = _FRONT_MATTER.match(document)
+    if match is None:
+        return document
+    updated = _update_existing_release_yaml(match.group(0), stats)
+    return updated + document[match.end() :]
+
+
+def _merge_yaml_custom_metadata(generated: bytes, source: bytes) -> bytes:
+    """Combine trusted custom YAML with freshly generated release fields."""
+    custom = "\n".join(
+        line
+        for line in _yaml_custom_text(source.decode("utf-8")).replace("\r\n", "\n").splitlines()
+        if line.strip() != "---"
+    ).strip()
+    derived = "\n".join(_yaml_derived_lines(generated.decode("utf-8"))).strip()
+    content = "\n".join(part for part in (custom, derived) if part)
+    return f"---\n{content}\n---".encode()
+
+
+def _yaml_derived_lines(document: str) -> list[str]:
+    """Return generated YAML fields while retaining their list values."""
+    derived: list[str] = []
+    include_values = False
+    for line in document.replace("\r\n", "\n").splitlines():
+        key = _yaml_top_level_key(line)
+        if key is not None:
+            include_values = _is_derived_yaml_key(key)
+            if include_values:
+                derived.append(line)
+        elif _is_derived_yaml_list_value(include_values, line):
+            derived.append(line)
+    return derived
+
+
+def _is_derived_yaml_key(key: str) -> bool:
+    """Return whether a top-level YAML key is release-generated."""
+    return key in _RELEASE_YAML_DERIVED_KEYS
+
+
+def _is_derived_yaml_list_value(include_values: bool, line: str) -> bool:
+    """Return whether one continuation line belongs to a derived list."""
+    return include_values and _is_yaml_list_value(line)
+
+
+def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
+    """Replace only generated YAML fields already present in one document."""
+    text = document.decode("utf-8")
+    if stats.detected_language_count:
+        text = _replace_release_language_tags(text, stats)
+    values = {
+        **_release_yaml_values(stats),
+        "detected_language_count": stats.detected_language_count,
+        "website_language_count": stats.website_language_count,
+        "contact_website_language_count": stats.contact_website_language_count,
+        "sentence_count": stats.total_sentence_count,
+        "website_segmented_count": stats.website_sentence_row_count,
+        "contact_website_segmented_count": stats.contact_website_sentence_row_count,
+    }
+    for key, value in values.items():
+        text, _ = _replace_density_yaml_field(text, key, f"{key}: {value}")
+    return text.encode("utf-8")
+
+
+def yaml_custom_sha256(path: Path) -> str | None:
+    """Hash YAML content after removing release-generated fields."""
+    document = _yaml_document_bytes(path)
+    if document is None:
+        return None
+    normalized = _yaml_custom_text(document.decode("utf-8"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _yaml_document_bytes(path: Path) -> bytes | None:
+    """Return the YAML document or README front matter to hash."""
+    if not path.is_file():
+        return None
+    document = path.read_bytes()
+    if path.name == "README.md":
+        match = _FRONT_MATTER.match(document)
+        if match is None:
+            return None
+        document = match.group(0)
+    return document
+
+
+def _yaml_custom_text(document: str) -> str:
+    """Remove release-generated top-level fields before hashing."""
+    lines = document.replace("\r\n", "\n").splitlines(keepends=True)
+    return "".join(_iter_yaml_custom_lines(lines)).rstrip("\n")
+
+
+def _iter_yaml_custom_lines(lines: list[str]) -> Iterator[str]:
+    """Yield YAML lines that belong to non-generated metadata."""
+    kept: list[str] = []
+    skip_language_values = False
+    for line in lines:
+        if skip_language_values and _is_yaml_list_value(line):
+            continue
+        key = _yaml_top_level_key(line)
+        skip_language_values = key == "language"
+        if key in _RELEASE_YAML_DERIVED_KEYS:
+            continue
+        kept.append(line)
+    yield from kept
+
+
+def _is_yaml_list_value(line: str) -> bool:
+    """Return whether a line is an indented YAML list item."""
+    return bool(re.match(r"^[ \t]+- ", line))
+
+
+def _yaml_top_level_key(line: str) -> str | None:
+    """Return a top-level YAML key, if one is present."""
+    match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):", line)
+    return match.group(1) if match else None
+
+
+def _update_release_yaml_text(text: str, stats: CardStats) -> bytes:
+    """Update all scalar metrics that the generated card front matter exposes."""
+    text = _replace_release_language_tags(text, stats)
+    required_values = _release_yaml_values(stats)
+    optional_values = {
+        "detected_language_count": stats.detected_language_count,
+        "website_language_count": stats.website_language_count,
+        "contact_website_language_count": stats.contact_website_language_count,
+        "sentence_count": stats.total_sentence_count,
+        "website_segmented_count": stats.website_sentence_row_count,
+        "contact_website_segmented_count": stats.contact_website_sentence_row_count,
+    }
+    return _replace_release_yaml_fields(
+        text,
+        {**required_values, **optional_values},
+        required_keys=required_values,
+    )
+
+
+def _replace_release_language_tags(text: str, stats: CardStats) -> str:
+    """Refresh the generated top-level language list while preserving YAML."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    replacement = [f"{line}{newline}" for line in _language_tag_lines(stats)]
+    language_range = _language_yaml_range(lines)
+    if language_range is not None:
+        start, end = language_range
+        return "".join((*lines[:start], *replacement, *lines[end:]))
+    if not replacement:
+        return text
+    insertion = _language_yaml_insertion_index(lines)
+    return "".join((*lines[:insertion], *replacement, *lines[insertion:]))
+
+
+def _language_yaml_range(lines: list[str]) -> tuple[int, int] | None:
+    """Return the top-level language field range, including its list values."""
+    for index, line in enumerate(lines):
+        if line.startswith("language:"):
+            end = index + 1
+            while end < len(lines) and re.match(r"^[ \t]+- ", lines[end]):
+                end += 1
+            return index, end
+    return None
+
+
+def _language_yaml_insertion_index(lines: list[str]) -> int:
+    """Return a stable insertion point for a missing language field."""
+    return next(
+        (
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.startswith(("size_categories:", "configs:", "---"))
+        ),
+        len(lines),
+    )
+
+
+def _release_yaml_values(stats: CardStats) -> dict[str, object]:
+    """Return the required scalar values exposed in generated front matter."""
+    return {
+        "observation_count": stats.observation_count,
+        "public_row_count": stats.public_row_count,
+        "rejection_count": stats.rejection_count,
+        "duplicate_count": stats.duplicate_count,
+        "conflicting_snapshot_count": stats.conflicting_snapshot_count,
+        "sources_count": stats.sources_count,
+        "expected_sources_count": stats.expected_sources_count,
+        "enriched_sources_count": stats.enriched_sources_count,
+        "dataset_status": _dataset_status_value(stats),
+        "website_text_success_count": stats.website_text_success_count,
+        "website_total_words": stats.website_total_words,
+        "contact_website_text_success_count": stats.contact_website_text_success_count,
+        "contact_website_total_words": stats.contact_website_total_words,
+        "unique_text_identity_count": stats.polygons_with_any_text,
+        "polygon_density_h3_resolution": stats.polygon_density_h3_resolution,
+        "polygon_density_row_count": stats.polygon_density_row_count,
+        "occupied_h3_cell_count": stats.occupied_h3_cell_count,
+    }
+
+
+def _replace_release_yaml_fields(
+    text: str,
+    values: Mapping[str, object],
+    *,
+    required_keys: Collection[str],
+) -> bytes:
+    """Replace generated fields and append missing required or nonzero fields."""
+    newline = "\r\n" if "\r\n" in text else "\n"
+    updated = text
+    missing: list[str] = []
+    for key, value in values.items():
+        updated, addition = _replace_one_release_yaml_field(updated, key, value, required_keys)
+        if addition is not None:
+            missing.append(addition)
+    if missing:
+        updated = _append_density_yaml_fields(updated, missing, newline)
+    return updated.encode("utf-8")
+
+
+def _replace_one_release_yaml_field(
+    text: str,
+    key: str,
+    value: object,
+    required_keys: Collection[str],
+) -> tuple[str, str | None]:
+    """Replace one release field and return an optional missing-field addition."""
+    replacement = f"{key}: {value}"
+    updated, found = _replace_density_yaml_field(text, key, replacement)
+    if not found and _should_append_release_yaml_field(key, value, required_keys):
+        return updated, replacement
+    return updated, None
+
+
+def _should_append_release_yaml_field(
+    key: str,
+    value: object,
+    required_keys: Collection[str],
+) -> bool:
+    """Return whether a missing generated field belongs in the document."""
+    return key in required_keys or bool(value)
 
 
 def _update_density_yaml_text(text: str, stats: CardStats) -> bytes:
@@ -447,6 +807,7 @@ def _render_yaml_front_matter(stats: CardStats) -> str:
         f"website_total_words: {stats.website_total_words}",
         f"contact_website_text_success_count: {stats.contact_website_text_success_count}",
         f"contact_website_total_words: {stats.contact_website_total_words}",
+        f"unique_text_identity_count: {stats.polygons_with_any_text}",
         *_language_metadata_lines(stats),
         *_sentence_metadata_lines(stats),
         f"polygon_density_h3_resolution: {stats.polygon_density_h3_resolution}",
@@ -614,10 +975,16 @@ def _render_website_text_section(stats: CardStats) -> list[str]:
             f"{stats.contact_website_total_words:,} |"
         ),
         "",
+        (
+            "Website-text table counts are unique `(osm_type, osm_id)` identities across "
+            "regional rows; regional overlap duplicates are removed globally."
+        ),
+        "",
         f"Unique polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
         (
             "Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy "
-            "has successful, trimmed non-empty website or contact:website text."
+            "has successful, trimmed non-empty website or contact:website text; regional "
+            "overlap duplicates removed globally."
         ),
         f"Combined extracted words: **{combined_words:,}**",
         "",
@@ -690,7 +1057,7 @@ def _render_polygon_geometry_section(geometry: GeometryStats) -> list[str]:
         (
             "Surface and shape statistics computed over every published polygon row from the "
             "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
-            f"ellipsoid. The complete breakdown is published as [`{GEOMETRY_STATS_FILENAME}`]"
+            f"ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`{GEOMETRY_STATS_FILENAME}`]"
             f"({GEOMETRY_STATS_FILENAME})."
         ),
         "",
@@ -730,7 +1097,7 @@ def _render_geographic_section(stats: CardStats) -> list[str]:
             f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
             f"**{stats.polygon_density_row_count:,}** unique polygons with successfully "
             "extracted, non-empty website or contact:website text, globally deduplicated by "
-            "`(osm_type, osm_id)`. "
+            "`(osm_type, osm_id)`; regional overlap duplicates removed globally. "
             "The color scale is logarithmic, counts are absolute, and a Natural Earth "
             "1:110m land backdrop provides geographic context."
         ),

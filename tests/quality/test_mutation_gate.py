@@ -57,6 +57,17 @@ def test_killed_mutants_are_collected() -> None:
     }
 
 
+def test_reported_mutants_includes_unchecked_entries() -> None:
+    assert mutation_gate.reported_mutants(_RESULTS.splitlines()) == {
+        "osm_polygon_website_tag.pipeline.sat.x_select_device__mutmut_1",
+        "osm_polygon_website_tag.web.web_fetch.x__probe__mutmut_3",
+        "osm_polygon_website_tag.domain.geometry.x__area_bucket__mutmut_2",
+        "osm_polygon_website_tag.pipeline.enrich.x__retry__mutmut_7",
+        "osm_polygon_website_tag.pipeline.analyze.x__slow__mutmut_1",
+        "osm_polygon_website_tag.reporting.card.x__render__mutmut_9",
+    }
+
+
 def test_baseline_ignores_comments_and_blanks(tmp_path: Path) -> None:
     path = tmp_path / "baseline.txt"
     path.write_text("# a note\n\n  module.x_f__mutmut_1  \n", encoding="utf-8")
@@ -122,13 +133,15 @@ def test_a_healed_baseline_entry_is_reported(
     assert "sat.x_select_device__mutmut_1" in captured.out
 
 
-def test_an_empty_scoped_run_passes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_empty_scoped_run_fails_closed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     results, baseline = _write(tmp_path, results="    module.x_f__mutmut_1: not checked\n")
 
     code = mutation_gate.main(["--results", str(results), "--baseline", str(baseline)])
 
-    assert code == 0
-    assert "0 baseline hit(s)" in capsys.readouterr().out
+    assert code == 1
+    assert "no mutation verdicts" in capsys.readouterr().err
 
 
 def test_the_repository_baseline_is_sorted_and_documented() -> None:
@@ -216,8 +229,8 @@ def test_a_scope_with_no_findings_passes(
         ["--results", str(results), "--baseline", str(baseline), "--scope", "other.package.*"]
     )
 
-    assert code == 0
-    assert "0 baseline hit(s)" in capsys.readouterr().out
+    assert code == 1
+    assert "no mutation verdicts" in capsys.readouterr().err
 
 
 def test_the_gate_lists_every_finding_not_a_prefix(
