@@ -378,10 +378,7 @@ def test_finalize_snapshot_state_advances_only_expected_steps(
         state.metadata["status"] = status
 
     monkeypatch.setattr(finalize_module, "transition_status", transition)
-    monkeypatch.setattr(
-        "osm_polygon_website_tag.pipeline.analyze.analyze_results",
-        lambda _root: actions.append("analyze"),
-    )
+    monkeypatch.setattr(finalize_module, "analyze_results", lambda _root: actions.append("analyze"))
     monkeypatch.setattr(finalize_module, "build_card", lambda _root: actions.append("card"))
 
     finalize_module._advance_snapshot_state(tmp_path, state)
