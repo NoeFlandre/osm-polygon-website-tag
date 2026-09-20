@@ -164,3 +164,33 @@ def test_draw_polygon_emits_outer_ring_and_holes_with_distinct_styles(
             },
         ),
     ]
+
+
+def test_a_faked_matplotlib_import_does_not_outlive_its_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pollute both lazy caches through the production loaders themselves.
+
+    Paired with the assertion below: the loader writes the fake into module
+    globals, which `monkeypatch` cannot undo, so only the package fixture
+    keeps the fake from reaching the next test.
+    """
+    fake_patches = ModuleType("matplotlib.patches")
+    fake_matplotlib = ModuleType("matplotlib")
+    fake_matplotlib_any = cast(Any, fake_matplotlib)
+    fake_matplotlib_any.use = lambda _backend: None
+    fake_matplotlib_any.patches = fake_patches
+    monkeypatch.setitem(sys.modules, "matplotlib", fake_matplotlib)
+    monkeypatch.setitem(sys.modules, "matplotlib.patches", fake_patches)
+    monkeypatch.delitem(basemap.__dict__, "patches", raising=False)
+
+    assert basemap._matplotlib_patches() is fake_patches
+    assert basemap.__dict__["patches"] is fake_patches
+
+
+def test_the_real_patches_module_survives_a_polluting_test() -> None:
+    """The previous test's fake must not be what this one resolves."""
+    patches_module = basemap._matplotlib_patches()
+
+    assert hasattr(patches_module, "Polygon")
+    assert basemap.__dict__["patches"] is patches_module
