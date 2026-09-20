@@ -358,6 +358,14 @@ def test_update_sentence_section_replaces_and_inserts_coverage_block() -> None:
     assert b"## Languages\nkeep\n## Sentences\n" in inserted
     assert inserted.endswith(b"## Polygon geometry\nkeep\n")
 
+    after_website = _update_sentence_section(
+        b"prefix\n## Website text\nkeep\n## Polygon geometry\nkeep\n", stats
+    )
+    assert b"## Website text\nkeep\n## Sentences\n" in after_website
+
+    appended = _update_sentence_section(b"prefix\n", stats)
+    assert appended.startswith(b"prefix\n\n## Sentences\n")
+
 
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
     assert _render_language_section(_golden_card_stats()) == []
