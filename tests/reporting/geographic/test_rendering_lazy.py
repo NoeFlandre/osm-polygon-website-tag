@@ -71,6 +71,18 @@ def test_module_compatibility_attributes_delegate_to_the_loader(
     assert rendering.__getattr__("plt") is components[2]
 
 
+def test_module_compatibility_attributes_work_through_normal_module_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    components = (object(), object(), object())
+    for name in ("colors", "patches", "plt"):
+        monkeypatch.delitem(rendering.__dict__, name, raising=False)
+    monkeypatch.setattr(rendering, "_matplotlib_components", lambda: components)
+
+    for name, expected in zip(("colors", "patches", "plt"), components, strict=True):
+        assert getattr(rendering, name) is expected
+
+
 def test_unknown_module_attribute_has_a_normal_attribute_error() -> None:
     with pytest.raises(
         AttributeError,

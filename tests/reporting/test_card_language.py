@@ -337,6 +337,20 @@ def test_sentence_count_helpers_keep_explicit_values_and_use_distinct_fallbacks(
     ) == ["| None reported | 0 |"]
 
 
+def test_sentence_count_helpers_use_fallbacks_when_explicit_counts_are_zero() -> None:
+    stats = replace(
+        _sentence_card_stats(),
+        website_sentence_row_count=2,
+        contact_website_sentence_row_count=3,
+        sentence_split_supported_count=0,
+        sentence_split_unsupported_count=0,
+        unsupported_language_row_count=8,
+        sentence_split_eligible_count=0,
+    )
+
+    assert card_rendering._sentence_counts(stats) == (5, 5, 8, 13)
+
+
 def test_yaml_custom_hash_ignores_a_trailing_document_newline(tmp_path: Path) -> None:
     front_matter = "---\nlicense: odbl\nconfigs:\n  - config_name: default\n---"
     yaml_path = tmp_path / "dataset.yaml"
