@@ -222,6 +222,22 @@ def test_copy_query_atomic_removes_temporary_output_after_promotion_failure(
     assert not destination.with_name(f".{destination.name}.tmp.parquet").exists()
 
 
+def test_copy_query_atomic_creates_every_missing_parent_level(tmp_path: Path) -> None:
+    """A destination several levels below an existing directory must still be written.
+
+    ``mkdir`` without ``parents=True`` happens to succeed when exactly one level
+    is missing, so only a deeper destination pins the recursive creation down.
+    """
+    connection = _make_connection(tmp_path / "duckdb")
+    destination = tmp_path / "one" / "two" / "three" / "result.parquet"
+    try:
+        copy_query_atomic(connection, "SELECT 1 AS value", destination)
+    finally:
+        connection.close()
+
+    assert pq.read_table(destination).to_pylist() == [{"value": 1}]
+
+
 def test_copy_query_atomic_escapes_quoted_output_paths(tmp_path: Path) -> None:
     connection = _make_connection(tmp_path / "duckdb")
     destination = tmp_path / "quoted'parent" / "result.parquet"

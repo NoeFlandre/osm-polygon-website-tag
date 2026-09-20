@@ -45,12 +45,19 @@ def _matplotlib_components() -> tuple[Any, Any, Any]:
 
 
 def __getattr__(name: str) -> Any:
-    """Expose lazily loaded Matplotlib modules for compatibility and tests."""
+    """Expose lazily loaded Matplotlib modules for compatibility and tests.
+
+    A module-level ``__getattr__`` must report an unknown name as
+    ``AttributeError`` and nothing else. The import system probes every module
+    it imports a name from for ``__path__``, so any other exception leaking out
+    of here aborts an unrelated import instead of failing this lookup. Index
+    resolution is therefore inside the guard too, not only the mapping lookup.
+    """
     try:
         component_index = _LAZY_COMPONENT_INDEX[name]
-    except KeyError as exc:
+        return _matplotlib_components()[component_index]
+    except (KeyError, IndexError, TypeError) as exc:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
-    return _matplotlib_components()[component_index]
 
 
 def atomic_save_png(fig, output_path: Path) -> None:
