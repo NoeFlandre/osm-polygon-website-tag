@@ -73,6 +73,7 @@ from osm_polygon_website_tag.reporting.card_patching import (  # noqa: F401
     _update_geographic_section,
     _update_geometry_section,
     _update_language_section,
+    _update_sentence_section,
     _update_website_text_section,
 )
 from osm_polygon_website_tag.reporting.card_rendering import (  # noqa: F401

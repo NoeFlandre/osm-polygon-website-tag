@@ -24,6 +24,7 @@ def test_sentence_stats_come_from_the_analysis_table(tmp_path: Path) -> None:
                     "status": "unsupported_language",
                     "row_count": 2,
                     "sentence_count": 0,
+                    "language": "hrv_Latn",
                 },
                 {
                     "tag": "contact_website",
@@ -45,6 +46,10 @@ def test_sentence_stats_come_from_the_analysis_table(tmp_path: Path) -> None:
     assert stats.contact_website_sentence_row_count == 3
     assert stats.total_sentence_count == 52
     assert stats.unsupported_language_row_count == 2
+    assert stats.sentence_split_eligible_count == 10
+    assert stats.sentence_split_supported_count == 8
+    assert stats.sentence_split_unsupported_count == 2
+    assert stats.top_unsupported_sentence_languages == [("hrv_Latn", 2)]
 
 
 def test_sentence_stats_are_absent_without_an_analysis_table(tmp_path: Path) -> None:

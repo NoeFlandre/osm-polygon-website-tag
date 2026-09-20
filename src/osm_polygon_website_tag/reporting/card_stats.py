@@ -91,6 +91,10 @@ class CardStats:
     contact_website_sentence_row_count: int = 0
     total_sentence_count: int = 0
     unsupported_language_row_count: int = 0
+    sentence_split_eligible_count: int = 0
+    sentence_split_supported_count: int = 0
+    sentence_split_unsupported_count: int = 0
+    top_unsupported_sentence_languages: list[tuple[str, int]] = field(default_factory=list)
     top_languages: list[tuple[str, int]] = field(default_factory=list)
     polygon_density_h3_resolution: int = 3
     occupied_h3_cell_count: int = 0
@@ -338,16 +342,20 @@ def _add_analysis_stats(
 
 
 def _add_sentence_stats(stats: CardStats, path: Path) -> None:
-    """Load optional segmentation status counts from the analysis table."""
+    """Load optional segmentation counts and language coverage from analysis."""
     if not path.exists():
         return
     rows = pq.read_table(path).to_pylist()
     stats.website_sentence_row_count = _sentence_rows(rows, "website")
     stats.contact_website_sentence_row_count = _sentence_rows(rows, "contact_website")
-    stats.total_sentence_count = sum(int(row["sentence_count"]) for row in rows)
-    stats.unsupported_language_row_count = sum(
-        int(row["row_count"]) for row in rows if row.get("status") == SENTENCE_UNSUPPORTED_LANGUAGE
-    )
+    stats.total_sentence_count = _sentence_total(rows)
+    supported = _sentence_status_rows(rows, SENTENCE_SUCCESS)
+    unsupported = _sentence_status_rows(rows, SENTENCE_UNSUPPORTED_LANGUAGE)
+    stats.sentence_split_supported_count = supported
+    stats.sentence_split_unsupported_count = unsupported
+    stats.sentence_split_eligible_count = supported + unsupported
+    stats.unsupported_language_row_count = unsupported
+    stats.top_unsupported_sentence_languages = _unsupported_language_counts(rows)
 
 
 def _sentence_rows(rows: list[dict[str, Any]], tag: str) -> int:
@@ -357,6 +365,30 @@ def _sentence_rows(rows: list[dict[str, Any]], tag: str) -> int:
         for row in rows
         if row.get("tag") == tag and row.get("status") == SENTENCE_SUCCESS
     )
+
+
+def _sentence_total(rows: list[dict[str, Any]]) -> int:
+    """Count all emitted sentences across the analysis table."""
+    return sum(int(row["sentence_count"]) for row in rows)
+
+
+def _sentence_status_rows(rows: list[dict[str, Any]], status: str) -> int:
+    """Count text units for one sentence-analysis status."""
+    return sum(int(row["row_count"]) for row in rows if row.get("status") == status)
+
+
+def _unsupported_language_counts(rows: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Return unsupported detected-language labels ordered by descending count."""
+    totals: dict[str, int] = {}
+    for row in rows:
+        if row.get("status") != SENTENCE_UNSUPPORTED_LANGUAGE:
+            continue
+        language = row.get("language")
+        if language is None:
+            continue
+        label = str(language)
+        totals[label] = totals.get(label, 0) + int(row["row_count"])
+    return sorted(totals.items(), key=_language_sort_key)
 
 
 def _add_language_stats(stats: CardStats, path: Path) -> None:

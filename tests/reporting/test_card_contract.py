@@ -13,6 +13,7 @@ from tests.fixtures.card import (
     _golden_card_stats,
     _golden_geometry_stats,
     _language_card_stats,
+    _sentence_card_stats,
     _setup_minimal_run,
 )
 
@@ -31,6 +32,7 @@ from osm_polygon_website_tag.reporting.card import (
     _update_geographic_section,
     _update_geometry_section,
     _update_language_section,
+    _update_sentence_section,
     _update_website_text_section,
     build_card,
     update_card_with_geometry,
@@ -337,6 +339,24 @@ def test_update_language_section_appends_missing_block_without_website_text() ->
 
     assert updated.startswith(b"prefix\n\n## Languages\n")
     assert b"| `eng_Latn` | 25 |" in updated
+
+
+def test_update_sentence_section_replaces_and_inserts_coverage_block() -> None:
+    stats = _sentence_card_stats()
+    replaced = _update_sentence_section(
+        b"prefix\n## Languages\nkeep\n## Sentences\nSTALE\n## Polygon geometry\nkeep\n",
+        stats,
+    )
+    assert b"STALE" not in replaced
+    assert b"| Sentence-splitting coverage | 80.0% |" in replaced
+    assert replaced.startswith(b"prefix\n## Languages\nkeep\n## Sentences\n")
+    assert replaced.endswith(b"## Polygon geometry\nkeep\n")
+
+    inserted = _update_sentence_section(
+        b"prefix\n## Languages\nkeep\n## Polygon geometry\nkeep\n", stats
+    )
+    assert b"## Languages\nkeep\n## Sentences\n" in inserted
+    assert inserted.endswith(b"## Polygon geometry\nkeep\n")
 
 
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:

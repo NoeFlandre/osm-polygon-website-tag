@@ -26,6 +26,7 @@ from osm_polygon_website_tag.reporting.card_patching import (
     _update_geographic_section,
     _update_geometry_section,
     _update_language_section,
+    _update_sentence_section,
     _update_website_text_section,
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
@@ -111,6 +112,7 @@ def refresh_card_for_release(
     updated_readme = _update_readme_front_matter(original_readme, stats)
     updated_readme = _update_website_text_section(updated_readme, stats)
     updated_readme = _update_language_section(updated_readme, stats)
+    updated_readme = _update_sentence_section(updated_readme, stats)
     updated_readme = _update_geographic_section(
         _update_geometry_section(updated_readme, geometry), stats
     )

@@ -165,4 +165,8 @@ def _sentence_card_stats() -> CardStats:
     stats.website_sentence_row_count = 8
     stats.contact_website_sentence_row_count = 4
     stats.unsupported_language_row_count = 3
+    stats.sentence_split_eligible_count = 15
+    stats.sentence_split_supported_count = 12
+    stats.sentence_split_unsupported_count = 3
+    stats.top_unsupported_sentence_languages = [("hrv_Latn", 2), ("zho_Hani", 1)]
     return stats

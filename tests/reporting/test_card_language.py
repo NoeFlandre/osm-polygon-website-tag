@@ -234,7 +234,12 @@ def test_sentence_front_matter_and_section_render_segmentation_totals() -> None:
     assert "| Sentences | 60 |" in body
     assert "| Segmented `website` texts | 8 |" in body
     assert "| Segmented `contact:website` texts | 4 |" in body
-    assert "| Texts in an uncovered language | 3 |" in body
+    assert "| Eligible text units for splitting | 15 |" in body
+    assert "| Split with a supported language | 12 |" in body
+    assert "| Left unsplit: unsupported language | 3 |" in body
+    assert "| Sentence-splitting coverage | 80.0% |" in body
+    assert "| Unsupported-language share | 20.0% |" in body
+    assert "| `hrv_Latn` | 2 |" in body
     assert "Mean sentences per segmented text: **5.0**" in body
 
 
@@ -265,7 +270,18 @@ def test_sentence_section_has_a_stable_line_contract() -> None:
         "| Sentences | 60 |",
         "| Segmented `website` texts | 8 |",
         "| Segmented `contact:website` texts | 4 |",
-        "| Texts in an uncovered language | 3 |",
+        "| Eligible text units for splitting | 15 |",
+        "| Split with a supported language | 12 |",
+        "| Left unsplit: unsupported language | 3 |",
+        "| Sentence-splitting coverage | 80.0% |",
+        "| Unsupported-language share | 20.0% |",
+        "",
+        "Top unsupported languages:",
+        "",
+        "| Language | Text units |",
+        "| --- | ---: |",
+        "| `hrv_Latn` | 2 |",
+        "| `zho_Hani` | 1 |",
         "",
         "Mean sentences per segmented text: **5.0**",
         "",
@@ -279,6 +295,22 @@ def test_sentence_metadata_has_a_stable_line_contract() -> None:
         "contact_website_segmented_count: 4",
     ]
     assert card_module._sentence_metadata_lines(_language_card_stats()) == []
+
+
+def test_sentence_section_renders_unsupported_only_population_without_dividing_by_zero() -> None:
+    stats = _language_card_stats()
+    stats.total_sentence_count = 0
+    stats.website_sentence_row_count = 0
+    stats.contact_website_sentence_row_count = 0
+    stats.sentence_split_eligible_count = 3
+    stats.sentence_split_supported_count = 0
+    stats.sentence_split_unsupported_count = 3
+    stats.unsupported_language_row_count = 3
+
+    section = card_module._render_sentence_section(stats)
+
+    assert "| Sentence-splitting coverage | 0.0% |" in section
+    assert "Mean sentences per segmented text: **n/a**" in section
 
 
 def test_yaml_custom_hash_ignores_a_trailing_document_newline(tmp_path: Path) -> None:

@@ -169,9 +169,13 @@ def _render_language_section(stats: CardStats) -> list[str]:
 
 def _render_sentence_section(stats: CardStats) -> list[str]:
     """Render sentence totals when the run carries v1.5 segmentation."""
-    if not stats.total_sentence_count:
+    if not stats.total_sentence_count and not stats.sentence_split_eligible_count:
         return []
-    segmented = stats.website_sentence_row_count + stats.contact_website_sentence_row_count
+    segmented, supported, unsupported, eligible = _sentence_counts(stats)
+    coverage = _percentage(supported, eligible)
+    unsupported_share = _percentage(unsupported, eligible)
+    top_rows = _unsupported_language_rows(stats)
+    mean_sentences = _mean_sentences(stats.total_sentence_count, segmented)
     return [
         "## Sentences",
         "",
@@ -189,11 +193,61 @@ def _render_sentence_section(stats: CardStats) -> list[str]:
         f"| Sentences | {stats.total_sentence_count:,} |",
         f"| Segmented `website` texts | {stats.website_sentence_row_count:,} |",
         f"| Segmented `contact:website` texts | {stats.contact_website_sentence_row_count:,} |",
-        f"| Texts in an uncovered language | {stats.unsupported_language_row_count:,} |",
+        f"| Eligible text units for splitting | {eligible:,} |",
+        f"| Split with a supported language | {supported:,} |",
+        f"| Left unsplit: unsupported language | {unsupported:,} |",
+        f"| Sentence-splitting coverage | {coverage} |",
+        f"| Unsupported-language share | {unsupported_share} |",
         "",
-        f"Mean sentences per segmented text: **{stats.total_sentence_count / segmented:.1f}**",
+        "Top unsupported languages:",
+        "",
+        "| Language | Text units |",
+        "| --- | ---: |",
+        *top_rows,
+        "",
+        f"Mean sentences per segmented text: **{mean_sentences}**",
         "",
     ]
+
+
+def _sentence_counts(stats: CardStats) -> tuple[int, int, int, int]:
+    """Return segmented, supported, unsupported, and eligible text-unit counts."""
+    segmented = stats.website_sentence_row_count + stats.contact_website_sentence_row_count
+    supported = _reported_count(stats.sentence_split_supported_count, segmented)
+    unsupported = _reported_count(
+        stats.sentence_split_unsupported_count,
+        stats.unsupported_language_row_count,
+    )
+    eligible = _reported_count(stats.sentence_split_eligible_count, supported + unsupported)
+    return segmented, supported, unsupported, eligible
+
+
+def _reported_count(value: int, fallback: int) -> int:
+    """Use a newer explicit metric while retaining compatibility with old cards."""
+    return value or fallback
+
+
+def _unsupported_language_rows(stats: CardStats) -> list[str]:
+    """Render the top unsupported-language rows, including an empty-state row."""
+    if not stats.top_unsupported_sentence_languages:
+        return ["| None reported | 0 |"]
+    return [
+        f"| `{label}` | {count:,} |" for label, count in stats.top_unsupported_sentence_languages
+    ]
+
+
+def _mean_sentences(total: int, segmented: int) -> str:
+    """Format the sentence mean without dividing by an unsupported-only population."""
+    if not segmented:
+        return "n/a"
+    return f"{total / segmented:.1f}"
+
+
+def _percentage(numerator: int, denominator: int) -> str:
+    """Format a percentage without inventing a value for an empty population."""
+    if not denominator:
+        return "n/a"
+    return f"{100 * numerator / denominator:.1f}%"
 
 
 def _render_polygon_geometry_section(geometry: GeometryStats) -> list[str]:

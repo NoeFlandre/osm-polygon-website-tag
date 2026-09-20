@@ -46,6 +46,7 @@ _DERIVED_README_HEADINGS = frozenset(
     {
         b"## Website text",
         b"## Languages",
+        b"## Sentences",
         b"## Polygon geometry",
         b"## Geographic distribution",
     }

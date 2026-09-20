@@ -78,6 +78,10 @@ def _patch_existing_refresh_dependencies(
         calls["language"] = (document, received_stats)
         return b"language"
 
+    def update_sentence(document: bytes, received_stats: object) -> bytes:
+        calls["sentence"] = (document, received_stats)
+        return b"sentence"
+
     def update_geometry(document: bytes, received_geometry: object) -> bytes:
         calls["geometry_section"] = (document, received_geometry)
         return b"geometry"
@@ -89,6 +93,7 @@ def _patch_existing_refresh_dependencies(
     monkeypatch.setattr(card_artifacts, "_update_readme_front_matter", update_front)
     monkeypatch.setattr(card_artifacts, "_update_website_text_section", update_website)
     monkeypatch.setattr(card_artifacts, "_update_language_section", update_language)
+    monkeypatch.setattr(card_artifacts, "_update_sentence_section", update_sentence)
     monkeypatch.setattr(card_artifacts, "_update_geometry_section", update_geometry)
     monkeypatch.setattr(card_artifacts, "_update_geographic_section", update_geographic)
     return calls
@@ -215,7 +220,8 @@ def test_refresh_existing_readme_updates_all_release_inputs(
     assert calls["front"] == (b"original-readme", stats)
     assert calls["website"] == (b"front", stats)
     assert calls["language"] == (b"website", stats)
-    assert calls["geometry_section"] == (b"language", geometry)
+    assert calls["sentence"] == (b"language", stats)
+    assert calls["geometry_section"] == (b"sentence", geometry)
     assert calls["geographic"] == (b"geometry", stats)
     assert calls["yaml"] == (b"original-yaml", stats)
     assert calls["validate"] == (

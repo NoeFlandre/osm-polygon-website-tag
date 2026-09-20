@@ -434,27 +434,36 @@ SENTENCE_TABLE_SCHEMA = pa.schema(
     [
         pa.field("tag", pa.string(), nullable=False),
         pa.field("status", pa.string(), nullable=False),
+        pa.field("language", pa.string()),
         pa.field("row_count", pa.int64(), nullable=False),
         pa.field("sentence_count", pa.int64(), nullable=False),
     ]
 )
 
 _SENTENCE_TAG_COLUMNS = (
-    ("website", "website_sentence_status", "website_sentence_count"),
-    ("contact_website", "contact_website_sentence_status", "contact_website_sentence_count"),
+    ("website", "website_sentence_status", "website_sentence_count", "website_language"),
+    (
+        "contact_website",
+        "contact_website_sentence_status",
+        "contact_website_sentence_count",
+        "contact_website_language",
+    ),
 )
 
 
-def _sentence_tag_select(tag: str, status_column: str, count_column: str) -> str:
+def _sentence_tag_select(
+    tag: str, status_column: str, count_column: str, language_column: str
+) -> str:
     """Build the grouped status/sentence query for one website tag.
 
     Every interpolated name is a literal from ``_SENTENCE_TAG_COLUMNS``; no
     caller-supplied value reaches the statement.
     """
     return f"""
-        SELECT '{tag}' AS tag, {status_column} AS status, COUNT(*)::BIGINT AS row_count,
+        SELECT '{tag}' AS tag, {status_column} AS status, {language_column} AS language,
+               COUNT(*)::BIGINT AS row_count,
                COALESCE(SUM({count_column}), 0)::BIGINT AS sentence_count
-        FROM public_polygons WHERE {status_column} IS NOT NULL GROUP BY 1, 2
+        FROM public_polygons WHERE {status_column} IS NOT NULL GROUP BY 1, 2, 3
     """  # noqa: S608
 
 
@@ -464,15 +473,20 @@ def _write_sentence_table(con: duckdb.DuckDBPyConnection, analysis_dir: Path) ->
         _write_arrow_table(analysis_dir / "sentences.parquet", [], SENTENCE_TABLE_SCHEMA)
         return
     selects = " UNION ALL ".join(
-        _sentence_tag_select(tag, status, count) for tag, status, count in _SENTENCE_TAG_COLUMNS
+        _sentence_tag_select(tag, status, count, language)
+        for tag, status, count, language in _SENTENCE_TAG_COLUMNS
     )
-    query = f"SELECT * FROM ({selects}) ORDER BY tag, status"  # noqa: S608
+    query = f"SELECT * FROM ({selects}) ORDER BY tag, status, language"  # noqa: S608
     duckdb_engine.copy_query_atomic(con, query, analysis_dir / "sentences.parquet")
 
 
 def _has_sentence_columns(con: duckdb.DuckDBPyConnection) -> bool:
     """Return whether the public view carries the v1.5 sentence columns."""
-    required = {name for _tag, status, count in _SENTENCE_TAG_COLUMNS for name in (status, count)}
+    required = {
+        name
+        for _tag, status, count, language in _SENTENCE_TAG_COLUMNS
+        for name in (status, count, language)
+    }
     return required.issubset(_public_columns(con))
 
 
