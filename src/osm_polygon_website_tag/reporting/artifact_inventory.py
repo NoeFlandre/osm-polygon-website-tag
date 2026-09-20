@@ -33,16 +33,31 @@ _DATA_MANIFEST_FILES = frozenset(
 
 def publishable_paths(root: Path) -> tuple[Path, ...]:
     """Return the deterministic, content-only publication inventory."""
-    paths = [
-        path
-        for directory in _PUBLISHABLE_DIRECTORIES
-        for path in _directory_publishable_paths(root / directory)
-    ]
+    return tuple(root / relative_path for relative_path in _publishable_relative_paths(root))
+
+
+def _publishable_relative_paths(root: Path) -> list[str]:
+    """Return sorted relative names for every publishable artifact."""
+    return sorted(path.relative_to(root).as_posix() for path in _managed_publishable_paths(root))
+
+
+def _managed_publishable_paths(root: Path) -> list[Path]:
+    """Collect managed files and the optional density map."""
+    paths = _directory_publishable_paths_for_root(root)
     paths.extend(_root_publishable_paths(root))
     map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
     if map_path.is_file():
         paths.append(map_path)
-    return tuple(sorted(paths, key=lambda path: path.relative_to(root).as_posix()))
+    return paths
+
+
+def _directory_publishable_paths_for_root(root: Path) -> list[Path]:
+    """Collect files from every managed publication directory."""
+    return [
+        path
+        for directory in _PUBLISHABLE_DIRECTORIES
+        for path in _directory_publishable_paths(root / directory)
+    ]
 
 
 def _directory_publishable_paths(directory: Path) -> list[Path]:
@@ -88,7 +103,7 @@ def _manifest_sha256(root: Path, include: Callable[[str], bool]) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _manifest_entries(root: Path, include: Callable[[str], bool]) -> list[dict[str, int | str]]:
@@ -111,7 +126,7 @@ def _manifest_digest(entries: list[dict[str, int | str]]) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _is_data_manifest_path(relative_path: str) -> bool:

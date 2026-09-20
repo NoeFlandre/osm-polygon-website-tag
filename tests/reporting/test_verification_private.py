@@ -7,6 +7,7 @@ import json
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import duckdb
 import pytest
@@ -208,6 +209,225 @@ def test_legacy_yaml_custom_identity_covers_compatibility_paths(
     monkeypatch.setattr(receipt, "yaml_custom_sha256", unreadable)
     receipt._verify_legacy_yaml_custom_identity(tmp_path, errors)
     assert errors == ["completion receipt custom YAML identity unreadable: unreadable"]
+
+
+def test_readme_body_identity_is_strict_and_refresh_aware(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "README.md").write_text("# card\n", encoding="utf-8")
+    errors: list[str] = []
+
+    receipt._report_missing_readme_body_identity(tmp_path, errors, False)
+    assert errors == []
+    receipt._report_missing_readme_body_identity(tmp_path, errors, True)
+    assert errors == ["completion receipt has no trusted README body identity"]
+
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", lambda _path: "custom")
+    monkeypatch.setattr(receipt, "readme_preserved_sha256", lambda _path: None)
+    errors.clear()
+    receipt._verify_existing_readme_body_identity(tmp_path, "expected", errors, True)
+    assert errors == []
+
+    monkeypatch.setattr(receipt, "readme_preserved_sha256", lambda _path: "actual")
+    receipt._verify_existing_readme_body_identity(tmp_path, "expected", errors, False)
+    assert errors == ["completion receipt README body identity mismatch"]
+
+
+def test_readme_identity_rejects_non_string_receipt_values(tmp_path: Path) -> None:
+    errors: list[str] = []
+
+    receipt._verify_readme_preserved_identity(
+        tmp_path,
+        {"readme_preserved_sha256": 123},
+        errors,
+        allow_refreshable_card_metadata=False,
+    )
+
+    assert errors == ["completion receipt has invalid README body identity"]
+
+
+def test_readme_identity_forwards_refresh_policy_and_uses_exact_readme_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[str, Path]] = []
+
+    def readme_hash(path: Path) -> str:
+        observed.append(("readme", path))
+        return "expected"
+
+    def yaml_hash(path: Path) -> str:
+        observed.append(("yaml", path))
+        return "custom"
+
+    monkeypatch.setattr(receipt, "readme_preserved_sha256", readme_hash)
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", yaml_hash)
+    errors: list[str] = []
+
+    receipt._verify_existing_readme_body_identity(tmp_path, "expected", errors, False)
+
+    assert errors == []
+    assert observed == [
+        ("readme", tmp_path / "README.md"),
+        ("yaml", tmp_path / "README.md"),
+    ]
+
+    observed.clear()
+    monkeypatch.setattr(receipt, "readme_preserved_sha256", lambda _path: None)
+    receipt._verify_existing_readme_body_identity(tmp_path, "expected", errors, True)
+    assert errors == []
+
+    forwarded: list[bool | None] = []
+    monkeypatch.setattr(
+        receipt,
+        "_verify_existing_readme_body_identity",
+        lambda _root, _expected, _errors, allow: forwarded.append(allow),
+    )
+    receipt._verify_readme_preserved_identity(
+        tmp_path,
+        {"readme_preserved_sha256": "expected"},
+        errors,
+        allow_refreshable_card_metadata=True,
+    )
+    assert forwarded == [True]
+
+
+def test_missing_readme_identity_requires_the_canonical_readme_path(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# card\n", encoding="utf-8")
+    errors: list[str] = []
+
+    receipt._report_missing_readme_body_identity(tmp_path, errors, True)
+
+    assert errors == ["completion receipt has no trusted README body identity"]
+
+
+def test_missing_readme_identity_requests_the_canonical_filename() -> None:
+    requested: list[str] = []
+
+    class Readme:
+        def is_file(self) -> bool:
+            return True
+
+    class Root:
+        def __truediv__(self, name: str) -> Readme:
+            requested.append(name)
+            return Readme()
+
+    errors: list[str] = []
+    receipt._report_missing_readme_body_identity(cast(Path, Root()), errors, True)
+
+    assert requested == ["README.md"]
+    assert errors == ["completion receipt has no trusted README body identity"]
+
+
+def test_current_card_contract_requires_lowercase_stats_json(tmp_path: Path) -> None:
+    map_path = tmp_path / POLYGON_DENSITY_ASSET_REL_PATH
+    map_path.parent.mkdir(parents=True)
+    map_path.write_bytes(b"png")
+    (tmp_path / "stats.json").write_bytes(b"{}\n")
+    errors: list[str] = []
+
+    requested: list[Path] = []
+    real_is_file = Path.is_file
+
+    def is_file(path: Path) -> bool:
+        requested.append(path)
+        return real_is_file(path)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(Path, "is_file", is_file)
+    try:
+        receipt._verify_current_card_contract(map_path, errors)
+    finally:
+        monkeypatch.undo()
+
+    assert errors == []
+    assert tmp_path / "stats.json" in requested
+
+
+def test_yaml_custom_identity_reports_missing_and_unreadable_documents(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = tmp_path / "dataset.yaml"
+    dataset.write_text("license: odbl\n", encoding="utf-8")
+    errors: list[str] = []
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", lambda _path: None)
+
+    assert receipt._verify_one_yaml_custom_identity(
+        tmp_path,
+        {"dataset_yaml_custom_sha256": "expected"},
+        "dataset_yaml_custom_sha256",
+        "dataset.yaml",
+        errors,
+    )
+    assert errors == ["completion receipt custom YAML identity mismatch: dataset.yaml"]
+
+    received: list[tuple[Path, str, list[str]]] = []
+    real_read_identity = receipt._read_yaml_custom_identity
+
+    def read_identity(path: Path, relative: str, received_errors: list[str]) -> tuple[bool, str]:
+        received.append((path, relative, received_errors))
+        return False, "expected"
+
+    monkeypatch.setattr(receipt, "_read_yaml_custom_identity", read_identity)
+    errors.clear()
+    assert receipt._verify_one_yaml_custom_identity(
+        tmp_path,
+        {"dataset_yaml_custom_sha256": "expected"},
+        "dataset_yaml_custom_sha256",
+        "dataset.yaml",
+        errors,
+    )
+    assert received == [(dataset, "dataset.yaml", errors)]
+
+    def unreadable(_path: Path) -> str:
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(receipt, "yaml_custom_sha256", unreadable)
+    monkeypatch.setattr(receipt, "_read_yaml_custom_identity", real_read_identity)
+    errors.clear()
+    assert receipt._read_yaml_custom_identity(dataset, "dataset.yaml", errors) == (True, None)
+    assert errors == [
+        "completion receipt custom YAML identity unreadable: dataset.yaml: unreadable"
+    ]
+
+
+def test_yaml_custom_identity_keeps_legacy_and_refresh_policies_distinct(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    errors: list[str] = []
+    legacy_calls: list[Path] = []
+    real_verify_one = receipt._verify_one_yaml_custom_identity
+    real_verify_legacy = receipt._verify_legacy_yaml_custom_identity
+    monkeypatch.setattr(
+        receipt,
+        "_verify_one_yaml_custom_identity",
+        lambda *_args: False,
+    )
+    monkeypatch.setattr(
+        receipt,
+        "_verify_legacy_yaml_custom_identity",
+        lambda root, _errors: legacy_calls.append(root),
+    )
+
+    receipt._verify_yaml_custom_identity(tmp_path, {}, errors)
+    assert legacy_calls == [tmp_path]
+    receipt._verify_yaml_custom_identity(tmp_path, {}, errors, allow_refreshable_card_metadata=True)
+    assert errors == ["completion receipt has no trusted custom YAML identity"]
+
+    monkeypatch.setattr(receipt, "_verify_one_yaml_custom_identity", real_verify_one)
+    monkeypatch.setattr(receipt, "_verify_legacy_yaml_custom_identity", real_verify_legacy)
+    monkeypatch.setattr(
+        receipt,
+        "yaml_custom_sha256",
+        lambda path: "dataset" if path.name == "dataset.yaml" else "readme",
+    )
+    errors.clear()
+    receipt._verify_yaml_custom_identity(tmp_path, {}, errors)
+    assert errors == ["completion receipt custom YAML identity mismatch"]
 
 
 def test_text_population_manifest_binds_expected_entries(
@@ -530,6 +750,21 @@ def test_receipt_entrypoints_and_orchestrator_forward_strict_and_refresh_modes(
             ("data", (root, payload, received_errors))
         ),
     )
+    policy_calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        receipt,
+        "_verify_yaml_custom_identity",
+        lambda _root, _payload, _errors, *, allow_refreshable_card_metadata: policy_calls.append(
+            ("yaml", allow_refreshable_card_metadata)
+        ),
+    )
+    monkeypatch.setattr(
+        receipt,
+        "_verify_readme_preserved_identity",
+        lambda _root, _payload, _errors, *, allow_refreshable_card_metadata: policy_calls.append(
+            ("readme", allow_refreshable_card_metadata)
+        ),
+    )
 
     receipt._verify_receipt(tmp_path, errors, allow_refreshable_card_metadata=False)
     assert calls == [
@@ -550,8 +785,10 @@ def test_receipt_entrypoints_and_orchestrator_forward_strict_and_refresh_modes(
             (tmp_path, {"artifacts": [entry], "card_contract_version": 2}, errors),
         ),
     ]
+    assert policy_calls == [("yaml", False), ("readme", False)]
 
     calls.clear()
+    policy_calls.clear()
     receipt._verify_receipt(tmp_path, errors, allow_refreshable_card_metadata=True)
     assert calls[1:] == [
         ("refresh-card", (tmp_path, 2, errors)),
@@ -570,6 +807,7 @@ def test_receipt_entrypoints_and_orchestrator_forward_strict_and_refresh_modes(
             (tmp_path, {"artifacts": [entry], "card_contract_version": 2}, errors),
         ),
     ]
+    assert policy_calls == [("yaml", True), ("readme", True)]
 
     calls.clear()
     monkeypatch.setattr(receipt, "_read_receipt", lambda *_args: {})

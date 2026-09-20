@@ -39,7 +39,7 @@ def _update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
 def _update_geographic_section(card: bytes, stats: CardStats) -> bytes:
     """Replace or insert the geography block using the card's newline style."""
     newline = b"\r\n" if b"\r\n" in card else b"\n"
-    block = newline.join(line.encode("utf-8") for line in _render_geographic_section(stats))
+    block = newline.join(line.encode() for line in _render_geographic_section(stats))
     block += newline
     existing = _GEOGRAPHIC_HEADING.search(card)
     if existing is not None:
@@ -62,7 +62,7 @@ def _update_website_text_section(card: bytes, stats: CardStats) -> bytes:
     existing = _WEBSITE_TEXT_HEADING.search(card)
     if existing is None:
         return card
-    block = newline.join(line.encode("utf-8") for line in _render_website_text_section(stats))
+    block = newline.join(line.encode() for line in _render_website_text_section(stats))
     return _replace_section(card, existing, block + newline)
 
 
@@ -99,7 +99,7 @@ def _insert_new_language_section(card: bytes, stats: CardStats, newline: bytes) 
 
 def _language_section_block(stats: CardStats, newline: bytes) -> bytes:
     """Render one language section using the card's newline convention."""
-    return newline.join(line.encode("utf-8") for line in _render_language_section(stats)) + newline
+    return newline.join(line.encode() for line in _render_language_section(stats)) + newline
 
 
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
@@ -119,7 +119,7 @@ def _insert_after_section(card: bytes, heading: re.Match[bytes], block: bytes) -
 def _geometry_block_bytes(geometry: GeometryStats, newline: bytes) -> bytes:
     """Render the additive block using the existing card's newline convention."""
     lines = _render_polygon_geometry_section(geometry)
-    return newline.join(line.encode("utf-8") for line in lines) + newline
+    return newline.join(line.encode() for line in lines) + newline
 
 
 def _append_geometry_block(card: bytes, block: bytes, newline: bytes) -> bytes:

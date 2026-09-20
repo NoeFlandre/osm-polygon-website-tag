@@ -27,9 +27,11 @@ from osm_polygon_website_tag.reporting.card import (
     build_card,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats
+from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GeometryStats,
 )
+from osm_polygon_website_tag.reporting.text_population import TextPopulationSummary
 
 
 def test_card_stats_private_arrow_helpers_count_invalid_values_and_select_sources(
@@ -354,6 +356,77 @@ def test_rendered_front_matter_is_valid_yaml_with_declared_dataset_contract() ->
     assert document["public_row_count"] == 3
 
 
+def test_render_card_bundle_retains_the_text_population_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text_population = TextPopulationSummary()
+    summary = PolygonDensitySummary(3, 0, 0, ())
+    geometry = GeometryStats(row_count=1)
+
+    monkeypatch.setattr(
+        card_module,
+        "compute_text_population_summary",
+        lambda *_args, **_kwargs: text_population,
+    )
+    monkeypatch.setattr(
+        card_module,
+        "compute_polygon_density_summary",
+        lambda *_args, **_kwargs: summary,
+    )
+    monkeypatch.setattr(
+        card_module,
+        "compute_card_stats",
+        lambda *_args, **_kwargs: CardStats(public_row_count=1),
+    )
+    monkeypatch.setattr(
+        card_module,
+        "compute_geometry_stats",
+        lambda *_args, **_kwargs: geometry,
+    )
+    monkeypatch.setattr(card_module, "_public_schema_for_card", lambda *_args: pa.schema([]))
+    monkeypatch.setattr(card_module, "_render_markdown", lambda *_args, **_kwargs: "body")
+    monkeypatch.setattr(card_module, "_render_yaml_front_matter", lambda *_args: "front")
+
+    bundle = card_module.render_card_bundle(tmp_path)
+
+    assert bundle.text_population is text_population
+
+
+def test_build_card_forwards_custom_yaml_source_to_bundle_renderer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    geometry = GeometryStats(row_count=1)
+    bundle = card_module.CardBundle(
+        readme=b"front\nbody",
+        dataset_yaml=b"front",
+        summary=PolygonDensitySummary(3, 0, 0, ()),
+        text_population=TextPopulationSummary(),
+        geometry=geometry,
+    )
+    received: list[bytes | None] = []
+
+    def render_bundle(
+        _root: Path,
+        *,
+        source_names: Collection[str] | None,
+        _yaml_source: bytes | None,
+    ) -> card_module.CardBundle:
+        del source_names
+        received.append(_yaml_source)
+        return bundle
+
+    monkeypatch.setattr(card_module, "render_card_bundle", render_bundle)
+    monkeypatch.setattr(card_module, "build_polygon_density_map", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(card_module, "_staged_geometry_stats", lambda *_args: [])
+    monkeypatch.setattr(card_module, "atomic_promote_bundle", lambda _promotions: None)
+
+    card_module.build_card(tmp_path, _yaml_source=b"custom")
+
+    assert received == [b"custom"]
+
+
 def test_build_card_preserves_collaborator_and_staging_contracts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -367,6 +440,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     geometry = GeometryStats(row_count=4)
     calls: list[tuple[str, object]] = []
     writes: list[tuple[Path, str, str | None]] = []
+    byte_writes: list[tuple[Path, bytes]] = []
     mkdirs: list[tuple[Path, bool, bool]] = []
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
 
@@ -446,6 +520,10 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
         writes.append((path, data, encoding))
         return len(data)
 
+    def fake_write_bytes(path: Path, data: bytes) -> int:
+        byte_writes.append((path, data))
+        return len(data)
+
     def fake_mkdir(
         path: Path,
         mode: int = 0o777,
@@ -467,6 +545,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     monkeypatch.setattr(card_module, "_render_yaml_front_matter", fake_render_yaml)
     monkeypatch.setattr(card_module, "_public_schema_for_card", fake_public_schema)
     monkeypatch.setattr(Path, "write_text", fake_write_text)
+    monkeypatch.setattr(Path, "write_bytes", fake_write_bytes)
     monkeypatch.setattr(Path, "mkdir", fake_mkdir)
     monkeypatch.setattr(card_module, "atomic_promote_bundle", promoted.append)
 
@@ -488,11 +567,11 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
             "global_unique_text",
         ),
     )
-    assert writes == [
-        (run_dir / ".README.md.building", "front\nbody", "utf-8"),
-        (run_dir / ".dataset.yaml.building", "front", "utf-8"),
-        (run_dir / ".stats.json.building", "stats", "utf-8"),
+    assert byte_writes == [
+        (run_dir / ".README.md.building", b"front\nbody"),
+        (run_dir / ".dataset.yaml.building", b"front"),
     ]
+    assert writes == [(run_dir / ".stats.json.building", "stats", "utf-8")]
     assert mkdirs == [(run_dir / ".assets", True, True)]
     assert promoted == [
         [

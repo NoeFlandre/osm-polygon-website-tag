@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import matplotlib.pyplot as plt
@@ -22,6 +23,7 @@ from osm_polygon_website_tag.reporting.geographic.basemap import (
     _draw_polygon,
     _draw_polygon_feature,
 )
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.polygon_density import (
     build_polygon_density_map,
@@ -621,6 +623,90 @@ def test_renderer_uses_exact_world_tick_range_bounds(
     )
 
     assert range_calls == [(-180, 181, 30), (-90, 91, 30)]
+
+
+def test_build_polygon_density_map_forwards_inputs_and_returns_render_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+    summary = PolygonDensitySummary(
+        h3_resolution=7,
+        polygon_row_count=11,
+        occupied_cell_count=13,
+        cells=(),
+        aggregation_mode="global_unique_text",
+    )
+
+    def compute_summary(root: Path, **kwargs: object) -> PolygonDensitySummary:
+        calls["summary"] = (root, kwargs)
+        return summary
+
+    def render_polygon_density(received: PolygonDensitySummary, destination: Path) -> str:
+        calls["render"] = (received, destination)
+        return "caption"
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.reporting.geographic.polygon_density.compute_polygon_density_summary",
+        compute_summary,
+    )
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.reporting.geographic.polygon_density.render_polygon_density",
+        render_polygon_density,
+    )
+
+    result = build_polygon_density_map(
+        tmp_path,
+        h3_resolution=9,
+        source_names={"monaco-latest.osm.pbf"},
+        extracted_text_only=True,
+        aggregation_mode="global_unique_text",
+    )
+
+    assert calls["summary"] == (
+        tmp_path,
+        {
+            "h3_resolution": 9,
+            "source_names": {"monaco-latest.osm.pbf"},
+            "extracted_text_only": True,
+            "aggregation_mode": "global_unique_text",
+        },
+    )
+    assert calls["render"] == (summary, tmp_path / POLYGON_DENSITY_ASSET_REL_PATH)
+    assert result.output_path == tmp_path / POLYGON_DENSITY_ASSET_REL_PATH
+    assert result.h3_resolution == 7
+    assert result.polygon_row_count == 11
+    assert result.occupied_cell_count == 13
+    assert result.caption == "caption"
+    assert result.aggregation_mode == "global_unique_text"
+
+
+def test_build_polygon_density_map_defaults_missing_aggregation_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import polygon_density
+
+    summary = SimpleNamespace(
+        h3_resolution=7,
+        polygon_row_count=11,
+        occupied_cell_count=13,
+        aggregation_mode=None,
+    )
+    monkeypatch.setattr(
+        polygon_density,
+        "compute_polygon_density_summary",
+        lambda *_args, **_kwargs: summary,
+    )
+    monkeypatch.setattr(
+        polygon_density,
+        "render_polygon_density",
+        lambda *_args, **_kwargs: "caption",
+    )
+
+    result = build_polygon_density_map(tmp_path)
+
+    assert result.aggregation_mode == "regional_rows"
 
 
 def test_map_is_a_deterministic_png(tmp_path: Path) -> None:

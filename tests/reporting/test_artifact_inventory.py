@@ -84,6 +84,22 @@ def test_inventory_private_filters_and_manifest_selection_are_exact(tmp_path: Pa
     assert not artifact_inventory._is_data_manifest_path("analysis/a.txt")
 
 
+def test_manifest_digest_sorts_entries_by_relative_path() -> None:
+    entries: list[dict[str, int | str]] = [
+        {"path": "polygons/z.parquet", "size_bytes": 1, "sha256": "z"},
+        {"path": "polygons/a.parquet", "size_bytes": 1, "sha256": "a"},
+    ]
+    expected = hashlib.sha256(
+        json.dumps(
+            sorted(entries, key=lambda item: str(item["path"])),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    assert artifact_inventory._manifest_digest(entries) == expected
+
+
 def test_hash_file_reads_in_bounded_chunks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -18,7 +18,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
     POLYGON_PUBLIC_SCHEMA_V1_5,
-    column_doc,
+    column_doc,  # noqa: F401
 )
 from osm_polygon_website_tag.reporting.card_metadata import (  # noqa: F401
     _FRONT_MATTER,
@@ -97,6 +97,7 @@ from osm_polygon_website_tag.reporting.card_rendering import (  # noqa: F401
     _render_sentence_section,
     _render_snapshot_section,
     _render_website_text_section,
+    _schema_rows,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats  # noqa: F401
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
@@ -163,12 +164,10 @@ def render_card_bundle(
     )
     front_matter = _render_yaml_front_matter(stats)
     if _yaml_source is not None:
-        front_matter = _merge_yaml_custom_metadata(
-            front_matter.encode("utf-8"), _yaml_source
-        ).decode("utf-8")
+        front_matter = _merge_yaml_custom_metadata(front_matter.encode(), _yaml_source).decode()
     return CardBundle(
-        readme=(front_matter + "\n" + body).encode("utf-8"),
-        dataset_yaml=front_matter.encode("utf-8"),
+        readme=(front_matter + "\n" + body).encode(),
+        dataset_yaml=front_matter.encode(),
         summary=summary,
         text_population=text_population,
         geometry=geometry,
@@ -199,8 +198,8 @@ def build_card(
             source_names=source_names,
             aggregation_mode="global_unique_text",
         )
-        staged_readme.write_text(bundle.readme.decode("utf-8"), encoding="utf-8")
-        staged_yaml.write_text(bundle.dataset_yaml.decode("utf-8"), encoding="utf-8")
+        staged_readme.write_bytes(bundle.readme)
+        staged_yaml.write_bytes(bundle.dataset_yaml)
         promotions = [
             (staged_map, root / POLYGON_DENSITY_ASSET_REL_PATH),
             (staged_readme, readme_path),
@@ -275,18 +274,6 @@ def _selected_public_paths(
 def _has_schema(paths: Collection[Path], schema: pa.Schema) -> bool:
     """Return whether any selected shard carries an exact public contract."""
     return any(pq.read_schema(path).equals(schema, check_metadata=True) for path in paths)
-
-
-def _schema_rows(schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> list[str]:
-    """Render one Markdown row for every public polygon schema field."""
-    rows: list[str] = []
-    for field in schema:
-        description = " ".join(column_doc(field.name).split()).replace("|", "\\|")
-        rows.append(
-            f"| `{field.name}` | `{field.type}` | "
-            f"{'yes' if field.nullable else 'no'} | {description} |"
-        )
-    return rows
 
 
 def _staged_geometry_stats(

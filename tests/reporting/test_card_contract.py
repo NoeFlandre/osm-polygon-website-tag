@@ -17,6 +17,7 @@ from tests.fixtures.card import (
 )
 
 import osm_polygon_website_tag.reporting.card as card_module
+import osm_polygon_website_tag.reporting.card_rendering as card_rendering
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
@@ -93,6 +94,21 @@ def test_geometry_renderers_have_stable_numeric_and_newline_contracts() -> None:
         area=replace(geometry.area, summary=replace(geometry.area.summary, percentiles={})),
     )
     assert "| p95 area | 0.00 m² |" in _render_polygon_geometry_section(missing_p95)
+
+
+def test_geometry_total_area_uses_square_metres_to_square_kilometres_conversion() -> None:
+    geometry = _golden_geometry_stats()
+    boundary = replace(
+        geometry,
+        area=replace(
+            geometry.area,
+            summary=replace(geometry.area.summary, total=1_005_000.5),
+        ),
+    )
+
+    section = _render_polygon_geometry_section(boundary)
+
+    assert "| Total area | 1.01 km² |" in section
 
 
 def test_geometry_block_preserves_prefix_and_card_newline_conventions() -> None:
@@ -198,6 +214,22 @@ def test_update_website_text_section_replaces_only_the_generated_block() -> None
     assert b"STALE" not in updated
     assert b"Unique polygons with extracted text: **7**" in updated
     assert updated.endswith(b"## Languages\nkeep\n")
+
+
+def test_update_website_text_section_preserves_crlf_newlines() -> None:
+    stats = CardStats(
+        website_text_success_count=2,
+        website_total_words=3,
+        polygons_with_any_text=4,
+    )
+    card = b"prefix\r\n## Website text\r\nstale\r\n## Links\r\nkeep\r\n"
+
+    updated = _update_website_text_section(card, stats)
+
+    assert b"stale" not in updated
+    assert b"## Website text\r\n" in updated
+    assert b"## Links\r\nkeep\r\n" in updated
+    assert b"\n" not in updated.replace(b"\r\n", b"")
 
 
 def test_update_density_yaml_inserts_missing_fields_before_newline_terminated_closure() -> None:
@@ -393,6 +425,26 @@ def test_update_card_with_geometry_promotes_only_changed_staged_files_and_cleans
     assert not staged_stats.exists()
 
 
+def test_update_card_with_geometry_cleans_missing_staged_files_on_noop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readme = tmp_path / "README.md"
+    readme.write_bytes(b"original")
+    geometry = GeometryStats(row_count=3)
+    (tmp_path / "stats.json").write_text(render_geometry_stats(geometry), encoding="utf-8")
+    monkeypatch.setattr(card_module, "compute_geometry_stats", lambda *_args, **_kwargs: geometry)
+    monkeypatch.setattr(
+        card_module,
+        "_update_geometry_section",
+        lambda original, _geometry: original,
+    )
+
+    assert update_card_with_geometry(tmp_path) == readme
+    assert not (tmp_path / ".README.md.geometry.building").exists()
+    assert not (tmp_path / ".stats.json.geometry.building").exists()
+
+
 def test_staged_geometry_stats_requires_explicit_utf8_for_existing_reports(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -500,7 +552,7 @@ def test_schema_rows_and_selected_public_paths_are_deterministic(tmp_path: Path)
 def test_schema_rows_escapes_descriptions_and_marks_nullable_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(card_module, "column_doc", lambda _name: " left   | right ")
+    monkeypatch.setattr(card_rendering, "column_doc", lambda _name: " left   | right ")
     schema = pa.schema([pa.field("name", pa.string(), nullable=True)])
 
     assert card_module._schema_rows(schema) == ["| `name` | `string` | yes | left \\| right |"]

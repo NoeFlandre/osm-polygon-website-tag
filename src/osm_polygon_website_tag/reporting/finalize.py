@@ -184,7 +184,7 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         for path in publishable_paths(root)
     ]
     canonical = json.dumps(artifacts, sort_keys=True, separators=(",", ":"))
-    sources = json.loads((root / "manifests" / "sources.json").read_text(encoding="utf-8"))
+    sources = json.loads((root / "manifests" / "sources.json").read_bytes())
     receipt = {
         "schema_version": "v1.2",
         "digest_algorithm": "sha256",
@@ -198,11 +198,8 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
     if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file() and (root / "stats.json").is_file():
         receipt["card_contract_version"] = CARD_CONTRACT_VERSION
     destination = root / "manifests" / "completion_receipt.json"
-    temporary = destination.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.write_bytes((json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
     temporary.replace(destination)
     return receipt
 

@@ -93,11 +93,19 @@ def test_update_existing_release_yaml_refreshes_every_optional_metric() -> None:
 
 
 def test_should_replace_existing_languages_requires_a_real_generated_list() -> None:
+    no_values = "language:\nlicense: odbl\n"
     one_value = "language:\n  - eng\nlicense: odbl\n"
     generated = "language:\n  - eng\n  - deu\nlicense: odbl\n"
 
+    assert not metadata._should_replace_existing_languages(no_values, CardStats())
+    assert not metadata._should_replace_existing_languages(
+        no_values.replace("license: odbl", "website_language_count: 2"), CardStats()
+    )
     assert not metadata._should_replace_existing_languages(one_value, CardStats())
     assert metadata._should_replace_existing_languages(generated, CardStats()) is False
+    assert metadata._should_replace_existing_languages(
+        one_value.replace("license: odbl", "website_language_count: 2"), CardStats()
+    )
     assert metadata._should_replace_existing_languages(
         generated.replace("license: odbl", "website_language_count: 2"), CardStats()
     )
@@ -147,6 +155,10 @@ def test_yaml_custom_text_removes_only_generated_fields_and_language_values() ->
     assert metadata._yaml_custom_text("custom_scalar: keepX\n") == "custom_scalar: keepX"
 
 
+def test_yaml_custom_text_skips_only_values_belonging_to_language_key() -> None:
+    assert metadata._yaml_custom_text("language:\n  - eng\nlicense: odbl\n") == ("license: odbl")
+
+
 def test_yaml_line_classifiers_cover_case_and_indentation_boundaries() -> None:
     assert metadata._is_yaml_list_value("  - item\n")
     assert not metadata._is_yaml_list_value("- item\n")
@@ -185,6 +197,14 @@ def test_readme_preserved_hash_excludes_all_generated_sections_including_last() 
     assert (
         metadata.readme_preserved_sha256_bytes(trailing_custom)
         == hashlib.sha256(b"## Custom tail\nkeep\n").hexdigest()
+    )
+
+
+def test_readme_preserved_hash_starts_preservation_cursor_at_body_start() -> None:
+    document = b"---\nlicense: odbl\n---\nintro\n## Website text\nderived\n"
+
+    assert (
+        metadata.readme_preserved_sha256_bytes(document) == hashlib.sha256(b"intro\n").hexdigest()
     )
 
 

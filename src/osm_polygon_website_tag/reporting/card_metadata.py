@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 import re
 from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
@@ -55,14 +56,14 @@ def _update_density_yaml(document: bytes | None, stats: CardStats) -> bytes:
     """Update only the derived density fields in an existing dataset YAML."""
     if document is None:
         return b""
-    return _update_density_yaml_text(document.decode("utf-8"), stats)
+    return _update_density_yaml_text(document.decode(), stats)
 
 
 def _update_release_yaml(document: bytes | None, stats: CardStats) -> bytes:
     """Refresh generated card metrics while retaining all custom YAML fields."""
     if document is None:
         return b""
-    return _update_release_yaml_text(document.decode("utf-8"), stats)
+    return _update_release_yaml_text(document.decode(), stats)
 
 
 def _update_readme_front_matter(document: bytes, stats: CardStats) -> bytes:
@@ -77,11 +78,9 @@ def _update_readme_front_matter(document: bytes, stats: CardStats) -> bytes:
 def _merge_yaml_custom_metadata(generated: bytes, source: bytes) -> bytes:
     """Combine trusted custom YAML with freshly generated release fields."""
     custom = "\n".join(
-        line
-        for line in _yaml_custom_text(source.decode("utf-8")).splitlines()
-        if line.strip() != "---"
+        line for line in _yaml_custom_text(source.decode()).splitlines() if line.strip() != "---"
     ).strip()
-    derived = "\n".join(_yaml_derived_lines(generated.decode("utf-8"))).strip()
+    derived = "\n".join(_yaml_derived_lines(generated.decode())).strip()
     content = "\n".join(part for part in (custom, derived) if part)
     return f"---\n{content}\n---".encode()
 
@@ -89,14 +88,14 @@ def _merge_yaml_custom_metadata(generated: bytes, source: bytes) -> bytes:
 def _yaml_derived_lines(document: str) -> list[str]:
     """Return generated YAML fields while retaining their list values."""
     derived: list[str] = []
-    include_values = False
+    derived_key: str | None = None
     for line in document.splitlines():
         key = _yaml_top_level_key(line)
         if key is not None:
-            include_values = _is_derived_yaml_key(key)
-            if include_values:
+            derived_key = _derived_yaml_key(key)
+            if derived_key is not None:
                 derived.append(line)
-        elif _is_derived_yaml_list_value(include_values, line):
+        elif _is_derived_yaml_list_value(derived_key, line):
             derived.append(line)
     return derived
 
@@ -106,14 +105,21 @@ def _is_derived_yaml_key(key: str) -> bool:
     return key in _RELEASE_YAML_DERIVED_KEYS
 
 
-def _is_derived_yaml_list_value(include_values: bool, line: str) -> bool:
+def _derived_yaml_key(key: str) -> str | None:
+    """Return a release-generated key, or no active list marker."""
+    if _is_derived_yaml_key(key):
+        return key
+    return None
+
+
+def _is_derived_yaml_list_value(derived_key: str | None, line: str) -> bool:
     """Return whether one continuation line belongs to a derived list."""
-    return include_values and _is_yaml_list_value(line)
+    return derived_key is not None and _is_yaml_list_value(line)
 
 
 def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
     """Replace only generated YAML fields already present in one document."""
-    text = document.decode("utf-8")
+    text = document.decode()
     if _should_replace_existing_languages(text, stats):
         text = _replace_release_language_tags(text, stats)
     values = {
@@ -127,7 +133,7 @@ def _update_existing_release_yaml(document: bytes, stats: CardStats) -> bytes:
     }
     for key, value in values.items():
         text, _ = _replace_density_yaml_field(text, key, f"{key}: {value}")
-    return text.encode("utf-8")
+    return text.encode()
 
 
 def _should_replace_existing_languages(text: str, stats: CardStats) -> bool:
@@ -158,8 +164,8 @@ def yaml_custom_sha256_bytes(document: bytes, *, readme: bool = False) -> str | 
         if match is None:
             return None
         document = match.group(0)
-    normalized = _yaml_custom_text(document.decode("utf-8"))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    normalized = _yaml_custom_text(document.decode())
+    return hashlib.sha256(normalized.encode()).hexdigest()
 
 
 def readme_preserved_sha256(path: Path) -> str | None:
@@ -174,16 +180,16 @@ def readme_preserved_sha256_bytes(document: bytes) -> str:
     match = _FRONT_MATTER.match(document)
     body = document[match.end() :] if match is not None else document
     preserved: list[bytes] = []
-    cursor = 0
+    cursor = len(preserved)
     headings = list(_README_HEADING.finditer(body))
     for index, heading in enumerate(headings):
         title = heading.group(0).rstrip(b"\r\n")
         if title not in _DERIVED_README_HEADINGS:
             continue
-        preserved.append(body[cursor : heading.start()])
+        preserved.append(body[operator.index(cursor) : heading.start()])
         end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
         cursor = end
-    preserved.append(body[cursor:])
+    preserved.append(body[operator.index(cursor) :])
     return hashlib.sha256(b"".join(preserved)).hexdigest()
 
 
@@ -209,12 +215,12 @@ def _yaml_custom_text(document: str) -> str:
 def _iter_yaml_custom_lines(lines: list[str]) -> Iterator[str]:
     """Yield YAML lines that belong to non-generated metadata."""
     kept: list[str] = []
-    skip_language_values = False
+    in_language_list = False
     for line in lines:
-        if skip_language_values and _is_yaml_list_value(line):
+        if _is_language_list_value(in_language_list, line):
             continue
         key = _yaml_top_level_key(line)
-        skip_language_values = key == "language"
+        in_language_list = key == "language"
         if key in _RELEASE_YAML_DERIVED_KEYS:
             continue
         kept.append(line)
@@ -224,6 +230,13 @@ def _iter_yaml_custom_lines(lines: list[str]) -> Iterator[str]:
 def _is_yaml_list_value(line: str) -> bool:
     """Return whether a line is an indented YAML list item."""
     return bool(re.match(r"^[ \t]+- ", line))
+
+
+def _is_language_list_value(in_language_list: bool, line: str) -> bool:
+    """Return whether a line continues a generated language list."""
+    if not isinstance(in_language_list, bool):
+        raise TypeError("language-list state must be boolean")
+    return in_language_list and _is_yaml_list_value(line)
 
 
 def _yaml_top_level_key(line: str) -> str | None:
@@ -340,7 +353,7 @@ def _replace_release_yaml_fields(
             missing.append(addition)
     if missing:
         updated = _append_density_yaml_fields(updated, missing, newline)
-    return updated.encode("utf-8")
+    return updated.encode()
 
 
 def _replace_one_release_yaml_field(
@@ -383,7 +396,7 @@ def _update_density_yaml_text(text: str, stats: CardStats) -> bytes:
             missing.append(replacement)
     if missing:
         updated = _append_density_yaml_fields(updated, missing, newline)
-    return updated.encode("utf-8")
+    return updated.encode()
 
 
 def _replace_density_yaml_field(text: str, key: str, replacement: str) -> tuple[str, bool]:
