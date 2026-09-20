@@ -233,6 +233,33 @@ def test_copy_query_atomic_escapes_quoted_output_paths(tmp_path: Path) -> None:
     assert pq.read_table(destination).to_pylist() == [{"value": 1}]
 
 
+def test_copy_query_atomic_passes_the_exact_temporary_path_to_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = _make_connection(tmp_path / "duckdb")
+    destination = tmp_path / "nested" / "result.parquet"
+    calls: list[tuple[Path, Path, bool]] = []
+
+    def promote(temporary: Path, target: Path) -> None:
+        calls.append((temporary, target, temporary.is_file()))
+        temporary.replace(target)
+
+    monkeypatch.setattr(duckdb_engine, "atomic_write_file", promote)
+    try:
+        copy_query_atomic(connection, "SELECT 1 AS value", destination)
+    finally:
+        connection.close()
+
+    assert calls == [
+        (
+            destination.with_name(f".{destination.name}.tmp.parquet"),
+            destination,
+            True,
+        )
+    ]
+    assert pq.read_table(destination).to_pylist() == [{"value": 1}]
+
+
 def test_copy_query_atomic_preserves_the_original_copy_error_when_no_temp_exists(
     tmp_path: Path,
 ) -> None:

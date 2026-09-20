@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
@@ -16,6 +17,7 @@ from tests.fixtures.card import (
 )
 
 import osm_polygon_website_tag.reporting.card as card_module
+import osm_polygon_website_tag.reporting.card_rendering as card_rendering
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
@@ -311,6 +313,28 @@ def test_sentence_section_renders_unsupported_only_population_without_dividing_b
 
     assert "| Sentence-splitting coverage | 0.0% |" in section
     assert "Mean sentences per segmented text: **n/a**" in section
+
+
+def test_sentence_count_helpers_keep_explicit_values_and_use_distinct_fallbacks() -> None:
+    stats = replace(
+        _sentence_card_stats(),
+        website_sentence_row_count=2,
+        contact_website_sentence_row_count=3,
+        sentence_split_supported_count=4,
+        sentence_split_unsupported_count=6,
+        unsupported_language_row_count=9,
+        sentence_split_eligible_count=12,
+    )
+
+    assert card_rendering._sentence_counts(stats) == (5, 4, 6, 12)
+    assert card_rendering._reported_count(2, 7) == 2
+    assert card_rendering._unsupported_language_rows(stats) == [
+        "| `hrv_Latn` | 2 |",
+        "| `zho_Hani` | 1 |",
+    ]
+    assert card_rendering._unsupported_language_rows(
+        replace(stats, top_unsupported_sentence_languages=[])
+    ) == ["| None reported | 0 |"]
 
 
 def test_yaml_custom_hash_ignores_a_trailing_document_newline(tmp_path: Path) -> None:

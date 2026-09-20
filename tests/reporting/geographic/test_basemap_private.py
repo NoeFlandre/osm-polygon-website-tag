@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
@@ -56,6 +57,44 @@ def test_draw_landmasses_reads_features_and_delegates_in_order(tmp_path, monkeyp
     basemap.draw_landmasses(axis, path)
 
     assert calls == features
+
+
+def test_draw_landmasses_handles_a_feature_collection_without_features(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "empty.geojson"
+    path.write_text(json.dumps({"type": "FeatureCollection"}), encoding="utf-8")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(basemap, "_draw_feature", lambda _axis, feature: calls.append(feature))
+
+    basemap.draw_landmasses(object(), path)
+
+    assert calls == []
+
+
+def test_draw_landmasses_reads_utf8_json_with_the_declared_encoding(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "unicode.geojson"
+    feature = {
+        "type": "Feature",
+        "properties": {"name": "Île-de-France"},
+        "geometry": {"type": "Polygon", "coordinates": []},
+    }
+    path.write_text(json.dumps({"features": [feature]}, ensure_ascii=False), encoding="utf-8")
+    calls: list[dict[str, object]] = []
+    encodings: list[str | None] = []
+    original_read_text = Path.read_text
+
+    def read_text(self: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        encodings.append(encoding)
+        return original_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(basemap, "_draw_feature", lambda _axis, received: calls.append(received))
+
+    basemap.draw_landmasses(object(), path)
+
+    assert encodings == ["utf-8"]
+    assert calls == [feature]
 
 
 def test_draw_feature_dispatches_only_supported_geometry_types(

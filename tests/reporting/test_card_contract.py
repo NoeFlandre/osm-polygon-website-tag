@@ -367,6 +367,27 @@ def test_update_sentence_section_replaces_and_inserts_coverage_block() -> None:
     assert appended.startswith(b"prefix\n\n## Sentences\n")
 
 
+def test_update_sentence_section_preserves_crlf_and_removes_stale_empty_block() -> None:
+    stats = _sentence_card_stats()
+    crlf = _update_sentence_section(
+        b"prefix\r\n## Website text\r\nkeep\r\n## Polygon geometry\r\nkeep\r\n",
+        stats,
+    )
+
+    assert b"## Sentences\r\n" in crlf
+    assert b"## Sentences\n" not in crlf
+    assert b"\n" not in crlf.replace(b"\r\n", b"")
+
+    stale = _update_sentence_section(
+        b"prefix\n## Sentences\nSTALE\n## Polygon geometry\nkeep\n",
+        _language_card_stats(),
+    )
+    assert stale == b"prefix\n## Polygon geometry\nkeep\n"
+
+    untouched = b"prefix\n## Polygon geometry\nkeep\n"
+    assert _update_sentence_section(untouched, _language_card_stats()) == untouched
+
+
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
     assert _render_language_section(_golden_card_stats()) == []
     assert _render_language_section(_language_card_stats()) == [

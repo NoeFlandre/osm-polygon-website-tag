@@ -77,3 +77,16 @@ def test_unknown_module_attribute_has_a_normal_attribute_error() -> None:
         match=r"^module 'osm_polygon_website_tag\.reporting\.geographic\.rendering' has no attribute 'missing'$",
     ):
         rendering.__getattr__("missing")
+
+
+def test_unknown_module_attribute_does_not_load_matplotlib(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        rendering,
+        "_matplotlib_components",
+        lambda: pytest.fail("unknown attributes must not load Matplotlib"),
+    )
+
+    with pytest.raises(AttributeError):
+        rendering.__getattr__("unknown")
