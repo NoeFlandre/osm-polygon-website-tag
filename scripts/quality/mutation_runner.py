@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,7 @@ _STATS_FILE = ".mutmut-stats-child.json"
 _MPLCONFIGDIR: Final = (
     Path(tempfile.gettempdir()) / f"osm-polygon-website-tag-mutmut-mplconfig-{os.getpid()}"
 )
+_TEST_SELECTION_ENV: Final = "MUTATION_TEST_PATHS"
 
 
 def _source_path_for_mutant_name(mutant_name: str) -> Path:
@@ -177,6 +179,20 @@ def _pytest_command(
     return [sys.executable, "-m", "pytest", *params]
 
 
+def _selected_tests(tests: Iterable[str]) -> tuple[str, ...]:
+    """Optionally narrow expensive coverage/stat collection to named test paths.
+
+    Normal CI runs leave this unset and retain the complete-suite mutation
+    contract. Local module-focused runs can provide shell-style paths through
+    ``MUTATION_TEST_PATHS`` so they do not spend several minutes collecting
+    unrelated coverage before testing a small scope.
+    """
+    selection = os.environ.get(_TEST_SELECTION_ENV, "").strip()
+    if not selection:
+        return tuple(tests)
+    return tuple(shlex.split(selection))
+
+
 def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
     """Collect source coverage in a fresh process and return mutmut's mapping."""
     import coverage
@@ -192,7 +208,7 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
         "--source=src",
         "-m",
         "pytest",
-        *_pytest_command(runner, ())[3:],
+        *_pytest_command(runner, _selected_tests(()))[3:],
     ]
     try:
         result = subprocess.run(  # noqa: S603
@@ -242,6 +258,7 @@ def _run_tests(runner: Any, *, mutant_name: str | None, tests: Iterable[str]) ->
 def _run_stats(runner: Any, tests: Iterable[str]) -> int:
     """Collect mutmut test associations in a fresh interpreter."""
     del runner
+    tests = _selected_tests(tests)
     output_path = _stats_output_path()
     output_path.unlink(missing_ok=True)
     command = [

@@ -268,7 +268,8 @@ def _cells_global(
     if row is None:
         return [dict.fromkeys(EIGHT_CELL_EXPRESSIONS.keys(), 0)]
     cols = [d[0] for d in con.description]
-    return [dict(zip(cols, row, strict=False))]
+    width = min(len(cols), len(row))
+    return [{cols[index]: row[index] for index in range(width)}]
 
 
 def cells_global_observation(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:

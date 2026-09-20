@@ -103,6 +103,24 @@ def test_pytest_command_preserves_mutmut_selection_and_project_flags() -> None:
     assert "--ignore=tests/architecture" in command
 
 
+def test_selected_tests_can_narrow_local_coverage_collection(monkeypatch) -> None:
+    monkeypatch.setenv(
+        mutation_runner._TEST_SELECTION_ENV,
+        "tests/storage/test_duckdb_engine.py tests/storage/test_bounded_storage.py",
+    )
+
+    assert mutation_runner._selected_tests(["tests/all.py"]) == (
+        "tests/storage/test_duckdb_engine.py",
+        "tests/storage/test_bounded_storage.py",
+    )
+
+
+def test_selected_tests_default_to_the_mutmut_selection(monkeypatch) -> None:
+    monkeypatch.delenv(mutation_runner._TEST_SELECTION_ENV, raising=False)
+
+    assert mutation_runner._selected_tests(["tests/all.py"]) == ("tests/all.py",)
+
+
 def test_coverage_environment_prefers_original_checkout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "PYTHONPATH",
