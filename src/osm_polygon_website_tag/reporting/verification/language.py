@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 from pathlib import Path
 
 import pyarrow as pa
@@ -23,7 +24,12 @@ _LANGUAGE_COLUMNS = (
 
 def verify_language_invariants(root: Path, errors: list[str]) -> None:
     """Verify nullable language pairs independently for every public shard."""
-    for path in sorted((root / "polygons").glob("*.parquet")):
+    verify_language_paths(sorted((root / "polygons").glob("*.parquet")), errors)
+
+
+def verify_language_paths(paths: Collection[Path], errors: list[str]) -> None:
+    """Verify nullable language pairs for an exact reducer input selection."""
+    for path in sorted(paths):
         _verify_language_file(path, errors)
 
 
@@ -113,4 +119,4 @@ def _valid_probability(value: object) -> bool:
     )
 
 
-__all__ = ["verify_language_invariants"]
+__all__ = ["verify_language_invariants", "verify_language_paths"]

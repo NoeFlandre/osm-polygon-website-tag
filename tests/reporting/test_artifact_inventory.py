@@ -84,11 +84,29 @@ def test_inventory_private_filters_and_manifest_selection_are_exact(tmp_path: Pa
     assert not artifact_inventory._is_data_manifest_path("analysis/a.txt")
 
 
+def test_manifest_digest_sorts_entries_by_relative_path() -> None:
+    entries: list[dict[str, int | str]] = [
+        {"path": "polygons/z.parquet", "size_bytes": 1, "sha256": "z"},
+        {"path": "polygons/a.parquet", "size_bytes": 1, "sha256": "a"},
+    ]
+    expected = hashlib.sha256(
+        json.dumps(
+            sorted(entries, key=lambda item: str(item["path"])),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    assert artifact_inventory._manifest_digest(entries) == expected
+
+
 def test_hash_file_reads_in_bounded_chunks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "artifact.bin"
+    path.write_bytes(b"chunk")
+    artifact_inventory._hash_identified_file.cache_clear()
     sizes: list[int] = []
 
     class Stream:
@@ -150,3 +168,28 @@ def test_data_manifest_hash_includes_only_source_manifests_and_parquet_files(
         tmp_path / "manifests/sources.json",
         tmp_path / "manifests/expected_sources.json",
     ]
+
+
+def test_hashing_one_unchanged_file_reads_it_once(tmp_path: Path) -> None:
+    """A release hashes the same shard for several manifests; read it once."""
+    path = tmp_path / "shard.parquet"
+    path.write_bytes(b"payload")
+    artifact_inventory._hash_identified_file.cache_clear()
+
+    first = artifact_inventory.hash_file(path)
+    reads = artifact_inventory._hash_identified_file.cache_info().misses
+    assert artifact_inventory.hash_file(path) == first
+    assert artifact_inventory._hash_identified_file.cache_info().misses == reads
+
+
+def test_rewriting_a_file_is_hashed_again(tmp_path: Path) -> None:
+    """The release rewrites the card mid-run, so identity must follow content."""
+    path = tmp_path / "README.md"
+    path.write_bytes(b"before")
+    artifact_inventory._hash_identified_file.cache_clear()
+    first = artifact_inventory.hash_file(path)
+
+    path.write_bytes(b"after-a-longer-body")
+
+    assert artifact_inventory.hash_file(path) != first
+    assert artifact_inventory.hash_file(path) == hashlib.sha256(b"after-a-longer-body").hexdigest()

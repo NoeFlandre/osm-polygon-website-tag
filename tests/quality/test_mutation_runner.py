@@ -103,6 +103,24 @@ def test_pytest_command_preserves_mutmut_selection_and_project_flags() -> None:
     assert "--ignore=tests/architecture" in command
 
 
+def test_selected_tests_can_narrow_local_coverage_collection(monkeypatch) -> None:
+    monkeypatch.setenv(
+        mutation_runner._TEST_SELECTION_ENV,
+        "tests/storage/test_duckdb_engine.py tests/storage/test_bounded_storage.py",
+    )
+
+    assert mutation_runner._selected_tests(["tests/all.py"]) == (
+        "tests/storage/test_duckdb_engine.py",
+        "tests/storage/test_bounded_storage.py",
+    )
+
+
+def test_selected_tests_default_to_the_mutmut_selection(monkeypatch) -> None:
+    monkeypatch.delenv(mutation_runner._TEST_SELECTION_ENV, raising=False)
+
+    assert mutation_runner._selected_tests(["tests/all.py"]) == ("tests/all.py",)
+
+
 def test_coverage_environment_prefers_original_checkout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "PYTHONPATH",
@@ -335,6 +353,20 @@ def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
 
     assert source_paths == (Path("src/osm_polygon_website_tag/__init__.py"),)
     assert config.only_mutate == ["src/osm_polygon_website_tag/__init__.py"]
+
+
+def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> None:
+    config = SimpleNamespace(only_mutate=[])
+
+    source_paths = mutation_runner._configure_source_scope(
+        ["osm_polygon_website_tag.reporting.geographic.*"],
+        config=config,
+    )
+
+    assert source_paths == (Path("src/osm_polygon_website_tag/reporting/geographic/__init__.py"),)
+    assert config.only_mutate == [
+        "src/osm_polygon_website_tag/reporting/geographic/__init__.py",
+    ]
 
 
 def test_scoped_mutation_config_rejects_unqualified_filters() -> None:

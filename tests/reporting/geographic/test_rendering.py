@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import builtins
+import os
+import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import matplotlib.pyplot as plt
@@ -18,10 +23,33 @@ from osm_polygon_website_tag.reporting.geographic.basemap import (
     _draw_polygon,
     _draw_polygon_feature,
 )
+from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.polygon_density import (
     build_polygon_density_map,
 )
+
+
+def test_reporting_card_import_defers_matplotlib_until_map_rendering() -> None:
+    root = Path(__file__).resolve().parents[3]
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(root / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import osm_polygon_website_tag.reporting.card; "
+            "print('matplotlib' in sys.modules)",
+        ],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == "False"
 
 
 def test_bundled_land_backdrop_is_present() -> None:
@@ -215,6 +243,7 @@ def test_renderer_nonempty_branch_has_an_explicit_deterministic_visual_contract(
     polygon_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     cmap_calls: list[tuple[object, ...]] = []
     norm_calls: list[dict[str, object]] = []
+    scalar_kwargs: list[dict[str, object]] = []
     events: list[tuple[object, ...]] = []
     subplot_calls: list[dict[str, object]] = []
 
@@ -312,6 +341,7 @@ def test_renderer_nonempty_branch_has_an_explicit_deterministic_visual_contract(
     class Scalar:
         def __init__(self, **kwargs: object) -> None:
             events.append(("scalar", self))
+            scalar_kwargs.append(kwargs)
             self.kwargs = kwargs
 
         def set_array(self, value: object) -> None:
@@ -348,6 +378,7 @@ def test_renderer_nonempty_branch_has_an_explicit_deterministic_visual_contract(
     ]
     assert axis_calls[9] == ("set_aspect", ("equal",), {"adjustable": "box"})
     assert norm_calls == [{"vmin": 0.5, "vmax": 3.0}]
+    assert scalar_kwargs == [{"norm": norm, "cmap": cmap}]
     assert events[0][0] == "land"
     assert ("cmap", "magma") in events
     assert polygon_calls == [
@@ -458,10 +489,224 @@ def test_renderer_empty_branch_uses_exact_explanatory_text_and_caption(
     )
     assert figure_calls == [("text", (0.5, 0.01, caption), {"ha": "center", "fontsize": 8})]
     assert caption == (
-        "H3 resolution 5; 0 occupied cells across 0 regional rows/centroids; "
+        "H3 resolution 5; 0 occupied cells across 0 regional rows/centroids "
+        "(regional polygon rows/centroids); "
         "logarithmic scale. Natural Earth 1:110m land backdrop."
     )
     assert events == ["land", "save", ("close", figure)]
+
+
+def test_renderer_empty_global_branch_uses_exact_explanatory_text(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import rendering
+
+    text_calls: list[tuple[object, ...]] = []
+
+    class Axis:
+        def __init__(self) -> None:
+            self.transAxes = object()
+
+        def set_facecolor(self, _value: object) -> None:
+            pass
+
+        def set_xlim(self, *_values: object) -> None:
+            pass
+
+        def set_ylim(self, *_values: object) -> None:
+            pass
+
+        def set_xticks(self, _values: object) -> None:
+            pass
+
+        def set_yticks(self, _values: object) -> None:
+            pass
+
+        def set_xlabel(self, _value: object) -> None:
+            pass
+
+        def set_ylabel(self, _value: object) -> None:
+            pass
+
+        def set_title(self, _value: object) -> None:
+            pass
+
+        def grid(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def set_aspect(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def text(self, *args: object, **_kwargs: object) -> None:
+            text_calls.append(args)
+
+    class Figure:
+        def text(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    axis = Axis()
+    monkeypatch.setattr(rendering.plt, "subplots", lambda **_kwargs: (Figure(), axis))
+    monkeypatch.setattr(rendering, "draw_landmasses", lambda *_args: None)
+    monkeypatch.setattr(rendering, "atomic_save_png", lambda *_args: None)
+    monkeypatch.setattr(rendering.plt, "close", lambda _figure: None)
+
+    rendering.render_polygon_density(
+        PolygonDensitySummary(5, 0, 0, (), extracted_text_only=True),
+        tmp_path / "empty-global.png",
+    )
+
+    assert text_calls == [
+        (
+            0.5,
+            0.5,
+            "No unique polygons with extracted text; regional overlap duplicates removed globally",
+        )
+    ]
+
+
+def test_renderer_uses_one_as_the_singleton_log_scale_upper_bound(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import rendering
+
+    norm_calls: list[dict[str, object]] = []
+    real_log_norm = rendering.colors.LogNorm
+
+    def log_norm(
+        *,
+        vmin: float | None = None,
+        vmax: float | None = None,
+        clip: bool = False,
+    ) -> object:
+        norm_calls.append({"vmin": vmin, "vmax": vmax})
+        return real_log_norm(vmin=vmin, vmax=vmax, clip=clip)
+
+    monkeypatch.setattr(rendering.colors, "LogNorm", log_norm)
+    monkeypatch.setattr(rendering, "draw_landmasses", lambda *_args: None)
+    monkeypatch.setattr(
+        rendering,
+        "cell_boundary_rings",
+        lambda _cell: [[(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, -1.0)]],
+    )
+    monkeypatch.setattr(rendering, "atomic_save_png", lambda *_args: None)
+
+    rendering.render_polygon_density(
+        PolygonDensitySummary(5, 1, 1, (("cell", 1),)),
+        tmp_path / "singleton.png",
+    )
+
+    assert norm_calls == [{"vmin": 0.5, "vmax": 1.0}]
+
+
+def test_renderer_uses_exact_world_tick_range_bounds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import rendering
+
+    range_calls: list[tuple[int, ...]] = []
+    real_range = builtins.range
+
+    def range_spy(*args: int) -> range:
+        range_calls.append(args)
+        return real_range(*args)
+
+    monkeypatch.setattr(rendering, "range", range_spy, raising=False)
+    monkeypatch.setattr(rendering, "draw_landmasses", lambda *_args: None)
+    monkeypatch.setattr(rendering, "atomic_save_png", lambda *_args: None)
+
+    rendering.render_polygon_density(
+        PolygonDensitySummary(5, 0, 0, ()),
+        tmp_path / "ticks.png",
+    )
+
+    assert range_calls == [(-180, 181, 30), (-90, 91, 30)]
+
+
+def test_build_polygon_density_map_forwards_inputs_and_returns_render_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: dict[str, object] = {}
+    summary = PolygonDensitySummary(
+        h3_resolution=7,
+        polygon_row_count=11,
+        occupied_cell_count=13,
+        cells=(),
+        aggregation_mode="global_unique_text",
+    )
+
+    def compute_summary(root: Path, **kwargs: object) -> PolygonDensitySummary:
+        calls["summary"] = (root, kwargs)
+        return summary
+
+    def render_polygon_density(received: PolygonDensitySummary, destination: Path) -> str:
+        calls["render"] = (received, destination)
+        return "caption"
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.reporting.geographic.polygon_density.compute_polygon_density_summary",
+        compute_summary,
+    )
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.reporting.geographic.polygon_density.render_polygon_density",
+        render_polygon_density,
+    )
+
+    result = build_polygon_density_map(
+        tmp_path,
+        h3_resolution=9,
+        source_names={"monaco-latest.osm.pbf"},
+        extracted_text_only=True,
+        aggregation_mode="global_unique_text",
+    )
+
+    assert calls["summary"] == (
+        tmp_path,
+        {
+            "h3_resolution": 9,
+            "source_names": {"monaco-latest.osm.pbf"},
+            "extracted_text_only": True,
+            "aggregation_mode": "global_unique_text",
+        },
+    )
+    assert calls["render"] == (summary, tmp_path / POLYGON_DENSITY_ASSET_REL_PATH)
+    assert result.output_path == tmp_path / POLYGON_DENSITY_ASSET_REL_PATH
+    assert result.h3_resolution == 7
+    assert result.polygon_row_count == 11
+    assert result.occupied_cell_count == 13
+    assert result.caption == "caption"
+    assert result.aggregation_mode == "global_unique_text"
+
+
+def test_build_polygon_density_map_defaults_missing_aggregation_mode(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from osm_polygon_website_tag.reporting.geographic import polygon_density
+
+    summary = SimpleNamespace(
+        h3_resolution=7,
+        polygon_row_count=11,
+        occupied_cell_count=13,
+        aggregation_mode=None,
+    )
+    monkeypatch.setattr(
+        polygon_density,
+        "compute_polygon_density_summary",
+        lambda *_args, **_kwargs: summary,
+    )
+    monkeypatch.setattr(
+        polygon_density,
+        "render_polygon_density",
+        lambda *_args, **_kwargs: "caption",
+    )
+
+    result = build_polygon_density_map(tmp_path)
+
+    assert result.aggregation_mode == "regional_rows"
 
 
 def test_map_is_a_deterministic_png(tmp_path: Path) -> None:

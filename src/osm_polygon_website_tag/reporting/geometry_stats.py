@@ -41,10 +41,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyproj
 
+from osm_polygon_website_tag.reporting.text_population import (
+    TextPopulationSummary,
+    compute_text_population_summary,
+)
 from osm_polygon_website_tag.storage.duckdb_engine import fresh_connection
 
 GEOMETRY_STATS_FILENAME = "stats.json"
-GEOMETRY_STATS_SCHEMA_VERSION = "v1"
+GEOMETRY_STATS_SCHEMA_VERSION = "v2"
 
 #: Public polygon columns the computation reads; no other column is touched.
 GEOMETRY_STATS_COLUMNS: tuple[str, ...] = ("geometry", "bbox", "area_m2", "osm_primary_tag")
@@ -153,6 +157,12 @@ class GeometryStats:
     """Complete, machine-readable polygon geometry statistics."""
 
     schema_version: str = GEOMETRY_STATS_SCHEMA_VERSION
+    population_scope: str = "published polygon rows"
+    text_population_scope: str = (
+        "global unique (osm_type, osm_id) identities with successful non-empty website or "
+        "contact:website text"
+    )
+    text_population: TextPopulationSummary = field(default_factory=TextPopulationSummary)
     row_count: int = 0
     area: AreaStats = field(default_factory=AreaStats)
     shape: ShapeStats = field(default_factory=ShapeStats)
@@ -165,6 +175,7 @@ def compute_geometry_stats(
     run_dir: Path | str,
     *,
     source_names: Collection[str] | None = None,
+    text_population: TextPopulationSummary | None = None,
 ) -> GeometryStats:
     """Compute geometry statistics from every selected public polygon row.
 
@@ -175,6 +186,11 @@ def compute_geometry_stats(
     directory = root / "polygons"
     if not directory.is_dir():
         raise FileNotFoundError(f"missing {directory}")
+    resolved_text_population = (
+        text_population
+        if text_population is not None
+        else compute_text_population_summary(root, source_names=source_names)
+    )
     accumulator = _Accumulator()
     store = _GeometryValueStore(root)
     try:
@@ -182,7 +198,12 @@ def compute_geometry_stats(
         source_pbf_names = [f"{shard.stem}.osm.pbf" for shard in selected_shards]
         for shard in selected_shards:
             _accumulate_shard(shard, accumulator, store)
-        return _build_stats(accumulator, store, source_pbf_names)
+        return _build_stats(
+            accumulator,
+            store,
+            source_pbf_names,
+            text_population=resolved_text_population,
+        )
     finally:
         store.close()
 
@@ -234,6 +255,8 @@ class _GeometryValueStore:
     """Run-owned DuckDB store for exact, spillable numeric distributions."""
 
     def __init__(self, run_dir: Path) -> None:
+        # Serial: these aggregates sum doubles, and parallel summation reorders
+        # the additions, which changes the last digits and breaks byte stability.
         self._connection = fresh_connection(run_dir)
         self._connection.execute(
             """
@@ -649,9 +672,12 @@ def _build_stats(
     accumulator: _Accumulator,
     store: _GeometryValueStore,
     source_pbf_names: Sequence[str],
+    *,
+    text_population: TextPopulationSummary,
 ) -> GeometryStats:
     """Convert accumulated state into the reported statistics."""
     return GeometryStats(
+        text_population=text_population,
         row_count=accumulator.row_count,
         area=AreaStats(
             summary=store.summary("area_m2"),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import pyarrow.parquet as pq
@@ -13,8 +14,10 @@ from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
 from osm_polygon_website_tag.reporting.card import (
     _public_schema_for_card,
     _render_geographic_section,
+    _render_language_section,
     _render_markdown,
     _render_polygon_geometry_section,
+    _render_website_text_section,
     _render_yaml_front_matter,
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
@@ -22,10 +25,15 @@ from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geographic.rendering import render_polygon_density
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GEOMETRY_STATS_FILENAME,
     compute_geometry_stats,
     render_geometry_stats,
+)
+from osm_polygon_website_tag.reporting.text_population import (
+    TextPopulationSummary,
+    compute_text_population_summary,
 )
 
 
@@ -104,8 +112,12 @@ def _verify_analysis_readability(
 
 def _verify_card_statistics(root: Path, errors: list[str]) -> None:
     try:
-        stats = compute_card_stats(root)
-        geometry = compute_geometry_stats(root)
+        text_population = compute_text_population_summary(root)
+        summary = compute_polygon_density_summary(root, aggregation_mode="global_unique_text")
+        stats = compute_card_stats(root, summary=summary, text_population=text_population)
+        geometry = compute_geometry_stats(root, text_population=text_population)
+        _verify_text_population_agreement(text_population, summary, stats, geometry, errors)
+        _verify_map_matches_summary(root, summary, errors)
         expected_yaml = _render_yaml_front_matter(stats)
         expected_readme = (
             expected_yaml
@@ -127,7 +139,9 @@ def _verify_card_statistics(root: Path, errors: list[str]) -> None:
 def _verify_release_card_statistics(root: Path, errors: list[str]) -> None:
     """Verify release-derived card values without rewriting legacy sections."""
     try:
-        geometry = compute_geometry_stats(root)
+        text_population = compute_text_population_summary(root)
+        summary = compute_polygon_density_summary(root, aggregation_mode="global_unique_text")
+        geometry = compute_geometry_stats(root, text_population=text_population)
         _compare_card_file(
             root / GEOMETRY_STATS_FILENAME,
             render_geometry_stats(geometry),
@@ -135,12 +149,53 @@ def _verify_release_card_statistics(root: Path, errors: list[str]) -> None:
             errors,
         )
         _verify_release_geometry_section(root, geometry, errors)
-        summary = compute_polygon_density_summary(root, extracted_text_only=True)
-        stats = compute_card_stats(root, summary=summary)
+        stats = compute_card_stats(root, summary=summary, text_population=text_population)
+        _verify_text_population_agreement(text_population, summary, stats, geometry, errors)
+        _verify_map_matches_summary(root, summary, errors)
+        _verify_release_website_text_section(root, stats, errors)
+        _verify_release_text_yaml(root, stats, errors)
         _verify_release_geographic_section(root, stats, errors)
         _verify_release_density_yaml(root, stats, errors)
     except Exception as exc:
         errors.append(f"release card statistic verification failed: {exc}")
+
+
+def _verify_text_population_agreement(
+    text_population: TextPopulationSummary,
+    summary: Any,
+    stats: Any,
+    geometry: Any,
+    errors: list[str],
+) -> None:
+    """Require card, map, and machine-readable text populations to agree."""
+    expected = text_population.unique_identity_count
+    if summary.polygon_row_count != expected:
+        errors.append(
+            "global map population does not match text report: "
+            f"{summary.polygon_row_count} != {expected}"
+        )
+    if stats.polygons_with_any_text != expected:
+        errors.append(
+            "card unique-text population does not match text report: "
+            f"{stats.polygons_with_any_text} != {expected}"
+        )
+    if geometry.text_population != text_population:
+        errors.append("stats.json text population does not match the canonical text report")
+
+
+def _verify_map_matches_summary(root: Path, summary: Any, errors: list[str]) -> None:
+    """Re-render an existing map and reject bytes from another population."""
+    map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
+    if not map_path.is_file():
+        return
+    try:
+        with TemporaryDirectory(dir=map_path.parent) as temporary:
+            expected_path = Path(temporary) / "expected.png"
+            render_polygon_density(summary, expected_path)
+            if map_path.read_bytes() != expected_path.read_bytes():
+                errors.append("map artifact does not match the canonical global summary")
+    except Exception as exc:
+        errors.append(f"map artifact verification failed: {exc}")
 
 
 def _verify_release_geometry_section(
@@ -197,6 +252,106 @@ def _verify_release_density_yaml(root: Path, stats: Any, errors: list[str]) -> N
     for key, value in expected.items():
         if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content):
             errors.append(f"dataset.yaml {key} does not match the unique-text summary")
+
+
+def _verify_release_website_text_section(root: Path, stats: Any, errors: list[str]) -> None:
+    """Require an existing release card text section to match canonical counts."""
+    path = root / "README.md"
+    if not path.is_file():
+        return
+    content = path.read_bytes().replace(b"\r\n", b"\n").decode("utf-8")
+    heading = re.search(r"(?m)^## Website text(?:\n|$)", content)
+    if heading is None:
+        return
+    expected = "\n".join(_render_website_text_section(stats)) + "\n"
+    match = re.search(r"(?ms)^## Website text\n.*?(?=^## |\Z)", content)
+    if match is None or match.group(0) != expected:
+        errors.append("README Website text section does not match canonical text statistics")
+
+
+def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None:
+    """Require release YAML and README metadata to expose canonical values."""
+    if not (root / "dataset.yaml").is_file() and not (root / "README.md").is_file():
+        return
+    expected = {
+        "website_text_success_count": stats.website_text_success_count,
+        "website_total_words": stats.website_total_words,
+        "contact_website_text_success_count": stats.contact_website_text_success_count,
+        "contact_website_total_words": stats.contact_website_total_words,
+        "unique_text_identity_count": stats.polygons_with_any_text,
+    }
+    _verify_release_yaml_path(root / "dataset.yaml", "dataset.yaml", expected, errors)
+    _verify_release_readme(root / "README.md", stats, expected, errors)
+
+
+def _verify_release_yaml_path(
+    path: Path,
+    label: str,
+    expected: dict[str, object],
+    errors: list[str],
+) -> None:
+    """Verify generated fields in one release YAML file when it exists."""
+    if not path.is_file():
+        return
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"{label} text fields are unreadable: {exc}")
+        return
+    _verify_release_yaml_fields(content, label, expected, errors)
+
+
+def _verify_release_readme(
+    path: Path,
+    stats: Any,
+    expected: dict[str, object],
+    errors: list[str],
+) -> None:
+    """Verify README front matter and its generated language section."""
+    if not path.is_file():
+        return
+    try:
+        readme_content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        errors.append(f"README front matter text fields are unreadable: {exc}")
+        return
+    front_matter = re.match(r"\A---(?:\r?\n).*?(?:\r?\n)---(?:\r?\n|$)", readme_content, re.DOTALL)
+    if front_matter is not None:
+        _verify_release_yaml_fields(
+            front_matter.group(0),
+            "README front matter",
+            expected,
+            errors,
+            require_present=False,
+        )
+    _verify_release_language_section(readme_content, stats, errors)
+
+
+def _verify_release_language_section(content: str, stats: Any, errors: list[str]) -> None:
+    """Verify an existing README language section against canonical totals."""
+    normalized = content.replace("\r\n", "\n")
+    language_match = re.search(r"(?ms)^## Languages\n.*?(?=^## |\Z)", normalized)
+    if language_match is None:
+        return
+    expected_languages = "\n".join(_render_language_section(stats)) + "\n"
+    if language_match is not None and language_match.group(0) != expected_languages:
+        errors.append("README Languages section does not match canonical text statistics")
+
+
+def _verify_release_yaml_fields(
+    content: str,
+    label: str,
+    expected: dict[str, object],
+    errors: list[str],
+    *,
+    require_present: bool = True,
+) -> None:
+    """Compare one YAML-like document's generated text fields."""
+    for key, value in expected.items():
+        if not re.search(rf"(?m)^{re.escape(key)}: {value}$", content) and (
+            require_present or re.search(rf"(?m)^{re.escape(key)}:", content)
+        ):
+            errors.append(f"{label} {key} does not match canonical text statistics")
 
 
 def _compare_card_file(

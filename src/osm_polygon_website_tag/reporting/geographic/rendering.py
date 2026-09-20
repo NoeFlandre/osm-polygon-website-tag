@@ -5,13 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-
-import matplotlib
-
-matplotlib.use("Agg")
-
-from matplotlib import colors, patches
-from matplotlib import pyplot as plt
+from typing import Any
 
 from osm_polygon_website_tag.reporting.geographic.basemap import (
     BUNDLED_LAND_PATH,
@@ -19,6 +13,51 @@ from osm_polygon_website_tag.reporting.geographic.basemap import (
 )
 from osm_polygon_website_tag.reporting.geographic.h3_geometry import cell_boundary_rings
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
+
+_LAZY_COMPONENT_INDEX = {"colors": 0, "patches": 1, "plt": 2}
+
+
+def _matplotlib_components() -> tuple[Any, Any, Any]:
+    """Load Matplotlib only when a map is actually rendered.
+
+    Card verification imports this module even when it only checks text and
+    YAML. Deferring the GUI-heavy import avoids a system font scan in every
+    isolated test and mutation process while keeping the module attributes
+    available for renderer tests and callers that patch them.
+    """
+    pyplot = globals().get("plt")
+    colors_module = globals().get("colors")
+    patches_module = globals().get("patches")
+    if pyplot is None or colors_module is None or patches_module is None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from matplotlib import colors as colors_module
+        from matplotlib import patches as patches_module
+        from matplotlib import pyplot as pyplot
+
+        globals().update(
+            colors=colors_module,
+            patches=patches_module,
+            plt=pyplot,
+        )
+    return colors_module, patches_module, pyplot
+
+
+def __getattr__(name: str) -> Any:
+    """Expose lazily loaded Matplotlib modules for compatibility and tests.
+
+    A module-level ``__getattr__`` must report an unknown name as
+    ``AttributeError`` and nothing else. The import system probes every module
+    it imports a name from for ``__path__``, so any other exception leaking out
+    of here aborts an unrelated import instead of failing this lookup. Index
+    resolution is therefore inside the guard too, not only the mapping lookup.
+    """
+    try:
+        component_index = _LAZY_COMPONENT_INDEX[name]
+        return _matplotlib_components()[component_index]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
 
 
 def atomic_save_png(fig, output_path: Path) -> None:
@@ -44,7 +83,8 @@ def atomic_save_png(fig, output_path: Path) -> None:
 
 def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) -> str:
     """Render and atomically save a world-coordinate H3 density map."""
-    fig, axis = plt.subplots(figsize=(16, 8), dpi=100)
+    colors_module, patches_module, pyplot = _matplotlib_components()
+    fig, axis = pyplot.subplots(figsize=(16, 8), dpi=100)
     try:
         axis.set_facecolor("#cfe2f3")
         axis.set_xlim(-180, 180)
@@ -59,11 +99,11 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
         draw_landmasses(axis, BUNDLED_LAND_PATH)
         if summary.cells:
             maximum = max(count for _cell, count in summary.cells)
-            norm = colors.LogNorm(vmin=0.5, vmax=max(1.0, float(maximum)))
-            cmap = plt.get_cmap("magma")
+            norm = colors_module.LogNorm(vmin=0.5, vmax=max(1.0, float(maximum)))
+            cmap = pyplot.get_cmap("magma")
             for cell, count in summary.cells:
                 for ring in cell_boundary_rings(cell):
-                    polygon = patches.Polygon(
+                    polygon = patches_module.Polygon(
                         ring,
                         closed=True,
                         facecolor=cmap(norm(count)),
@@ -72,7 +112,7 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
                         alpha=0.95,
                     )
                     axis.add_patch(polygon)
-            scalar = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+            scalar = pyplot.cm.ScalarMappable(norm=norm, cmap=cmap)
             scalar.set_array([])
             fig.colorbar(scalar, ax=axis, label="Polygons per H3 cell (log scale)")
         else:
@@ -94,18 +134,23 @@ def render_polygon_density(summary: PolygonDensitySummary, output_path: Path) ->
         atomic_save_png(fig, output_path)
         return caption
     finally:
-        plt.close(fig)
+        pyplot.close(fig)
 
 
 def _scope_label(summary: PolygonDensitySummary) -> str:
     """Describe the aggregation scope without overstating regional rows."""
     if summary.extracted_text_only:
-        return "unique polygons with extracted text"
-    return "regional rows/centroids"
+        return (
+            "unique polygons with extracted text (successful non-empty website or contact:website "
+            "text; regional overlap duplicates removed globally)"
+        )
+    return "regional rows/centroids (regional polygon rows/centroids)"
 
 
 def _empty_scope_label(summary: PolygonDensitySummary) -> str:
     """Describe an empty map using the same scope as its caption."""
     if summary.extracted_text_only:
-        return "No unique polygons with extracted text"
+        return (
+            "No unique polygons with extracted text; regional overlap duplicates removed globally"
+        )
     return "No regional polygon rows/centroids"

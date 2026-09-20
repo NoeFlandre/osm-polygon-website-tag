@@ -11,13 +11,20 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from osm_polygon_website_tag.pipeline.analyze import analyze_results
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256,
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.card import CARD_CONTRACT_VERSION, build_card
+from osm_polygon_website_tag.reporting.card import (
+    CARD_CONTRACT_VERSION,
+    build_card,
+    readme_preserved_sha256,
+    yaml_custom_sha256,
+)
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.reporting.verify import (
     VerificationReport,
     verify_results,
@@ -101,8 +108,6 @@ def _snapshot_preflight_error(metadata: dict[str, Any], status: object) -> str |
 
 def _advance_snapshot_state(root: Path, state: Any) -> None:
     """Advance a frozen run through analysis/card steps without enrichment."""
-    from osm_polygon_website_tag.pipeline.analyze import analyze_results
-
     steps: tuple[tuple[str, str, Callable[[], object] | None], ...] = (
         (STATUS_EXTRACTING, STATUS_EXTRACTED, None),
         (STATUS_EXTRACTED, STATUS_ENRICHING, None),
@@ -179,25 +184,40 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         for path in publishable_paths(root)
     ]
     canonical = json.dumps(artifacts, sort_keys=True, separators=(",", ":"))
-    sources = json.loads((root / "manifests" / "sources.json").read_text(encoding="utf-8"))
+    sources = json.loads((root / "manifests" / "sources.json").read_bytes())
     receipt = {
         "schema_version": "v1.2",
         "digest_algorithm": "sha256",
         "data_manifest_sha256": data_manifest_sha256(root),
+        "text_population_manifest": list(text_population_manifest_entries(root)),
         "manifest_digest": hashlib.sha256(canonical.encode()).hexdigest(),
         "sources_count": len(sources),
         "artifacts": artifacts,
     }
+    receipt.update(_yaml_custom_receipt_fields(root))
     if (root / POLYGON_DENSITY_ASSET_REL_PATH).is_file() and (root / "stats.json").is_file():
         receipt["card_contract_version"] = CARD_CONTRACT_VERSION
     destination = root / "manifests" / "completion_receipt.json"
-    temporary = destination.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.write_bytes((json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode())
     temporary.replace(destination)
     return receipt
+
+
+def _yaml_custom_receipt_fields(root: Path) -> dict[str, str]:
+    """Return receipt fields binding non-generated card YAML metadata."""
+    fields: dict[str, str] = {}
+    for field, relative in (
+        ("dataset_yaml_custom_sha256", "dataset.yaml"),
+        ("readme_yaml_custom_sha256", "README.md"),
+    ):
+        digest = yaml_custom_sha256(root / relative)
+        if digest is not None:
+            fields[field] = digest
+    preserved = readme_preserved_sha256(root / "README.md")
+    if preserved is not None:
+        fields["readme_preserved_sha256"] = preserved
+    return fields
 
 
 def replace_receipt_atomic(run_dir: Path | str) -> dict[str, Any]:

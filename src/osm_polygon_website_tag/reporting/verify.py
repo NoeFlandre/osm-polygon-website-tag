@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from osm_polygon_website_tag.reporting.text_population import text_population_parquets
 from osm_polygon_website_tag.reporting.verification.analysis import (
     verify_analysis_and_card as _verify_analysis_and_card,
 )
@@ -15,6 +16,9 @@ from osm_polygon_website_tag.reporting.verification.analysis import (
 )
 from osm_polygon_website_tag.reporting.verification.language import (
     verify_language_invariants as _verify_language_invariants,
+)
+from osm_polygon_website_tag.reporting.verification.language import (
+    verify_language_paths as _verify_language_paths,
 )
 from osm_polygon_website_tag.reporting.verification.receipt import verify_receipt as _verify_receipt
 from osm_polygon_website_tag.reporting.verification.rows import (
@@ -26,6 +30,9 @@ from osm_polygon_website_tag.reporting.verification.sentence import (
 from osm_polygon_website_tag.reporting.verification.shards import verify_shards as _verify_shards
 from osm_polygon_website_tag.reporting.verification.text import (
     verify_text_invariants as _verify_text_invariants,
+)
+from osm_polygon_website_tag.reporting.verification.text import (
+    verify_text_paths as _verify_text_paths,
 )
 from osm_polygon_website_tag.runtime.run_state import SourceManifestEntry
 
@@ -73,14 +80,28 @@ def _verify_results(
     if not metadata:
         errors.append("run metadata is empty")
     status = metadata.get("status")
-    _verify_text_invariants(root, status, errors)
-    _verify_language_invariants(root, errors)
+    if preserve_card_sections:
+        _verify_release_text_inputs(root, status, errors)
+    else:
+        _verify_text_invariants(root, status, errors)
+        _verify_language_invariants(root, errors)
     _verify_sentence_invariants(root, errors)
     if preserve_card_sections:
         _verify_release_status_artifacts(root, status, include_receipt, errors)
     else:
         _verify_status_artifacts(root, status, include_receipt, errors)
     return VerificationReport(not errors, errors, checked)
+
+
+def _verify_release_text_inputs(root: Path, status: object, errors: list[str]) -> None:
+    """Verify the exact Parquet paths used by release-time text reduction."""
+    try:
+        paths = text_population_parquets(root)
+    except Exception as exc:
+        errors.append(f"release text population inventory verification failed: {exc}")
+        return
+    _verify_text_paths(paths, status, errors)
+    _verify_language_paths(paths, errors)
 
 
 def _verify_status_artifacts(

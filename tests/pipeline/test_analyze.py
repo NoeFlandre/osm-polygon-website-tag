@@ -1091,11 +1091,12 @@ def test_write_sentence_table_counts_statuses_and_sentences(tmp_path: Path) -> N
     con.execute(
         """
         CREATE TABLE public_polygons AS SELECT * FROM (VALUES
-          ('success', 3, 'absent', NULL),
-          ('success', 2, 'unsupported_language', NULL),
-          ('empty_text', NULL, 'success', 4)
+          ('success', 3, 'absent', NULL, 'eng_Latn', NULL),
+          ('success', 2, 'unsupported_language', NULL, 'eng_Latn', 'hrv_Latn'),
+          ('empty_text', NULL, 'success', 4, NULL, 'deu_Latn')
         ) AS t(website_sentence_status, website_sentence_count,
-               contact_website_sentence_status, contact_website_sentence_count)
+               contact_website_sentence_status, contact_website_sentence_count,
+               website_language, contact_website_language)
         """
     )
 
@@ -1103,16 +1104,41 @@ def test_write_sentence_table_counts_statuses_and_sentences(tmp_path: Path) -> N
 
     assert sorted(path.name for path in tmp_path.iterdir()) == ["sentences.parquet"]
     assert pq.read_table(tmp_path / "sentences.parquet").to_pylist() == [
-        {"tag": "contact_website", "status": "absent", "row_count": 1, "sentence_count": 0},
-        {"tag": "contact_website", "status": "success", "row_count": 1, "sentence_count": 4},
         {
             "tag": "contact_website",
-            "status": "unsupported_language",
+            "status": "absent",
+            "language": None,
             "row_count": 1,
             "sentence_count": 0,
         },
-        {"tag": "website", "status": "empty_text", "row_count": 1, "sentence_count": 0},
-        {"tag": "website", "status": "success", "row_count": 2, "sentence_count": 5},
+        {
+            "tag": "contact_website",
+            "status": "success",
+            "language": "deu_Latn",
+            "row_count": 1,
+            "sentence_count": 4,
+        },
+        {
+            "tag": "contact_website",
+            "status": "unsupported_language",
+            "language": "hrv_Latn",
+            "row_count": 1,
+            "sentence_count": 0,
+        },
+        {
+            "tag": "website",
+            "status": "empty_text",
+            "language": None,
+            "row_count": 1,
+            "sentence_count": 0,
+        },
+        {
+            "tag": "website",
+            "status": "success",
+            "language": "eng_Latn",
+            "row_count": 2,
+            "sentence_count": 5,
+        },
     ]
 
 
@@ -1125,7 +1151,7 @@ def test_write_sentence_table_is_empty_for_a_v14_run(tmp_path: Path) -> None:
     assert sorted(path.name for path in tmp_path.iterdir()) == ["sentences.parquet"]
     table = pq.read_table(tmp_path / "sentences.parquet")
     assert table.num_rows == 0
-    assert table.schema.names == ["tag", "status", "row_count", "sentence_count"]
+    assert table.schema.names == ["tag", "status", "language", "row_count", "sentence_count"]
 
 
 def test_public_columns_reads_the_registered_view() -> None:

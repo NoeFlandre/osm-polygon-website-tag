@@ -35,6 +35,10 @@ from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
+from osm_polygon_website_tag.reporting.text_population import (
+    TextPopulationSummary,
+    compute_text_population_summary,
+)
 
 _TEXT_STATS_COLUMNS = frozenset(
     {
@@ -87,6 +91,10 @@ class CardStats:
     contact_website_sentence_row_count: int = 0
     total_sentence_count: int = 0
     unsupported_language_row_count: int = 0
+    sentence_split_eligible_count: int = 0
+    sentence_split_supported_count: int = 0
+    sentence_split_unsupported_count: int = 0
+    top_unsupported_sentence_languages: list[tuple[str, int]] = field(default_factory=list)
     top_languages: list[tuple[str, int]] = field(default_factory=list)
     polygon_density_h3_resolution: int = 3
     occupied_h3_cell_count: int = 0
@@ -97,6 +105,7 @@ def compute_card_stats(
     run_dir: Path | str,
     *,
     summary: PolygonDensitySummary | None = None,
+    text_population: TextPopulationSummary | None = None,
     source_names: Collection[str] | None = None,
 ) -> CardStats:
     """Recompute every README card statistic from ``run_dir``.
@@ -122,16 +131,14 @@ def compute_card_stats(
     _set_shard_counts(stats, public_shards, observation_shards, rejection_shards)
     stats.expected_sources_count = _expected_source_count(run_dir, stats.sources_count)
     _add_public_shard_stats(stats, public_shards)
-    _set_unique_polygon_text_count(
-        stats,
-        _regional_public_shards(
-            public_shards,
-            observation_shards,
-            source_names=source_names,
-        ),
+    population = (
+        text_population
+        if text_population is not None
+        else compute_text_population_summary(run_dir, source_names=source_names)
     )
+    _set_text_population_stats(stats, population)
     if source_names is None and analysis_dir.exists():
-        _add_analysis_stats(stats, analysis_dir)
+        _add_analysis_stats(stats, analysis_dir, text_population=population)
     return stats
 
 
@@ -191,10 +198,50 @@ def _expected_source_count(run_dir: Path, fallback: int) -> int:
 def _add_public_shard_stats(stats: CardStats, public_shards: Collection[Path]) -> None:
     """Accumulate text totals and per-source row counts."""
     for shard in public_shards:
-        _add_text_stats(stats, shard)
+        _add_enriched_source_count(stats, shard)
         stats.per_source_counts.append(
             {"source_pbf": f"{shard.stem}.osm.pbf", "row_count": _parquet_row_count(shard)}
         )
+
+
+def _set_text_population_stats(stats: CardStats, population: TextPopulationSummary) -> None:
+    """Copy globally deduplicated text values into the card statistics."""
+    stats.website_urls_present = population.website_urls_present
+    stats.website_text_success_count = population.website_identity_count
+    stats.website_text_empty_count = population.website_empty_identity_count
+    stats.website_text_failure_count = population.website_failure_identity_count
+    stats.website_total_words = population.website_total_words
+    stats.contact_website_urls_present = population.contact_website_urls_present
+    stats.contact_website_text_success_count = population.contact_website_identity_count
+    stats.contact_website_text_empty_count = population.contact_website_empty_identity_count
+    stats.contact_website_text_failure_count = population.contact_website_failure_identity_count
+    stats.contact_website_total_words = population.contact_website_total_words
+    stats.polygons_with_any_text = population.unique_identity_count
+    stats.website_language_count = population.website_language_count
+    stats.contact_website_language_count = population.contact_website_language_count
+    stats.detected_language_count = population.detected_language_count
+    stats.top_languages = list(population.top_languages)
+
+
+def _add_enriched_source_count(stats: CardStats, shard: Path) -> None:
+    """Count source shards without adding their regional text totals."""
+    parquet = pq.ParquetFile(shard)
+    if not _TEXT_STATS_COLUMNS.issubset(parquet.schema_arrow.names):
+        return
+    if not _has_retryable_text_status(parquet):
+        stats.enriched_sources_count += 1
+
+
+def _has_retryable_text_status(parquet: pq.ParquetFile) -> bool:
+    """Return whether a shard contains a retryable text status."""
+    return any(
+        status_has_retryable_value(batch.column(column))
+        for batch in parquet.iter_batches(
+            columns=["website_text_status", "contact_website_text_status"],
+            batch_size=8_192,
+        )
+        for column in ("website_text_status", "contact_website_text_status")
+    )
 
 
 def _set_unique_polygon_text_count(stats: CardStats, public_shards: Collection[Path]) -> None:
@@ -276,7 +323,12 @@ def _parquet_row_count(path: Path) -> int:
     return int(pq.ParquetFile(path).metadata.num_rows)
 
 
-def _add_analysis_stats(stats: CardStats, analysis_dir: Path) -> None:
+def _add_analysis_stats(
+    stats: CardStats,
+    analysis_dir: Path,
+    *,
+    text_population: TextPopulationSummary | None = None,
+) -> None:
     """Load optional duplicate, cell, and hostname analysis tables."""
     stats.duplicate_count = _optional_row_count(analysis_dir / "duplicate_observations.parquet")
     stats.conflicting_snapshot_count = _optional_row_count(
@@ -284,21 +336,26 @@ def _add_analysis_stats(stats: CardStats, analysis_dir: Path) -> None:
     )
     _add_cell_stats(stats, analysis_dir / "cells_global.parquet")
     _add_hostname_stats(stats, analysis_dir)
-    _add_language_stats(stats, analysis_dir / "languages.parquet")
+    if text_population is None:
+        _add_language_stats(stats, analysis_dir / "languages.parquet")
     _add_sentence_stats(stats, analysis_dir / "sentences.parquet")
 
 
 def _add_sentence_stats(stats: CardStats, path: Path) -> None:
-    """Load optional segmentation status counts from the analysis table."""
+    """Load optional segmentation counts and language coverage from analysis."""
     if not path.exists():
         return
     rows = pq.read_table(path).to_pylist()
     stats.website_sentence_row_count = _sentence_rows(rows, "website")
     stats.contact_website_sentence_row_count = _sentence_rows(rows, "contact_website")
-    stats.total_sentence_count = sum(int(row["sentence_count"]) for row in rows)
-    stats.unsupported_language_row_count = sum(
-        int(row["row_count"]) for row in rows if row.get("status") == SENTENCE_UNSUPPORTED_LANGUAGE
-    )
+    stats.total_sentence_count = _sentence_total(rows)
+    supported = _sentence_status_rows(rows, SENTENCE_SUCCESS)
+    unsupported = _sentence_status_rows(rows, SENTENCE_UNSUPPORTED_LANGUAGE)
+    stats.sentence_split_supported_count = supported
+    stats.sentence_split_unsupported_count = unsupported
+    stats.sentence_split_eligible_count = supported + unsupported
+    stats.unsupported_language_row_count = unsupported
+    stats.top_unsupported_sentence_languages = _unsupported_language_counts(rows)
 
 
 def _sentence_rows(rows: list[dict[str, Any]], tag: str) -> int:
@@ -308,6 +365,30 @@ def _sentence_rows(rows: list[dict[str, Any]], tag: str) -> int:
         for row in rows
         if row.get("tag") == tag and row.get("status") == SENTENCE_SUCCESS
     )
+
+
+def _sentence_total(rows: list[dict[str, Any]]) -> int:
+    """Count all emitted sentences across the analysis table."""
+    return sum(int(row["sentence_count"]) for row in rows)
+
+
+def _sentence_status_rows(rows: list[dict[str, Any]], status: str) -> int:
+    """Count text units for one sentence-analysis status."""
+    return sum(int(row["row_count"]) for row in rows if row.get("status") == status)
+
+
+def _unsupported_language_counts(rows: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Return unsupported detected-language labels ordered by descending count."""
+    totals: dict[str, int] = {}
+    for row in rows:
+        if row.get("status") != SENTENCE_UNSUPPORTED_LANGUAGE:
+            continue
+        language = row.get("language")
+        if language is None:
+            continue
+        label = str(language)
+        totals[label] = totals.get(label, 0) + int(row["row_count"])
+    return sorted(totals.items(), key=_language_sort_key)
 
 
 def _add_language_stats(stats: CardStats, path: Path) -> None:

@@ -20,17 +20,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from osm_polygon_website_tag.publishing.card_artifacts import refresh_card_for_release
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     data_manifest_sha256 as compute_data_manifest_sha256,
 )
-from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
+from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
 from osm_polygon_website_tag.reporting.artifact_inventory import (
     parquet_manifest_sha256 as compute_parquet_manifest_sha256,
 )
-from osm_polygon_website_tag.reporting.card import refresh_card_for_release
 from osm_polygon_website_tag.reporting.finalize import replace_receipt_atomic
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.text_population import (
+    text_population_manifest_entries_for_paths,
+    text_population_parquets,
+)
 from osm_polygon_website_tag.reporting.verification.receipt import (
     verify_receipt_before_card_refresh,
 )
@@ -61,6 +65,7 @@ class ReleasedFile:
     size_bytes: int
     data_manifest_sha256: str | None = None
     parquet_manifest_sha256: str | None = None
+    text_population_entries: tuple[tuple[str, int, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,7 @@ class CardReleaseReport:
     parquet_manifest_sha256: str = ""
     uploaded: bool = False
     no_op: bool = False
+    changed_files: tuple[str, ...] = ()
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -88,6 +94,14 @@ class CardReleaseReport:
                     "size_bytes": item.size_bytes,
                     "data_manifest_sha256": item.data_manifest_sha256,
                     "parquet_manifest_sha256": item.parquet_manifest_sha256,
+                    "text_population_manifest": [
+                        {
+                            "path": path,
+                            "size_bytes": size,
+                            "sha256": digest,
+                        }
+                        for path, size, digest in item.text_population_entries
+                    ],
                 }
                 for item in self.files
             ],
@@ -96,6 +110,7 @@ class CardReleaseReport:
             "data_manifest_sha256": self.data_manifest_sha256,
             "parquet_manifest_sha256": self.parquet_manifest_sha256,
             "no_op": self.no_op,
+            "changed_files": list(self.changed_files),
             "repo_id": self.repo_id,
             "revision": self.revision,
             "run_dir": self.run_dir,
@@ -110,10 +125,22 @@ class HubVerifier(Protocol):
     def __call__(self, repo_id: str, files: tuple[ReleasedFile, ...]) -> str: ...
 
 
+@dataclass(frozen=True)
+class _RemoteCheck:
+    """Remote metadata comparison before an upload."""
+
+    revision: str | None
+    changed_files: tuple[str, ...] = ()
+
+
 class RemoteChecker(Protocol):
     """Return the current revision when the remote already matches exactly."""
 
-    def __call__(self, repo_id: str, files: tuple[ReleasedFile, ...]) -> str | None: ...
+    def __call__(
+        self,
+        repo_id: str,
+        files: tuple[ReleasedFile, ...],
+    ) -> str | _RemoteCheck | None: ...
 
 
 @dataclass(frozen=True)
@@ -122,6 +149,25 @@ class _PublicationResult:
 
     revision: str
     uploaded: bool
+    changed_files: tuple[str, ...] = ()
+
+
+def _publication_report_fields(
+    files: tuple[ReleasedFile, ...],
+    publication: _PublicationResult | None,
+) -> tuple[str | None, bool, bool, tuple[str, ...]]:
+    """Return stable report fields for dry-run, upload, and no-op outcomes."""
+    if publication is None:
+        return None, False, False, ()
+    if not publication.uploaded:
+        return publication.revision, False, True, ()
+    changed_files = publication.changed_files or tuple(item.relative_path for item in files)
+    return (
+        publication.revision,
+        True,
+        False,
+        changed_files,
+    )
 
 
 class _RemoteArtifactMismatchError(ValueError):
@@ -141,6 +187,7 @@ def build_card_release_plan(
     root = Path(run_dir)
     identity = data_manifest_sha256 or compute_data_manifest_sha256(root)
     parquet_identity = compute_parquet_manifest_sha256(root)
+    text_population_entries = _text_population_release_entries(root)
     items: list[ReleasedFile] = []
     for name in CARD_RELEASE_FILES:
         path = root / name
@@ -153,6 +200,7 @@ def build_card_release_plan(
                 size_bytes=path.stat().st_size,
                 data_manifest_sha256=identity,
                 parquet_manifest_sha256=parquet_identity,
+                text_population_entries=text_population_entries,
             )
         )
     return tuple(items)
@@ -175,6 +223,7 @@ def _require_complete_release(root: Path) -> str:
     state = load_run(root)
     if state.metadata.get("status") != STATUS_COMPLETE:
         raise ValueError("release requires a COMPLETE run")
+    _require_release_bound_text_population(root)
     receipt = _completion_receipt_path(root)
     identity = _completion_data_identity(receipt)
     receipt_errors: list[str] = []
@@ -184,6 +233,92 @@ def _require_complete_release(root: Path) -> str:
             f"release completion receipt verification failed; refusing to release: {receipt_errors}"
         )
     return identity or compute_data_manifest_sha256(root)
+
+
+def _require_release_bound_text_population(root: Path) -> None:
+    """Require every release-time reducer input to be receipt-bound."""
+    population_paths = text_population_parquets(root)
+    external = _external_text_population_paths(population_paths, root.resolve())
+    if external:
+        receipt = _completion_receipt_path(root)
+        payload = _read_receipt_payload(
+            receipt,
+            error_type=ValueError,
+            label="release completion receipt",
+        )
+        expected = payload.get("text_population_manifest")
+        try:
+            actual = list(_text_population_manifest_entries_from_paths(root, population_paths))
+        except OSError as exc:
+            raise ValueError(
+                "release requires external text population shards bound by the completion receipt"
+            ) from exc
+        if expected != actual:
+            raise ValueError(
+                "release requires external text population shards bound by the completion receipt"
+            )
+    else:
+        _raise_for_unbound_text_population_paths(root, population_paths)
+
+
+def _text_population_release_entries(root: Path) -> tuple[tuple[str, int, str], ...]:
+    """Normalize selected text-shard identities for release and remote checks."""
+    return tuple(
+        (
+            str(entry.get("remote_path", entry["path"])),
+            int(entry["size_bytes"]),
+            str(entry["sha256"]),
+        )
+        for entry in _text_population_manifest_entries_from_paths(
+            root, text_population_parquets(root)
+        )
+    )
+
+
+def _text_population_manifest_entries_from_paths(
+    root: Path,
+    paths: list[Path],
+) -> tuple[dict[str, int | str], ...]:
+    """Build logical receipt entries from the exact selected shard paths."""
+    return text_population_manifest_entries_for_paths(root, paths)
+
+
+def _raise_for_unbound_text_population_paths(root: Path, paths: list[Path]) -> None:
+    """Reject reducer inputs missing from the hashed release inventory."""
+    unbound = _unbound_text_population_paths(paths, _release_inventory(root))
+    if unbound:
+        names = ", ".join(str(path) for path in unbound[:3])
+        suffix = "..." if len(unbound) > 3 else ""
+        raise ValueError(
+            "release requires text population shards in the release artifact inventory; "
+            f"unbound shards found: {names}{suffix}"
+        )
+
+
+def _release_inventory(root: Path) -> set[Path]:
+    """Return resolved paths covered by the completion receipt inventory."""
+    return {path.resolve() for path in publishable_paths(root)}
+
+
+def _unbound_text_population_paths(paths: list[Path], inventory: set[Path]) -> list[Path]:
+    """Return reducer inputs absent from the resolved release inventory."""
+    return [path for path in paths if path.resolve() not in inventory]
+
+
+def _external_text_population_paths(
+    paths: list[Path],
+    resolved_root: Path,
+) -> list[Path]:
+    """Return reducer inputs that resolve outside the release root."""
+    return [path for path in paths if _is_external_text_population_path(path, resolved_root)]
+
+
+def _is_external_text_population_path(path: Path, resolved_root: Path) -> bool:
+    """Return whether one reducer input resolves outside the release root."""
+    try:
+        return not path.resolve().is_relative_to(resolved_root)
+    except OSError as exc:
+        raise ValueError(f"release cannot resolve text population shard: {path}") from exc
 
 
 def _completion_receipt_path(root: Path) -> Path:
@@ -247,7 +382,8 @@ def _require_verified(report: VerificationReport, run_dir: Path) -> None:
 def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     """Rebuild the card and report; return whether their bytes changed."""
     before = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
-    _update_card_safely(run_dir)
+    identities = _card_refresh_identities(run_dir)
+    _update_card_safely(run_dir, **identities)
     after = {name: _digest_or_none(run_dir / name) for name in _CARD_ARTIFACTS}
     _require_data_identity(run_dir, expected_data_identity)
     receipt_needs_data_identity = (
@@ -259,10 +395,56 @@ def _recompute_card(run_dir: Path, expected_data_identity: str) -> bool:
     return True
 
 
-def _update_card_safely(run_dir: Path) -> None:
+def _card_refresh_identities(root: Path) -> dict[str, str | None]:
+    """Read receipt identities needed to validate a staged card refresh."""
+    payload = _read_receipt_payload(
+        _completion_receipt_path(root),
+        error_type=ValueError,
+        label="release completion receipt",
+    )
+    identities = _receipt_card_refresh_identities(payload)
+    _require_recoverable_card_identities(root, identities)
+    return identities
+
+
+def _receipt_card_refresh_identities(payload: dict[str, Any]) -> dict[str, str | None]:
+    """Extract and validate the card identities recorded in a receipt."""
+    identities = {
+        "expected_readme_custom_sha256": payload.get("readme_yaml_custom_sha256"),
+        "expected_dataset_custom_sha256": payload.get("dataset_yaml_custom_sha256"),
+        "expected_readme_preserved_sha256": payload.get("readme_preserved_sha256"),
+    }
+    if not all(value is None or isinstance(value, str) for value in identities.values()):
+        raise ValueError("release completion receipt has invalid card identities")
+
+    return identities
+
+
+def _require_recoverable_card_identities(root: Path, identities: dict[str, str | None]) -> None:
+    """Require receipt evidence before reconstructing a missing README."""
+    if (root / "README.md").is_file():
+        return
+    if not identities["expected_readme_custom_sha256"]:
+        raise ValueError("missing README custom metadata cannot be recovered")
+    if not identities["expected_readme_preserved_sha256"]:
+        raise ValueError("missing README body cannot be recovered")
+
+
+def _update_card_safely(
+    run_dir: Path,
+    *,
+    expected_readme_custom_sha256: str | None = None,
+    expected_dataset_custom_sha256: str | None = None,
+    expected_readme_preserved_sha256: str | None = None,
+) -> None:
     """Normalize card-update failures to a release refusal."""
     try:
-        refresh_card_for_release(run_dir)
+        refresh_card_for_release(
+            run_dir,
+            expected_readme_custom_sha256=expected_readme_custom_sha256,
+            expected_dataset_custom_sha256=expected_dataset_custom_sha256,
+            expected_readme_preserved_sha256=expected_readme_preserved_sha256,
+        )
     except Exception as exc:
         raise ValueError(f"verification failed for {run_dir}; refusing to release: {exc}") from exc
 
@@ -363,6 +545,16 @@ def _expected_parquet_data_identity(files: tuple[ReleasedFile, ...]) -> str:
     return identity
 
 
+def _expected_text_population_entries(
+    files: tuple[ReleasedFile, ...],
+) -> tuple[tuple[str, int, str], ...]:
+    """Return the selected text-shard identities bound to a release plan."""
+    entries = {item.text_population_entries for item in files}
+    if len(entries) != 1:
+        raise ValueError("release plan has no single text population manifest")
+    return next(iter(entries))
+
+
 def _remote_data_identity(api: Any, repo_id: str, revision: str) -> str | None:
     """Read the completion receipt's data identity at the remote revision."""
     path = api.hf_hub_download(
@@ -417,9 +609,11 @@ def _remote_source_manifest_entries(
 
 def _remote_data_manifest_sha256(api: Any, repo_id: str, revision: str) -> str:
     """Hash remote source manifests and Parquet metadata as one data identity."""
+    parquet_entries = _remote_parquet_entries(api, repo_id, revision)
     entries = [
         *_remote_source_manifest_entries(api, repo_id, revision),
-        *_remote_parquet_entries(api, repo_id, revision).values(),
+        *parquet_entries.values(),
+        *_remote_text_population_manifest_entries(api, repo_id, revision, parquet_entries),
     ]
     canonical = json.dumps(
         sorted(entries, key=lambda item: str(item["path"])),
@@ -427,6 +621,64 @@ def _remote_data_manifest_sha256(api: Any, repo_id: str, revision: str) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _remote_text_population_manifest_entries(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    parquet_entries: dict[str, dict[str, int | str]],
+) -> list[dict[str, int | str]]:
+    """Project the receipt-bound reducer inputs onto remote published shards."""
+    payload = _remote_text_population_receipt(api, repo_id, revision)
+    expected = payload.get("text_population_manifest")
+    if not isinstance(expected, list):
+        return []
+    return [_remote_text_population_entry(item, parquet_entries) for item in expected]
+
+
+def _remote_text_population_receipt(api: Any, repo_id: str, revision: str) -> dict[str, Any]:
+    """Download and validate the remote completion receipt."""
+    try:
+        downloaded = api.hf_hub_download(
+            repo_id,
+            "manifests/completion_receipt.json",
+            revision=revision,
+            repo_type="dataset",
+        )
+        payload = _read_receipt_payload(
+            Path(downloaded),
+            error_type=_RemoteDataMismatchError,
+            label="remote completion receipt",
+        )
+    except _RemoteDataMismatchError:
+        raise
+    except Exception as exc:
+        raise _RemoteDataMismatchError(
+            f"remote completion receipt unavailable for text population identity: {exc}"
+        ) from exc
+    return payload
+
+
+def _remote_text_population_entry(
+    item: Any,
+    parquet_entries: dict[str, dict[str, int | str]],
+) -> dict[str, int | str]:
+    """Project one receipt-bound text shard onto its remote Parquet identity."""
+    if not isinstance(item, dict):
+        raise _RemoteDataMismatchError("remote text population manifest entry is invalid")
+    logical = item.get("path")
+    remote_path = item.get("remote_path", logical)
+    if not isinstance(logical, str) or not isinstance(remote_path, str):
+        raise _RemoteDataMismatchError("remote text population manifest path is invalid")
+    remote = parquet_entries.get(remote_path)
+    if remote is None:
+        raise _RemoteDataMismatchError(f"remote text population shard missing: {remote_path}")
+    return {
+        "path": f"text_population/{logical}",
+        "size_bytes": remote["size_bytes"],
+        "sha256": remote["sha256"],
+    }
 
 
 def _verify_remote_data_identity(
@@ -440,7 +692,7 @@ def _verify_remote_data_identity(
     actual = _remote_data_manifest_sha256(api, repo_id, revision)
     if actual != expected:
         raise _RemoteDataMismatchError(
-            f"remote data manifest mismatch: local={expected}, remote={actual}"
+            f"remote data identity mismatch (data manifest): local={expected}, remote={actual}"
         )
     receipt_identity = _remote_data_identity(api, repo_id, revision)
     if receipt_identity is not None and receipt_identity != expected:
@@ -560,6 +812,52 @@ def _verify_remote_parquet_data_identity(
         )
 
 
+def _verify_remote_text_population_identity(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    files: tuple[ReleasedFile, ...],
+) -> None:
+    """Independently verify every selected text shard exists remotely unchanged."""
+    expected = _expected_text_population_entries(files)
+    if not expected:
+        return
+    remote = _remote_parquet_entries(api, repo_id, revision)
+    for path, size_bytes, digest in expected:
+        _verify_remote_text_population_entry(remote, path, size_bytes, digest)
+
+
+def _verify_remote_text_population_entry(
+    remote: dict[str, dict[str, int | str]],
+    path: str,
+    size_bytes: int,
+    digest: str,
+) -> None:
+    """Verify one selected text shard against bounded remote metadata."""
+    actual = remote.get(path)
+    if actual is None:
+        raise _RemoteDataMismatchError(f"remote text population shard missing: {path}")
+    if actual["size_bytes"] != size_bytes or actual["sha256"] != digest:
+        raise _RemoteDataMismatchError(f"remote text population shard mismatch: {path}")
+
+
+def _remote_changed_files(
+    api: Any,
+    repo_id: str,
+    revision: str,
+    files: tuple[ReleasedFile, ...],
+) -> tuple[str, ...]:
+    """Return only card files whose remote bytes differ from the local plan."""
+    changed: list[str] = []
+    for item in files:
+        try:
+            _verify_remote_size(api, repo_id, revision, item)
+            _verify_remote_digest(api, repo_id, revision, item)
+        except _RemoteArtifactMismatchError:
+            changed.append(item.relative_path)
+    return tuple(changed)
+
+
 def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
     """Confirm each released file's remote identity and return the revision."""
     from huggingface_hub import HfApi
@@ -571,18 +869,29 @@ def default_hub_verifier(repo_id: str, files: tuple[ReleasedFile, ...]) -> str:
     revision = _remote_revision(api, repo_id)
     _verify_remote_data_identity(api, repo_id, revision, files)
     _verify_remote_parquet_data_identity(api, repo_id, revision, files)
+    _verify_remote_text_population_identity(api, repo_id, revision, files)
     for item in files:
         _verify_remote_size(api, repo_id, revision, item)
         _verify_remote_digest(api, repo_id, revision, item)
     return revision
 
 
-def _default_remote_checker(repo_id: str, files: tuple[ReleasedFile, ...]) -> str | None:
-    """Return a revision for an exact remote no-op, or request an upload."""
-    try:
-        return default_hub_verifier(repo_id, files)
-    except _RemoteArtifactMismatchError:
-        return None
+def _default_remote_checker(repo_id: str, files: tuple[ReleasedFile, ...]) -> _RemoteCheck:
+    """Compare remote data and return exact card mismatches before upload."""
+    token = resolve_hf_token()
+    if not token:
+        raise ValueError("release requires Hugging Face environment/local credentials")
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=token)
+    revision = _remote_revision(api, repo_id)
+    _verify_remote_data_identity(api, repo_id, revision, files)
+    _verify_remote_parquet_data_identity(api, repo_id, revision, files)
+    _verify_remote_text_population_identity(api, repo_id, revision, files)
+    changed_files = _remote_changed_files(api, repo_id, revision, files)
+    if not changed_files:
+        return _RemoteCheck(revision)
+    return _RemoteCheck(None, changed_files)
 
 
 def _require_credentialed_uploader() -> Callable[..., None]:
@@ -600,6 +909,7 @@ def _upload_and_verify(
     files: tuple[ReleasedFile, ...],
     uploader: Callable[..., None] | None,
     verifier: HubVerifier | None,
+    changed_files: tuple[str, ...] = (),
 ) -> _PublicationResult:
     """Upload the planned files and verify the resulting remote revision."""
     if uploader is None:
@@ -611,7 +921,7 @@ def _upload_and_verify(
     revision = verifier(repo_id, files)
     if not revision:
         raise ValueError("hub verification returned an empty revision")
-    return _PublicationResult(revision, uploaded=True)
+    return _PublicationResult(revision, uploaded=True, changed_files=changed_files)
 
 
 def _publish(
@@ -625,9 +935,14 @@ def _publish(
     remote_checker: RemoteChecker | None,
 ) -> _PublicationResult:
     """No-op an exact remote release, otherwise upload and verify it."""
+    changed_files: tuple[str, ...] = ()
     if remote_checker is not None:
         current = remote_checker(repo_id, files)
-        if current:
+        if isinstance(current, _RemoteCheck):
+            if current.revision:
+                return _PublicationResult(current.revision, uploaded=False)
+            changed_files = current.changed_files
+        elif current:
             return _PublicationResult(current, uploaded=False)
     return _upload_and_verify(
         run_dir,
@@ -636,6 +951,7 @@ def _publish(
         files=files,
         uploader=uploader,
         verifier=verifier,
+        changed_files=changed_files,
     )
 
 
@@ -701,6 +1017,7 @@ def release_card_and_stats(
         verifier=verifier,
         remote_checker=remote_checker,
     )
+    revision, uploaded, no_op, changed_files = _publication_report_fields(files, publication)
     return CardReleaseReport(
         repo_id=repo_id,
         run_dir=str(root),
@@ -708,11 +1025,12 @@ def release_card_and_stats(
         verified_shards=tuple(report.checked_shards),
         recomputed=recomputed,
         published=apply,
-        revision=publication.revision if publication else None,
+        revision=revision,
         data_manifest_sha256=identity,
         parquet_manifest_sha256=compute_parquet_manifest_sha256(root),
-        uploaded=publication.uploaded if publication else False,
-        no_op=bool(publication and not publication.uploaded),
+        uploaded=uploaded,
+        no_op=no_op,
+        changed_files=changed_files,
     )
 
 

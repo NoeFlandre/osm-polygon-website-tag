@@ -203,6 +203,113 @@ def test_finalize_private_status_helpers_detect_pending_rows(tmp_path: Path) -> 
     )
 
 
+def test_failed_snapshot_report_is_a_failed_verification_report() -> None:
+    report = finalize_module._failed_snapshot_report("bad snapshot")
+
+    assert report.ok is False
+    assert report.verification.ok is False
+    assert report.verification.errors == ["bad snapshot"]
+
+
+def test_unfinished_text_status_scan_uses_the_canonical_polygon_directory(
+    tmp_path: Path,
+) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    pq.write_table(
+        pa.table(
+            {
+                "website_text_status": pa.array(["pending"]),
+                "contact_website_text_status": pa.array(["absent"]),
+            }
+        ),
+        polygons / "pending.parquet",
+    )
+
+    assert finalize_module._unfinished_text_status_errors(tmp_path) == [
+        "pending.parquet contains unfinished text statuses"
+    ]
+
+
+def test_unfinished_text_status_scan_passes_the_canonical_directory_name() -> None:
+    requested: list[str] = []
+
+    class Directory:
+        def glob(self, pattern: str) -> list[Path]:
+            assert pattern == "*.parquet"
+            return []
+
+    class Root:
+        def __truediv__(self, name: str) -> Directory:
+            requested.append(name)
+            return Directory()
+
+    assert finalize_module._unfinished_text_status_errors(cast(Path, Root())) == []
+    assert requested == ["polygons"]
+
+
+def test_completion_receipt_uses_canonical_case_sensitive_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "sources.json").write_bytes(b"[]\n")
+    map_path = tmp_path / "assets" / "geographic_polygon_density.png"
+    map_path.parent.mkdir()
+    map_path.write_bytes(b"png")
+    (tmp_path / "stats.json").write_bytes(b"{}\n")
+
+    yaml_calls: list[Path] = []
+    readme_calls: list[Path] = []
+    source_reads: list[Path] = []
+    is_file_calls: list[Path] = []
+    replace_targets: list[Path] = []
+
+    def yaml_hash(path: Path) -> str:
+        yaml_calls.append(path)
+        return "yaml-digest"
+
+    def readme_hash(path: Path) -> str:
+        readme_calls.append(path)
+        return "readme-digest"
+
+    real_read_bytes = Path.read_bytes
+    real_is_file = Path.is_file
+    real_replace = Path.replace
+
+    def read_bytes(path: Path) -> bytes:
+        source_reads.append(path)
+        return real_read_bytes(path)
+
+    def is_file(path: Path) -> bool:
+        is_file_calls.append(path)
+        return real_is_file(path)
+
+    def replace(path: Path, target: Path) -> Path:
+        replace_targets.append(target)
+        return real_replace(path, target)
+
+    monkeypatch.setattr(finalize_module, "publishable_paths", lambda _root: [])
+    monkeypatch.setattr(finalize_module, "data_manifest_sha256", lambda _root: "data-digest")
+    monkeypatch.setattr(finalize_module, "text_population_manifest_entries", lambda _root: ())
+    monkeypatch.setattr(finalize_module, "yaml_custom_sha256", yaml_hash)
+    monkeypatch.setattr(finalize_module, "readme_preserved_sha256", readme_hash)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(Path, "is_file", is_file)
+    monkeypatch.setattr(Path, "replace", replace)
+
+    receipt = finalize_module._write_completion_receipt(tmp_path)
+
+    assert receipt["card_contract_version"] == 2
+    assert yaml_calls == [tmp_path / "dataset.yaml", tmp_path / "README.md"]
+    assert readme_calls == [tmp_path / "README.md"]
+    assert source_reads == [tmp_path / "manifests" / "sources.json"]
+    assert tmp_path / "stats.json" in is_file_calls
+    assert replace_targets == [tmp_path / "manifests" / "completion_receipt.json"]
+    assert (manifests / "completion_receipt.json").is_file()
+
+
 def test_finalize_run_writes_receipt(tmp_path: Path) -> None:
     run_dir, _ = _setup(tmp_path)
     report = finalize_run(run_dir)
@@ -210,8 +317,15 @@ def test_finalize_run_writes_receipt(tmp_path: Path) -> None:
     receipt_path = run_dir / "manifests" / "completion_receipt.json"
     assert receipt_path.exists()
     receipt = json.loads(receipt_path.read_text())
+    raw_receipt = receipt_path.read_bytes()
+    assert raw_receipt.startswith(b'{\n  "artifacts":')
+    assert receipt["schema_version"] == "v1.2"
+    assert receipt["digest_algorithm"] == "sha256"
     assert "manifest_digest" in receipt
     assert "data_manifest_sha256" in receipt
+    assert "dataset_yaml_custom_sha256" in receipt
+    assert "readme_yaml_custom_sha256" in receipt
+    assert "text_population_manifest" in receipt
     assert receipt["sources_count"] == 1
     paths = {entry["path"] for entry in receipt["artifacts"]}
     assert "README.md" in paths
@@ -262,8 +376,21 @@ def test_finalize_snapshot_rejects_unfinished_text_rows(tmp_path: Path) -> None:
     report = finalize_snapshot(run_dir)
 
     assert report.ok is False
+    assert report.receipt == {}
+    assert report.verification.ok is False
+    assert report.verification.checked_shards
     assert any("unfinished text statuses" in error for error in report.verification.errors)
     assert not (run_dir / "manifests" / "completion_receipt.json").exists()
+
+
+def test_finalize_snapshot_rejects_non_frozen_runs_before_verification(tmp_path: Path) -> None:
+    run_dir, _ = _setup(tmp_path)
+
+    report = finalize_snapshot(run_dir)
+
+    assert report.ok is False
+    assert report.receipt == {}
+    assert report.verification.errors == ["snapshot finalization requires snapshot_status='done'"]
 
 
 def test_finalize_run_transitions_to_complete(tmp_path: Path) -> None:
@@ -288,6 +415,8 @@ def test_finalize_run_fails_on_verification_error(tmp_path: Path) -> None:
     shard.write_bytes(b"not parquet")
     report = finalize_run(run_dir)
     assert report.ok is False
+    assert report.receipt == {}
+    assert report.verification.ok is False
 
 
 def test_finalize_run_can_proceed_to_complete(tmp_path: Path) -> None:
@@ -341,6 +470,24 @@ def test_complete_verification_requires_card_contract(
     assert any("card_contract_version" in error for error in report.errors)
 
 
+@pytest.mark.parametrize("missing", ["map", "stats"])
+def test_completion_receipt_binds_card_contract_to_both_generated_artifacts(
+    tmp_path: Path,
+    *,
+    missing: str,
+) -> None:
+    run_dir, _ = _setup(tmp_path)
+    assert finalize_run(run_dir).ok
+    if missing == "map":
+        (run_dir / "assets" / "geographic_polygon_density.png").unlink()
+    else:
+        (run_dir / "stats.json").unlink()
+
+    receipt = finalize_module._write_completion_receipt(run_dir)
+
+    assert "card_contract_version" not in receipt
+
+
 def test_finalize_private_status_scan_is_bounded_and_fail_closed() -> None:
     calls: list[dict[str, object]] = []
 
@@ -375,10 +522,7 @@ def test_finalize_snapshot_state_advances_only_expected_steps(
         state.metadata["status"] = status
 
     monkeypatch.setattr(finalize_module, "transition_status", transition)
-    monkeypatch.setattr(
-        "osm_polygon_website_tag.pipeline.analyze.analyze_results",
-        lambda _root: actions.append("analyze"),
-    )
+    monkeypatch.setattr(finalize_module, "analyze_results", lambda _root: actions.append("analyze"))
     monkeypatch.setattr(finalize_module, "build_card", lambda _root: actions.append("card"))
 
     finalize_module._advance_snapshot_state(tmp_path, state)
@@ -423,6 +567,9 @@ def test_finalize_run_requires_card_built_or_complete_after_verification(
     state.metadata["status"] = STATUS_ANALYZED
     failed = finalize_run(tmp_path)
     assert failed.ok is False
+    assert failed.receipt == {}
+    assert failed.verification.ok is False
+    assert failed.verification.checked_shards == ("a",)
     assert "card_built or complete" in failed.verification.errors[0]
 
 

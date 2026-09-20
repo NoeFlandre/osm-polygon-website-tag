@@ -136,5 +136,7 @@ also_copy = [
 ]
 pytest_add_cli_args = ["-q", "--ignore=tests/architecture"]
 mutate_only_covered_lines = true
-max_stack_depth = 3
+# Dataclass-generated __init__ frames use <string>, which strict path resolution
+# cannot inspect during mutmut's dependency tracing.
+max_stack_depth = -1
 timeout_constant = 2.0
