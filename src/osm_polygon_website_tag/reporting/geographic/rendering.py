@@ -14,6 +14,8 @@ from osm_polygon_website_tag.reporting.geographic.basemap import (
 from osm_polygon_website_tag.reporting.geographic.h3_geometry import cell_boundary_rings
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 
+_LAZY_COMPONENT_INDEX = {"colors": 0, "patches": 1, "plt": 2}
+
 
 def _matplotlib_components() -> tuple[Any, Any, Any]:
     """Load Matplotlib only when a map is actually rendered.
@@ -44,10 +46,11 @@ def _matplotlib_components() -> tuple[Any, Any, Any]:
 
 def __getattr__(name: str) -> Any:
     """Expose lazily loaded Matplotlib modules for compatibility and tests."""
-    if name in {"colors", "patches", "plt"}:
-        components = _matplotlib_components()
-        return {"colors": components[0], "patches": components[1], "plt": components[2]}[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        component_index = _LAZY_COMPONENT_INDEX[name]
+    except KeyError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+    return _matplotlib_components()[component_index]
 
 
 def atomic_save_png(fig, output_path: Path) -> None:
