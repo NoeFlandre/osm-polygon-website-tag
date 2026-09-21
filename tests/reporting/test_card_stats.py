@@ -236,3 +236,179 @@ def test_each_known_status_is_recognised_exactly() -> None:
     """One assertion per accepted value, so dropping any one is visible."""
     for accepted in ("absent", "pending", "success", "empty"):
         assert card_stats._count_invalid_statuses(_status([accepted])) == 0, accepted
+
+
+def _text_batch(
+    website: list[str | None],
+    website_status: list[str],
+    website_words: list[int | None],
+    contact: list[str | None],
+    contact_status: list[str],
+    contact_words: list[int | None],
+) -> pa.RecordBatch:
+    return pa.record_batch(
+        {
+            "website": pa.array(website, type=pa.string()),
+            "website_text_status": pa.array(website_status, type=pa.string()),
+            "website_word_count": pa.array(website_words, type=pa.int64()),
+            "contact_website": pa.array(contact, type=pa.string()),
+            "contact_website_text_status": pa.array(contact_status, type=pa.string()),
+            "contact_website_word_count": pa.array(contact_words, type=pa.int64()),
+        }
+    )
+
+
+def test_a_text_batch_accumulates_each_field_from_its_own_column() -> None:
+    """Both URL fields must stay wired to their own columns.
+
+    Every total differs, so a batch read through the other field's column, or
+    assigned rather than accumulated, cannot land on the same numbers.
+    """
+    stats = CardStats()
+    batch = _text_batch(
+        website=["https://a", None, "https://c"],
+        website_status=["success", "absent", "empty"],
+        website_words=[11, None, None],
+        contact=["https://x", "https://y", None],
+        contact_status=["success", "success", "absent"],
+        contact_words=[20, 5, None],
+    )
+
+    retryable = card_stats._add_text_batch(stats, batch)
+
+    assert stats.website_urls_present == 2
+    assert stats.contact_website_urls_present == 2
+    assert stats.website_text_success_count == 1
+    assert stats.contact_website_text_success_count == 2
+    assert stats.website_text_empty_count == 1
+    assert stats.contact_website_text_empty_count == 0
+    assert stats.website_total_words == 11
+    assert stats.contact_website_total_words == 25
+    # `empty` is not a terminal status, so this batch is still retryable.
+    assert retryable is True
+
+
+def test_text_batches_add_to_the_running_totals() -> None:
+    stats = CardStats()
+    batch = _text_batch(
+        website=["https://a"],
+        website_status=["success"],
+        website_words=[4],
+        contact=["https://x"],
+        contact_status=["success"],
+        contact_words=[7],
+    )
+
+    for _ in range(2):
+        card_stats._add_text_batch(stats, batch)
+
+    assert stats.website_urls_present == 2
+    assert stats.contact_website_urls_present == 2
+    assert stats.website_total_words == 8
+    assert stats.contact_website_total_words == 14
+
+
+def test_a_batch_is_retryable_when_either_status_is_nonterminal() -> None:
+    """`absent` and `success` are terminal; anything else means unfinished."""
+    only_website = _text_batch(["u"], ["pending"], [None], ["v"], ["success"], [1])
+    only_contact = _text_batch(["u"], ["success"], [1], ["v"], ["pending"], [None])
+    neither = _text_batch(["u"], ["success"], [1], ["v"], ["absent"], [None])
+
+    assert card_stats._add_text_batch(CardStats(), only_website) is True
+    assert card_stats._add_text_batch(CardStats(), only_contact) is True
+    assert card_stats._add_text_batch(CardStats(), neither) is False
+
+
+def test_only_the_exact_success_status_contributes_words() -> None:
+    stats = CardStats()
+    batch = _text_batch(["u"], ["SUCCESS"], [9], ["v"], ["Success"], [9])
+
+    card_stats._add_text_batch(stats, batch)
+
+    assert stats.website_total_words == 0
+    assert stats.contact_website_total_words == 0
+
+
+def test_url_counts_add_each_field_separately() -> None:
+    stats = CardStats()
+    stats.website_urls_present = 40
+    stats.contact_website_urls_present = 70
+    website = pa.array(["a", None, "c"], type=pa.string())
+    contact = pa.array(["x", None, None], type=pa.string())
+
+    card_stats._add_url_counts(stats, website, contact)
+    card_stats._add_url_counts(stats, website, contact)
+
+    assert stats.website_urls_present == 40 + 2 + 2
+    assert stats.contact_website_urls_present == 70 + 1 + 1
+
+
+def _cells(path: Path, rows: list[dict[str, object]], *, with_counts: bool = True) -> Path:
+    columns: dict[str, pa.Array] = {
+        "cell": pa.array([row["cell"] for row in rows], type=pa.string()),
+        "level": pa.array([row["level"] for row in rows], type=pa.string()),
+    }
+    if with_counts:
+        columns["row_count"] = pa.array([row["row_count"] for row in rows], type=pa.int64())
+    pq.write_table(pa.table(columns), path)
+    return path
+
+
+def test_cell_stats_split_observation_from_canonical(tmp_path: Path) -> None:
+    stats = CardStats()
+    path = _cells(
+        tmp_path / "cells.parquet",
+        [
+            {"cell": "a", "level": "observation", "row_count": 3},
+            {"cell": "b", "level": "canonical", "row_count": 5},
+            {"cell": "c", "level": "canonical", "row_count": 7},
+        ],
+    )
+
+    card_stats._add_cell_stats(stats, path)
+
+    assert stats.eight_cell_observation == {"a": 3}
+    assert stats.eight_cell_canonical == {"b": 5, "c": 7}
+    assert stats.canonical_count == 12
+
+
+def test_only_the_exact_observation_level_is_an_observation(tmp_path: Path) -> None:
+    """`level` and `observation` are stored enum values, matched exactly."""
+    stats = CardStats()
+    path = _cells(
+        tmp_path / "cells.parquet",
+        [
+            {"cell": "a", "level": "OBSERVATION", "row_count": 1},
+            {"cell": "b", "level": "Observation", "row_count": 2},
+        ],
+    )
+
+    card_stats._add_cell_stats(stats, path)
+
+    assert stats.eight_cell_observation == {}
+    assert stats.eight_cell_canonical == {"a": 1, "b": 2}
+
+
+def test_cell_stats_default_a_missing_row_count_to_zero(tmp_path: Path) -> None:
+    """The reader tolerates a shard without the column rather than crashing."""
+    stats = CardStats()
+    path = _cells(
+        tmp_path / "cells.parquet",
+        [{"cell": "a", "level": "observation"}, {"cell": "b", "level": "canonical"}],
+        with_counts=False,
+    )
+
+    card_stats._add_cell_stats(stats, path)
+
+    assert stats.eight_cell_observation == {"a": 0}
+    assert stats.eight_cell_canonical == {"b": 0}
+    assert stats.canonical_count == 0
+
+
+def test_cell_stats_ignore_a_missing_file(tmp_path: Path) -> None:
+    stats = CardStats()
+
+    card_stats._add_cell_stats(stats, tmp_path / "absent.parquet")
+
+    assert stats.eight_cell_observation == {}
+    assert stats.canonical_count == 0
