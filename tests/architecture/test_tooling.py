@@ -116,6 +116,11 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "mutation-clean:",
         "qa-ci",
         "quality:",
+        "focused base=",
+        "qa-push base=",
+        "qa-pr:",
+        "qa-merge:",
+        "release-verify run_dir",
     ):
         assert recipe in justfile
     for command in (
@@ -145,7 +150,7 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     assert "python scripts/quality/mutation_scope.py" in justfile
     ci = re.search(r"^qa-ci:\s*(.*)$", justfile, re.MULTILINE)
     assert ci is not None
-    assert ci.group(1).strip() == "baseline ruff typecheck unit acceptance architecture crap"
+    assert ci.group(1).strip() == "qa-pr"
     assert "just mutation-clean" in justfile
     assert 'scopes+=(--scope "$filter")' in justfile
     assert 'mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters' in justfile
@@ -200,8 +205,12 @@ def test_pre_commit_uses_uv_locked_project_tools() -> None:
     assert "uv run --locked ruff check --fix" in config
     assert "uv run --locked ruff format" in config
     assert "uv run --locked ty check src tests scripts" in config
-    assert "uv run --locked pytest" in config
+    assert "entry: just focused" in config
+    assert "entry: just qa-push" in config
     assert "stages: [pre-push]" in config
+    # The pre-push hook must stay bounded: a bare `pytest` here would run the
+    # whole suite on every push, which is the pull request's job.
+    assert "entry: uv run --locked pytest" not in config
 
 
 def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
@@ -209,7 +218,13 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
 
     assert "contents: read" in workflow
     assert "uv sync --locked" in workflow
-    assert "run: just qa-ci" in workflow
+    assert "run: just qa-pr" in workflow
+    # A superseded pull-request run must not keep a 25-job matrix alive.
+    assert "concurrency:" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+    # The container gate belongs to the Docker workflow; building it here too
+    # would pay for the same image twice on every commit.
+    assert "just smoke" not in workflow
     assert "mutation_filters:" in workflow
     assert "--json" in workflow
     assert "fromJSON(needs.quality.outputs.mutation_filters)" in workflow
@@ -259,7 +274,10 @@ def test_the_mutation_sweep_workflow_is_manual_pinned_and_sharded() -> None:
     workflow = (ROOT / ".github" / "workflows" / "mutation-sweep.yml").read_text()
 
     assert "workflow_dispatch:" in workflow
-    assert "on:\n  workflow_dispatch:" in workflow
+    # Tier 5: exhaustive and scheduled, never in a pull request's path.
+    assert "schedule:" in workflow
+    assert 'cron: "0 3 * * *"' in workflow
+    assert "pull_request" not in workflow
     assert "contents: read" in workflow
     assert "HF_TOKEN" not in workflow
     assert "uv sync --locked" in workflow
@@ -270,3 +288,48 @@ def test_the_mutation_sweep_workflow_is_manual_pinned_and_sharded() -> None:
     uses = re.findall(r"uses: [^@\s]+@([^\s]+)", workflow)
     assert uses
     assert all(re.fullmatch(r"[0-9a-f]{40}", revision) for revision in uses)
+
+
+def test_the_quality_gates_are_tiered_and_do_not_duplicate_work() -> None:
+    """Each tier must add something the cheaper tier below it did not prove.
+
+    The costly mistakes this pins down are the ones the repository actually
+    made: a pre-push hook that ran the whole suite, and a pull-request gate
+    that ran the suite once plainly and once more under coverage.
+    """
+    justfile = (ROOT / "justfile").read_text()
+
+    push = re.search(r'^qa-push base="origin/main":[ \t]*(.*)$', justfile, re.MULTILINE)
+    assert push is not None
+    assert push.group(1).strip() == "ruff typecheck"
+
+    pr = re.search(r"^qa-pr:[ \t]*(.*)$", justfile, re.MULTILINE)
+    assert pr is not None
+    pr_gates = pr.group(1).split()
+    assert pr_gates == ["baseline", "ruff", "typecheck", "coverage", "crap"]
+    # `coverage` already collects unit, acceptance and architecture, so naming
+    # any of them again would run the suite twice.
+    for duplicated in ("unit", "acceptance", "architecture", "test"):
+        assert duplicated not in pr_gates
+
+    merge = re.search(r"^qa-merge:[ \t]*(.*)$", justfile, re.MULTILINE)
+    assert merge is not None
+    assert merge.group(1).strip() == "qa-pr"
+
+    # `crap` must not depend on `coverage`, or every caller pays for the suite
+    # a second time; `qa-pr` is what sequences them.
+    crap = re.search(r"^crap:[ \t]*(.*)$", justfile, re.MULTILINE)
+    assert crap is not None
+    assert crap.group(1).strip() == ""
+
+
+def test_the_release_gate_stays_strict() -> None:
+    """Data integrity is never selected away or sampled."""
+    justfile = (ROOT / "justfile").read_text()
+
+    release = re.search(r"^release-verify run_dir:\s*$", justfile, re.MULTILINE)
+    assert release is not None
+    assert 'osm-polygon-website-tag verify-results --run-dir "{{ run_dir }}"' in justfile
+    assert 'just release-stats-dry-run "{{ run_dir }}"' in justfile
+    # The publishing recipes must keep demanding an explicit repository.
+    assert "--confirm-repo 'NoeFlandre/osm-polygon-website-tag'" in justfile

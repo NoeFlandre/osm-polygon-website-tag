@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A superseded run has nothing left to prove, and its mutation matrix alone is
+# twenty-five jobs. Cancel it rather than pay for it twice.
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -52,8 +58,10 @@ jobs:
           printf 'filters=%s\n' "$filters" >> "$GITHUB_OUTPUT"
           printf 'Mutation matrix: %s\n' "$filters"
 
-      - name: Run quality gates
-        run: just qa-ci
+      # The container gate lives in the Docker workflow, which runs beside this
+      # one; building the image here too would pay for it twice per commit.
+      - name: Run the tiered gate
+        run: just qa-pr
 
   mutation:
     name: Mutation / ${{ matrix.shard.name }}

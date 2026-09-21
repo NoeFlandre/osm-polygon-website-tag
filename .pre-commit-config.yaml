@@ -1,6 +1,10 @@
 minimum_pre_commit_version: "4.5.0"
 default_install_hook_types: [pre-commit, pre-push]
 
+# Tier 1 runs on the commit, Tier 2 on the push. Neither runs the whole suite:
+# the pull-request gate does that on every commit, so paying for it again
+# locally buys waiting, not safety. Both tiers stay strict about what they do
+# cover -- nothing here is allowed to pass a failure through.
 repos:
   - repo: local
     hooks:
@@ -20,9 +24,15 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-commit]
-      - id: pytest
-        name: pytest
-        entry: uv run --locked pytest
+      - id: focused-tests
+        name: focused tests
+        entry: just focused
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+      - id: bounded-tests
+        name: bounded tests
+        entry: just qa-push
         language: system
         pass_filenames: false
         stages: [pre-push]
