@@ -124,10 +124,23 @@ def function_filters(
     """
     base = root if root is not None else Path.cwd()
     scoped: dict[str, list[str]] = {}
+    whole_module: set[str] = set()
     for raw, lines in sorted(lines_by_path.items()):
         path = Path(raw)
-        parts = _source_parts(path) if path.suffix == ".py" else None
+        if path.suffix != ".py":
+            continue
+        parts = _source_parts(path)
         if parts is None:
+            # A changed test re-checks the module it mirrors: weakening a test
+            # would otherwise leave that module's mutants unverified until some
+            # later change happened to touch the source. Which mutants a test
+            # edit reaches cannot be read off the diff, so it takes the module.
+            mirrored = _mirrored_source_parts(path, base)
+            if mirrored is None:
+                continue
+            module = ".".join([PACKAGE_NAME, *mirrored])
+            whole_module.add(module)
+            scoped[module] = [f"{module}.*"]
             continue
         module = ".".join([PACKAGE_NAME, *parts])
         source = base / path
@@ -135,8 +148,9 @@ def function_filters(
             continue
         names = _changed_function_names(source, lines)
         if names is None:
+            whole_module.add(module)
             scoped[module] = [f"{module}.*"]
-        elif names:
+        elif names and module not in whole_module:
             scoped[module] = [f"{module}.{name}__mutmut_*" for name in sorted(names)]
     return scoped
 
