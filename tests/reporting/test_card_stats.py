@@ -266,25 +266,29 @@ def test_a_text_batch_accumulates_each_field_from_its_own_column() -> None:
     """
     stats = CardStats()
     batch = _text_batch(
-        website=["https://a", None, "https://c"],
-        website_status=["success", "absent", "empty"],
-        website_words=[11, None, None],
-        contact=["https://x", "https://y", None],
-        contact_status=["success", "success", "absent"],
-        contact_words=[20, 5, None],
+        website=["https://a", None, "https://c", "https://d", None],
+        website_status=["success", "absent", "empty", "empty", "pending"],
+        website_words=[11, None, None, None, None],
+        contact=["https://x", "https://y", None, "https://w", "https://v"],
+        contact_status=["success", "success", "absent", "empty", "boom"],
+        contact_words=[20, 5, None, None, None],
     )
 
     retryable = card_stats._add_text_batch(stats, batch)
 
-    assert stats.website_urls_present == 2
-    assert stats.contact_website_urls_present == 2
+    assert stats.website_urls_present == 3
+    assert stats.contact_website_urls_present == 4
     assert stats.website_text_success_count == 1
     assert stats.contact_website_text_success_count == 2
-    assert stats.website_text_empty_count == 1
-    assert stats.contact_website_text_empty_count == 0
+    assert stats.website_text_empty_count == 2
+    assert stats.contact_website_text_empty_count == 1
+    # Every count is non-zero on at least one side, so a column replaced by
+    # null cannot coincide with the expected totals.
+    assert stats.website_text_failure_count == 0
+    assert stats.contact_website_text_failure_count == 1
     assert stats.website_total_words == 11
     assert stats.contact_website_total_words == 25
-    # `empty` is not a terminal status, so this batch is still retryable.
+    # `empty` and `pending` are not terminal, so this batch is still retryable.
     assert retryable is True
 
 
