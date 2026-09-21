@@ -143,3 +143,96 @@ def test_an_empty_shard_list_never_starts_a_pool(monkeypatch) -> None:
     monkeypatch.setattr(card_stats, "ThreadPoolExecutor", refuse)
 
     assert card_stats._count_parquets([]) == 0
+
+
+def _status(values: list[str | None]) -> pa.Array:
+    return pa.array(values, type=pa.string())
+
+
+def _mask(values: list[bool]) -> pa.Array:
+    return pa.array(values, type=pa.bool_())
+
+
+def test_status_counts_accumulate_each_field_independently() -> None:
+    """Every counter must add to what is there and read its own column.
+
+    The six increments are deliberately distinct so a counter that is assigned
+    instead of accumulated, subtracted, or wired to the other URL field cannot
+    produce the same totals.
+    """
+    stats = CardStats()
+    stats.website_text_success_count = 100
+    stats.contact_website_text_success_count = 200
+    stats.website_text_empty_count = 300
+    stats.contact_website_text_empty_count = 400
+    stats.website_text_failure_count = 500
+    stats.contact_website_text_failure_count = 600
+
+    website_status = _status(["success", "empty", "empty", "boom", "pending"])
+    contact_status = _status(["empty", "boom", "boom", "boom", "success"])
+    website_success = _mask([True, False, False, False, False])
+    contact_success = _mask([True, True, False, False, False])
+
+    card_stats._add_status_counts(
+        stats, website_status, contact_status, website_success, contact_success
+    )
+
+    assert stats.website_text_success_count == 100 + 1
+    assert stats.contact_website_text_success_count == 200 + 2
+    assert stats.website_text_empty_count == 300 + 2
+    assert stats.contact_website_text_empty_count == 400 + 1
+    assert stats.website_text_failure_count == 500 + 1
+    assert stats.contact_website_text_failure_count == 600 + 3
+
+
+def test_status_counts_add_again_on_a_second_batch() -> None:
+    """A shard is read in batches, so the second call must keep the first."""
+    stats = CardStats()
+    website_status = _status(["empty", "boom"])
+    contact_status = _status(["boom", "boom"])
+    website_success = _mask([True, False])
+    contact_success = _mask([False, False])
+
+    for _ in range(2):
+        card_stats._add_status_counts(
+            stats, website_status, contact_status, website_success, contact_success
+        )
+
+    assert stats.website_text_success_count == 2
+    assert stats.contact_website_text_success_count == 0
+    assert stats.website_text_empty_count == 2
+    assert stats.contact_website_text_empty_count == 0
+    assert stats.website_text_failure_count == 2
+    assert stats.contact_website_text_failure_count == 4
+
+
+def test_only_the_exact_lowercase_empty_status_counts_as_empty() -> None:
+    """`empty` is a stored enum value, not a case-insensitive label."""
+    stats = CardStats()
+    statuses = _status(["EMPTY", "Empty", "empty"])
+    no_success = _mask([False, False, False])
+
+    card_stats._add_status_counts(stats, statuses, statuses, no_success, no_success)
+
+    assert stats.website_text_empty_count == 1
+    assert stats.contact_website_text_empty_count == 1
+    # The two mis-cased values are unknown statuses, so they are failures.
+    assert stats.website_text_failure_count == 2
+
+
+def test_invalid_statuses_count_everything_outside_the_known_set() -> None:
+    known = _status(["absent", "pending", "success", "empty"])
+
+    assert card_stats._count_invalid_statuses(known) == 0
+
+
+def test_invalid_statuses_count_nulls_and_unknown_values() -> None:
+    statuses = _status(["absent", None, "boom", "PENDING", "Success", "EMPTY", ""])
+
+    assert card_stats._count_invalid_statuses(statuses) == 6
+
+
+def test_each_known_status_is_recognised_exactly() -> None:
+    """One assertion per accepted value, so dropping any one is visible."""
+    for accepted in ("absent", "pending", "success", "empty"):
+        assert card_stats._count_invalid_statuses(_status([accepted])) == 0, accepted
