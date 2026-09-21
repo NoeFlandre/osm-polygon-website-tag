@@ -57,8 +57,13 @@ def test_no_package_change_produces_no_filters() -> None:
     assert mutation_scope.module_filters(["docs/operations.md", "justfile"], root=_ROOT) == []
 
 
-def test_a_changed_test_file_rechecks_the_module_it_mirrors() -> None:
-    """Weakening a test must not slip past the gate untested."""
+def test_module_filters_recheck_the_module_a_changed_test_mirrors() -> None:
+    """Weakening a test must not slip past the gate untested.
+
+    This covers `module_filters`, which `main` does not call; the CI path is
+    covered by `test_the_ci_scope_rechecks_the_module_a_changed_test_mirrors`.
+    Asserting the contract only here is what let the gap go unnoticed.
+    """
     paths = [
         "tests/pipeline/test_sat.py",
         "tests/reporting/geographic/test_h3_geometry.py",
@@ -278,3 +283,44 @@ def test_the_json_matrix_carries_a_name_and_its_filters(
     assert capsys.readouterr().out.strip() == (
         '[{"name":"osm_polygon_website_tag.reporting.card","filters":"a.x_one__mutmut_* a.x_b*"}]'
     )
+
+
+def test_the_ci_scope_rechecks_the_module_a_changed_test_mirrors() -> None:
+    """The CI path must honour the mirroring, not just `module_filters`.
+
+    `main` scopes with `function_filters`; for a while only `module_filters`
+    understood test files, so a test-only change selected nothing and a
+    weakened test could retire its module's mutants unverified.
+    """
+    scoped = mutation_scope.function_filters(
+        {"tests/reporting/test_card_stats.py": {1}}, root=_ROOT
+    )
+
+    assert scoped == {
+        "osm_polygon_website_tag.reporting.card_stats": [
+            "osm_polygon_website_tag.reporting.card_stats.*"
+        ]
+    }
+
+
+def test_a_test_file_without_a_mirrored_module_selects_nothing() -> None:
+    assert (
+        mutation_scope.function_filters({"tests/quality/test_crap_report.py": {1}}, root=_ROOT)
+        == {}
+    )
+    assert mutation_scope.function_filters({"tests/conftest.py": {1}}, root=_ROOT) == {}
+
+
+def test_a_changed_test_widens_its_module_beyond_the_changed_functions() -> None:
+    """A test edit can reach any mutant, so it outranks a function filter."""
+    scoped = mutation_scope.function_filters(
+        {
+            "tests/reporting/test_card_stats.py": {1},
+            "src/osm_polygon_website_tag/reporting/card_stats.py": {1},
+        },
+        root=_ROOT,
+    )
+
+    assert scoped["osm_polygon_website_tag.reporting.card_stats"] == [
+        "osm_polygon_website_tag.reporting.card_stats.*"
+    ]
