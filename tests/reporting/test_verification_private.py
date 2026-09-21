@@ -1595,3 +1595,111 @@ def test_map_verifier_rejects_bytes_from_a_different_global_summary(
     analysis._verify_map_matches_summary(tmp_path, object(), errors)
 
     assert errors == ["map artifact does not match the canonical global summary"]
+
+
+def _cells(counts: dict[str, int]) -> list[dict[str, object]]:
+    return [{"cell": cell, "row_count": count} for cell, count in counts.items()]
+
+
+_EIGHT = {f"c{index}": 1 for index in range(8)}
+
+
+def _sources_manifest(root: Path, observation_total: int) -> None:
+    (root / "manifests").mkdir(parents=True, exist_ok=True)
+    (root / "manifests" / "sources.json").write_text(
+        json.dumps([{"observation_row_count": observation_total}]), encoding="utf-8"
+    )
+
+
+def test_observation_cells_are_named_observation_in_their_error(tmp_path: Path) -> None:
+    """The level label is what tells the two cell errors apart."""
+    errors: list[str] = []
+
+    analysis._verify_observation_cells(tmp_path, _cells({"a": 1}), set(_EIGHT), errors)
+
+    assert errors == ["observation analysis does not contain exactly eight cells"]
+
+
+def test_canonical_cells_are_named_canonical_in_their_error() -> None:
+    errors: list[str] = []
+
+    analysis._verify_canonical_cells(_cells({"a": 1}), _cells({"a": 1}), set(_EIGHT), errors)
+
+    assert errors == ["canonical analysis does not contain exactly eight cells"]
+
+
+def test_observation_cells_check_their_total_once_the_set_matches(tmp_path: Path) -> None:
+    """A wrong total must surface, which only happens if the guard passed."""
+    _sources_manifest(tmp_path, observation_total=99)
+    errors: list[str] = []
+
+    analysis._verify_observation_cells(tmp_path, _cells(_EIGHT), set(_EIGHT), errors)
+
+    assert errors == ["observation cell total mismatch: 8 != 99"]
+
+
+def test_observation_cells_accept_a_matching_total(tmp_path: Path) -> None:
+    _sources_manifest(tmp_path, observation_total=8)
+    errors: list[str] = []
+
+    analysis._verify_observation_cells(tmp_path, _cells(_EIGHT), set(_EIGHT), errors)
+
+    assert errors == []
+
+
+def test_a_wrong_cell_set_skips_the_observation_total(tmp_path: Path) -> None:
+    """No manifest is written, so reading one would raise rather than report."""
+    errors: list[str] = []
+
+    analysis._verify_observation_cells(tmp_path, _cells({"a": 1}), set(_EIGHT), errors)
+
+    assert errors == ["observation analysis does not contain exactly eight cells"]
+
+
+def test_canonical_cells_check_their_total_once_the_set_matches() -> None:
+    errors: list[str] = []
+
+    analysis._verify_canonical_cells(
+        _cells(dict.fromkeys(_EIGHT, 5)), _cells(_EIGHT), set(_EIGHT), errors
+    )
+
+    assert errors == ["canonical cell total exceeds observation total"]
+
+
+def test_canonical_cells_accept_a_total_within_the_observations() -> None:
+    errors: list[str] = []
+
+    analysis._verify_canonical_cells(
+        _cells(_EIGHT), _cells(dict.fromkeys(_EIGHT, 5)), set(_EIGHT), errors
+    )
+
+    assert errors == []
+
+
+def test_yaml_fields_report_a_missing_key_when_it_is_required() -> None:
+    errors: list[str] = []
+
+    analysis._verify_release_yaml_fields("other: 1\n", "dataset.yaml", {"count": 3}, errors)
+
+    assert errors == ["dataset.yaml count does not match canonical text statistics"]
+
+
+def test_yaml_fields_ignore_a_missing_key_when_it_is_optional() -> None:
+    """A preserved card may predate a field; only a present one must agree."""
+    errors: list[str] = []
+
+    analysis._verify_release_yaml_fields(
+        "other: 1\n", "dataset.yaml", {"count": 3}, errors, require_present=False
+    )
+
+    assert errors == []
+
+
+def test_an_optional_yaml_field_still_has_to_agree_when_present() -> None:
+    errors: list[str] = []
+
+    analysis._verify_release_yaml_fields(
+        "count: 9\n", "dataset.yaml", {"count": 3}, errors, require_present=False
+    )
+
+    assert errors == ["dataset.yaml count does not match canonical text statistics"]
