@@ -85,11 +85,19 @@ pre-commit:
 pre-push:
     uv run --locked pre-commit run --all-files --hook-stage pre-push
 
-coverage:
-    uv run --locked pytest --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:/tmp/osm-polygon-website-tag-coverage.json --cov-fail-under=75
+COVERAGE_JSON := env("COVERAGE_JSON", "/tmp/osm-polygon-website-tag-coverage.json")
 
-crap: coverage
-    uv run --locked python scripts/quality/crap_report.py --coverage-json /tmp/osm-polygon-website-tag-coverage.json --path src/osm_polygon_website_tag --max-crap 6
+# One instrumented run of the whole suite; downstream gates read its artifact
+# rather than paying for the suite again.
+# Tier 3/4: the single source of test and coverage truth.
+coverage:
+    uv run --locked pytest --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
+
+# Depends on nothing so CI never runs the suite twice; run `just coverage`
+# first, or use `just qa-pr`, which sequences them.
+# Tier 3/4: CRAP gate over the existing coverage artifact.
+crap:
+    uv run --locked python scripts/quality/crap_report.py --coverage-json "{{ COVERAGE_JSON }}" --path src/osm_polygon_website_tag --max-crap 6
 
 mutation: mutation-clean
     uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}"
@@ -165,11 +173,54 @@ diff-review:
 
 qa-gauntlet: baseline ruff typecheck unit acceptance architecture crap mutation smoke diff-review
 
-# The non-mutation gates CI runs before the deterministic per-module mutation
-# matrix. The matrix invokes `mutation-module` once per module shard emitted
-# by `mutation_scope.py`, passing that shard's function filters.
-qa-ci: baseline ruff typecheck unit acceptance architecture crap
+# Seconds, not minutes: only the tests a change can plausibly break.
+# Tier 1: focused tests for the current diff.
+focused base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    targets="$(uv run --locked python scripts/quality/select_tests.py --base "{{ base }}")"
+    if [ -z "$targets" ]; then
+        printf '%s\n' 'No testable change; nothing to run.'
+        exit 0
+    fi
+    if [ "$targets" = "BROAD" ]; then
+        printf '%s\n' 'Configuration changed; running the structural tests only.'
+        uv run --locked pytest tests/architecture tests/quality -q
+        exit 0
+    fi
+    printf 'Selected:\n%s\n' "$targets"
+    # shellcheck disable=SC2086
+    uv run --locked pytest $targets -q
+
+# Bounded by construction -- it runs the selection above, never the whole
+# suite. The pull request is what proves the whole suite.
+# Tier 2: pre-push gate.
+qa-push base="origin/main": ruff typecheck
+    just focused "{{ base }}"
+
+# `coverage` collects unit, acceptance and architecture in one instrumented
+# run, and `crap` reads that run's artifact. The per-module mutation matrix
+# runs beside this job; `mutation_scope.py` emits one shard per changed
+# function.
+# Tier 3: the pull-request gate.
+qa-pr: baseline ruff typecheck coverage crap
+
+# Everything the pull request proved, plus the container smoke test. In CI the
+# Docker workflow owns the container gate and runs it beside the quality job,
+# so this recipe is for proving a merge locally in one command.
+# Tier 4: the merge gate.
+qa-merge: qa-pr
     just smoke
+
+# Never selected away and never weakened: recomputes the card, verifies every
+# shard, and proves the plan without uploading.
+# Tier 4: the strict data-integrity gate for a real run directory.
+release-verify run_dir:
+    uv run --locked osm-polygon-website-tag verify-results --run-dir "{{ run_dir }}"
+    just release-stats-dry-run "{{ run_dir }}"
+
+# Deprecated alias for `qa-pr`, kept so existing invocations keep working.
+qa-ci: qa-pr
 
 install-hooks:
     uv run --locked pre-commit install --hook-type pre-commit --hook-type pre-push

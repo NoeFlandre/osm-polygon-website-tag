@@ -118,13 +118,18 @@ smoke checks before changing `Dockerfile`.
 | Type check | `just typecheck` |
 | Pre-commit hooks | `just pre-commit` |
 | Pre-push hook | `just pre-push` |
+| Tier 1 focused tests | `just focused [base]` |
+| Tier 2 pre-push gate | `just qa-push [base]` |
+| Tier 3 pull-request gate | `just qa-pr` |
+| Tier 4 merge gate | `just qa-merge` |
+| Tier 4 release gate | `just release-verify <run-dir>` |
 | Build distributions | `just build` |
 | Coverage gate | `just coverage` |
 | CRAP complexity gate | `just crap` |
 | Full mutation sweep | `just mutation` |
 | Changed-module mutation gate | `just mutation-scope <base>` |
 | Completion QA gate | `just qa-gauntlet` |
-| CI quality gates | `just qa-ci` plus one `just mutation-module <filter>` shard per changed module |
+| CI quality gates | `just qa-pr` plus one `just mutation-module <filter>` shard per changed module |
 | Strict docs build | `uv run --locked mkdocs build --strict --site-dir /tmp/osm-polygon-website-tag-site` |
 
 All Python tools run inside the locked `uv` environment. If a hook fails, run
@@ -137,10 +142,53 @@ mutations, smoke test, and diff review, in that order. The command uses
 `just quality` for CRAP/mutation reporting and `just check` for the fast
 core quality baseline, so all project-wide safeguards stay in place.
 
+## Tiered quality gates
+
+Each tier exists to catch a class of mistake at the cheapest moment that can
+catch it, and to add something the tier below it did not already prove. No
+tier is allowed to hide a failure: what a cheap tier skips, a later mandatory
+tier runs.
+
+| Tier | When | What runs | Budget |
+| --- | --- | --- | --- |
+| 1 | `git commit` | Ruff lint and format on the commit, `ty`, and `just focused` — only the tests the diff can plausibly break | seconds |
+| 2 | `git push` | `just qa-push`: Ruff, `ty`, and the same bounded selection | under a minute |
+| 3 | pull request | `just qa-pr`: lock baseline, Ruff, `ty`, one instrumented run of the whole suite, CRAP (max 6); beside it the container smoke test and one mutation shard per changed function | minutes |
+| 4 | merge / release | `just qa-merge` locally, and `just release-verify <run-dir>` before publishing | minutes |
+| 5 | nightly 03:00 UTC or manual | the exhaustive mutation sweep, sharded per package area | hours |
+
+Test selection for tiers 1 and 2 comes from
+`scripts/quality/select_tests.py`. A changed module selects its mirrored test
+*package* rather than a guessed file name, because test files do not always
+mirror a module one-to-one — `geographic/basemap.py` is covered by
+`test_basemap_private.py`. Changing `pyproject.toml`, `uv.lock`, `justfile`,
+`.pre-commit-config.yaml` or `tests/conftest.py` defeats selection entirely;
+the selector reports `BROAD` and the hook falls back to the structural tests,
+leaving the full suite to tier 3.
+
+**Tier 2 never runs the full suite.** That is deliberate, not a gap: the
+pull-request gate runs it on every commit, so paying for it again on every
+push buys waiting rather than safety.
+
+**Tier 4 is never sampled or selected away.** `just release-verify` recomputes
+the card, verifies every shard, and proves the publication plan without
+uploading. Publishing still demands an explicit `--confirm-repo`, and the
+remote data-identity checks refuse a release whose local data does not match
+what is on the Hub.
+
+Two duplications were removed when these tiers were introduced: the
+pull-request gate used to run the whole suite once plainly and again under
+coverage, and the container image was built by both the quality job and the
+Docker workflow. `crap` therefore no longer depends on `coverage` — `qa-pr`
+sequences them so the suite is instrumented exactly once. The Quality and
+Docker workflows also cancel superseded pull-request runs, which previously
+left a twenty-five-job mutation matrix running for a commit nobody was
+waiting on.
+
 ## Mutation testing
 
 A full sweep is about fourteen thousand mutants and several hours, which a
-hosted CI runner does not reliably survive. CI first runs `just qa-ci` for the
+hosted CI runner does not reliably survive. CI first runs `just qa-pr` for the
 non-mutation gates, then resolves the changed/relevant module filters in sorted
 order and runs one `just mutation-module <filter>` job per filter. A changed
 test file mirrors its source module, so weakening a test still rechecks that

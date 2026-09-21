@@ -5,11 +5,19 @@ name: Mutation sweep
 # results into the baseline the gate enforces. Manual: pushes run the scoped
 # gate in the Quality workflow instead.
 on:
+  # Tier 5. A full sweep is hours of work, so it runs while nobody is waiting
+  # and on demand, never in the path of a pull request.
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       children:
         description: Mutant test processes per job
         default: "4"
+
+concurrency:
+  group: mutation-sweep
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -46,7 +54,7 @@ jobs:
       - name: Sweep the area
         run: |
           uv run --locked python scripts/quality/mutation_runner.py run \
-            --max-children "${{ inputs.children }}" \
+            --max-children "${{ inputs.children || '4' }}" \
             "osm_polygon_website_tag.${{ matrix.area }}.*"
 
       - name: Collect the area's unverified mutants
