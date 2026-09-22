@@ -18,7 +18,6 @@ from tests.fixtures.card import (
 )
 
 import osm_polygon_website_tag.reporting.card as card_module
-import osm_polygon_website_tag.reporting.card_rendering as card_rendering
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
@@ -71,9 +70,8 @@ def test_geometry_renderers_have_stable_numeric_and_newline_contracts() -> None:
         "## Polygon geometry",
         "",
         (
-            "Surface and shape statistics computed over every published polygon row from the "
-            "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
-            "ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`stats.json`](stats.json)."
+            "Geodesic areas on the WGS84 ellipsoid, over every published polygon row. "
+            "Full breakdown in [`stats.json`](stats.json)."
         ),
         "",
         "| Metric | Value |",
@@ -160,7 +158,7 @@ def test_update_geographic_section_replaces_inserts_and_appends() -> None:
         b"prefix\n## Geographic distribution\nstale\n## Links\nkeep\n", stats
     )
     assert b"stale" not in replaced
-    assert b"**3** occupied cells" in replaced
+    assert b"**3** occupied H3 cells" in replaced
     assert replaced.endswith(b"## Links\nkeep\n")
 
     inserted = _update_geographic_section(b"prefix\n## Polygon geometry\nkeep\n", stats)
@@ -214,7 +212,7 @@ def test_update_website_text_section_replaces_only_the_generated_block() -> None
 
     assert updated.startswith(b"prefix\n## Website text\n")
     assert b"STALE" not in updated
-    assert b"Unique polygons with extracted text: **7**" in updated
+    assert b"unique `(osm_type, osm_id)` polygons -- 9 words in total" in updated
     assert updated.endswith(b"## Languages\nkeep\n")
 
 
@@ -394,8 +392,8 @@ def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
         "## Languages",
         "",
         (
-            "Detected with GlotLID v3 on successfully extracted text; labels are exact "
-            "script-aware `language_Script` codes with a top-1 probability column."
+            "Detected with GlotLID v3. Labels are script-aware `language_Script` codes; "
+            "each row carries its top-1 probability."
         ),
         "",
         "| Metric | Value |",
@@ -584,9 +582,7 @@ def test_render_hostnames_covers_empty_valid_and_invalid_rows() -> None:
 
 def test_schema_rows_and_selected_public_paths_are_deterministic(tmp_path: Path) -> None:
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
-    assert card_module._schema_rows(schema) == [
-        "| `polygon_id` | `string` | no | Deterministic source-scoped identifier of the form ``<source-stem>:<osm_type>/<osm_id>``. |"
-    ]
+    assert card_module._schema_rows(schema) == ["| `polygon_id` | `string` | no |"]
 
     polygons = tmp_path / "polygons"
     polygons.mkdir()
@@ -598,13 +594,19 @@ def test_schema_rows_and_selected_public_paths_are_deterministic(tmp_path: Path)
     assert card_module._selected_public_paths(tmp_path, {"b.osm.pbf"}) == [second]
 
 
-def test_schema_rows_escapes_descriptions_and_marks_nullable_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(card_rendering, "column_doc", lambda _name: " left   | right ")
-    schema = pa.schema([pa.field("name", pa.string(), nullable=True)])
+def test_schema_rows_mark_nullable_fields() -> None:
+    """The card lists column, type and nullability -- prose lives in the repo."""
+    schema = pa.schema(
+        [
+            pa.field("name", pa.string(), nullable=True),
+            pa.field("osm_id", pa.int64(), nullable=False),
+        ]
+    )
 
-    assert card_module._schema_rows(schema) == ["| `name` | `string` | yes | left \\| right |"]
+    assert card_module._schema_rows(schema) == [
+        "| `name` | `string` | yes |",
+        "| `osm_id` | `int64` | no |",
+    ]
 
 
 def test_public_schema_selection_respects_source_filter_and_metadata_check(
@@ -641,4 +643,4 @@ def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> No
     assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
     assert "## Geographic distribution" in card
     assert "assets/geographic_polygon_density.png" in card
-    assert "H3 resolution 3" in card
+    assert "occupied H3 cells at resolution 3" in card

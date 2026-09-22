@@ -104,24 +104,20 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
     assert "https://download.geofabrik.de/" in content
-    assert "Live metrics: [Trackio dashboard]" in content
+    assert "[Live metrics](https://huggingface.co/spaces/" in content
     assert "https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics" in content
-    assert "Live metrics: [Trackio dashboard](https://huggingface.co/spaces/" in content
-    assert "NoeFlandre/osm-polygon-website-tag-metrics);" in content
     assert ".hf.space" not in content
-    assert (
-        "[GitHub repository and README](https://github.com/NoeFlandre/osm-polygon-website-tag)"
-        in content
-    )
-    assert "Website text is third-party content" in content
-    assert "grants no additional reuse rights" in content
-    assert "Check the source site's terms or license" in content
+    assert "[source code](https://github.com/NoeFlandre/osm-polygon-website-tag)" in content
+    # The text licence carve-out must survive any tightening of the card.
+    assert "not covered by the ODbL" in content
+    assert "rights stay with each source site" in content
+    assert "Check a site's terms" in content
     assert "## Citation" in content
     assert "blob/main/CITATION.cff" in content
     assert "https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag" in content
     assert "assets/hero.png" in content
     assert content.index("assets/hero.png") < content.index("# OSM Polygon Website Dataset") + 200
-    assert content.index("## Methodology and quality") < content.index("## Public polygon schema")
+    assert content.index("## Public polygon schema") < content.index("## Method")
     assert "Top `website` hostnames" not in content
     assert "Top `contact:website` hostnames" not in content
 
@@ -155,41 +151,44 @@ def test_snapshot_section_renders_its_metrics_as_markdown_rows() -> None:
     )
 
     assert _render_snapshot_section(stats) == [
-        "## Snapshot",
+        "## At a glance",
         "",
-        "| Metric | Value | What it means |",
-        "| --- | ---: | --- |",
-        "| Snapshot status | Done | Current published snapshot |",
-        "| Regional PBFs included | 2 / 3 | Published source shards / expected source PBFs |",
-        "| Published polygon rows | 4 | Rows in the public `polygons/` files |",
-        "| Comparison observations | 5 | Source-level records with a website, contact:website, or Wikidata tag |",
-        "| Duplicate OSM objects | 6 | Objects observed in more than one source snapshot |",
-        "| Conflicting snapshot observations | 7 | Repeated observations whose tag values disagree with the selected version |",
-        "| Rejected polygon candidates | 8 | Candidate objects that did not produce a usable polygon row |",
+        "| | |",
+        "| --- | ---: |",
+        "| Polygons | 4 |",
+        "| With extracted text | 0 |",
+        "| Words of text | 0 |",
+        "| Languages | 0 |",
+        "| Regional sources | 2 / 3 |",
+        "| Duplicate objects removed | 6 |",
+        "| Candidates rejected | 8 |",
+        "| Status | Done |",
         "",
     ]
 
 
 def test_render_markdown_has_a_stable_complete_output_contract() -> None:
+    """The whole card is pinned: a public card changes deliberately or not at all."""
     expected = dedent(
         r"""
         # OSM Polygon Website Dataset
 
         ![osm-polygon-website-tag hero banner](assets/hero.png)
 
-        OpenStreetMap closed ways and polygon relations carrying a non-empty `website` OR `contact:website` tag, with full main-page text extracted using Trafilatura. Every statistic below is regenerated from the current upload-acknowledged Parquet artifacts.
+        OpenStreetMap polygons that carry a `website` or `contact:website` tag, with the full main-page text of each site. Every number below is recomputed from the published Parquet files.
 
-        ## Snapshot
+        ## At a glance
 
-        | Metric | Value | What it means |
-        | --- | ---: | --- |
-        | Snapshot status | In progress | Current published snapshot |
-        | Regional PBFs included | 5 / 6 | Published source shards / expected source PBFs |
-        | Published polygon rows | 3 | Rows in the public `polygons/` files |
-        | Comparison observations | 2 | Source-level records with a website, contact:website, or Wikidata tag |
-        | Duplicate OSM objects | 7 | Objects observed in more than one source snapshot |
-        | Conflicting snapshot observations | 8 | Repeated observations whose tag values disagree with the selected version |
-        | Rejected polygon candidates | 4 | Candidate objects that did not produce a usable polygon row |
+        | | |
+        | --- | ---: |
+        | Polygons | 3 |
+        | With extracted text | 19 |
+        | Words of text | 31 |
+        | Languages | 0 |
+        | Regional sources | 5 / 6 |
+        | Duplicate objects removed | 7 |
+        | Candidates rejected | 4 |
+        | Status | In progress |
 
         ## Website text
 
@@ -198,15 +197,17 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         | `website` | 9 | 10 | 11 | 12 | 13 |
         | `contact:website` | 14 | 15 | 16 | 17 | 18 |
 
-        Website-text table counts are unique `(osm_type, osm_id)` identities across regional rows; regional overlap duplicates are removed globally.
+        Counts are unique `(osm_type, osm_id)` polygons -- 31 words in total. Regional overlap duplicates are removed globally.
 
-        Unique polygons with extracted text: **19**
-        Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy has successful, trimmed non-empty website or contact:website text; regional overlap duplicates removed globally.
-        Combined extracted words: **31**
+        ## Geographic distribution
+
+        ![H3 polygon density](assets/geographic_polygon_density.png)
+
+        **21** occupied H3 cells at resolution 20, covering **22** unique polygons with extracted text. Log colour scale, Natural Earth 1:110m backdrop.
 
         ## Polygon geometry
 
-        Surface and shape statistics computed over every published polygon row from the `area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`stats.json`](stats.json).
+        Geodesic areas on the WGS84 ellipsoid, over every published polygon row. Full breakdown in [`stats.json`](stats.json).
 
         | Metric | Value |
         | --- | ---: |
@@ -222,17 +223,6 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
 
         Dataset bounding box: `[-1.500000, -2.500000, 3.500000, 4.500000]` (min lon, min lat, max lon, max lat).
 
-        ## Geographic distribution
-
-        ![H3 polygon density](assets/geographic_polygon_density.png)
-
-        H3 resolution 20 contains **21** occupied cells across **22** unique polygons with successfully extracted, non-empty website or contact:website text, globally deduplicated by `(osm_type, osm_id)`; regional overlap duplicates removed globally. The color scale is logarithmic, counts are absolute, and a Natural Earth 1:110m land backdrop provides geographic context.
-
-        ## Links
-
-        Live metrics: [Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics); it shows this frozen dataset snapshot.
-        Code and README: [GitHub repository and README](https://github.com/NoeFlandre/osm-polygon-website-tag).
-
 
         ### Top `website` hostnames
 
@@ -245,51 +235,44 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         | Hostname | Polygons |
         | --- | ---: |
         | `contact.example` | 24 |
-        ## Methodology and quality
-
-        Geometry is assembled with libosmium. Full main text is extracted independently for both website tags with Trafilatura and is not truncated. Word counts are Python Unicode `\w+` matches.
-
-        Text statuses are `absent`, `pending`, `success`, `empty`, `invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. A source is enriched only when every status is `success` or `absent`. Failed values retry on later resumptions; successful values are cached.
-
-        A URL is marked `unsafe_url` when its hostname, or any redirect target, does not resolve exclusively to globally routable public IP addresses. Localhost, private, reserved, multicast, and unspecified targets are blocked. Unsupported schemes and URLs containing credentials are classified as `invalid_url`; redirect limits, timeouts, oversized responses, and unsupported content types are recorded as `fetch_error`.
 
         ## Dataset contents
 
-        - `polygons/*.parquet`: the public polygon split, one shard per source PBF.
-        - `analysis/*.parquet`: detailed overlap, provenance, hostname, duplicate, conflict, and per-source statistics.
-        - `deduplication_summary.json`: counts and tag-conflict totals from the global canonicalization pass.
-        - `stats.json`: complete machine-readable polygon geometry statistics.
-        - `manifests/`: source inventory, upload checkpoints, and completion receipt.
+        - `polygons/*.parquet` -- the polygons and their extracted text, one shard per source.
+        - `analysis/*.parquet` -- languages, sentences, hostnames, duplicates and per-source counts.
+        - `stats.json`, `deduplication_summary.json` -- full geometry and dedup numbers.
+        - `manifests/` -- source inventory and completion receipt.
 
         ## Public polygon schema
 
-        | Column | Type | Nullable | Description |
-        | --- | --- | :---: | --- |
-        | `polygon_id` | `string` | no | Deterministic source-scoped identifier of the form ``<source-stem>:<osm_type>/<osm_id>``. |
+        | Column | Type | Nullable |
+        | --- | --- | :---: |
+        | `polygon_id` | `string` | no |
+
+        ## Method
+
+        - Geometry assembled with libosmium; text extracted with Trafilatura and never truncated. Word counts are Unicode `\w+` matches.
+        - Text status is one of `absent`, `pending`, `success`, `empty`, `invalid_url`, `unsafe_url`, `fetch_error`, `extract_error`. A source is enriched only when every status is `success` or `absent`. Failed values retry on later resumptions; successful values are cached.
+        - URLs resolving to anything other than a public IP are refused as `unsafe_url`, before and after redirects.
+        - [Live metrics](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics) · [source code](https://github.com/NoeFlandre/osm-polygon-website-tag)
 
         ## Provenance and license
 
-        Source filename, byte size, and nanosecond modification time are recorded before processing. The completion receipt binds finalized artifacts by relative path, byte size, and SHA-256.
+        Every artifact is bound by relative path, byte size and SHA-256 in the completion receipt. Map backdrop: Natural Earth 1:110m (public domain).
 
-        The map backdrop uses Natural Earth 1:110m Admin-0 country geography, distributed in the source tree under its public-domain terms.
+        © OpenStreetMap contributors, under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) -- see the [copyright page](https://www.openstreetmap.org/copyright). Extracts from [Geofabrik](https://download.geofabrik.de/).
 
-        © OpenStreetMap contributors. OpenStreetMap data is available under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/); see the [OpenStreetMap copyright and attribution page](https://www.openstreetmap.org/copyright). Regional PBF extracts are provided by [Geofabrik](https://download.geofabrik.de/).
-
-        Website text is third-party content, separate from the OSM data, and is not covered by the ODbL. This dataset asserts no license for that text and grants no additional reuse rights: copyright and licensing conditions remain with each source website. Check the source site's terms or license before using or redistributing extracted text.
+        **The website text is not covered by the ODbL.** It is third-party content; rights stay with each source site. Check a site's terms before reusing its text.
 
         ## Citation
 
-        If you use this dataset, please cite it using the machine-readable metadata in [`CITATION.cff`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/blob/main/CITATION.cff). GitHub and the Hugging Face dataset page can then display the citation directly.
+        Machine-readable metadata: [`CITATION.cff`](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/blob/main/CITATION.cff).
 
         > Flandre, Noé. *OSM Polygon Website Tag Dataset*. [Hugging Face dataset](https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag)
         """
-    ).lstrip()
-
-    expected = expected.replace(
-        "Unique polygons with extracted text: **19**\n",
-        "Unique polygons with extracted text: **19**  \n",
-    )
+    ).lstrip("\n")
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
+
     assert (
         card_module._render_markdown(
             _golden_card_stats(), geometry=_golden_geometry_stats(), schema=schema

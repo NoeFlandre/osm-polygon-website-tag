@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 
 import pyarrow as pa
 
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA, column_doc
+from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.reporting.card_metadata import _dataset_status_value
 from osm_polygon_website_tag.reporting.card_stats import CardStats
 from osm_polygon_website_tag.reporting.geographic.layout import (
@@ -21,6 +21,11 @@ from osm_polygon_website_tag.reporting.geometry_stats import GEOMETRY_STATS_FILE
 from osm_polygon_website_tag.runtime.config import DEFAULT_GITHUB_REPO, TRACKIO_DASHBOARD_URL
 
 CARD_TOP_LANGUAGE_LIMIT = 10
+
+# A public card is read, not audited. The long tails belong in the published
+# Parquet and `stats.json`; the card shows enough to characterise them.
+CARD_TOP_UNSUPPORTED_LIMIT = 5
+CARD_TOP_HOSTNAME_LIMIT = 5
 
 
 def _render_markdown(
@@ -36,13 +41,12 @@ def _render_markdown(
         *_render_website_text_section(stats),
         *_render_language_section(stats),
         *_render_sentence_section(stats),
-        *_render_polygon_geometry_section(geometry),
         *_render_geographic_section(stats),
-        *_render_links_section(),
+        *_render_polygon_geometry_section(geometry),
         *_hostname_sections(stats),
-        *_render_methodology_section(stats),
         *_render_dataset_contents_section(),
         *_render_schema_section(schema),
+        *_render_methodology_section(stats),
         *_render_provenance_section(),
         *_render_citation_section(),
     ]
@@ -57,10 +61,9 @@ def _render_intro_section() -> list[str]:
         f"![osm-polygon-website-tag hero banner]({HERO_ASSET_REL_PATH})",
         "",
         (
-            "OpenStreetMap closed ways and polygon relations carrying a non-empty "
-            "`website` OR `contact:website` tag, with full main-page text extracted "
-            "using Trafilatura. Every statistic below is regenerated from the "
-            "current upload-acknowledged Parquet artifacts."
+            "OpenStreetMap polygons that carry a `website` or `contact:website` tag, "
+            "with the full main-page text of each site. Every number below is "
+            "recomputed from the published Parquet files."
         ),
         "",
     ]
@@ -69,35 +72,18 @@ def _render_intro_section() -> list[str]:
 def _render_snapshot_section(stats: CardStats) -> list[str]:
     """Render snapshot status and artifact counts."""
     return [
-        "## Snapshot",
+        "## At a glance",
         "",
-        "| Metric | Value | What it means |",
-        "| --- | ---: | --- |",
-        f"| Snapshot status | {_dataset_status_label(stats)} | Current published snapshot |",
-        (
-            f"| Regional PBFs included | {stats.sources_count:,} / "
-            f"{stats.expected_sources_count:,} | Published source shards / expected source PBFs |"
-        ),
-        (
-            f"| Published polygon rows | {stats.public_row_count:,} | "
-            "Rows in the public `polygons/` files |"
-        ),
-        (
-            f"| Comparison observations | {stats.observation_count:,} | "
-            "Source-level records with a website, contact:website, or Wikidata tag |"
-        ),
-        (
-            f"| Duplicate OSM objects | {stats.duplicate_count:,} | "
-            "Objects observed in more than one source snapshot |"
-        ),
-        (
-            f"| Conflicting snapshot observations | {stats.conflicting_snapshot_count:,} | "
-            "Repeated observations whose tag values disagree with the selected version |"
-        ),
-        (
-            f"| Rejected polygon candidates | {stats.rejection_count:,} | "
-            "Candidate objects that did not produce a usable polygon row |"
-        ),
+        "| | |",
+        "| --- | ---: |",
+        f"| Polygons | {stats.public_row_count:,} |",
+        f"| With extracted text | {stats.polygons_with_any_text:,} |",
+        (f"| Words of text | {stats.website_total_words + stats.contact_website_total_words:,} |"),
+        f"| Languages | {stats.detected_language_count:,} |",
+        f"| Regional sources | {stats.sources_count:,} / {stats.expected_sources_count:,} |",
+        f"| Duplicate objects removed | {stats.duplicate_count:,} |",
+        f"| Candidates rejected | {stats.rejection_count:,} |",
+        f"| Status | {_dataset_status_label(stats)} |",
         "",
     ]
 
@@ -124,17 +110,9 @@ def _render_website_text_section(stats: CardStats) -> list[str]:
         ),
         "",
         (
-            "Website-text table counts are unique `(osm_type, osm_id)` identities across "
-            "regional rows; regional overlap duplicates are removed globally."
+            f"Counts are unique `(osm_type, osm_id)` polygons -- {combined_words:,} words "
+            "in total. Regional overlap duplicates are removed globally."
         ),
-        "",
-        f"Unique polygons with extracted text: **{stats.polygons_with_any_text:,}**  ",
-        (
-            "Counts unique `(osm_type, osm_id)` polygons across regional rows when any copy "
-            "has successful, trimmed non-empty website or contact:website text; regional "
-            "overlap duplicates removed globally."
-        ),
-        f"Combined extracted words: **{combined_words:,}**",
         "",
     ]
 
@@ -148,8 +126,8 @@ def _render_language_section(stats: CardStats) -> list[str]:
         "## Languages",
         "",
         (
-            "Detected with GlotLID v3 on successfully extracted text; labels are exact "
-            "script-aware `language_Script` codes with a top-1 probability column."
+            "Detected with GlotLID v3. Labels are script-aware `language_Script` codes; "
+            "each row carries its top-1 probability."
         ),
         "",
         "| Metric | Value |",
@@ -180,12 +158,9 @@ def _render_sentence_section(stats: CardStats) -> list[str]:
         "## Sentences",
         "",
         (
-            "Extracted text is segmented with "
-            "[SaT](https://huggingface.co/segment-any-text/sat-3l-sm) for the 85 languages the "
-            "segmenter covers; text in any other detected language records "
-            "`unsupported_language` instead of sentences. Segments carry their own trailing "
-            "spaces but not the line breaks that separated them, so joining them does not "
-            "reproduce the source text; the full text stays in the `*_text` columns."
+            "Segmented with [SaT](https://huggingface.co/segment-any-text/sat-3l-sm), which "
+            "covers 85 languages; anything else records `unsupported_language`. Segments do "
+            "not rejoin into the source text -- use the `*_text` columns for that."
         ),
         "",
         "| Metric | Value |",
@@ -199,13 +174,9 @@ def _render_sentence_section(stats: CardStats) -> list[str]:
         f"| Sentence-splitting coverage | {coverage} |",
         f"| Unsupported-language share | {unsupported_share} |",
         "",
-        "Top unsupported languages:",
-        "",
-        "| Language | Text units |",
-        "| --- | ---: |",
-        *top_rows,
-        "",
         f"Mean sentences per segmented text: **{mean_sentences}**",
+        "",
+        f"Most common unsupported languages: {top_rows}.",
         "",
     ]
 
@@ -227,13 +198,16 @@ def _reported_count(value: int, fallback: int) -> int:
     return value or fallback
 
 
-def _unsupported_language_rows(stats: CardStats) -> list[str]:
-    """Render the top unsupported-language rows, including an empty-state row."""
-    if not stats.top_unsupported_sentence_languages:
-        return ["| None reported | 0 |"]
-    return [
-        f"| `{label}` | {count:,} |" for label, count in stats.top_unsupported_sentence_languages
-    ]
+def _unsupported_language_rows(stats: CardStats) -> str:
+    """Name the largest unsupported languages inline rather than in a long table.
+
+    The full distribution is hundreds of labels with a very long tail; it lives
+    in the published Parquet, and listing it on the card buried everything else.
+    """
+    top = stats.top_unsupported_sentence_languages[:CARD_TOP_UNSUPPORTED_LIMIT]
+    if not top:
+        return "none reported"
+    return ", ".join(f"`{label}` ({count:,})" for label, count in top)
 
 
 def _mean_sentences(total: int, segmented: int) -> str:
@@ -257,10 +231,8 @@ def _render_polygon_geometry_section(geometry: GeometryStats) -> list[str]:
         "## Polygon geometry",
         "",
         (
-            "Surface and shape statistics computed over every published polygon row from the "
-            "`area_m2`, `bbox`, and `geometry` columns. Areas are geodesic on the WGS84 "
-            f"ellipsoid. Population scope: published polygon rows. The complete breakdown is published as [`{GEOMETRY_STATS_FILENAME}`]"
-            f"({GEOMETRY_STATS_FILENAME})."
+            "Geodesic areas on the WGS84 ellipsoid, over every published polygon row. "
+            f"Full breakdown in [`{GEOMETRY_STATS_FILENAME}`]({GEOMETRY_STATS_FILENAME})."
         ),
         "",
         "| Metric | Value |",
@@ -295,13 +267,10 @@ def _render_geographic_section(stats: CardStats) -> list[str]:
         "",
         (
             f"![H3 polygon density]({POLYGON_DENSITY_ASSET_REL_PATH})\n\n"
-            f"H3 resolution {stats.polygon_density_h3_resolution} contains "
-            f"**{stats.occupied_h3_cell_count:,}** occupied cells across "
-            f"**{stats.polygon_density_row_count:,}** unique polygons with successfully "
-            "extracted, non-empty website or contact:website text, globally deduplicated by "
-            "`(osm_type, osm_id)`; regional overlap duplicates removed globally. "
-            "The color scale is logarithmic, counts are absolute, and a Natural Earth "
-            "1:110m land backdrop provides geographic context."
+            f"**{stats.occupied_h3_cell_count:,}** occupied H3 cells at resolution "
+            f"{stats.polygon_density_h3_resolution}, covering "
+            f"**{stats.polygon_density_row_count:,}** unique polygons with extracted text. "
+            "Log colour scale, Natural Earth 1:110m backdrop."
         ),
         "",
     ]
@@ -327,28 +296,24 @@ def _render_links_section() -> list[str]:
 def _render_methodology_section(stats: CardStats) -> list[str]:
     """Render extraction, status, and URL-safety methodology."""
     return [
-        "## Methodology and quality",
+        "## Method",
         "",
         (
-            "Geometry is assembled with libosmium. Full main text is extracted "
-            "independently for both website tags with Trafilatura and is not "
-            "truncated. Word counts are Python Unicode `\\w+` matches."
+            "- Geometry assembled with libosmium; text extracted with Trafilatura "
+            "and never truncated. Word counts are Unicode `\\w+` matches."
         ),
-        "",
         (
-            "Text statuses are `absent`, `pending`, `success`, `empty`, "
-            "`invalid_url`, `unsafe_url`, `fetch_error`, or `extract_error`. "
+            "- Text status is one of `absent`, `pending`, `success`, `empty`, "
+            "`invalid_url`, `unsafe_url`, `fetch_error`, `extract_error`. "
             + _enrichment_policy(stats)
         ),
-        "",
         (
-            "A URL is marked `unsafe_url` when its hostname, or any redirect "
-            "target, does not resolve exclusively to globally routable public "
-            "IP addresses. Localhost, private, reserved, multicast, and "
-            "unspecified targets are blocked. Unsupported schemes and URLs "
-            "containing credentials are classified as `invalid_url`; redirect "
-            "limits, timeouts, oversized responses, and unsupported content "
-            "types are recorded as `fetch_error`."
+            "- URLs resolving to anything other than a public IP are refused as "
+            "`unsafe_url`, before and after redirects."
+        ),
+        (
+            f"- [Live metrics]({TRACKIO_DASHBOARD_URL}) \u00b7 "
+            f"[source code]({DEFAULT_GITHUB_REPO.removesuffix('.git')})"
         ),
         "",
     ]
@@ -359,13 +324,10 @@ def _render_dataset_contents_section() -> list[str]:
     return [
         "## Dataset contents",
         "",
-        "- `polygons/*.parquet`: the public polygon split, one shard per source PBF.",
-        "- `analysis/*.parquet`: detailed overlap, provenance, hostname, duplicate, "
-        "conflict, and per-source statistics.",
-        "- `deduplication_summary.json`: counts and tag-conflict totals from the global "
-        "canonicalization pass.",
-        f"- `{GEOMETRY_STATS_FILENAME}`: complete machine-readable polygon geometry statistics.",
-        "- `manifests/`: source inventory, upload checkpoints, and completion receipt.",
+        "- `polygons/*.parquet` -- the polygons and their extracted text, one shard per source.",
+        "- `analysis/*.parquet` -- languages, sentences, hostnames, duplicates and per-source counts.",
+        f"- `{GEOMETRY_STATS_FILENAME}`, `deduplication_summary.json` -- full geometry and dedup numbers.",
+        "- `manifests/` -- source inventory and completion receipt.",
         "",
     ]
 
@@ -375,8 +337,8 @@ def _render_schema_section(schema: pa.Schema) -> list[str]:
     return [
         "## Public polygon schema",
         "",
-        "| Column | Type | Nullable | Description |",
-        "| --- | --- | :---: | --- |",
+        "| Column | Type | Nullable |",
+        "| --- | --- | :---: |",
         *_schema_rows(schema),
         "",
     ]
@@ -388,31 +350,21 @@ def _render_provenance_section() -> list[str]:
         "## Provenance and license",
         "",
         (
-            "Source filename, byte size, and nanosecond modification time are "
-            "recorded before processing. The completion receipt binds finalized "
-            "artifacts by relative path, byte size, and SHA-256."
+            "Every artifact is bound by relative path, byte size and SHA-256 in the "
+            "completion receipt. Map backdrop: Natural Earth 1:110m (public domain)."
         ),
         "",
         (
-            "The map backdrop uses Natural Earth 1:110m Admin-0 country geography, "
-            "distributed in the source tree under its public-domain terms."
+            "© OpenStreetMap contributors, under the "
+            "[ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) -- see the "
+            "[copyright page](https://www.openstreetmap.org/copyright). "
+            "Extracts from [Geofabrik](https://download.geofabrik.de/)."
         ),
         "",
         (
-            "© OpenStreetMap contributors. OpenStreetMap data is available under "
-            "the [Open Database License (ODbL) 1.0]"
-            "(https://opendatacommons.org/licenses/odbl/1-0/); see the "
-            "[OpenStreetMap copyright and attribution page]"
-            "(https://www.openstreetmap.org/copyright). Regional PBF extracts are "
-            "provided by [Geofabrik](https://download.geofabrik.de/)."
-        ),
-        "",
-        (
-            "Website text is third-party content, separate from the OSM data, and "
-            "is not covered by the ODbL. This dataset asserts no license for that "
-            "text and grants no additional reuse rights: copyright and licensing "
-            "conditions remain with each source website. Check the source site's "
-            "terms or license before using or redistributing extracted text."
+            "**The website text is not covered by the ODbL.** It is third-party "
+            "content; rights stay with each source site. Check a site's terms "
+            "before reusing its text."
         ),
         "",
     ]
@@ -424,11 +376,9 @@ def _render_citation_section() -> list[str]:
         "## Citation",
         "",
         (
-            "If you use this dataset, please cite it using the machine-readable "
-            "metadata in [`CITATION.cff`]"
+            "Machine-readable metadata: [`CITATION.cff`]"
             "(https://huggingface.co/datasets/NoeFlandre/osm-polygon-website-tag/"
-            "blob/main/CITATION.cff). GitHub and the Hugging Face dataset page "
-            "can then display the citation directly."
+            "blob/main/CITATION.cff)."
         ),
         "",
         (
@@ -462,19 +412,18 @@ def _hostname_sections(stats: CardStats) -> list[str]:
     ):
         if rows:
             sections.extend(["", _render_hostnames(label, rows, hostname_key=key)])
+    if sections:
+        # The joined section ends on a table row; the next heading needs air.
+        sections.append("")
     return sections
 
 
 def _schema_rows(schema: pa.Schema = POLYGON_PUBLIC_SCHEMA) -> list[str]:
     """Render one Markdown row for every public polygon schema field."""
-    rows: list[str] = []
-    for field in schema:
-        description = " ".join(column_doc(field.name).split()).replace("|", "\\|")
-        rows.append(
-            f"| `{field.name}` | `{field.type}` | "
-            f"{'yes' if field.nullable else 'no'} | {description} |"
-        )
-    return rows
+    return [
+        f"| `{field.name}` | `{field.type}` | {'yes' if field.nullable else 'no'} |"
+        for field in schema
+    ]
 
 
 def _dataset_status_label(stats: CardStats) -> str:
@@ -492,13 +441,13 @@ def _render_hostnames(
     *,
     hostname_key: str,
 ) -> str:
-    """Render at most ten artifact-derived hostnames."""
+    """Render the largest artifact-derived hostnames."""
     lines = [f"### Top `{label}` hostnames", ""]
     if not rows:
         lines.append("_No hostnames observed._")
         return "\n".join(lines)
     lines.extend(["| Hostname | Polygons |", "| --- | ---: |"])
-    for row in rows[:10]:
+    for row in rows[:CARD_TOP_HOSTNAME_LIMIT]:
         hostname = row[hostname_key]
         row_count = row["row_count"]
         if not isinstance(hostname, str) or not isinstance(row_count, int):

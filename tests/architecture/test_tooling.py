@@ -127,8 +127,8 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "uv lock --check",
         "uv run --locked ruff check .",
         "uv run --locked ruff format --check .",
-        "uv run --locked pytest tests --ignore=tests/acceptance --ignore=tests/architecture",
-        "uv run --locked pytest tests/acceptance",
+        "uv run --locked pytest -n auto tests --ignore=tests/acceptance --ignore=tests/architecture",
+        "uv run --locked pytest -n auto tests/acceptance",
         "uv run --locked pytest tests/architecture",
         "uv run --locked ty check src tests scripts",
         "uv run --locked pytest",
@@ -333,3 +333,19 @@ def test_the_release_gate_stays_strict() -> None:
     assert 'just release-stats-dry-run "{{ run_dir }}"' in justfile
     # The publishing recipes must keep demanding an explicit repository.
     assert "--confirm-repo 'NoeFlandre/osm-polygon-website-tag'" in justfile
+
+
+def test_the_suite_recipes_shard_across_cores() -> None:
+    """The project lives on an external volume, so I/O latency sets the pace.
+
+    Serially the suite spent about eighteen minutes mostly waiting on reads;
+    sharded across cores it runs in well under two. Losing `-n auto` would
+    quietly hand that back.
+    """
+    justfile = (ROOT / "justfile").read_text()
+
+    for recipe in ("test", "unit", "acceptance", "coverage"):
+        body = re.search(rf"^{recipe}:[^\n]*\n((?:    [^\n]*\n)+)", justfile, re.MULTILINE)
+        assert body is not None, recipe
+        assert "-n auto" in body.group(1), recipe
+    assert "pytest-xdist" in (ROOT / "pyproject.toml").read_text()

@@ -111,7 +111,7 @@ def test_card_stats_does_not_mark_retryable_statuses_enriched(tmp_path: Path) ->
     stats = compute_card_stats(run_dir)
 
     assert stats.enriched_sources_count == 0
-    assert "| Snapshot status | In progress |" in build_card(run_dir).read_text()
+    assert "| Status | In progress |" in build_card(run_dir).read_text()
 
 
 def test_card_stats_can_scope_to_uploaded_sources(tmp_path: Path) -> None:
@@ -167,9 +167,9 @@ def test_incremental_card_renders_progress_and_text_statistics(tmp_path: Path) -
     content = build_card(run_dir).read_text()
 
     assert "dataset_status: in_progress" in content
-    assert "| Regional PBFs included | 1 / 2 |" in content
+    assert "| Regional sources | 1 / 2 |" in content
     assert "| `website` | 1 | 1 | 0 | 0 | 3 |" in content
-    assert "Combined extracted words: **3**" in content
+    assert "3 words in total" in content
     assert "Trafilatura" in content
     assert "Unicode `\\w+`" in content
 
@@ -188,7 +188,7 @@ def test_hostname_renderer_caps_public_table_at_ten_rows() -> None:
         hostname_key="website_hostname",
     )
 
-    assert "host-9.example" in rendered
+    assert "host-4.example" in rendered
     assert "host-10.example" not in rendered
 
 
@@ -241,7 +241,7 @@ def test_sentence_front_matter_and_section_render_segmentation_totals() -> None:
     assert "| Left unsplit: unsupported language | 3 |" in body
     assert "| Sentence-splitting coverage | 80.0% |" in body
     assert "| Unsupported-language share | 20.0% |" in body
-    assert "| `hrv_Latn` | 2 |" in body
+    assert "`hrv_Latn` (2)" in body
     assert "Mean sentences per segmented text: **5.0**" in body
 
 
@@ -259,12 +259,9 @@ def test_sentence_section_has_a_stable_line_contract() -> None:
         "## Sentences",
         "",
         (
-            "Extracted text is segmented with "
-            "[SaT](https://huggingface.co/segment-any-text/sat-3l-sm) for the 85 languages the "
-            "segmenter covers; text in any other detected language records "
-            "`unsupported_language` instead of sentences. Segments carry their own trailing "
-            "spaces but not the line breaks that separated them, so joining them does not "
-            "reproduce the source text; the full text stays in the `*_text` columns."
+            "Segmented with [SaT](https://huggingface.co/segment-any-text/sat-3l-sm), which "
+            "covers 85 languages; anything else records `unsupported_language`. Segments do "
+            "not rejoin into the source text -- use the `*_text` columns for that."
         ),
         "",
         "| Metric | Value |",
@@ -278,14 +275,9 @@ def test_sentence_section_has_a_stable_line_contract() -> None:
         "| Sentence-splitting coverage | 80.0% |",
         "| Unsupported-language share | 20.0% |",
         "",
-        "Top unsupported languages:",
-        "",
-        "| Language | Text units |",
-        "| --- | ---: |",
-        "| `hrv_Latn` | 2 |",
-        "| `zho_Hani` | 1 |",
-        "",
         "Mean sentences per segmented text: **5.0**",
+        "",
+        "Most common unsupported languages: `hrv_Latn` (2), `zho_Hani` (1).",
         "",
     ]
 
@@ -328,13 +320,13 @@ def test_sentence_count_helpers_keep_explicit_values_and_use_distinct_fallbacks(
 
     assert card_rendering._sentence_counts(stats) == (5, 4, 6, 12)
     assert card_rendering._reported_count(2, 7) == 2
-    assert card_rendering._unsupported_language_rows(stats) == [
-        "| `hrv_Latn` | 2 |",
-        "| `zho_Hani` | 1 |",
-    ]
-    assert card_rendering._unsupported_language_rows(
-        replace(stats, top_unsupported_sentence_languages=[])
-    ) == ["| None reported | 0 |"]
+    assert card_rendering._unsupported_language_rows(stats) == "`hrv_Latn` (2), `zho_Hani` (1)"
+    assert (
+        card_rendering._unsupported_language_rows(
+            replace(stats, top_unsupported_sentence_languages=[])
+        )
+        == "none reported"
+    )
 
 
 def test_sentence_count_helpers_use_fallbacks_when_explicit_counts_are_zero() -> None:
