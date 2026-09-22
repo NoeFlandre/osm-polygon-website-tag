@@ -1386,3 +1386,96 @@ def test_release_upload_folder_includes_exact_repository_and_commit(
     assert captured["repo_id"] == DEFAULT_HF_DATASET
     assert captured["repo_type"] == "dataset"
     assert captured["commit_message"] == "Publish dataset card and polygon statistics report"
+
+
+_REMOTE_VERIFIERS = (
+    "_verify_remote_data_identity",
+    "_verify_remote_parquet_data_identity",
+    "_verify_remote_text_population_identity",
+)
+
+
+def _recording_remote_checker(
+    monkeypatch: pytest.MonkeyPatch, *, changed: tuple[str, ...]
+) -> tuple[dict[str, tuple[Any, ...]], list[Any]]:
+    """Stub the remote calls while recording the exact arguments they receive.
+
+    Recording the arguments is the point: a stub that swallows ``*args`` lets
+    a swapped or dropped argument through, which is how this function's whole
+    orchestration went unverified.
+    """
+    import huggingface_hub
+
+    calls: dict[str, tuple[Any, ...]] = {}
+    created: list[Any] = []
+
+    class RecordingApi:
+        def __init__(self, token: object = None) -> None:
+            self.token = token
+            created.append(self)
+
+    def record(name: str, result: object = None):
+        def hook(*args: object) -> object:
+            calls[name] = args
+            return result
+
+        return hook
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", RecordingApi)
+    monkeypatch.setattr(release_module, "resolve_hf_token", lambda: "secret-token")
+    monkeypatch.setattr(release_module, "_remote_revision", record("_remote_revision", "rev-1"))
+    for name in _REMOTE_VERIFIERS:
+        monkeypatch.setattr(release_module, name, record(name))
+    monkeypatch.setattr(
+        release_module, "_remote_changed_files", record("_remote_changed_files", changed)
+    )
+    return calls, created
+
+
+def test_a_missing_credential_refuses_before_any_remote_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(release_module, "resolve_hf_token", lambda: "")
+
+    with pytest.raises(
+        ValueError, match=r"^release requires Hugging Face environment/local credentials$"
+    ):
+        release_module._default_remote_checker(DEFAULT_HF_DATASET, ())
+
+
+def test_the_remote_check_threads_every_argument_to_every_remote_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item = ReleasedFile(relative_path="README.md", sha256="a" * 64, size_bytes=3)
+    files = (item,)
+    calls, created = _recording_remote_checker(monkeypatch, changed=())
+
+    checked = release_module._default_remote_checker("owner/repo", files)
+
+    assert len(created) == 1
+    api = created[0]
+    assert api.token == "secret-token"
+    assert calls["_remote_revision"] == (api, "owner/repo")
+    for name in _REMOTE_VERIFIERS:
+        assert calls[name] == (api, "owner/repo", "rev-1", files), name
+    assert calls["_remote_changed_files"] == (api, "owner/repo", "rev-1", files)
+    assert checked == release_module._RemoteCheck("rev-1")
+
+
+def test_an_unchanged_remote_returns_its_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    _recording_remote_checker(monkeypatch, changed=())
+
+    checked = release_module._default_remote_checker("owner/repo", ())
+
+    assert checked == release_module._RemoteCheck("rev-1")
+    assert checked.changed_files == ()
+
+
+def test_a_changed_remote_withholds_the_revision_and_names_the_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _recording_remote_checker(monkeypatch, changed=("README.md", "dataset.yaml"))
+
+    checked = release_module._default_remote_checker("owner/repo", ())
+
+    assert checked == release_module._RemoteCheck(None, ("README.md", "dataset.yaml"))
