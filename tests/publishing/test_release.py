@@ -2226,3 +2226,16 @@ def test_remote_size_accepts_an_entry_without_a_size() -> None:
     api = SimpleNamespace(get_paths_info=lambda *_args, **_kwargs: [SimpleNamespace()])
 
     release_module._verify_remote_size(api, "o/r", "rev", _released("a"))
+
+
+@pytest.mark.parametrize(("size_bytes", "digest"), [(2, "x"), (1, "y")])
+def test_remote_text_population_entry_rejects_either_identity_mismatch(
+    size_bytes: int, digest: str
+) -> None:
+    remote: dict[str, dict[str, int | str]] = {"a.parquet": {"size_bytes": 1, "sha256": "x"}}
+
+    with pytest.raises(
+        release_module._RemoteDataMismatchError,
+        match=r"^remote text population shard mismatch: a\.parquet$",
+    ):
+        release_module._verify_remote_text_population_entry(remote, "a.parquet", size_bytes, digest)

@@ -1383,3 +1383,8 @@ def test_cells_per_group_default_to_all_observations(
 def test_class_count_refusal_is_exact(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"^unsupported class query$"):
         _write_class_count(None, tmp_path / "x.parquet", column="bad", view="public_polygons")  # type: ignore
+
+
+def test_cells_per_group_refusal_is_exact(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^unsupported group query$"):
+        _write_cells_per_group(None, tmp_path / "x.parquet", group_column="bad")  # type: ignore

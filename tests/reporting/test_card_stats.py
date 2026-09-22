@@ -561,7 +561,9 @@ def _stub_analysis_tables(monkeypatch) -> list[tuple[str, Path]]:
     monkeypatch.setattr(card_stats, "_add_cell_stats", lambda _s, p: calls.append(("cells", p)))
     monkeypatch.setattr(card_stats, "_add_hostname_stats", lambda _s, p: calls.append(("hosts", p)))
     monkeypatch.setattr(
-        card_stats, "_add_language_stats", lambda _s, p: calls.append(("languages", p))
+        card_stats,
+        "_add_language_stats",
+        lambda s, p: calls.append(("languages", p)) if isinstance(s, CardStats) else None,
     )
     monkeypatch.setattr(
         card_stats, "_add_sentence_stats", lambda _s, p: calls.append(("sentences", p))
@@ -746,13 +748,17 @@ def test_unique_polygon_text_count_reads_shards_with_every_column(monkeypatch) -
         "contact_website_text",
         "contact_website_text_status",
     ]
-    monkeypatch.setattr(card_stats.pq, "ParquetFile", lambda _shard: _SchemaParquet(names))
+    opened: list[object] = []
+    monkeypatch.setattr(
+        card_stats.pq, "ParquetFile", lambda shard: opened.append(shard) or _SchemaParquet(names)
+    )
     monkeypatch.setattr(card_stats, "_text_polygon_ids", lambda _batch: {("way", 1)})
     stats = CardStats()
 
     card_stats._set_unique_polygon_text_count(stats, [Path("a.parquet")])
 
     assert stats.polygons_with_any_text == 1
+    assert opened == [Path("a.parquet")]
 
 
 def test_text_polygon_ids_include_contact_only_text() -> None:
@@ -783,10 +789,18 @@ def test_text_polygon_ids_include_contact_only_text() -> None:
 def test_unsupported_language_counts_sum_each_language() -> None:
     unsupported = card_stats.SENTENCE_UNSUPPORTED_LANGUAGE
     rows = [
+        {"status": "other", "language": "x", "row_count": 9},
+        {"status": unsupported, "language": None, "row_count": 7},
         {"status": unsupported, "language": "y", "row_count": 4},
         {"status": unsupported, "language": "x", "row_count": 1},
         {"status": unsupported, "language": "x", "row_count": 3},
-        {"status": "other", "language": "x", "row_count": 9},
+        {"status": unsupported, "language": "a", "row_count": 2},
+        {"status": unsupported, "language": "z", "row_count": 9},
     ]
 
-    assert card_stats._unsupported_language_counts(rows) == [("x", 4), ("y", 4)]
+    assert card_stats._unsupported_language_counts(rows) == [
+        ("z", 9),
+        ("x", 4),
+        ("y", 4),
+        ("a", 2),
+    ]
