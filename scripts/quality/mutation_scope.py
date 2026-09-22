@@ -195,6 +195,56 @@ def _iter_functions(tree: ast.AST, class_name: str | None = None) -> Iterator[tu
             yield from _iter_functions(node, class_name)
 
 
+# One shard per this many functions. A module is the unit of *selection* but a
+# poor unit of *work*: `reporting/card_stats.py` alone carries 819 mutants and
+# ran for 88 minutes while every other shard had long finished, so the whole
+# matrix was as slow as its worst module. Splitting a module's functions across
+# shards costs a little setup per job and buys back most of that wall clock.
+SHARD_FUNCTIONS = 8
+
+
+def module_function_filters(module: str, *, root: Path | None = None) -> list[str]:
+    """Return one filter per function in ``module``, or ``[]`` if unreadable.
+
+    Every mutmut mutant belongs to a function -- module level code is not
+    mutated -- so the per-function filters of a module cover exactly what its
+    whole-module filter covers.
+    """
+    base = root if root is not None else Path.cwd()
+    relative = module.removeprefix(f"{PACKAGE_NAME}.").split(".")
+    candidate = base / PACKAGE_ROOT.joinpath(*relative)
+    source = candidate / "__init__.py" if candidate.is_dir() else candidate.with_suffix(".py")
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeError):
+        return []
+    return [f"{module}.{name}__mutmut_*" for name, _start, _end in _iter_functions(tree)]
+
+
+def shards(
+    scoped: dict[str, list[str]],
+    *,
+    root: Path | None = None,
+    size: int = SHARD_FUNCTIONS,
+) -> list[dict[str, str]]:
+    """Return the CI matrix: one entry per bounded group of function filters."""
+    matrix: list[dict[str, str]] = []
+    for module in sorted(scoped):
+        filters = scoped[module]
+        if filters == [f"{module}.*"]:
+            expanded = module_function_filters(module, root=root)
+            # A module with no functions has no mutants to split; keep the
+            # whole-module filter so the scope is never silently narrowed.
+            filters = expanded or filters
+        groups = [filters[start : start + size] for start in range(0, len(filters), size)] or [
+            filters
+        ]
+        for index, group in enumerate(groups, start=1):
+            name = module if len(groups) == 1 else f"{module} [{index}/{len(groups)}]"
+            matrix.append({"name": name, "filters": " ".join(group)})
+    return matrix
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Print one filter per line, or the CI matrix of one shard per module."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -212,11 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     scoped = function_filters(lines)
     if args.json:
-        matrix = [
-            {"name": module, "filters": " ".join(filters)}
-            for module, filters in sorted(scoped.items())
-        ]
-        print(json.dumps(matrix, separators=(",", ":")))
+        print(json.dumps(shards(scoped), separators=(",", ":")))
     else:
         for filters in (scoped[module] for module in sorted(scoped)):
             for filter_expression in filters:

@@ -189,8 +189,18 @@ waiting on.
 
 A full sweep is about fourteen thousand mutants and several hours, which a
 hosted CI runner does not reliably survive. CI first runs `just qa-pr` for the
-non-mutation gates, then resolves the changed/relevant module filters in sorted
-order and runs one `just mutation-module <filter>` job per filter. A changed
+non-mutation gates, then resolves the changed/relevant filters in sorted order
+and runs one `just mutation-module <filters>` job per shard.
+
+A module is the unit of *selection* but a poor unit of *work*:
+`reporting/card_stats.py` alone carries 819 mutants and ran for 88 minutes
+while every other shard had long finished, so the matrix was as slow as its
+worst module. `mutation_scope.py` therefore expands a whole-module scope into
+its individual functions and groups them into shards of at most
+`SHARD_FUNCTIONS`. Every mutmut mutant belongs to a function -- module level
+code is not mutated -- so the per-function filters cover exactly what the
+whole-module filter covered, and a module whose functions cannot be
+enumerated keeps its `.*` filter rather than being silently narrowed. A changed
 test file mirrors its source module, so weakening a test still rechecks that
 module. Run the full `just mutation` sweep locally before a release or after
 broad refactoring.
