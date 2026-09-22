@@ -1062,3 +1062,29 @@ def test_release_geographic_section_compares_the_exact_section(
     analysis._verify_release_geographic_section(tmp_path, object(), errors)
 
     assert errors == expected
+
+
+def test_readability_of_no_artifacts_is_true(tmp_path: Path) -> None:
+    assert analysis._verify_analysis_readability(tmp_path, set(), []) is True
+
+
+def test_analysis_reads_only_artifacts_both_present_and_expected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[set[str]] = []
+    monkeypatch.setattr(analysis, "_verify_expected_source_inventory", lambda *_args: None)
+    monkeypatch.setattr(
+        analysis, "_verify_analysis_inventory", lambda *_args: ({"a", "b"}, {"b", "c"})
+    )
+    monkeypatch.setattr(analysis, "_verify_card_files", lambda *_args: None)
+    monkeypatch.setattr(
+        analysis,
+        "_verify_analysis_readability",
+        lambda _root, names, _errors: seen.append(names) or True,
+    )
+    monkeypatch.setattr(analysis, "_verify_card_statistics", lambda *_args: None)
+    monkeypatch.setattr(analysis, "_verify_map_artifact", lambda *_args, **_kwargs: None)
+
+    analysis.verify_analysis_and_card(tmp_path, [])
+
+    assert seen == [{"b"}]

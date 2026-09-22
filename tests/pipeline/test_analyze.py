@@ -1327,3 +1327,59 @@ def test_analyze_results_threads_one_staging_bundle_through_every_step(
         ("cleanup", (run_dir,)),
     ]
     assert (run_dir / "analysis").is_dir()
+
+
+def test_staging_cleanup_suppresses_a_removal_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from osm_polygon_website_tag.pipeline import analyze as module
+
+    def fail(_path: Path) -> None:
+        raise OSError("busy")
+
+    monkeypatch.setattr(module.shutil, "rmtree", fail)
+
+    module._cleanup_invocation_staging_dir(tmp_path)
+
+
+def test_closing_the_connection_suppresses_its_failure() -> None:
+    class _Connection:
+        def close(self) -> None:
+            raise RuntimeError("already closed")
+
+    _close_analysis_connection(_Connection())  # type: ignore
+
+
+def test_global_cell_rows_report_absent_cells_as_zero() -> None:
+    rows = _global_cell_rows({}, {})
+
+    assert {row["row_count"] for row in rows} == {0}
+
+
+def test_cells_per_group_default_to_all_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from osm_polygon_website_tag.pipeline import analyze as module
+
+    copies: list[tuple[object, str, Path]] = []
+    monkeypatch.setattr(
+        module.duckdb_engine,
+        "copy_query_atomic",
+        lambda con, query, path: copies.append((con, query, path)),
+    )
+    con = object()
+
+    _write_cells_per_group(con, tmp_path / "cells.parquet")  # type: ignore
+
+    [(received, query, path)] = copies
+    assert received is con
+    assert path == tmp_path / "cells.parquet"
+    parts = query.removesuffix(" ORDER BY group_value, cell").split(" UNION ALL ")
+    assert len(parts) == len(EIGHT_CELL_LABELS)
+    assert all(part.startswith("SELECT source_pbf::VARCHAR") for part in parts)
+    assert all(part.endswith("FROM observations GROUP BY source_pbf") for part in parts)
+
+
+def test_class_count_refusal_is_exact(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^unsupported class query$"):
+        _write_class_count(None, tmp_path / "x.parquet", column="bad", view="public_polygons")  # type: ignore

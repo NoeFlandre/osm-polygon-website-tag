@@ -636,3 +636,157 @@ def test_public_shard_stats_list_each_source_with_its_row_count(monkeypatch) -> 
         {"source_pbf": "ab.osm.pbf", "row_count": 2},
         {"source_pbf": "cde.osm.pbf", "row_count": 3},
     ]
+
+
+class _SchemaParquet:
+    """A shard exposing a schema and recording the columns each read asks for."""
+
+    reads: ClassVar[list[list[str]]] = []
+
+    def __init__(self, names: list[str]) -> None:
+        self.schema_arrow = pa.schema([(name, pa.string()) for name in names])
+
+    def iter_batches(self, *, columns: list[str], batch_size: int) -> list[object]:
+        self.reads.append(columns)
+        return [object()]
+
+
+def test_enriched_source_count_adds_one_to_the_running_total(monkeypatch) -> None:
+    names = sorted(card_stats._TEXT_STATS_COLUMNS)
+    monkeypatch.setattr(card_stats.pq, "ParquetFile", lambda _shard: _SchemaParquet(names))
+    monkeypatch.setattr(card_stats, "_has_retryable_text_status", lambda _parquet: False)
+    stats = CardStats(enriched_sources_count=5)
+
+    card_stats._add_enriched_source_count(stats, Path("a.parquet"))
+
+    assert stats.enriched_sources_count == 6
+
+
+def test_retryable_status_reads_only_the_two_status_columns(monkeypatch) -> None:
+    _SchemaParquet.reads = []
+    monkeypatch.setattr(card_stats, "status_has_retryable_value", lambda _column: False)
+    parquet = _SchemaParquet([])
+    parquet.iter_batches = lambda *, columns, batch_size: _SchemaParquet.reads.append(columns) or []  # type: ignore
+
+    assert card_stats._has_retryable_text_status(parquet) is False  # type: ignore
+    assert _SchemaParquet.reads == [["website_text_status", "contact_website_text_status"]]
+
+
+def test_hostname_stats_load_both_tables(tmp_path: Path, monkeypatch) -> None:
+    for name in ("top_hostnames_website.parquet", "top_hostnames_contact_website.parquet"):
+        (tmp_path / name).write_bytes(b"")
+    monkeypatch.setattr(
+        card_stats.pq,
+        "read_table",
+        lambda path: pa.table({"name": [Path(path).name]}),
+    )
+    stats = CardStats()
+
+    card_stats._add_hostname_stats(stats, tmp_path)
+
+    assert stats.top_hostnames_website == [{"name": "top_hostnames_website.parquet"}]
+    assert stats.top_hostnames_contact_website == [
+        {"name": "top_hostnames_contact_website.parquet"}
+    ]
+
+
+def test_language_stats_total_each_tag_and_rank_by_count_then_name(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "languages.parquet"
+    path.write_bytes(b"")
+    rows = [
+        {"tag": "website", "row_count": 2},
+        {"tag": "website", "row_count": 5},
+        {"tag": "contact_website", "row_count": 3},
+    ]
+    monkeypatch.setattr(card_stats.pq, "read_table", lambda _path: pa.Table.from_pylist(rows))
+    monkeypatch.setattr(
+        card_stats, "_combined_language_counts", lambda _rows: {"b": 2, "a": 2, "c": 5, "d": 1}
+    )
+    stats = CardStats()
+
+    card_stats._add_language_stats(stats, path)
+
+    assert stats.website_language_count == 7
+    assert stats.contact_website_language_count == 3
+    assert stats.detected_language_count == 4
+    assert stats.top_languages == [("c", 5), ("a", 2), ("b", 2), ("d", 1)]
+
+
+def test_language_sort_key_breaks_count_ties_by_name() -> None:
+    assert sorted([("b", 2), ("a", 2)], key=card_stats._language_sort_key) == [("a", 2), ("b", 2)]
+
+
+def test_artifact_paths_name_the_missing_directory(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=rf"^missing {tmp_path / 'polygons'}$"):
+        card_stats._artifact_paths(tmp_path, source_names=None)
+
+
+def test_optional_row_count_of_a_missing_table_is_zero(tmp_path: Path) -> None:
+    assert card_stats._optional_row_count(tmp_path / "absent.parquet") == 0
+
+
+def test_text_population_stats_copy_the_detected_language_count() -> None:
+    stats = CardStats()
+
+    card_stats._set_text_population_stats(
+        stats, card_stats.TextPopulationSummary(detected_language_count=9)
+    )
+
+    assert stats.detected_language_count == 9
+
+
+def test_unique_polygon_text_count_reads_shards_with_every_column(monkeypatch) -> None:
+    names = [
+        "osm_type",
+        "osm_id",
+        "website_text",
+        "website_text_status",
+        "contact_website_text",
+        "contact_website_text_status",
+    ]
+    monkeypatch.setattr(card_stats.pq, "ParquetFile", lambda _shard: _SchemaParquet(names))
+    monkeypatch.setattr(card_stats, "_text_polygon_ids", lambda _batch: {("way", 1)})
+    stats = CardStats()
+
+    card_stats._set_unique_polygon_text_count(stats, [Path("a.parquet")])
+
+    assert stats.polygons_with_any_text == 1
+
+
+def test_text_polygon_ids_include_contact_only_text() -> None:
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {
+                "osm_type": "way",
+                "osm_id": 1,
+                "website_text": "hi",
+                "website_text_status": "success",
+                "contact_website_text": None,
+                "contact_website_text_status": "absent",
+            },
+            {
+                "osm_type": "node",
+                "osm_id": 2,
+                "website_text": None,
+                "website_text_status": "absent",
+                "contact_website_text": "yo",
+                "contact_website_text_status": "success",
+            },
+        ]
+    )
+
+    assert card_stats._text_polygon_ids(batch) == {("way", 1), ("node", 2)}
+
+
+def test_unsupported_language_counts_sum_each_language() -> None:
+    unsupported = card_stats.SENTENCE_UNSUPPORTED_LANGUAGE
+    rows = [
+        {"status": unsupported, "language": "y", "row_count": 4},
+        {"status": unsupported, "language": "x", "row_count": 1},
+        {"status": unsupported, "language": "x", "row_count": 3},
+        {"status": "other", "language": "x", "row_count": 9},
+    ]
+
+    assert card_stats._unsupported_language_counts(rows) == [("x", 4), ("y", 4)]

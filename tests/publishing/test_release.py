@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from tests.reporting.test_finalize import _setup
@@ -2051,3 +2051,178 @@ def test_remote_data_identity_rejects_a_disagreeing_receipt(
 
     monkeypatch.setattr(release_module, "_remote_data_identity", lambda *_args: None)
     release_module._verify_remote_data_identity(object(), "o/r", "rev", (_released("a"),))
+
+
+def _recording_receipt_reads(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> list[tuple[str, dict[str, object]]]:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def read(_path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("read", kwargs))
+        return payload
+
+    def identity(_payload: dict[str, object], **kwargs: object) -> str:
+        calls.append(("identity", kwargs))
+        return "id"
+
+    monkeypatch.setattr(release_module, "_read_receipt_payload", read)
+    monkeypatch.setattr(release_module, "_receipt_data_identity", identity)
+    return calls
+
+
+_LOCAL_RECEIPT = {"error_type": ValueError, "label": "release completion receipt"}
+
+
+def test_card_refresh_identities_read_the_local_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _recording_receipt_reads(monkeypatch, {"readme_yaml_custom_sha256": "r"})
+    monkeypatch.setattr(release_module, "_completion_receipt_path", lambda root: root / "r.json")
+    monkeypatch.setattr(release_module, "_require_recoverable_card_identities", lambda *_a: None)
+
+    identities = release_module._card_refresh_identities(tmp_path)
+
+    assert identities["expected_readme_custom_sha256"] == "r"
+    assert calls == [("read", _LOCAL_RECEIPT)]
+    assert calls[0][1]["error_type"] is ValueError
+
+
+def test_completion_data_identity_labels_both_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _recording_receipt_reads(monkeypatch, {})
+
+    assert release_module._completion_data_identity(tmp_path / "r.json") == "id"
+    assert calls == [("read", _LOCAL_RECEIPT), ("identity", _LOCAL_RECEIPT)]
+
+
+def test_remote_data_identity_labels_both_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _recording_receipt_reads(monkeypatch, {})
+    api = SimpleNamespace(hf_hub_download=lambda *_args, **_kwargs: str(tmp_path / "r.json"))
+    remote = {
+        "error_type": release_module._RemoteDataMismatchError,
+        "label": "remote completion receipt",
+    }
+
+    assert release_module._remote_data_identity(api, "o/r", "rev") == "id"
+    assert calls == [("read", remote), ("identity", remote)]
+
+
+def test_publish_if_requested_keeps_an_explicit_uploader_unchecked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        release_module, "_publish", lambda *args, **kwargs: published.append((args, kwargs)) or "p"
+    )
+    uploader = object()
+
+    result = release_module._publish_if_requested(
+        tmp_path,
+        apply=True,
+        repo_id="o/r",
+        repo_kind="dataset",
+        files=(),
+        uploader=uploader,  # type: ignore
+        verifier=None,
+        remote_checker=None,
+    )
+
+    assert result == "p"
+    assert published == [
+        (
+            (tmp_path,),
+            {
+                "repo_id": "o/r",
+                "repo_kind": "dataset",
+                "files": (),
+                "uploader": uploader,
+                "verifier": None,
+                "remote_checker": None,
+            },
+        )
+    ]
+
+
+def test_receipt_card_refresh_identities_map_each_receipt_field() -> None:
+    payload = {
+        "readme_yaml_custom_sha256": "r",
+        "dataset_yaml_custom_sha256": "d",
+        "readme_preserved_sha256": None,
+    }
+
+    assert release_module._receipt_card_refresh_identities(payload) == {
+        "expected_readme_custom_sha256": "r",
+        "expected_dataset_custom_sha256": "d",
+        "expected_readme_preserved_sha256": None,
+    }
+
+
+def test_remote_changed_files_check_the_named_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    checked: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        release_module,
+        "_verify_remote_size",
+        lambda _api, repo, *_rest: checked.append(("size", repo)),
+    )
+    monkeypatch.setattr(
+        release_module,
+        "_verify_remote_digest",
+        lambda _api, repo, *_rest: checked.append(("digest", repo)),
+    )
+
+    assert release_module._remote_changed_files(object(), "o/r", "rev", (_released("a"),)) == ()
+    assert checked == [("size", "o/r"), ("digest", "o/r")]
+
+
+def test_remote_parquet_entries_require_a_tree_listing_api() -> None:
+    with pytest.raises(
+        release_module._RemoteArtifactMismatchError,
+        match=r"^remote API cannot inspect Parquet shards$",
+    ):
+        release_module._remote_parquet_entries(SimpleNamespace(), "o/r", "rev")
+
+
+def test_update_card_safely_forwards_every_expected_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        release_module, "refresh_card_for_release", lambda _run, **kwargs: calls.append(kwargs)
+    )
+
+    release_module._update_card_safely(
+        tmp_path,
+        expected_readme_custom_sha256="r",
+        expected_dataset_custom_sha256="d",
+        expected_readme_preserved_sha256="p",
+    )
+
+    assert calls == [
+        {
+            "expected_readme_custom_sha256": "r",
+            "expected_dataset_custom_sha256": "d",
+            "expected_readme_preserved_sha256": "p",
+        }
+    ]
+
+
+def test_upload_and_verify_rejects_an_empty_revision(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^hub verification returned an empty revision$"):
+        release_module._upload_and_verify(
+            tmp_path,
+            repo_id="o/r",
+            repo_kind="dataset",
+            files=(),
+            uploader=lambda *_args, **_kwargs: None,
+            verifier=cast(Any, lambda *_args: ""),
+        )
+
+
+def test_remote_size_accepts_an_entry_without_a_size() -> None:
+    api = SimpleNamespace(get_paths_info=lambda *_args, **_kwargs: [SimpleNamespace()])
+
+    release_module._verify_remote_size(api, "o/r", "rev", _released("a"))
