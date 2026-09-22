@@ -236,7 +236,7 @@ def test_release_does_not_mutate_bundle_when_missing_readme_body_cannot_be_recov
     readme = run_dir / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8")
-        .replace("Code and README", "Tampered preserved body")
+        .replace("Machine-readable metadata", "Tampered preserved body")
         .replace("website_total_words: 2", "website_total_words: 999"),
         encoding="utf-8",
     )
@@ -334,7 +334,8 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
         "## Website text\n", "## Website text\n\nSTALE website values.\n", 1
     )
     geographic_start = current_readme.index("## Geographic distribution")
-    links_start = current_readme.index("## Links", geographic_start)
+    # The section that follows the geographic block on the current card.
+    links_start = current_readme.index("## Polygon geometry", geographic_start)
     readme.write_text(
         current_readme[:geographic_start]
         + "## Geographic distribution\n\nSTALE geographic values.\n\n"
@@ -358,8 +359,8 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
     assert report.recomputed is True
     assert "STALE geographic values" not in updated_readme
     assert "STALE website values" not in updated_readme
-    assert "regional overlap duplicates are removed globally" in updated_readme
-    assert "**1** unique polygons with successfully" in updated_readme
+    assert "Regional overlap duplicates are removed globally" in updated_readme
+    assert "covering **1** unique polygons with extracted text" in updated_readme
     assert "polygon_density_row_count: 1" in dataset_yaml.read_text(encoding="utf-8")
     assert "unique_text_identity_count: 1" in dataset_yaml.read_text(encoding="utf-8")
     assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
@@ -433,7 +434,7 @@ def test_release_rejects_preserved_readme_body_tampering(run_dir: Path) -> None:
     readme = run_dir / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8")
-        .replace("Code and README", "Tampered preserved body")
+        .replace("Machine-readable metadata", "Tampered preserved body")
         .replace("website_total_words: 2", "website_total_words: 999"),
         encoding="utf-8",
     )
@@ -490,7 +491,7 @@ def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     )
     assert "The existing geographic section remains untouched." not in updated_readme
     assert updated_readme[unrelated_start:] == readme_suffix[readme_suffix.index("## Unrelated") :]
-    assert "complete breakdown is published as [`stats.json`](stats.json)" in updated_readme
+    assert "Full breakdown in [`stats.json`](stats.json)" in updated_readme
     updated_yaml = (run_dir / "dataset.yaml").read_text(encoding="utf-8")
     assert updated_yaml.startswith(original_yaml.removesuffix("language: eng\n"))
     assert "language: eng\n" not in updated_yaml

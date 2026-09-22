@@ -70,6 +70,7 @@ dev = [
     "mkdocs-material>=9.6,<10",
     "mutmut>=3,<4",
     "radon>=6,<7",
+    "pytest-xdist>=3,<4",
 ]
 
 [tool.ruff]

@@ -42,21 +42,17 @@ def test_build_card_map_counts_only_polygons_with_extracted_text(tmp_path: Path)
     build_card(run_dir)
 
     card = (run_dir / "README.md").read_text()
-    assert "across **1** unique polygons with successfully extracted, non-empty" in card
+    assert "covering **1** unique polygons with extracted text" in card
 
 
 def test_build_card_embeds_observation_count(tmp_path: Path) -> None:
     run_dir = _setup_minimal_run(tmp_path)
     path = build_card(run_dir)
     content = path.read_text()
-    assert "| Published polygon rows | 1 | Rows in the public `polygons/` files |" in content
-    assert (
-        "| Regional PBFs included | 1 / 1 | Published source shards / expected source PBFs |"
-        in content
-    )
-    assert "| Comparison observations | 0 |" in content
-    assert "| What it means |" in content
-    assert "`website` OR `contact:website`" in content
+    assert "| Polygons | 1 |" in content
+    assert "| Regional sources | 1 / 1 |" in content
+    assert "| Duplicate objects removed | 0 |" in content
+    assert "`website` or `contact:website`" in content
 
 
 def test_build_card_lists_language_columns_for_v1_4_runs(tmp_path: Path) -> None:
@@ -95,12 +91,12 @@ def test_build_card_renders_done_snapshot_without_zero_canonical_metric(tmp_path
     content = build_card(run_dir).read_text()
 
     assert "dataset_status: done" in content
-    assert "| Snapshot status | Done |" in content
+    assert "| Status | Done |" in content
     assert "| Canonical polygons |" not in content
     assert "canonical_count:" not in content
-    assert "Regional PBFs included" in content
-    assert "expected source PBFs" in content
-    assert "globally routable public IP addresses" in content
+    assert "Regional sources" in content
+    assert "| Regional sources |" in content
+    assert "anything other than a public IP are refused as `unsafe_url`" in content
     assert "This snapshot is frozen" in content
     assert "Failed values retry on later resumptions" not in content
 
@@ -365,8 +361,8 @@ def test_regional_public_shards_falls_back_without_regional_polygons(
 def test_card_explains_unique_polygon_text_metric(tmp_path: Path) -> None:
     content = build_card(_setup_minimal_run(tmp_path)).read_text()
 
-    assert "Unique polygons with extracted text: **0**" in content
-    assert "globally deduplicated by `(osm_type, osm_id)`" in content
+    assert "| With extracted text | 0 |" in content
+    assert "unique `(osm_type, osm_id)` polygons" in content
 
 
 def test_text_polygon_ids_preserves_osm_identity_and_skips_null_ids() -> None:

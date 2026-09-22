@@ -50,13 +50,13 @@ typecheck:
     uv run --locked ty check src tests scripts
 
 test:
-    uv run --locked pytest
+    uv run --locked pytest -n auto
 
 unit:
-    uv run --locked pytest tests --ignore=tests/acceptance --ignore=tests/architecture
+    uv run --locked pytest -n auto tests --ignore=tests/acceptance --ignore=tests/architecture
 
 acceptance:
-    uv run --locked pytest tests/acceptance
+    uv run --locked pytest -n auto tests/acceptance
 
 architecture:
     uv run --locked pytest tests/architecture
@@ -88,10 +88,12 @@ pre-push:
 COVERAGE_JSON := env("COVERAGE_JSON", "/tmp/osm-polygon-website-tag-coverage.json")
 
 # One instrumented run of the whole suite; downstream gates read its artifact
-# rather than paying for the suite again.
+# rather than paying for the suite again. Sharded across cores: the project
+# lives on an external volume whose read latency, not CPU, sets the pace, so
+# the serial suite spent most of its eighteen minutes waiting on I/O.
 # Tier 3/4: the single source of test and coverage truth.
 coverage:
-    uv run --locked pytest --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
+    uv run --locked pytest -n auto --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
 
 # Depends on nothing so CI never runs the suite twice; run `just coverage`
 # first, or use `just qa-pr`, which sequences them.
