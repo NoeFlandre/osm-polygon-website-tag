@@ -491,3 +491,47 @@ def test_a_prefix_tie_restores_the_text_bearing_population(
 
     assert compute_text_population_summary(tmp_path).website_total_words == 4
     assert restored == [True]
+
+
+def test_the_text_column_types_are_exactly_the_reducer_contract() -> None:
+    """Pin the whole mapping, not a sample of it.
+
+    Every entry is a DuckDB cast applied to a reducer input, so a dropped
+    column, a renamed key or a widened type changes what the reducer reads
+    while every aggregate still looks plausible.
+    """
+    assert text_population._text_column_types() == {
+        "osm_version": "BIGINT",
+        "osm_timestamp": "TIMESTAMP",
+        "source_pbf": "VARCHAR",
+        "polygon_id": "VARCHAR",
+        "website": "VARCHAR",
+        "contact_website": "VARCHAR",
+        "website_word_count": "BIGINT",
+        "contact_website_word_count": "BIGINT",
+        "website_language": "VARCHAR",
+        "contact_website_language": "VARCHAR",
+        "lat": "DOUBLE",
+        "lon": "DOUBLE",
+        "osm_type": "VARCHAR",
+        "osm_id": "BIGINT",
+        "website_text": "VARCHAR",
+        "website_text_status": "VARCHAR",
+        "contact_website_text": "VARCHAR",
+        "contact_website_text_status": "VARCHAR",
+    }
+
+
+def test_the_optional_columns_are_carried_into_the_text_column_types() -> None:
+    """The required casts extend the optional ones rather than replacing them."""
+    types = text_population._text_column_types()
+
+    assert dict(text_population._OPTIONAL_COLUMNS).items() <= types.items()
+
+
+def test_the_text_column_types_are_a_fresh_mapping_each_call() -> None:
+    """Mutating the result must not corrupt the shared optional columns."""
+    first = text_population._text_column_types()
+    first["lat"] = "TAMPERED"
+
+    assert text_population._text_column_types()["lat"] == "DOUBLE"
