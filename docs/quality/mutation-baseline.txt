@@ -13,7 +13,7 @@
 #   uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
 #   uv run --locked mutmut results --all true > results.txt
 #   uv run --locked python scripts/quality/mutation_baseline.py --results results.txt
-# Recorded mutants: 443
+# Recorded mutants: 435
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -349,14 +349,6 @@ osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mu
 osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_67
 osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_73
 osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_78
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_11
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_15
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_19
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_23
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_27
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_31
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_35
-osm_polygon_website_tag.reporting.text_population.x__text_column_types__mutmut_7
 osm_polygon_website_tag.reporting.text_population.x__validate_word_counts__mutmut_1
 osm_polygon_website_tag.reporting.text_population.x__validate_word_counts__mutmut_2
 osm_polygon_website_tag.reporting.text_population.x_compute_text_population_summary__mutmut_5
