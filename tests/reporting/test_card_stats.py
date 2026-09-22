@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import ClassVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from osm_polygon_website_tag.pipeline.analyze import LANGUAGE_TABLE_SCHEMA, SENTENCE_TABLE_SCHEMA
 from osm_polygon_website_tag.reporting import card_stats
@@ -416,3 +418,221 @@ def test_cell_stats_ignore_a_missing_file(tmp_path: Path) -> None:
 
     assert stats.eight_cell_observation == {}
     assert stats.canonical_count == 0
+
+
+class _FakeTextParquet:
+    """Stand in for a shard: record how it is read and yield scripted batches."""
+
+    opened: ClassVar[list[object]] = []
+    reads: ClassVar[list[list[str]]] = []
+
+    def __init__(self, shard: object, names: list[str], batches: list[object]) -> None:
+        self.opened.append(shard)
+        self.schema_arrow = pa.schema([(name, pa.string()) for name in names])
+        self._batches = batches
+
+    def iter_batches(self, *, columns: list[str], batch_size: int) -> list[object]:
+        self.reads.append(columns)
+        return self._batches
+
+
+def _fake_text_shard(monkeypatch, retryable: list[bool], *, names=None) -> list[object]:
+    _FakeTextParquet.opened = []
+    _FakeTextParquet.reads = []
+    batches = [object() for _ in retryable]
+    verdicts = dict(zip(map(id, batches), retryable, strict=True))
+    seen: list[object] = []
+    columns = sorted(card_stats._TEXT_STATS_COLUMNS) if names is None else names
+    monkeypatch.setattr(
+        card_stats.pq,
+        "ParquetFile",
+        lambda shard: _FakeTextParquet(shard, [*columns, "extra"], batches),
+    )
+
+    def add_batch(_stats: CardStats, batch: object) -> bool:
+        seen.append(batch)
+        return verdicts[id(batch)]
+
+    monkeypatch.setattr(card_stats, "_add_text_batch", add_batch)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("retryable", "expected"),
+    [
+        ([], 6),
+        ([False, False], 6),
+        ([True, False], 5),
+        ([False, True], 5),
+        ([True, True], 5),
+    ],
+)
+def test_text_stats_count_a_source_as_enriched_only_without_retryable_batches(
+    monkeypatch, retryable: list[bool], expected: int
+) -> None:
+    seen = _fake_text_shard(monkeypatch, retryable)
+    stats = CardStats(enriched_sources_count=5)
+    shard = Path("shard.parquet")
+
+    card_stats._add_text_stats(stats, shard)
+
+    assert stats.enriched_sources_count == expected
+    assert len(seen) == len(retryable)
+    assert _FakeTextParquet.opened == [shard]
+    assert _FakeTextParquet.reads == [sorted(card_stats._TEXT_STATS_COLUMNS)]
+
+
+def test_text_stats_skip_a_shard_without_the_text_columns(monkeypatch) -> None:
+    seen = _fake_text_shard(monkeypatch, [False], names=["website"])
+    stats = CardStats(enriched_sources_count=5)
+
+    card_stats._add_text_stats(stats, Path("shard.parquet"))
+
+    assert stats.enriched_sources_count == 5
+    assert seen == []
+    assert _FakeTextParquet.reads == []
+
+
+def _stub_card_pipeline(monkeypatch, analysis_dir: Path) -> list[tuple[str, tuple, dict]]:
+    calls: list[tuple[str, tuple, dict]] = []
+
+    def record(name: str, result: object = None):
+        def stub(*args: object, **kwargs: object) -> object:
+            calls.append((name, args, kwargs))
+            return result
+
+        return stub
+
+    monkeypatch.setattr(card_stats, "_read_snapshot_status", record("snapshot", "complete"))
+    monkeypatch.setattr(card_stats, "_set_density_stats", record("density"))
+    monkeypatch.setattr(card_stats, "_artifact_paths", record("paths", ([], [], [], analysis_dir)))
+    monkeypatch.setattr(card_stats, "_set_shard_counts", record("counts"))
+    monkeypatch.setattr(card_stats, "_expected_source_count", record("expected", 0))
+    monkeypatch.setattr(card_stats, "_add_public_shard_stats", record("public"))
+    monkeypatch.setattr(card_stats, "compute_text_population_summary", record("population", "pop"))
+    monkeypatch.setattr(card_stats, "_set_text_population_stats", record("text"))
+    monkeypatch.setattr(card_stats, "_add_analysis_stats", record("analysis"))
+    return calls
+
+
+def _named(calls: list[tuple[str, tuple, dict]], name: str) -> list[tuple[tuple, dict]]:
+    return [(args, kwargs) for called, args, kwargs in calls if called == name]
+
+
+def test_card_stats_scope_text_and_density_to_the_selected_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = _stub_card_pipeline(monkeypatch, tmp_path)
+    summary = object()
+
+    card_stats.compute_card_stats(tmp_path, summary=summary, source_names=["a"])  # type: ignore
+
+    [(_args, density)] = _named(calls, "density")
+    assert density == {"summary": summary, "source_names": ["a"]}
+    assert _named(calls, "population") == [((tmp_path,), {"source_names": ["a"]})]
+    assert _named(calls, "analysis") == []
+
+
+def test_card_stats_hand_the_computed_population_to_the_analysis_tables(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = _stub_card_pipeline(monkeypatch, tmp_path)
+
+    stats = card_stats.compute_card_stats(tmp_path)
+
+    assert _named(calls, "population") == [((tmp_path,), {"source_names": None})]
+    assert _named(calls, "analysis") == [((stats, tmp_path), {"text_population": "pop"})]
+
+
+def test_card_stats_skip_a_missing_analysis_directory(tmp_path: Path, monkeypatch) -> None:
+    calls = _stub_card_pipeline(monkeypatch, tmp_path / "absent")
+
+    card_stats.compute_card_stats(tmp_path, text_population="given")  # type: ignore
+
+    assert _named(calls, "population") == []
+    assert _named(calls, "analysis") == []
+    assert _named(calls, "text")[0][0][1] == "given"
+
+
+def _stub_analysis_tables(monkeypatch) -> list[tuple[str, Path]]:
+    calls: list[tuple[str, Path]] = []
+    counts = {"duplicate_observations.parquet": 3, "conflicting_snapshots.parquet": 4}
+    monkeypatch.setattr(card_stats, "_optional_row_count", lambda path: counts.get(path.name, -1))
+    monkeypatch.setattr(card_stats, "_add_cell_stats", lambda _s, p: calls.append(("cells", p)))
+    monkeypatch.setattr(card_stats, "_add_hostname_stats", lambda _s, p: calls.append(("hosts", p)))
+    monkeypatch.setattr(
+        card_stats, "_add_language_stats", lambda _s, p: calls.append(("languages", p))
+    )
+    monkeypatch.setattr(
+        card_stats, "_add_sentence_stats", lambda _s, p: calls.append(("sentences", p))
+    )
+    return calls
+
+
+def test_analysis_stats_read_every_table_by_its_exact_name(tmp_path: Path, monkeypatch) -> None:
+    calls = _stub_analysis_tables(monkeypatch)
+    stats = CardStats()
+
+    card_stats._add_analysis_stats(stats, tmp_path)
+
+    assert (stats.duplicate_count, stats.conflicting_snapshot_count) == (3, 4)
+    assert calls == [
+        ("cells", tmp_path / "cells_global.parquet"),
+        ("hosts", tmp_path),
+        ("languages", tmp_path / "languages.parquet"),
+        ("sentences", tmp_path / "sentences.parquet"),
+    ]
+    assert [path.name for _name, path in calls] == [
+        "cells_global.parquet",
+        tmp_path.name,
+        "languages.parquet",
+        "sentences.parquet",
+    ]
+
+
+def test_analysis_stats_leave_languages_to_a_given_text_population(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls = _stub_analysis_tables(monkeypatch)
+
+    card_stats._add_analysis_stats(CardStats(), tmp_path, text_population=object())  # type: ignore
+
+    assert [name for name, _path in calls] == ["cells", "hosts", "sentences"]
+
+
+def test_density_stats_compute_only_the_extracted_text_population(
+    tmp_path: Path, monkeypatch
+) -> None:
+    requests: list[tuple[tuple, dict]] = []
+    density = type(
+        "Density", (), {"h3_resolution": 5, "occupied_cell_count": 6, "polygon_row_count": 7}
+    )()
+    monkeypatch.setattr(
+        card_stats,
+        "compute_polygon_density_summary",
+        lambda *args, **kwargs: requests.append((args, kwargs)) or density,
+    )
+    stats = CardStats()
+
+    card_stats._set_density_stats(stats, tmp_path, summary=None, source_names=["a"])
+
+    assert requests == [((tmp_path,), {"source_names": ["a"], "extracted_text_only": True})]
+    assert requests[0][1]["extracted_text_only"] is True
+    assert (
+        stats.polygon_density_h3_resolution,
+        stats.occupied_h3_cell_count,
+        stats.polygon_density_row_count,
+    ) == (5, 6, 7)
+
+
+def test_public_shard_stats_list_each_source_with_its_row_count(monkeypatch) -> None:
+    monkeypatch.setattr(card_stats, "_add_enriched_source_count", lambda _stats, _shard: None)
+    monkeypatch.setattr(card_stats, "_parquet_row_count", lambda shard: len(shard.stem))
+    stats = CardStats()
+
+    card_stats._add_public_shard_stats(stats, [Path("x/ab.parquet"), Path("x/cde.parquet")])
+
+    assert stats.per_source_counts == [
+        {"source_pbf": "ab.osm.pbf", "row_count": 2},
+        {"source_pbf": "cde.osm.pbf", "row_count": 3},
+    ]

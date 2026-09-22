@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -377,3 +378,141 @@ def test_publish_to_hf_plans_for_the_requested_repository(
 
     assert recorded == [{"run": run_dir, "repo_id": "owner/repo", "repo_kind": "model"}]
     assert plan.repo_id == "owner/repo"
+
+
+def test_publish_to_hf_plans_a_dataset_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default kind reaches the plan, not just the signature."""
+    run_dir = _setup_run(tmp_path)
+    kinds: list[str] = []
+    real_plan = publish_module.build_publish_plan
+
+    def record(run: Path, *, repo_id: str, repo_kind: str) -> PublishPlan:
+        kinds.append(repo_kind)
+        return real_plan(run, repo_id=repo_id, repo_kind=repo_kind)
+
+    monkeypatch.setattr(publish_module, "build_publish_plan", record)
+
+    plan = publish_to_hf(run_dir, repo_id="owner/repo")
+
+    assert kinds == ["dataset"]
+    assert plan.repo_kind == "dataset"
+
+
+def test_publish_to_hf_refusals_are_exact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = _setup_run(tmp_path)
+    with pytest.raises(ValueError, match=r"^publication requires a COMPLETE run$"):
+        publish_to_hf(run_dir, dry_run=False)
+
+    _complete(monkeypatch, run_dir)
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: None)
+    with pytest.raises(
+        ValueError, match=r"^publish requires Hugging Face environment/local credentials$"
+    ):
+        publish_to_hf(run_dir, dry_run=False)
+
+
+def test_create_repo_refusal_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: None)
+
+    with pytest.raises(
+        ValueError, match=r"^create-repo requires Hugging Face environment/local credentials$"
+    ):
+        create_repo(repo_id="foo/bar")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({}, {"repo_id": "foo/bar", "repo_kind": "dataset", "exist_ok": False}),
+        (
+            {"repo_kind": "model", "exist_ok": True},
+            {"repo_id": "foo/bar", "repo_kind": "model", "exist_ok": True},
+        ),
+    ],
+)
+def test_create_repo_forwards_every_argument(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, Any], expected: dict[str, object]
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: "abc")
+    monkeypatch.setattr(
+        publish_module, "_create_repo_remote", lambda **received: calls.append(received) or "id"
+    )
+
+    assert create_repo(repo_id="foo/bar", **kwargs) == "id"
+    assert calls == [expected]
+
+
+def test_root_artifacts_skip_only_the_missing_files(tmp_path: Path) -> None:
+    for name in ("dataset.yaml", "failures.jsonl", "stats.json"):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    plan = PublishPlan(repo_id="owner/repo", repo_kind="dataset")
+
+    publish_module._add_root_artifacts(plan, tmp_path)
+
+    assert plan.artifact_paths == [
+        tmp_path / "dataset.yaml",
+        tmp_path / "failures.jsonl",
+        tmp_path / "stats.json",
+    ]
+    assert plan.readme_path is None
+
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+    plan = PublishPlan(repo_id="owner/repo", repo_kind="dataset")
+    publish_module._add_root_artifacts(plan, tmp_path)
+    assert [path.name for path in plan.artifact_paths] == [
+        "README.md",
+        "dataset.yaml",
+        "failures.jsonl",
+        "stats.json",
+    ]
+    assert plan.readme_path == tmp_path / "README.md"
+
+
+def test_build_publish_plan_defaults_to_a_dataset_and_includes_the_map(tmp_path: Path) -> None:
+    map_path = tmp_path / publish_module.POLYGON_DENSITY_ASSET_REL_PATH
+    map_path.parent.mkdir(parents=True)
+    map_path.write_bytes(b"png")
+
+    plan = build_publish_plan(tmp_path)
+
+    assert plan.repo_kind == "dataset"
+    assert plan.artifact_paths == [map_path]
+
+
+def test_directory_artifacts_list_every_publishable_directory(tmp_path: Path) -> None:
+    subs = ("polygons", "analysis_observations", "rejections", "analysis", "manifests")
+    for sub in subs:
+        (tmp_path / sub / "nested").mkdir(parents=True)
+        (tmp_path / sub / "nested" / "a.parquet").write_bytes(b"x")
+    for name in ("completion_receipt.json", "uploaded_polygons.json"):
+        (tmp_path / "manifests" / name).write_text("{}", encoding="utf-8")
+    plan = PublishPlan(repo_id="owner/repo", repo_kind="dataset")
+
+    publish_module._add_directory_artifacts(plan, tmp_path)
+
+    assert plan.artifact_paths == [tmp_path / sub / "nested" / "a.parquet" for sub in subs]
+
+
+def test_receipt_plan_without_artifacts_publishes_only_the_receipt(tmp_path: Path) -> None:
+    receipt = tmp_path / "manifests" / "completion_receipt.json"
+    receipt.parent.mkdir()
+    receipt.write_text("{}", encoding="utf-8")
+    plan = PublishPlan(repo_id="owner/repo", repo_kind="dataset")
+
+    assert publish_module._receipt_publish_plan(plan, tmp_path, receipt).artifact_paths == [receipt]
+
+
+def test_sort_artifacts_orders_by_the_posix_relative_path(tmp_path: Path) -> None:
+    """``a.txt`` sorts before ``a/b`` as text, though not as a Path."""
+    plan = PublishPlan(
+        repo_id="owner/repo",
+        repo_kind="dataset",
+        artifact_paths=[tmp_path / "a" / "b", tmp_path / "a-b", tmp_path / "a.txt"],
+    )
+
+    publish_module._sort_artifacts(plan, tmp_path)
+
+    assert plan.artifact_paths == [tmp_path / "a-b", tmp_path / "a.txt", tmp_path / "a" / "b"]

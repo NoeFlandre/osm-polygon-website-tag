@@ -1159,3 +1159,171 @@ def test_public_columns_reads_the_registered_view() -> None:
     con.execute("CREATE TABLE public_polygons AS SELECT 1 AS osm_id, 'x' AS region")
 
     assert _public_columns(con) == {"osm_id", "region"}
+
+
+def test_write_cell_tables_writes_every_table_under_its_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from osm_polygon_website_tag.pipeline import analyze as module
+
+    cells_obs = {EIGHT_CELL_LABELS[0][0]: 3}
+    cells_canon = {EIGHT_CELL_LABELS[1][0]: 2}
+    con = object()
+    monkeypatch.setattr(module.duckdb_engine, "cells_global_observation", lambda _con: (cells_obs,))
+    monkeypatch.setattr(module.duckdb_engine, "cells_global_canonical", lambda _con: (cells_canon,))
+    tables: list[tuple[Path, object, pa.Schema]] = []
+    groups: list[tuple[object, Path, dict[str, object]]] = []
+    monkeypatch.setattr(
+        module, "_write_arrow_table", lambda path, rows, schema: tables.append((path, rows, schema))
+    )
+    monkeypatch.setattr(
+        module,
+        "_write_cells_per_group",
+        lambda received, path, **kwargs: groups.append((received, path, kwargs)),
+    )
+
+    assert module._write_cell_tables(con, tmp_path) == (cells_obs, cells_canon)  # type: ignore
+
+    assert tables == [
+        (
+            tmp_path / "cells_global.parquet",
+            _global_cell_rows(cells_obs, cells_canon),
+            pa.schema(
+                [
+                    pa.field("cell", pa.string(), nullable=False),
+                    pa.field("level", pa.string(), nullable=False),
+                    pa.field("row_count", pa.int64(), nullable=False),
+                ]
+            ),
+        )
+    ]
+    assert all(not field.nullable for field in tables[0][2])
+    canonical = "canonical_observations"
+    assert groups == [
+        (con, tmp_path / "cells_by_source.parquet", {}),
+        (
+            con,
+            tmp_path / "cells_by_region.parquet",
+            {"group_column": "region", "view": canonical},
+        ),
+        (
+            con,
+            tmp_path / "cells_by_osm_type.parquet",
+            {"group_column": "osm_type", "view": canonical},
+        ),
+        (
+            con,
+            tmp_path / "cells_by_primary_category.parquet",
+            {"group_column": "primary_category", "view": canonical},
+        ),
+    ]
+    assert [path.name for _con, path, _kwargs in groups] == [
+        "cells_by_source.parquet",
+        "cells_by_region.parquet",
+        "cells_by_osm_type.parquet",
+        "cells_by_primary_category.parquet",
+    ]
+
+
+def test_analysis_summary_reports_absent_cells_as_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from osm_polygon_website_tag.pipeline import analyze as module
+
+    monkeypatch.setattr(module, "_directory_row_count", lambda path: {"p": 11, "r": 12}[path.name])
+    monkeypatch.setattr(
+        module,
+        "_parquet_row_count",
+        lambda path: {"duplicate_observations.parquet": 13, "conflicting_snapshots.parquet": 14}[
+            path.name
+        ],
+    )
+    con = duckdb.connect(":memory:")
+    try:
+        con.execute("CREATE TABLE observations AS SELECT * FROM range(5)")
+        con.execute("CREATE TABLE canonical_observations AS SELECT * FROM range(4)")
+        first, second = EIGHT_CELL_LABELS[0][0], EIGHT_CELL_LABELS[1][0]
+        summary = module._analysis_summary(
+            con,
+            tmp_path / "p",
+            tmp_path / "r",
+            tmp_path,
+            cells_obs={first: 7},
+            cells_canon={second: 6},
+        )
+    finally:
+        con.close()
+
+    assert summary.observation_count == 5
+    assert summary.canonical_count == 4
+    assert summary.public_row_count == 11
+    assert summary.rejection_count == 12
+    assert summary.duplicate_count == 13
+    assert summary.conflicting_snapshot_count == 14
+    assert summary.cell_observation == {
+        key: 7 if key == first else 0 for key, _label in EIGHT_CELL_LABELS
+    }
+    assert summary.cell_canonical == {
+        key: 6 if key == second else 0 for key, _label in EIGHT_CELL_LABELS
+    }
+
+
+def test_write_arrow_table_creates_parents_and_keeps_the_schema(tmp_path: Path) -> None:
+    output = tmp_path / "a" / "b" / "table.parquet"
+    schema = pa.schema([pa.field("value", pa.int32(), nullable=False)])
+
+    _write_arrow_table(output, [{"value": 3}], schema)
+
+    assert pq.read_schema(output) == schema
+    assert pq.read_schema(output).field("value").nullable is False
+    assert pq.ParquetFile(output).metadata.row_group(0).column(0).compression == "SNAPPY"
+
+
+def test_analyze_results_threads_one_staging_bundle_through_every_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from osm_polygon_website_tag.pipeline import analyze as module
+
+    run_dir = tmp_path / "nested" / "run"
+    calls: list[tuple[str, tuple[object, ...]]] = []
+    con, summary = object(), object()
+    monkeypatch.setattr(
+        module, "_validate_analysis_inputs", lambda *args: calls.append(("validate", args))
+    )
+    monkeypatch.setattr(
+        module,
+        "_register_analysis_sources",
+        lambda *args: calls.append(("register", args)) or con,
+    )
+    monkeypatch.setattr(
+        module,
+        "_write_analysis_tables",
+        lambda *args: calls.append(("tables", args)) or summary,
+    )
+    monkeypatch.setattr(
+        module, "_close_analysis_connection", lambda *args: calls.append(("close", args))
+    )
+    monkeypatch.setattr(
+        module, "atomic_promote_bundle", lambda pairs: calls.append(("promote", ()))
+    )
+    monkeypatch.setattr(
+        module.duckdb_engine, "cleanup_temp_dir", lambda *args: calls.append(("cleanup", args))
+    )
+
+    assert analyze_results(run_dir) is summary
+
+    polygons, observations = run_dir / "polygons", run_dir / "analysis_observations"
+    rejections = run_dir / "rejections"
+    staging = calls[2][1][3]
+    assert isinstance(staging, Path)
+    assert staging.parent == run_dir / "staging"
+    assert staging.name.startswith("analysis-")
+    assert calls == [
+        ("validate", (run_dir, polygons, observations, rejections)),
+        ("register", (run_dir, observations, polygons, rejections)),
+        ("tables", (con, polygons, rejections, staging)),
+        ("close", (con,)),
+        ("promote", ()),
+        ("cleanup", (run_dir,)),
+    ]
+    assert (run_dir / "analysis").is_dir()

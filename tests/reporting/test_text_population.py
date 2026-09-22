@@ -535,3 +535,52 @@ def test_the_text_column_types_are_a_fresh_mapping_each_call() -> None:
     first["lat"] = "TAMPERED"
 
     assert text_population._text_column_types()["lat"] == "DOUBLE"
+
+
+def test_summary_from_connection_maps_every_view_to_its_own_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every field gets a distinct value so a dropped or cross-wired one shows."""
+    import duckdb
+
+    monkeypatch.setattr(text_population, "_validate_word_counts", lambda _connection: None)
+    monkeypatch.setattr(text_population, "_status_counts", lambda _connection: (201, 202, 203, 204))
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE canonical_any AS SELECT * FROM range(7)")
+        connection.execute(
+            "CREATE TABLE canonical_website AS SELECT * FROM (VALUES "
+            "(0, 'en'), (0, 'fr'), (0, NULL)) t(website_word_count, website_language)"
+        )
+        connection.execute(
+            "CREATE TABLE canonical_contact AS SELECT * FROM (VALUES "
+            "(5, 'en'), (6, 'de'), (7, 'en'), (8, NULL), (9, NULL)) "
+            "t(contact_website_word_count, contact_website_language)"
+        )
+        connection.execute(
+            "CREATE TABLE all_rows AS SELECT * FROM (VALUES "
+            "('way', 1, 'a', NULL), ('way', 1, 'b', NULL), ('node', 5, 'c', NULL), "
+            "('way', 2, ' ', 'x'), ('node', 3, NULL, 'y'), ('node', 4, NULL, 'z'), "
+            "('node', 6, NULL, 'q')) t(osm_type, osm_id, website, contact_website)"
+        )
+        summary = text_population._summary_from_connection(connection)
+    finally:
+        connection.close()
+
+    assert summary == text_population.TextPopulationSummary(
+        unique_identity_count=7,
+        website_identity_count=3,
+        contact_website_identity_count=5,
+        website_total_words=0,
+        contact_website_total_words=35,
+        website_urls_present=2,
+        contact_website_urls_present=4,
+        website_empty_identity_count=201,
+        contact_website_empty_identity_count=202,
+        website_failure_identity_count=203,
+        contact_website_failure_identity_count=204,
+        website_language_count=2,
+        contact_website_language_count=3,
+        detected_language_count=3,
+        top_languages=(("en", 3), ("de", 1), ("fr", 1)),
+    )

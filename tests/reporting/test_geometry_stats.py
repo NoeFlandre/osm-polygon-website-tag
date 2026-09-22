@@ -523,3 +523,48 @@ def test_geometry_values_are_computed_serially(tmp_path: Path) -> None:
         assert int(row[0]) == 1
     finally:
         store.close()
+
+
+def test_render_geometry_stats_is_sorted_indented_json() -> None:
+    from dataclasses import asdict
+
+    stats = geometry_stats.GeometryStats(row_count=3)
+    payload = asdict(stats)
+    assert list(payload) != sorted(payload), "fixture must not already be key-sorted"
+
+    rendered = render_geometry_stats(stats)
+
+    assert rendered == json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    assert rendered.startswith('{\n  "')
+
+
+def test_accumulate_batch_spills_every_row_under_its_schema_names() -> None:
+    batch = pa.RecordBatch.from_pydict(
+        {
+            "bbox": ["[0.0, 0.0, 1.0, 2.0]"],
+            "geometry": [
+                json.dumps({"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 2], [0, 0]]]})
+            ],
+            "area_m2": [5.0],
+            "osm_primary_tag": ["building"],
+        }
+    )
+    spilled: list[list[dict[str, Any]]] = []
+    store = type("Store", (), {"append": lambda _self, rows: spilled.append(rows)})()
+    accumulator = geometry_stats._Accumulator()
+
+    geometry_stats._accumulate_batch(
+        accumulator,
+        batch,
+        source_pbf="a.osm.pbf",
+        store=store,  # type: ignore
+    )
+
+    [rows] = spilled
+    [row] = rows
+    assert sorted(row) == sorted(geometry_stats._SPILL_SCHEMA.names)
+    assert row["width_degrees"] == 1.0
+    assert row["height_degrees"] == 2.0
+    assert row["height_m"] > row["width_m"] > 0
+    assert row["source_pbf"] == "a.osm.pbf"
+    assert row["osm_primary_tag"] == "building"
