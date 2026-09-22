@@ -13,7 +13,7 @@
 #   uv run --locked python scripts/quality/mutation_runner.py run --max-children 2
 #   uv run --locked mutmut results --all true > results.txt
 #   uv run --locked python scripts/quality/mutation_baseline.py --results results.txt
-# Recorded mutants: 435
+# Recorded mutants: 419
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -95,22 +95,6 @@ osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_2
 osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_3
 osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_6
 osm_polygon_website_tag.publishing.publish.x_create_repo__mutmut_7
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_1
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_13
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_15
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_16
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_2
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_24
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_3
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_30
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_33
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_34
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_35
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_36
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_37
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_38
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_39
-osm_polygon_website_tag.publishing.publish.x_publish_to_hf__mutmut_40
 osm_polygon_website_tag.publishing.release.x__card_refresh_identities__mutmut_10
 osm_polygon_website_tag.publishing.release.x__card_refresh_identities__mutmut_3
 osm_polygon_website_tag.publishing.release.x__card_refresh_identities__mutmut_4

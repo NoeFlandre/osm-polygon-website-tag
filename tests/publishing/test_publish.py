@@ -315,3 +315,65 @@ def test_create_repo_remote_requests_public_dataset(monkeypatch) -> None:
         "exist_ok": True,
         "private": False,
     }
+
+
+def test_publish_to_hf_defaults_to_a_dry_run() -> None:
+    """The default must never upload: publication is an explicit act."""
+    import inspect
+
+    signature = inspect.signature(publish_to_hf)
+
+    assert signature.parameters["dry_run"].default is True
+    assert signature.parameters["repo_kind"].default == "dataset"
+
+
+def test_publish_to_hf_passes_the_planned_artifacts_to_the_uploader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pin every upload argument.
+
+    A stub that swallows its arguments cannot tell a run directory from a
+    repository id, and these are the values that decide what is written to a
+    public dataset.
+    """
+    run_dir = _setup_run(tmp_path)
+    _complete(monkeypatch, run_dir)
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: "token")
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    def record(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(publish_module, "_upload_folder", record)
+
+    plan = publish_to_hf(run_dir, repo_id="owner/repo", repo_kind="dataset", dry_run=False)
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == (run_dir,)
+    assert kwargs == {
+        "repo_id": "owner/repo",
+        "repo_kind": "dataset",
+        "artifact_paths": plan.artifact_paths,
+    }
+    assert plan.artifact_paths
+
+
+def test_publish_to_hf_plans_for_the_requested_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plan must describe the repository the caller named."""
+    run_dir = _setup_run(tmp_path)
+    recorded: list[dict[str, object]] = []
+    real_plan = publish_module.build_publish_plan
+
+    def record(run: Path, *, repo_id: str, repo_kind: str) -> PublishPlan:
+        recorded.append({"run": run, "repo_id": repo_id, "repo_kind": repo_kind})
+        return real_plan(run, repo_id=repo_id, repo_kind=repo_kind)
+
+    monkeypatch.setattr(publish_module, "build_publish_plan", record)
+
+    plan = publish_to_hf(run_dir, repo_id="owner/repo", repo_kind="model")
+
+    assert recorded == [{"run": run_dir, "repo_id": "owner/repo", "repo_kind": "model"}]
+    assert plan.repo_id == "owner/repo"
