@@ -229,7 +229,7 @@ def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
     assert "--json" in workflow
     assert "fromJSON(needs.quality.outputs.mutation_filters)" in workflow
     assert "fail-fast: false" in workflow
-    assert "max-parallel: 18" in workflow
+    assert "max-parallel: 24" in workflow
     assert 'run: just mutation-module "$MUTATION_FILTERS"' in workflow
     assert "fetch-depth: 0" in workflow
     assert "HF_TOKEN" not in workflow

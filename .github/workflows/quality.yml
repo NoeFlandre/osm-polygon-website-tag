@@ -70,7 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 18
+      # Shards are now per-function groups, so there are more of them and
+      # each is smaller; let more run at once or the fan-out buys nothing.
+      max-parallel: 24
       matrix:
         shard: ${{ fromJSON(needs.quality.outputs.mutation_filters) }}
     steps:

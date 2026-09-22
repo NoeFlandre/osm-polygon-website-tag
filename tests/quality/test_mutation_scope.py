@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -143,12 +144,22 @@ def test_main_can_emit_a_sorted_json_matrix(
     )
 
     assert mutation_scope.main(["--base", "main", "--json"]) == 0
-    assert capsys.readouterr().out == (
-        '[{"name":"osm_polygon_website_tag.publishing.release",'
-        '"filters":"osm_polygon_website_tag.publishing.release.x_publish__mutmut_*"},'
-        '{"name":"osm_polygon_website_tag.reporting.card",'
-        '"filters":"osm_polygon_website_tag.reporting.card.*"}]\n'
+    matrix = json.loads(capsys.readouterr().out)
+
+    # Sorted by module, and a function-scoped module passes through as one
+    # shard under its plain name.
+    assert matrix[0] == {
+        "name": "osm_polygon_website_tag.publishing.release",
+        "filters": "osm_polygon_website_tag.publishing.release.x_publish__mutmut_*",
+    }
+    # A whole-module scope is expanded into explicit per-function filters
+    # rather than left as one opaque `.*` job. Bounded fan-out and the
+    # positional naming are covered against a larger module below.
+    card = matrix[1:]
+    assert [f for entry in card for f in entry["filters"].split()] == (
+        mutation_scope.module_function_filters("osm_polygon_website_tag.reporting.card", root=_ROOT)
     )
+    assert all(f != "osm_polygon_website_tag.reporting.card.*" for f in card[0]["filters"].split())
 
 
 def test_main_defaults_to_the_upstream_branch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -323,4 +334,74 @@ def test_a_changed_test_widens_its_module_beyond_the_changed_functions() -> None
 
     assert scoped["osm_polygon_website_tag.reporting.card_stats"] == [
         "osm_polygon_website_tag.reporting.card_stats.*"
+    ]
+
+
+def test_a_whole_module_shard_expands_to_every_function() -> None:
+    """Sharding must cover exactly what the whole-module filter covered.
+
+    Every mutmut mutant belongs to a function, so the per-function filters of
+    a module are complete; if that ever stopped being true, sharding would
+    silently narrow the gate.
+    """
+    module = "osm_polygon_website_tag.reporting.card_stats"
+    expanded = mutation_scope.module_function_filters(module, root=_ROOT)
+    matrix = mutation_scope.shards({module: [f"{module}.*"]}, root=_ROOT)
+
+    assert expanded, "expected the module to expose functions"
+    assert [f for entry in matrix for f in entry["filters"].split()] == expanded
+    assert all(f.startswith(f"{module}.") and f.endswith("__mutmut_*") for f in expanded)
+
+
+def test_shards_are_bounded_and_named_with_their_position() -> None:
+    module = "osm_polygon_website_tag.reporting.card_stats"
+    matrix = mutation_scope.shards({module: [f"{module}.*"]}, root=_ROOT, size=8)
+
+    assert len(matrix) > 1
+    assert all(len(entry["filters"].split()) <= 8 for entry in matrix)
+    assert matrix[0]["name"] == f"{module} [1/{len(matrix)}]"
+    assert matrix[-1]["name"] == f"{module} [{len(matrix)}/{len(matrix)}]"
+
+
+def test_a_single_shard_keeps_the_plain_module_name() -> None:
+    module = "osm_polygon_website_tag.reporting.card_stats"
+    matrix = mutation_scope.shards(
+        {module: [f"{module}.x_compute_card_stats__mutmut_*"]}, root=_ROOT
+    )
+
+    assert matrix == [{"name": module, "filters": f"{module}.x_compute_card_stats__mutmut_*"}]
+
+
+def test_a_module_without_functions_keeps_its_whole_module_filter(tmp_path: Path) -> None:
+    """Never silently narrow a scope we cannot expand."""
+    module = f"{mutation_scope.PACKAGE_NAME}.constants"
+    source = tmp_path / mutation_scope.PACKAGE_ROOT / "constants.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+
+    assert mutation_scope.module_function_filters(module, root=tmp_path) == []
+    assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == [
+        {"name": module, "filters": f"{module}.*"}
+    ]
+
+
+def test_an_unreadable_module_keeps_its_whole_module_filter(tmp_path: Path) -> None:
+    module = f"{mutation_scope.PACKAGE_NAME}.missing"
+
+    assert mutation_scope.module_function_filters(module, root=tmp_path) == []
+    assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == [
+        {"name": module, "filters": f"{module}.*"}
+    ]
+
+
+def test_methods_are_sharded_under_their_mutmut_prefix(tmp_path: Path) -> None:
+    module = f"{mutation_scope.PACKAGE_NAME}.holder"
+    source = tmp_path / mutation_scope.PACKAGE_ROOT / "holder.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "class Store:\n    def append(self) -> None:\n        pass\n", encoding="utf-8"
+    )
+
+    assert mutation_scope.module_function_filters(module, root=tmp_path) == [
+        f"{module}.xǁStoreǁappend__mutmut_*"
     ]
