@@ -138,3 +138,91 @@ def test_shard_verification_reports_unreadable_and_invalid_hashes(
         errors,
     )
     assert errors == ["missing public shard hash for a.osm.pbf"]
+
+
+def _minimal_shard(path: Path, rows: int) -> str:
+    """Write a readable shard whose schema does not match any contract."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table({"value": pa.array(range(rows), type=pa.int64())}), path)
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_a_row_count_mismatch_names_the_shard_it_came_from() -> None:
+    """The filename is the only thing tying an error to its shard."""
+    contract = shards.SHARD_CONTRACTS[0]
+    errors: list[str] = []
+
+    shards._verify_row_count(2, "monaco-latest.osm.pbf", contract, {contract.count_key: 99}, errors)
+
+    assert errors == [
+        f"{contract.kind} row count mismatch for monaco-latest.osm.pbf: manifest=99, parquet=2"
+    ]
+
+
+def test_an_invalid_row_count_names_the_shard_it_came_from() -> None:
+    contract = shards.SHARD_CONTRACTS[0]
+    errors: list[str] = []
+
+    shards._verify_row_count(2, "monaco-latest.osm.pbf", contract, {}, errors)
+
+    assert errors == [f"invalid {contract.count_key} for monaco-latest.osm.pbf"]
+
+
+def test_a_missing_shard_hash_names_the_shard_it_came_from(tmp_path: Path) -> None:
+    contract = shards.SHARD_CONTRACTS[0]
+    path = tmp_path / "a.parquet"
+    _minimal_shard(path, 1)
+    errors: list[str] = []
+
+    shards._verify_shard_hash(path, "monaco-latest.osm.pbf", contract, {}, errors)
+
+    assert errors == [f"missing {contract.kind} shard hash for monaco-latest.osm.pbf"]
+
+
+def test_a_shard_hash_mismatch_names_the_shard_and_both_digests(tmp_path: Path) -> None:
+    contract = shards.SHARD_CONTRACTS[0]
+    path = tmp_path / "a.parquet"
+    actual = _minimal_shard(path, 1)
+    expected = "0" * 64
+    errors: list[str] = []
+
+    shards._verify_shard_hash(
+        path, "monaco-latest.osm.pbf", contract, {contract.hash_key: expected}, errors
+    )
+
+    assert errors == [
+        f"{contract.kind} shard hash mismatch for monaco-latest.osm.pbf: {actual} != {expected}"
+    ]
+
+
+def test_a_manifest_entry_passes_its_filename_down_to_every_shard_error(tmp_path: Path) -> None:
+    """A readable-but-wrong shard still reaches the count and hash checks."""
+    contract = shards.SHARD_CONTRACTS[0]
+    _minimal_shard(tmp_path / contract.directory / "monaco-latest.parquet", 2)
+    errors: list[str] = []
+
+    shards._verify_manifest_entry(
+        tmp_path,
+        {"filename": "monaco-latest.osm.pbf", contract.count_key: 99},
+        errors,
+        [],
+        set(),
+    )
+
+    assert (
+        f"{contract.kind} row count mismatch for monaco-latest.osm.pbf: manifest=99, parquet=2"
+        in errors
+    )
+    assert f"missing {contract.kind} shard hash for monaco-latest.osm.pbf" in errors
+
+
+def test_a_missing_shard_directory_is_reported_with_its_path(tmp_path: Path) -> None:
+    contract = shards.SHARD_CONTRACTS[0]
+    errors: list[str] = []
+
+    shards._verify_extra_shards(tmp_path, contract, set(), errors)
+
+    assert errors == [f"missing shard directory: {tmp_path / contract.directory}"]
