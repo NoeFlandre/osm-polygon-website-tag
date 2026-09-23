@@ -30,9 +30,7 @@ lock:
 lint:
     uv run --locked ruff check .
 
-ruff:
-    uv run --locked ruff check .
-    uv run --locked ruff format --check .
+ruff: lint format-check
 
 format:
     uv run --locked ruff check . --fix
@@ -203,9 +201,9 @@ qa-push base="origin/main": ruff typecheck
 # `coverage` collects unit, acceptance and architecture in one instrumented
 # run, and `crap` reads that run's artifact. The per-module mutation matrix
 # runs beside this job; `mutation_scope.py` emits one shard per changed
-# function.
+# function. `build` proves the sdist and wheel still package.
 # Tier 3: the pull-request gate.
-qa-pr: baseline ruff typecheck coverage crap
+qa-pr: baseline ruff typecheck coverage crap build
 
 # Everything the pull request proved, plus the container smoke test. In CI the
 # Docker workflow owns the container gate and runs it beside the quality job,
@@ -220,9 +218,6 @@ qa-merge: qa-pr
 release-verify run_dir:
     uv run --locked osm-polygon-website-tag verify-results --run-dir "{{ run_dir }}"
     just release-stats-dry-run "{{ run_dir }}"
-
-# Deprecated alias for `qa-pr`, kept so existing invocations keep working.
-qa-ci: qa-pr
 
 install-hooks:
     uv run --locked pre-commit install --hook-type pre-commit --hook-type pre-push
