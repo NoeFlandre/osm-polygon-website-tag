@@ -1,4 +1,13 @@
-"""Byte-preserving section patchers for legacy dataset cards."""
+"""Byte-preserving section patchers for legacy dataset cards.
+
+Only the stats-derived sections in ``_PATCHED_SECTION_ORDER`` are refreshed.
+A missing section is inserted where ``render_markdown`` would place it: after
+the nearest earlier patched section present, else before the nearest later
+one, else appended. The snapshot ("At a glance"), hostname, and method
+sections also depend on ``CardStats`` but are frozen on legacy cards: a
+patched card keeps their original counts. Regenerate the card with the full
+builder (through a proper release) when those must change.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +29,14 @@ _LANGUAGE_HEADING = re.compile(rb"(?m)^## Languages(?:\r\n|\n|$)")
 _SENTENCE_HEADING = re.compile(rb"(?m)^## Sentences(?:\r\n|\n|$)")
 _GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
 _GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
+# Must match the order of these sections in ``card_rendering.render_markdown``.
+_PATCHED_SECTION_ORDER = (
+    _WEBSITE_TEXT_HEADING,
+    _LANGUAGE_HEADING,
+    _SENTENCE_HEADING,
+    _GEOGRAPHIC_HEADING,
+    _GEOMETRY_HEADING,
+)
 
 
 def update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
@@ -29,11 +46,7 @@ def update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
     existing = _GEOMETRY_HEADING.search(card)
     if existing is not None:
         return _replace_section(card, existing, block)
-
-    insertion = _GEOGRAPHIC_HEADING.search(card)
-    if insertion is not None:
-        return card[: insertion.start()] + block + card[insertion.start() :]
-    return _append_block(card, block, newline)
+    return _insert_section(card, _GEOMETRY_HEADING, block, newline)
 
 
 def update_geographic_section(card: bytes, stats: CardStats) -> bytes:
@@ -44,15 +57,7 @@ def update_geographic_section(card: bytes, stats: CardStats) -> bytes:
     if existing is not None:
         return _replace_section(card, existing, block)
 
-    return _insert_geographic_section(card, block, newline)
-
-
-def _insert_geographic_section(card: bytes, block: bytes, newline: bytes) -> bytes:
-    """Insert geography after geometry or append it to the card."""
-    geometry = _GEOMETRY_HEADING.search(card)
-    if geometry is not None:
-        return _insert_after_section(card, geometry, block)
-    return _append_block(card, block, newline)
+    return _insert_section(card, _GEOGRAPHIC_HEADING, block, newline)
 
 
 def update_website_text_section(card: bytes, stats: CardStats) -> bytes:
@@ -96,14 +101,7 @@ def _replace_sentence_section(
 
 def _insert_sentence_section(card: bytes, lines: list[str], newline: bytes) -> bytes:
     """Insert a missing sentence section after the best related section."""
-    block = _block_bytes(lines, newline)
-    language = _LANGUAGE_HEADING.search(card)
-    if language is not None:
-        return _insert_after_section(card, language, block)
-    website = _WEBSITE_TEXT_HEADING.search(card)
-    if website is not None:
-        return _insert_after_section(card, website, block)
-    return _append_block(card, block, newline)
+    return _insert_section(card, _SENTENCE_HEADING, _block_bytes(lines, newline), newline)
 
 
 def _replace_existing_language_section(
@@ -119,11 +117,9 @@ def _replace_existing_language_section(
 
 
 def _insert_new_language_section(card: bytes, stats: CardStats, newline: bytes) -> bytes:
-    """Insert a missing generated language section after website text."""
-    website = _WEBSITE_TEXT_HEADING.search(card)
-    if website is not None:
-        return _insert_after_section(card, website, _language_section_block(stats, newline))
-    return _append_block(card, _language_section_block(stats, newline), newline)
+    """Insert a missing generated language section in renderer order."""
+    block = _language_section_block(stats, newline)
+    return _insert_section(card, _LANGUAGE_HEADING, block, newline)
 
 
 def _language_section_block(stats: CardStats, newline: bytes) -> bytes:
@@ -139,6 +135,20 @@ def _newline(card: bytes) -> bytes:
 def _block_bytes(lines: list[str], newline: bytes) -> bytes:
     """Encode rendered lines as one newline-terminated block."""
     return newline.join(line.encode() for line in lines) + newline
+
+
+def _insert_section(card: bytes, heading: re.Pattern[bytes], block: bytes, newline: bytes) -> bytes:
+    """Insert a missing patched section where ``render_markdown`` would place it."""
+    position = _PATCHED_SECTION_ORDER.index(heading)
+    for earlier in reversed(_PATCHED_SECTION_ORDER[:position]):
+        match = earlier.search(card)
+        if match is not None:
+            return _insert_after_section(card, match, block)
+    for later in _PATCHED_SECTION_ORDER[position + 1 :]:
+        match = later.search(card)
+        if match is not None:
+            return card[: match.start()] + block + card[match.start() :]
+    return _append_block(card, block, newline)
 
 
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:

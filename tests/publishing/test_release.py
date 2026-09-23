@@ -482,11 +482,12 @@ def test_release_adds_geometry_without_replacing_existing_card_or_configuration(
     release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
     updated_readme = (run_dir / "README.md").read_bytes().decode("utf-8")
-    geometry_start = updated_readme.index("## Polygon geometry")
     geographic_start = updated_readme.index("## Geographic distribution")
+    geometry_start = updated_readme.index("## Polygon geometry")
     unrelated_start = updated_readme.index("## Unrelated metadata")
-    assert updated_readme[:geometry_start] == readme_prefix
-    assert updated_readme[geographic_start:unrelated_start].startswith(
+    assert updated_readme[:geographic_start] == readme_prefix
+    assert geographic_start < geometry_start < unrelated_start
+    assert updated_readme[geographic_start:geometry_start].startswith(
         "## Geographic distribution\n\n![H3 polygon density]"
     )
     assert "The existing geographic section remains untouched." not in updated_readme
