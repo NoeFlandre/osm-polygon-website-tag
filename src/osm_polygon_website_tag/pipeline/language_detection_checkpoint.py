@@ -7,7 +7,7 @@ from pathlib import Path
 from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_SCHEMA_VERSION
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA_V1_4
 from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
-from osm_polygon_website_tag.pipeline.glotlid import ModelIdentity
+from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
 
 CHECKPOINT_DIRECTORY_SUFFIX = ".language.parts"
 
