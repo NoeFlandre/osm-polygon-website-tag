@@ -11,6 +11,7 @@ that has not actually been staged.
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -110,11 +111,13 @@ def load_sat_splitter_from_path(
     model_batch_size: int = DEFAULT_MODEL_BATCH_SIZE,
 ) -> SaTSplitter:
     """Load the pinned segmentation model from a locally staged directory."""
-    from wtpsplit import SaT
+    # Resolved at runtime: wtpsplit ships in the optional `sentences` extra, so
+    # the default environment the type checker sees does not contain it.
+    sat_class = importlib.import_module("wtpsplit").SaT
 
     identity = sat_model_identity(model_dir, revision=revision)
     resolved = select_device(requested=device, cuda_available=_cuda_available())
-    model = prepare_model(SaT(str(model_dir)), device=resolved)
+    model = prepare_model(sat_class(str(model_dir)), device=resolved)
     return SaTSplitter(model, identity, model_batch_size=model_batch_size)
 
 

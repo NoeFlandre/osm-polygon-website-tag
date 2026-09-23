@@ -13,9 +13,12 @@ from osm_polygon_website_tag.pipeline.sentence_languages import (
 
 def test_supported_codes_match_the_installed_model_metadata() -> None:
     """The pinned table must not drift from what wtpsplit actually ships."""
-    from wtpsplit.utils import Constants
+    # wtpsplit ships in the optional `sentences` extra; the default install
+    # cannot see the model metadata, so the contract is checked where it can.
+    utils = pytest.importorskip("wtpsplit.utils")
+    constants = utils.Constants
 
-    assert frozenset(Constants.LANGINFO.index) == SAT_LANGUAGE_CODES
+    assert frozenset(constants.LANGINFO.index) == SAT_LANGUAGE_CODES
 
 
 def test_every_supported_code_is_reachable_from_at_least_one_subtag() -> None:
