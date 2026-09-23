@@ -6,7 +6,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from tests.reporting.test_finalize import _setup
@@ -1528,3 +1528,714 @@ def test_bound_shards_raise_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(release_module, "_unbound_text_population_paths", lambda *_args: [])
 
     assert release_module._raise_for_unbound_text_population_paths(Path("/run"), []) is None
+
+
+def test_release_card_and_stats_threads_the_run_through_every_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Record every collaborator so a dropped or swapped argument shows."""
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+    report = SimpleNamespace(checked_shards=["a.parquet", "b.parquet"])
+    files = (ReleasedFile(relative_path="README.md", sha256="f", size_bytes=1),)
+    publication = object()
+
+    def record(name: str, result: object = None):
+        def stub(*args: object, **kwargs: object) -> object:
+            calls.append((name, args, kwargs))
+            return result
+
+        return stub
+
+    monkeypatch.setattr(release_module, "_require_exact_repo", record("repo"))
+    monkeypatch.setattr(release_module, "_require_complete_release", record("complete", "exp"))
+    monkeypatch.setattr(release_module, "_recompute_card", record("recompute", True))
+    monkeypatch.setattr(release_module, "verify_release_results", record("verify", report))
+    monkeypatch.setattr(release_module, "_require_verified", record("verified"))
+    monkeypatch.setattr(release_module, "compute_data_manifest_sha256", record("data", "d-sha"))
+    monkeypatch.setattr(release_module, "build_card_release_plan", record("plan", files))
+    monkeypatch.setattr(release_module, "_publish_if_requested", record("publish", publication))
+    monkeypatch.setattr(
+        release_module,
+        "_publication_report_fields",
+        record("fields", ("rev", True, False, ("README.md",))),
+    )
+    monkeypatch.setattr(
+        release_module, "compute_parquet_manifest_sha256", record("parquet", "p-sha")
+    )
+    uploader, verifier, checker = object(), object(), object()
+
+    result = release_card_and_stats(
+        tmp_path,
+        confirm_repo="owner/repo",
+        repo_id="owner/repo",
+        repo_kind="model",
+        apply=True,
+        uploader=uploader,  # type: ignore
+        verifier=verifier,  # type: ignore
+        remote_checker=checker,  # type: ignore
+    )
+
+    assert result == release_module.CardReleaseReport(
+        repo_id="owner/repo",
+        run_dir=str(tmp_path),
+        files=files,
+        verified_shards=("a.parquet", "b.parquet"),
+        recomputed=True,
+        published=True,
+        revision="rev",
+        data_manifest_sha256="d-sha",
+        parquet_manifest_sha256="p-sha",
+        uploaded=True,
+        no_op=False,
+        changed_files=("README.md",),
+    )
+    assert calls == [
+        ("repo", ("owner/repo", "owner/repo", "model"), {}),
+        ("complete", (tmp_path,), {}),
+        ("recompute", (tmp_path, "exp"), {}),
+        ("verify", (tmp_path,), {}),
+        ("verified", (report, tmp_path), {}),
+        ("data", (tmp_path,), {}),
+        ("plan", (tmp_path,), {"data_manifest_sha256": "d-sha"}),
+        (
+            "publish",
+            (tmp_path,),
+            {
+                "apply": True,
+                "repo_id": "owner/repo",
+                "repo_kind": "model",
+                "files": files,
+                "uploader": uploader,
+                "verifier": verifier,
+                "remote_checker": checker,
+            },
+        ),
+        ("fields", (files, publication), {}),
+        ("parquet", (tmp_path,), {}),
+    ]
+
+
+_TEXT_BINDING_ERROR = (
+    "release requires external text population shards bound by the completion receipt"
+)
+
+
+def _external_text_population(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: dict[str, object], actual: object
+) -> list[tuple[str, tuple[object, ...], dict[str, object]]]:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+    paths = [tmp_path / "outside.parquet"]
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: paths)
+    monkeypatch.setattr(release_module, "_external_text_population_paths", lambda *_args: paths)
+    monkeypatch.setattr(release_module, "_completion_receipt_path", lambda _root: receipt)
+
+    def read(path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("read", (path,), kwargs))
+        return payload
+
+    def entries(root: Path, received: list[Path]) -> object:
+        calls.append(("entries", (root, received), {}))
+        if isinstance(actual, Exception):
+            raise actual
+        return iter(actual)  # type: ignore
+
+    monkeypatch.setattr(release_module, "_read_receipt_payload", read)
+    monkeypatch.setattr(release_module, "_text_population_manifest_entries_from_paths", entries)
+    return calls
+
+
+def test_release_text_population_accepts_receipt_bound_external_shards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = {"path": "outside.parquet", "sha256": "s", "size_bytes": 1}
+    calls = _external_text_population(
+        monkeypatch, tmp_path, {"text_population_manifest": [entry]}, [entry]
+    )
+
+    release_module._require_release_bound_text_population(tmp_path)
+
+    assert calls == [
+        (
+            "read",
+            (tmp_path / "receipt.json",),
+            {"error_type": ValueError, "label": "release completion receipt"},
+        ),
+        ("entries", (tmp_path, [tmp_path / "outside.parquet"]), {}),
+    ]
+    assert calls[0][2]["error_type"] is ValueError
+
+
+@pytest.mark.parametrize(
+    ("payload", "actual"),
+    [
+        ({"text_population_manifest": [{"path": "x"}]}, [{"path": "y"}]),
+        ({}, [{"path": "x"}]),
+        ({"text_population_manifest": [{"path": "x"}]}, OSError("gone")),
+    ],
+)
+def test_release_text_population_rejects_unbound_external_shards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: dict[str, object], actual: object
+) -> None:
+    _external_text_population(monkeypatch, tmp_path, payload, actual)
+
+    with pytest.raises(ValueError, match=rf"^{_TEXT_BINDING_ERROR}$"):
+        release_module._require_release_bound_text_population(tmp_path)
+
+
+def test_release_text_population_accepts_an_empty_bound_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty list must still be compared, not mistaken for a missing key."""
+    _external_text_population(monkeypatch, tmp_path, {"text_population_manifest": []}, [])
+
+    release_module._require_release_bound_text_population(tmp_path)
+
+
+_REMOTE_ENTRIES: dict[str, dict[str, int | str]] = {
+    "remote/a.parquet": {"size_bytes": 3, "sha256": "ra"},
+    "a.parquet": {"size_bytes": 4, "sha256": "la"},
+}
+
+
+@pytest.mark.parametrize(
+    ("item", "expected"),
+    [
+        (
+            {"path": "a.parquet"},
+            {"path": "text_population/a.parquet", "size_bytes": 4, "sha256": "la"},
+        ),
+        (
+            {"path": "a.parquet", "remote_path": "remote/a.parquet"},
+            {"path": "text_population/a.parquet", "size_bytes": 3, "sha256": "ra"},
+        ),
+    ],
+)
+def test_remote_text_population_entry_prefers_the_remote_path(
+    item: dict[str, str], expected: dict[str, object]
+) -> None:
+    assert release_module._remote_text_population_entry(item, _REMOTE_ENTRIES) == expected
+
+
+def test_remote_text_population_entry_rejects_a_missing_logical_path() -> None:
+    with pytest.raises(
+        release_module._RemoteDataMismatchError,
+        match=r"^remote text population manifest path is invalid$",
+    ):
+        release_module._remote_text_population_entry({"remote_path": "a.parquet"}, _REMOTE_ENTRIES)
+
+
+_UNBOUNDED = r"^remote Parquet entry lacks bounded identity: data/a\.parquet$"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        SimpleNamespace(lfs=SimpleNamespace(sha256="abc")),
+        SimpleNamespace(size=3),
+        SimpleNamespace(size=3, lfs=SimpleNamespace()),
+        SimpleNamespace(size=3, lfs=SimpleNamespace(sha256="")),
+        SimpleNamespace(size=3, lfs=SimpleNamespace(sha256=5)),
+        SimpleNamespace(size=None, lfs=SimpleNamespace(sha256="abc")),
+    ],
+)
+def test_remote_parquet_identity_requires_a_size_and_a_digest(entry: object) -> None:
+    with pytest.raises(release_module._RemoteArtifactMismatchError, match=_UNBOUNDED):
+        release_module._validated_remote_parquet_identity(entry, "data/a.parquet")
+
+
+def test_remote_parquet_identity_names_an_unknown_path() -> None:
+    with pytest.raises(
+        release_module._RemoteArtifactMismatchError,
+        match=r"^remote Parquet entry lacks bounded identity: <unknown>$",
+    ):
+        release_module._validated_remote_parquet_identity(SimpleNamespace(), "")
+
+
+def test_remote_parquet_identity_projects_a_bounded_entry() -> None:
+    entry = SimpleNamespace(size="3", lfs=SimpleNamespace(sha256="abc"))
+
+    assert release_module._validated_remote_parquet_identity(entry, "data/a.parquet") == {
+        "path": "data/a.parquet",
+        "size_bytes": 3,
+        "sha256": "abc",
+    }
+
+
+def test_remote_parquet_entry_identity_ignores_a_pathless_entry() -> None:
+    assert release_module._remote_parquet_entry_identity(SimpleNamespace(size=1)) is None
+
+
+def test_text_population_release_entries_prefer_the_remote_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = [tmp_path / "a.parquet"]
+    seen: list[tuple[Path, object]] = []
+    monkeypatch.setattr(release_module, "text_population_parquets", lambda _root: paths)
+
+    def entries(root: Path, received: object) -> list[dict[str, object]]:
+        seen.append((root, received))
+        return [
+            {
+                "path": "a.parquet",
+                "remote_path": "remote/a.parquet",
+                "size_bytes": "3",
+                "sha256": "x",
+            },
+            {"path": "b.parquet", "size_bytes": 4, "sha256": "y"},
+        ]
+
+    monkeypatch.setattr(release_module, "_text_population_manifest_entries_from_paths", entries)
+
+    assert release_module._text_population_release_entries(tmp_path) == (
+        ("remote/a.parquet", 3, "x"),
+        ("b.parquet", 4, "y"),
+    )
+    assert seen == [(tmp_path, paths)]
+
+
+def _recording_upload(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
+    uploads: list[dict[str, object]] = []
+
+    def upload(run_dir: Path, **kwargs: object) -> str:
+        uploads.append({"run_dir": run_dir, **kwargs})
+        return "uploaded"
+
+    monkeypatch.setattr(release_module, "_upload_and_verify", upload)
+    return uploads
+
+
+def _publish_with(tmp_path: Path, checker: object) -> object:
+    return release_module._publish(
+        tmp_path,
+        repo_id="owner/repo",
+        repo_kind="dataset",
+        files=("file",),  # type: ignore
+        uploader=None,
+        verifier=None,
+        remote_checker=checker,  # type: ignore
+    )
+
+
+def test_publish_without_a_checker_uploads_with_no_changed_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uploads = _recording_upload(monkeypatch)
+
+    assert _publish_with(tmp_path, None) == "uploaded"
+    assert uploads == [
+        {
+            "run_dir": tmp_path,
+            "repo_id": "owner/repo",
+            "repo_kind": "dataset",
+            "files": ("file",),
+            "uploader": None,
+            "verifier": None,
+            "changed_files": (),
+        }
+    ]
+
+
+def test_publish_no_ops_on_a_revision_the_checker_already_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uploads = _recording_upload(monkeypatch)
+    checks: list[tuple[object, ...]] = []
+
+    result = _publish_with(tmp_path, lambda *args: checks.append(args) or "rev-1")
+
+    assert result == release_module._PublicationResult("rev-1", uploaded=False)
+    assert checks == [("owner/repo", ("file",))]
+    assert uploads == []
+
+
+def test_remote_text_population_receipt_reads_the_downloaded_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    downloads: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    reads: list[tuple[Path, dict[str, object]]] = []
+    api = SimpleNamespace(
+        hf_hub_download=lambda *args, **kwargs: (
+            downloads.append((args, kwargs)) or str(tmp_path / "r.json")
+        )
+    )
+
+    def read(path: Path, **kwargs: object) -> dict[str, object]:
+        reads.append((path, kwargs))
+        return {"ok": 1}
+
+    monkeypatch.setattr(release_module, "_read_receipt_payload", read)
+
+    assert release_module._remote_text_population_receipt(api, "owner/repo", "rev") == {"ok": 1}
+    assert downloads == [
+        (
+            ("owner/repo", "manifests/completion_receipt.json"),
+            {"revision": "rev", "repo_type": "dataset"},
+        )
+    ]
+    assert reads == [
+        (
+            tmp_path / "r.json",
+            {
+                "error_type": release_module._RemoteDataMismatchError,
+                "label": "remote completion receipt",
+            },
+        )
+    ]
+    assert reads[0][1]["error_type"] is release_module._RemoteDataMismatchError
+
+
+def _released(identity: str | None) -> ReleasedFile:
+    return ReleasedFile(
+        relative_path="README.md", sha256="f", size_bytes=1, data_manifest_sha256=identity
+    )
+
+
+@pytest.mark.parametrize("files", [(), (_released("a"), _released("b")), (_released(None),)])
+def test_expected_data_identity_requires_exactly_one_identity(files: tuple) -> None:
+    with pytest.raises(ValueError, match=r"^release plan has no single data identity$"):
+        release_module._expected_data_identity(files)
+
+
+def test_require_complete_release_refusal_is_exact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        release_module, "load_run", lambda _root: SimpleNamespace(metadata={"status": "running"})
+    )
+    with pytest.raises(ValueError, match=r"^release requires a COMPLETE run$"):
+        release_module._require_complete_release(tmp_path)
+
+
+def test_require_complete_release_returns_the_receipt_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        release_module,
+        "load_run",
+        lambda _root: SimpleNamespace(metadata={"status": release_module.STATUS_COMPLETE}),
+    )
+    monkeypatch.setattr(release_module, "_require_release_bound_text_population", lambda _r: None)
+    monkeypatch.setattr(release_module, "_completion_receipt_path", lambda root: root / "r.json")
+    monkeypatch.setattr(release_module, "_completion_data_identity", lambda _r: "receipt-id")
+    monkeypatch.setattr(release_module, "verify_receipt_before_card_refresh", lambda *_a: None)
+    monkeypatch.setattr(release_module, "compute_data_manifest_sha256", lambda _r: "computed")
+
+    assert release_module._require_complete_release(tmp_path) == "receipt-id"
+
+
+def test_release_refusals_are_exact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(release_module, "resolve_hf_token", lambda: None)
+    with pytest.raises(
+        ValueError, match=r"^release requires Hugging Face environment/local credentials$"
+    ):
+        release_module._require_credentialed_uploader()
+
+    monkeypatch.setattr(release_module, "compute_data_manifest_sha256", lambda _r: "new")
+    with pytest.raises(ValueError, match=r"^release data manifest changed; refusing to release$"):
+        release_module._require_data_identity(tmp_path, "old")
+
+    with pytest.raises(
+        ValueError, match=r"^release repository kind must be the canonical dataset$"
+    ):
+        release_module._require_exact_repo(DEFAULT_HF_DATASET, DEFAULT_HF_DATASET, "model")
+
+
+def test_remote_text_population_entry_check_names_the_missing_shard() -> None:
+    with pytest.raises(
+        release_module._RemoteDataMismatchError,
+        match=r"^remote text population shard missing: a\.parquet$",
+    ):
+        release_module._verify_remote_text_population_entry({}, "a.parquet", 1, "x")
+
+
+def test_completion_receipt_path_rejects_a_missing_receipt(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^release requires a completion receipt: "):
+        release_module._completion_receipt_path(tmp_path)
+
+
+def test_completion_receipt_path_rejects_a_symlinked_receipt(tmp_path: Path) -> None:
+    target = tmp_path / "real.json"
+    target.write_text("{}", encoding="utf-8")
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "completion_receipt.json").symlink_to(target)
+
+    with pytest.raises(ValueError, match=r"^release requires a completion receipt: "):
+        release_module._completion_receipt_path(tmp_path)
+
+
+def test_publication_report_fields_without_a_publication_are_all_false() -> None:
+    assert release_module._publication_report_fields((), None) == (None, False, False, ())
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"data_manifest_sha256": "abc"}, "abc"),
+        ({"schema_version": "v1.2"}, None),
+    ],
+)
+def test_receipt_data_identity_accepts_a_digest_or_a_legacy_receipt(
+    payload: dict[str, object], expected: str | None
+) -> None:
+    assert (
+        release_module._receipt_data_identity(payload, error_type=ValueError, label="r") == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"data_manifest_sha256": ""},
+        {"data_manifest_sha256": 5},
+        {"schema_version": "v1.2", "data_manifest_sha256": None},
+    ],
+)
+def test_receipt_data_identity_rejects_an_invalid_digest(payload: dict[str, object]) -> None:
+    with pytest.raises(KeyError, match=r"r has no data identity"):
+        release_module._receipt_data_identity(payload, error_type=KeyError, label="r")  # type: ignore
+
+
+def test_remote_revision_rejects_an_info_without_a_sha() -> None:
+    api = SimpleNamespace(repo_info=lambda *_args, **_kwargs: SimpleNamespace())
+
+    with pytest.raises(ValueError, match=r"^hub repository owner/repo returned an empty revision$"):
+        release_module._remote_revision(api, "owner/repo")
+
+
+def test_recoverable_card_identities_accept_an_existing_readme(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("x", encoding="utf-8")
+    missing = {"expected_readme_custom_sha256": None, "expected_readme_preserved_sha256": None}
+
+    release_module._require_recoverable_card_identities(tmp_path, missing)
+
+
+def test_remote_text_population_identity_skips_a_release_without_text_shards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(release_module, "_expected_text_population_entries", lambda _files: ())
+    monkeypatch.setattr(
+        release_module,
+        "_remote_parquet_entries",
+        lambda *_args: pytest.fail("no text shard to compare"),
+    )
+
+    release_module._verify_remote_text_population_identity(object(), "o/r", "rev", ())
+
+
+def test_remote_text_population_identity_checks_every_expected_shard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        release_module, "_expected_text_population_entries", lambda _files: (("a", 1, "x"),)
+    )
+    monkeypatch.setattr(release_module, "_remote_parquet_entries", lambda *_args: {})
+
+    with pytest.raises(
+        release_module._RemoteDataMismatchError, match=r"^remote text population shard missing: a$"
+    ):
+        release_module._verify_remote_text_population_identity(object(), "o/r", "rev", ())
+
+
+def test_remote_data_identity_rejects_a_disagreeing_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(release_module, "_remote_data_manifest_sha256", lambda *_args: "a")
+    monkeypatch.setattr(release_module, "_remote_data_identity", lambda *_args: "b")
+
+    with pytest.raises(
+        release_module._RemoteDataMismatchError,
+        match=r"^remote data identity mismatch: local=a, remote=b$",
+    ):
+        release_module._verify_remote_data_identity(object(), "o/r", "rev", (_released("a"),))
+
+    monkeypatch.setattr(release_module, "_remote_data_identity", lambda *_args: None)
+    release_module._verify_remote_data_identity(object(), "o/r", "rev", (_released("a"),))
+
+
+def _recording_receipt_reads(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
+) -> list[tuple[str, dict[str, object]]]:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def read(_path: Path, **kwargs: object) -> dict[str, object]:
+        calls.append(("read", kwargs))
+        return payload
+
+    def identity(_payload: dict[str, object], **kwargs: object) -> str:
+        calls.append(("identity", kwargs))
+        return "id"
+
+    monkeypatch.setattr(release_module, "_read_receipt_payload", read)
+    monkeypatch.setattr(release_module, "_receipt_data_identity", identity)
+    return calls
+
+
+_LOCAL_RECEIPT = {"error_type": ValueError, "label": "release completion receipt"}
+
+
+def test_card_refresh_identities_read_the_local_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _recording_receipt_reads(monkeypatch, {"readme_yaml_custom_sha256": "r"})
+    monkeypatch.setattr(release_module, "_completion_receipt_path", lambda root: root / "r.json")
+    monkeypatch.setattr(release_module, "_require_recoverable_card_identities", lambda *_a: None)
+
+    identities = release_module._card_refresh_identities(tmp_path)
+
+    assert identities["expected_readme_custom_sha256"] == "r"
+    assert calls == [("read", _LOCAL_RECEIPT)]
+    assert calls[0][1]["error_type"] is ValueError
+
+
+def test_completion_data_identity_labels_both_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _recording_receipt_reads(monkeypatch, {})
+
+    assert release_module._completion_data_identity(tmp_path / "r.json") == "id"
+    assert calls == [("read", _LOCAL_RECEIPT), ("identity", _LOCAL_RECEIPT)]
+
+
+def test_remote_data_identity_labels_both_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _recording_receipt_reads(monkeypatch, {})
+    api = SimpleNamespace(hf_hub_download=lambda *_args, **_kwargs: str(tmp_path / "r.json"))
+    remote = {
+        "error_type": release_module._RemoteDataMismatchError,
+        "label": "remote completion receipt",
+    }
+
+    assert release_module._remote_data_identity(api, "o/r", "rev") == "id"
+    assert calls == [("read", remote), ("identity", remote)]
+
+
+def test_publish_if_requested_keeps_an_explicit_uploader_unchecked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    published: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        release_module, "_publish", lambda *args, **kwargs: published.append((args, kwargs)) or "p"
+    )
+    uploader = object()
+
+    result = release_module._publish_if_requested(
+        tmp_path,
+        apply=True,
+        repo_id="o/r",
+        repo_kind="dataset",
+        files=(),
+        uploader=uploader,  # type: ignore
+        verifier=None,
+        remote_checker=None,
+    )
+
+    assert result == "p"
+    assert published == [
+        (
+            (tmp_path,),
+            {
+                "repo_id": "o/r",
+                "repo_kind": "dataset",
+                "files": (),
+                "uploader": uploader,
+                "verifier": None,
+                "remote_checker": None,
+            },
+        )
+    ]
+
+
+def test_receipt_card_refresh_identities_map_each_receipt_field() -> None:
+    payload = {
+        "readme_yaml_custom_sha256": "r",
+        "dataset_yaml_custom_sha256": "d",
+        "readme_preserved_sha256": None,
+    }
+
+    assert release_module._receipt_card_refresh_identities(payload) == {
+        "expected_readme_custom_sha256": "r",
+        "expected_dataset_custom_sha256": "d",
+        "expected_readme_preserved_sha256": None,
+    }
+
+
+def test_remote_changed_files_check_the_named_repository(monkeypatch: pytest.MonkeyPatch) -> None:
+    checked: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        release_module,
+        "_verify_remote_size",
+        lambda _api, repo, *_rest: checked.append(("size", repo)),
+    )
+    monkeypatch.setattr(
+        release_module,
+        "_verify_remote_digest",
+        lambda _api, repo, *_rest: checked.append(("digest", repo)),
+    )
+
+    assert release_module._remote_changed_files(object(), "o/r", "rev", (_released("a"),)) == ()
+    assert checked == [("size", "o/r"), ("digest", "o/r")]
+
+
+def test_remote_parquet_entries_require_a_tree_listing_api() -> None:
+    with pytest.raises(
+        release_module._RemoteArtifactMismatchError,
+        match=r"^remote API cannot inspect Parquet shards$",
+    ):
+        release_module._remote_parquet_entries(SimpleNamespace(), "o/r", "rev")
+
+
+def test_update_card_safely_forwards_every_expected_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        release_module, "refresh_card_for_release", lambda _run, **kwargs: calls.append(kwargs)
+    )
+
+    release_module._update_card_safely(
+        tmp_path,
+        expected_readme_custom_sha256="r",
+        expected_dataset_custom_sha256="d",
+        expected_readme_preserved_sha256="p",
+    )
+
+    assert calls == [
+        {
+            "expected_readme_custom_sha256": "r",
+            "expected_dataset_custom_sha256": "d",
+            "expected_readme_preserved_sha256": "p",
+        }
+    ]
+
+
+def test_upload_and_verify_rejects_an_empty_revision(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^hub verification returned an empty revision$"):
+        release_module._upload_and_verify(
+            tmp_path,
+            repo_id="o/r",
+            repo_kind="dataset",
+            files=(),
+            uploader=lambda *_args, **_kwargs: None,
+            verifier=cast(Any, lambda *_args: ""),
+        )
+
+
+def test_remote_size_accepts_an_entry_without_a_size() -> None:
+    api = SimpleNamespace(get_paths_info=lambda *_args, **_kwargs: [SimpleNamespace()])
+
+    release_module._verify_remote_size(api, "o/r", "rev", _released("a"))
+
+
+@pytest.mark.parametrize(("size_bytes", "digest"), [(2, "x"), (1, "y")])
+def test_remote_text_population_entry_rejects_either_identity_mismatch(
+    size_bytes: int, digest: str
+) -> None:
+    remote: dict[str, dict[str, int | str]] = {"a.parquet": {"size_bytes": 1, "sha256": "x"}}
+
+    with pytest.raises(
+        release_module._RemoteDataMismatchError,
+        match=r"^remote text population shard mismatch: a\.parquet$",
+    ):
+        release_module._verify_remote_text_population_entry(remote, "a.parquet", size_bytes, digest)

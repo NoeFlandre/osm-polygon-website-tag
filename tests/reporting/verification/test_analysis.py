@@ -655,3 +655,436 @@ def test_an_optional_yaml_field_still_has_to_agree_when_present() -> None:
     )
 
     assert errors == ["dataset.yaml count does not match canonical text statistics"]
+
+
+def _recording_release_card_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[tuple[str, tuple[object, ...]]], dict[str, object]]:
+    """Stub every collaborator of both card-statistic gates and record exact arguments."""
+    calls: list[tuple[str, tuple[object, ...]]] = []
+    values = {name: object() for name in ("population", "summary", "stats", "geometry")}
+
+    def record(name: str, result: object = None):
+        def stub(*args: object, **kwargs: object) -> object:
+            calls.append((name, (*args, *sorted(kwargs.items()))))
+            return result
+
+        return stub
+
+    monkeypatch.setattr(
+        analysis, "compute_text_population_summary", record("population", values["population"])
+    )
+    monkeypatch.setattr(
+        analysis, "compute_polygon_density_summary", record("summary", values["summary"])
+    )
+    monkeypatch.setattr(analysis, "compute_card_stats", record("stats", values["stats"]))
+    monkeypatch.setattr(analysis, "compute_geometry_stats", record("geometry", values["geometry"]))
+    monkeypatch.setattr(analysis, "render_geometry_stats", record("render", "stats-text"))
+    monkeypatch.setattr(analysis, "_render_yaml_front_matter", record("yaml", "yaml-text"))
+    monkeypatch.setattr(analysis, "_render_markdown", record("markdown", "markdown-text"))
+    monkeypatch.setattr(analysis, "_public_schema_for_card", record("schema", "schema"))
+    for name in (
+        "_compare_card_file",
+        "_verify_release_geometry_section",
+        "_verify_text_population_agreement",
+        "_verify_map_matches_summary",
+        "_verify_release_website_text_section",
+        "_verify_release_text_yaml",
+        "_verify_release_geographic_section",
+        "_verify_release_density_yaml",
+    ):
+        monkeypatch.setattr(analysis, name, record(name))
+    return calls, values
+
+
+def test_release_card_statistics_hands_each_gate_the_shared_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls, values = _recording_release_card_pipeline(monkeypatch)
+    population, summary = values["population"], values["summary"]
+    stats, geometry = values["stats"], values["geometry"]
+    errors: list[str] = []
+
+    analysis._verify_release_card_statistics(tmp_path, errors)
+
+    assert errors == []
+    assert calls == [
+        ("population", (tmp_path,)),
+        ("summary", (tmp_path, ("aggregation_mode", "global_unique_text"))),
+        ("geometry", (tmp_path, ("text_population", population))),
+        ("render", (geometry,)),
+        ("_compare_card_file", (tmp_path / "stats.json", "stats-text", "stats.json", errors)),
+        ("_verify_release_geometry_section", (tmp_path, geometry, errors)),
+        ("stats", (tmp_path, ("summary", summary), ("text_population", population))),
+        (
+            "_verify_text_population_agreement",
+            (population, summary, stats, geometry, errors),
+        ),
+        ("_verify_map_matches_summary", (tmp_path, summary, errors)),
+        ("_verify_release_website_text_section", (tmp_path, stats, errors)),
+        ("_verify_release_text_yaml", (tmp_path, stats, errors)),
+        ("_verify_release_geographic_section", (tmp_path, stats, errors)),
+        ("_verify_release_density_yaml", (tmp_path, stats, errors)),
+    ]
+    for _name, args in calls[4:]:
+        if errors in args:
+            assert args[-1] is errors
+
+
+def test_card_statistics_hands_each_gate_the_shared_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls, values = _recording_release_card_pipeline(monkeypatch)
+    population, summary = values["population"], values["summary"]
+    stats, geometry = values["stats"], values["geometry"]
+    errors: list[str] = []
+
+    analysis._verify_card_statistics(tmp_path, errors)
+
+    assert errors == []
+    assert calls == [
+        ("population", (tmp_path,)),
+        ("summary", (tmp_path, ("aggregation_mode", "global_unique_text"))),
+        ("stats", (tmp_path, ("summary", summary), ("text_population", population))),
+        ("geometry", (tmp_path, ("text_population", population))),
+        (
+            "_verify_text_population_agreement",
+            (population, summary, stats, geometry, errors),
+        ),
+        ("_verify_map_matches_summary", (tmp_path, summary, errors)),
+        ("yaml", (stats,)),
+        ("schema", (tmp_path,)),
+        ("markdown", (stats, ("geometry", geometry), ("schema", "schema"))),
+        ("_compare_card_file", (tmp_path / "dataset.yaml", "yaml-text", "dataset.yaml", errors)),
+        (
+            "_compare_card_file",
+            (tmp_path / "README.md", "yaml-text\nmarkdown-text", "README.md", errors),
+        ),
+        ("render", (geometry,)),
+        ("_compare_card_file", (tmp_path / "stats.json", "stats-text", "stats.json", errors)),
+    ]
+    assert calls[4][1][-1] is errors
+    assert calls[5][1][-1] is errors
+
+
+def test_card_statistics_reports_a_failed_computation_verbatim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(_root: Path) -> None:
+        raise RuntimeError("unreadable shard")
+
+    monkeypatch.setattr(analysis, "compute_text_population_summary", fail)
+    errors: list[str] = []
+
+    analysis._verify_card_statistics(tmp_path, errors)
+
+    assert errors == ["card statistic verification failed: unreadable shard"]
+
+
+def _text_stats() -> SimpleNamespace:
+    return SimpleNamespace(
+        website_text_success_count=11,
+        website_total_words=22,
+        contact_website_text_success_count=33,
+        contact_website_total_words=44,
+        polygons_with_any_text=55,
+    )
+
+
+_TEXT_EXPECTED = {
+    "website_text_success_count": 11,
+    "website_total_words": 22,
+    "contact_website_text_success_count": 33,
+    "contact_website_total_words": 44,
+    "unique_text_identity_count": 55,
+}
+
+
+@pytest.mark.parametrize(
+    "present", [("dataset.yaml",), ("README.md",), ("dataset.yaml", "README.md")]
+)
+def test_release_text_yaml_checks_both_files_when_either_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    present: tuple[str, ...],
+) -> None:
+    for name in present:
+        (tmp_path / name).write_text("x\n", encoding="utf-8")
+    calls: list[tuple[str, tuple[object, ...]]] = []
+    monkeypatch.setattr(
+        analysis, "_verify_release_yaml_path", lambda *args: calls.append(("yaml", args))
+    )
+    monkeypatch.setattr(
+        analysis, "_verify_release_readme", lambda *args: calls.append(("readme", args))
+    )
+    stats = _text_stats()
+    errors: list[str] = []
+
+    analysis._verify_release_text_yaml(tmp_path, stats, errors)
+
+    assert calls == [
+        ("yaml", (tmp_path / "dataset.yaml", "dataset.yaml", _TEXT_EXPECTED, errors)),
+        ("readme", (tmp_path / "README.md", stats, _TEXT_EXPECTED, errors)),
+    ]
+    assert calls[0][1][3] is errors
+    assert calls[1][1][3] is errors
+    assert str(calls[0][1][0]).endswith("/dataset.yaml")
+    assert str(calls[1][1][0]).endswith("/README.md")
+
+
+def test_release_text_yaml_skips_a_run_without_either_card_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(analysis, "_verify_release_yaml_path", lambda *args: calls.append(args))
+    monkeypatch.setattr(analysis, "_verify_release_readme", lambda *args: calls.append(args))
+
+    analysis._verify_release_text_yaml(tmp_path, _text_stats(), [])
+
+    assert calls == []
+
+
+def test_release_yaml_path_ignores_a_missing_file(tmp_path: Path) -> None:
+    errors: list[str] = []
+
+    analysis._verify_release_yaml_path(tmp_path / "dataset.yaml", "dataset.yaml", {"a": 1}, errors)
+
+    assert errors == []
+
+
+def test_release_yaml_path_compares_the_file_contents(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.yaml"
+    path.write_text("a: 1\nb: 9\n", encoding="utf-8")
+    errors: list[str] = []
+
+    analysis._verify_release_yaml_path(path, "label.yaml", {"a": 1, "b": 2}, errors)
+
+    assert errors == ["label.yaml b does not match canonical text statistics"]
+
+
+def test_release_yaml_path_reports_undecodable_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.yaml"
+    path.write_bytes(b"\xff")
+    try:
+        path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        expected = f"label.yaml text fields are unreadable: {exc}"
+    errors: list[str] = []
+
+    analysis._verify_release_yaml_path(path, "label.yaml", {"a": 1}, errors)
+
+    assert errors == [expected]
+
+
+def _no_language_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(analysis, "_render_language_section", lambda _stats: ["## Languages", ""])
+
+
+def test_release_readme_ignores_a_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_language_section(monkeypatch)
+    errors: list[str] = []
+
+    analysis._verify_release_readme(tmp_path / "README.md", object(), {"a": 1}, errors)
+
+    assert errors == []
+
+
+def test_release_readme_reports_undecodable_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "README.md"
+    path.write_bytes(b"\xff")
+    try:
+        path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        expected = f"README front matter text fields are unreadable: {exc}"
+    errors: list[str] = []
+
+    analysis._verify_release_readme(path, object(), {"a": 1}, errors)
+
+    assert errors == [expected]
+
+
+def test_release_readme_checks_only_multiline_front_matter_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_language_section(monkeypatch)
+    path = tmp_path / "README.md"
+    path.write_text(
+        "---\nname: x\nwebsite_total_words: 9\n---\n\nwebsite_total_words: 3\nb: 7\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+
+    analysis._verify_release_readme(path, object(), {"website_total_words": 3, "b": 8}, errors)
+
+    assert errors == [
+        "README front matter website_total_words does not match canonical text statistics"
+    ]
+
+
+def test_release_readme_without_front_matter_reports_no_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _no_language_section(monkeypatch)
+    path = tmp_path / "README.md"
+    path.write_text("website_total_words: 9\n", encoding="utf-8")
+    errors: list[str] = []
+
+    analysis._verify_release_readme(path, object(), {"website_total_words": 3}, errors)
+
+    assert errors == []
+
+
+def test_release_readme_hands_the_whole_card_to_the_language_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        analysis, "_verify_release_language_section", lambda *args: calls.append(args)
+    )
+    path = tmp_path / "README.md"
+    path.write_text("---\na: 1\n---\nbody\n", encoding="utf-8")
+    stats = object()
+    errors: list[str] = []
+
+    analysis._verify_release_readme(path, stats, {"a": 1}, errors)
+
+    assert calls == [("---\na: 1\n---\nbody\n", stats, errors)]
+    assert calls[0][1] is stats
+    assert calls[0][2] is errors
+
+
+_LANGUAGE_LINES = ["## Languages", "", "- en: 3", ""]
+_LANGUAGE_ERROR = "README Languages section does not match canonical text statistics"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("intro\n## Languages\n\n- en: 3\n\n## Next\nx\n", []),
+        ("intro\r\n## Languages\r\n\r\n- en: 3\r\n\r\n## Next\r\nx\r\n", []),
+        ("intro\n## Languages\n\n- en: 4\n\n## Next\nx\n", [_LANGUAGE_ERROR]),
+        ("intro\r\n## Languages\r\n\r\n- en: 4\r\n", [_LANGUAGE_ERROR]),
+        ("intro\n## Other\n\n- en: 4\n", []),
+    ],
+)
+def test_release_language_section_compares_an_existing_section(
+    monkeypatch: pytest.MonkeyPatch, content: str, expected: list[str]
+) -> None:
+    stats = object()
+    seen: list[object] = []
+    monkeypatch.setattr(
+        analysis,
+        "_render_language_section",
+        lambda received: seen.append(received) or _LANGUAGE_LINES,
+    )
+    errors: list[str] = []
+
+    analysis._verify_release_language_section(content, stats, errors)
+
+    assert errors == expected
+    assert all(received is stats for received in seen)
+
+
+_WEBSITE_LINES = ["## Website text", "", "- words: 3", ""]
+_WEBSITE_ERROR = "README Website text section does not match canonical text statistics"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (b"intro\n## Website text\n\n- words: 3\n\n## Next\n", []),
+        (b"intro\r\n## Website text\r\n\r\n- words: 3\r\n\r\n## Next\r\n", []),
+        (b"intro\n## Website text\n\n- words: 4\n\n## Next\n", [_WEBSITE_ERROR]),
+        (b"intro\r\n## Website text\r\n\r\n- words: 4\r\n", [_WEBSITE_ERROR]),
+        (b"intro\n## Website text", [_WEBSITE_ERROR]),
+        (b"intro\n## Other\n", []),
+    ],
+)
+def test_release_website_text_section_compares_an_existing_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes, expected: list[str]
+) -> None:
+    monkeypatch.setattr(analysis, "_render_website_text_section", lambda _stats: _WEBSITE_LINES)
+    (tmp_path / "README.md").write_bytes(content)
+    errors: list[str] = []
+
+    analysis._verify_release_website_text_section(tmp_path, object(), errors)
+
+    assert errors == expected
+
+
+def test_release_website_text_section_reads_the_card_by_its_exact_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[str] = []
+    real_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        opened.append(path.name)
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(analysis, "_render_website_text_section", lambda _stats: _WEBSITE_LINES)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    (tmp_path / "README.md").write_bytes(b"## Website text\n\n- words: 4\n")
+    errors: list[str] = []
+
+    analysis._verify_release_website_text_section(tmp_path, object(), errors)
+
+    assert opened == ["README.md"]
+    assert errors == [_WEBSITE_ERROR]
+
+
+_GEOGRAPHIC_LINES = ["## Geographic distribution", "", "- cells: 3", ""]
+_GEOGRAPHIC_ERROR = "README Geographic distribution section does not match the unique-text summary"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        (b"intro\n## Geographic distribution\n\n- cells: 3\n\n## Next\n", []),
+        (b"intro\r\n## Geographic distribution\r\n\r\n- cells: 3\r\n\r\n## Next\r\n", []),
+        (b"intro\n## Geographic distribution\n\n- cells: 4\n", [_GEOGRAPHIC_ERROR]),
+        (b"intro\n## GEOGRAPHIC DISTRIBUTION\n\n- cells: 3\n", [_GEOGRAPHIC_ERROR]),
+    ],
+)
+def test_release_geographic_section_compares_the_exact_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes, expected: list[str]
+) -> None:
+    monkeypatch.setattr(analysis, "_render_geographic_section", lambda _stats: _GEOGRAPHIC_LINES)
+    (tmp_path / "README.md").write_bytes(content)
+    errors: list[str] = []
+
+    analysis._verify_release_geographic_section(tmp_path, object(), errors)
+
+    assert errors == expected
+
+
+def test_readability_of_no_artifacts_is_true(tmp_path: Path) -> None:
+    assert analysis._verify_analysis_readability(tmp_path, set(), []) is True
+
+
+def test_analysis_reads_only_artifacts_both_present_and_expected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[set[str]] = []
+    monkeypatch.setattr(analysis, "_verify_expected_source_inventory", lambda *_args: None)
+    monkeypatch.setattr(
+        analysis, "_verify_analysis_inventory", lambda *_args: ({"a", "b"}, {"b", "c"})
+    )
+    monkeypatch.setattr(analysis, "_verify_card_files", lambda *_args: None)
+    monkeypatch.setattr(
+        analysis,
+        "_verify_analysis_readability",
+        lambda _root, names, _errors: seen.append(names) or True,
+    )
+    monkeypatch.setattr(analysis, "_verify_card_statistics", lambda *_args: None)
+    monkeypatch.setattr(analysis, "_verify_map_artifact", lambda *_args, **_kwargs: None)
+
+    analysis.verify_analysis_and_card(tmp_path, [])
+
+    assert seen == [{"b"}]

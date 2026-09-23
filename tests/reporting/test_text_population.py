@@ -535,3 +535,198 @@ def test_the_text_column_types_are_a_fresh_mapping_each_call() -> None:
     first["lat"] = "TAMPERED"
 
     assert text_population._text_column_types()["lat"] == "DOUBLE"
+
+
+def test_summary_from_connection_maps_every_view_to_its_own_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every field gets a distinct value so a dropped or cross-wired one shows."""
+    import duckdb
+
+    monkeypatch.setattr(text_population, "_validate_word_counts", lambda _connection: None)
+    monkeypatch.setattr(text_population, "_status_counts", lambda _connection: (201, 202, 203, 204))
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE canonical_any AS SELECT * FROM range(7)")
+        connection.execute(
+            "CREATE TABLE canonical_website AS SELECT * FROM (VALUES "
+            "(0, 'en'), (0, 'fr'), (0, NULL)) t(website_word_count, website_language)"
+        )
+        connection.execute(
+            "CREATE TABLE canonical_contact AS SELECT * FROM (VALUES "
+            "(5, 'en'), (6, 'de'), (7, 'en'), (8, NULL), (9, NULL)) "
+            "t(contact_website_word_count, contact_website_language)"
+        )
+        connection.execute(
+            "CREATE TABLE all_rows AS SELECT * FROM (VALUES "
+            "('way', 1, 'a', NULL), ('way', 1, 'b', NULL), ('node', 5, 'c', NULL), "
+            "('way', 2, ' ', 'x'), ('node', 3, NULL, 'y'), ('node', 4, NULL, 'z'), "
+            "('node', 6, NULL, 'q')) t(osm_type, osm_id, website, contact_website)"
+        )
+        summary = text_population._summary_from_connection(connection)
+    finally:
+        connection.close()
+
+    assert summary == text_population.TextPopulationSummary(
+        unique_identity_count=7,
+        website_identity_count=3,
+        contact_website_identity_count=5,
+        website_total_words=0,
+        contact_website_total_words=35,
+        website_urls_present=2,
+        contact_website_urls_present=4,
+        website_empty_identity_count=201,
+        contact_website_empty_identity_count=202,
+        website_failure_identity_count=203,
+        contact_website_failure_identity_count=204,
+        website_language_count=2,
+        contact_website_language_count=3,
+        detected_language_count=3,
+        top_languages=(("en", 3), ("de", 1), ("fr", 1)),
+    )
+
+
+class _ScriptedConnection:
+    """Answer each query with the next scripted ``fetchone`` row."""
+
+    def __init__(self, *rows: object) -> None:
+        self._rows = list(rows)
+        self.queries: list[str] = []
+
+    def execute(self, query: str) -> _ScriptedConnection:
+        self.queries.append(query)
+        return self
+
+    def fetchone(self) -> object:
+        return self._rows.pop(0)
+
+
+def test_filter_source_paths_keeps_only_the_named_sources() -> None:
+    paths = [Path("x/a.parquet"), Path("x/b.parquet")]
+
+    assert text_population._filter_source_paths(paths, ["a.osm.pbf"]) == [Path("x/a.parquet")]
+    assert text_population._filter_source_paths(paths, None) == paths
+
+
+@pytest.mark.parametrize(("row", "expected"), [(None, False), ((0,), False), ((1,), True)])
+def test_prefix_ties_read_the_exists_flag(row: object, expected: bool) -> None:
+    assert text_population._has_prefix_ties(_ScriptedConnection(row)) is expected
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [((1, 2, 3, 4), (1, 2, 3, 4)), ((None, None, None, None), (0, 0, 0, 0))],
+)
+def test_status_counts_map_each_column_and_null_to_zero(row: tuple, expected: tuple) -> None:
+    assert text_population._status_counts(_ScriptedConnection(row)) == expected
+
+
+def test_scalar_reads_an_absent_row_as_zero() -> None:
+    assert text_population._scalar(_ScriptedConnection(None), "q") == 0
+    assert text_population._scalar(_ScriptedConnection((7,)), "q") == 7
+
+
+def test_word_count_validation_sums_both_tags() -> None:
+    with pytest.raises(TypeError, match=r"^successful text row has no word count$"):
+        text_population._validate_word_counts(_ScriptedConnection((1,), (1,)))
+
+    text_population._validate_word_counts(_ScriptedConnection((0,), (0,)))
+
+
+def test_sql_string_doubles_embedded_quotes() -> None:
+    assert text_population._sql_string(Path("a'b")) == "'a''b'"
+
+
+def _record_parquets(monkeypatch: pytest.MonkeyPatch, paths: list[Path]) -> list[object]:
+    requested: list[object] = []
+
+    def parquets(_root: Path, *, source_names: object = "unset") -> list[Path]:
+        requested.append(source_names)
+        return paths
+
+    monkeypatch.setattr(text_population, "text_population_parquets", parquets)
+    return requested
+
+
+def test_summary_and_coordinates_select_the_named_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requested = _record_parquets(monkeypatch, [])
+
+    assert (
+        text_population.compute_text_population_summary(tmp_path, source_names=["a"])
+        == text_population.TextPopulationSummary()
+    )
+    assert list(text_population.iter_canonical_text_coordinates(tmp_path, source_names=["b"])) == []
+    assert requested == [["a"], ["b"]]
+
+
+def test_coordinates_number_rows_across_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import contextmanager
+
+    _record_parquets(monkeypatch, [tmp_path / "a.parquet"])
+
+    def row(osm_id: int) -> dict[str, object]:
+        return {"osm_type": "way", "osm_id": osm_id, "lat": 1, "lon": 2, "__source_path": "s"}
+
+    batches = [
+        pa.RecordBatch.from_pylist([row(1), row(2)]),
+        pa.RecordBatch.from_pylist([row(3)]),
+    ]
+
+    class _Reader:
+        def to_arrow_reader(self, *, batch_size: int) -> list[pa.RecordBatch]:
+            return batches
+
+    class _Connection:
+        def execute(self, _query: str) -> _Reader:
+            return _Reader()
+
+    @contextmanager
+    def connection(_root: Path, _paths: list[Path]):
+        yield _Connection()
+
+    monkeypatch.setattr(text_population, "_canonical_connection", connection)
+
+    coordinates = list(text_population.iter_canonical_text_coordinates(tmp_path))
+
+    assert [(item.osm_id, item.row_index) for item in coordinates] == [(1, 0), (2, 1), (3, 2)]
+
+
+def test_manifest_entries_are_sorted_by_path_for_the_named_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = [tmp_path / "b.parquet", tmp_path / "a.parquet"]
+    requested = _record_parquets(monkeypatch, paths)
+    monkeypatch.setattr(text_population, "_regional_text_population_root", lambda _root: None)
+    monkeypatch.setattr(
+        text_population,
+        "_text_population_manifest_entry",
+        lambda _root, _regional, path: {"path": path.name},
+    )
+    monkeypatch.setattr(text_population, "_validate_unique_text_population_paths", lambda _e: None)
+
+    assert text_population.text_population_manifest_entries(tmp_path, source_names=["x"]) == (
+        {"path": "a.parquet"},
+        {"path": "b.parquet"},
+    )
+    assert requested == [["x"]]
+    assert text_population.text_population_manifest_entries_for_paths(tmp_path, paths) == (
+        {"path": "a.parquet"},
+        {"path": "b.parquet"},
+    )
+
+
+def test_text_population_parquets_filter_to_the_named_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("a.parquet", "b.parquet"):
+        (tmp_path / name).write_bytes(b"")
+    monkeypatch.setattr(text_population, "_text_population_directory", lambda _root: tmp_path)
+    monkeypatch.setattr(text_population, "_contract_paths", lambda paths: paths)
+
+    assert text_population.text_population_parquets(tmp_path, source_names=["b.osm.pbf"]) == [
+        tmp_path / "b.parquet"
+    ]
