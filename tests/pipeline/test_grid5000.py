@@ -310,7 +310,7 @@ def test_sync_completed_bundle_does_not_finish_with_an_incomplete_shard(
     state = load_run(run_dir)
     state.metadata["status"] = STATUS_ENRICHING
     atomic_write_json(run_dir / "manifests" / "run.json", state.metadata)
-    monkeypatch.setattr(grid5000, "_all_language_shards_complete", lambda _path: False)
+    monkeypatch.setattr(grid5000, "_all_language_shards_complete", lambda _path, **_kwargs: False)
     grid5000.sync_language_bundle(bundle_dir, run_dir)
 
     assert load_run(run_dir).metadata["status"] == STATUS_ENRICHING
@@ -321,7 +321,7 @@ def test_all_language_shards_complete_requires_a_nonempty_complete_set(
 ) -> None:
     empty = tmp_path / "empty"
     (empty / "polygons").mkdir(parents=True)
-    assert grid5000._all_language_shards_complete(empty) is False
+    assert grid5000._all_language_shards_complete(empty, installed=empty / "x.parquet") is False
 
     run_dir = _write_enriched_run(tmp_path / "run")
     model = tmp_path / "model_v3.bin"
@@ -340,9 +340,32 @@ def test_all_language_shards_complete_requires_a_nonempty_complete_set(
     monkeypatch.setattr(grid5000, "load_glotlid_detector_from_path", lambda _path: FakeDetector())
     grid5000.run_language_bundle(bundle_dir)
 
-    assert grid5000._all_language_shards_complete(run_dir) is False
+    absent = tmp_path / "absent.parquet"
+    assert grid5000._all_language_shards_complete(run_dir, installed=absent) is False
     grid5000.sync_language_bundle(bundle_dir, run_dir)
-    assert grid5000._all_language_shards_complete(run_dir) is True
+    assert grid5000._all_language_shards_complete(run_dir, installed=absent) is True
+
+
+def test_all_language_shards_complete_skips_installed_and_scans_v1_4_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    polygons = tmp_path / "polygons"
+    polygons.mkdir()
+    v14 = POLYGON_PUBLIC_SCHEMA_V1_4
+    older = pa.schema([pa.field("website", pa.string())])
+    for name, schema in (("a", v14), ("b", older), ("c", v14), ("d", older)):
+        pq.write_table(schema.empty_table(), polygons / f"{name}.parquet")
+    seen: list[str] = []
+
+    def needs(path: Path) -> bool:
+        seen.append(path.name)
+        return False
+
+    monkeypatch.setattr(grid5000, "shard_needs_language_detection", needs)
+    installed = polygons / "c.parquet"
+
+    assert grid5000._all_language_shards_complete(tmp_path, installed=installed) is True
+    assert seen == ["b.parquet", "d.parquet", "a.parquet"]
 
 
 @pytest.mark.parametrize("budget", [0, -1, float("nan"), float("inf"), True])
@@ -1228,3 +1251,42 @@ def test_paused_sync_rejects_source_changes_schema_changes_and_progress_mismatch
 
     with pytest.raises(ValueError, match=r"^paused result does not match checkpoint progress$"):
         grid5000._sync_paused_checkpoint(local, remote, bundle, replace(result, processed_rows=1))
+
+
+def test_sync_validates_a_tampered_remote_once_after_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _write_enriched_run(tmp_path / "run")
+    model = tmp_path / "model_v3.bin"
+    model.write_bytes(b"model")
+    bundle_dir = tmp_path / "bundle"
+    bundle = grid5000.prepare_language_bundle(
+        run_dir, bundle_dir, model_path=model, commit="abc123"
+    )
+
+    class FakeDetector:
+        identity = bundle.model
+
+        def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]:
+            return [LanguagePrediction("eng_Latn", 0.9) for _text in texts]
+
+    monkeypatch.setattr(grid5000, "load_glotlid_detector_from_path", lambda _path: FakeDetector())
+    grid5000.run_language_bundle(bundle_dir)
+    remote = bundle_dir / bundle.source_shard
+    pq.write_table(pq.read_table(remote), remote, compression="gzip")
+    local = run_dir / "polygons" / bundle.source_shard
+    before = local.read_bytes()
+    validated: list[str] = []
+    original = grid5000._validate_completed_shard
+
+    def spy(path: Path, result: grid5000.Grid5000Result) -> None:
+        validated.append(path.name)
+        original(path, result)
+
+    monkeypatch.setattr(grid5000, "_validate_completed_shard", spy)
+    with pytest.raises(ValueError, match=r"^completed language shard hash does not match result$"):
+        grid5000.sync_language_bundle(bundle_dir, run_dir)
+
+    assert validated == [f".{local.name}.grid5000-syncing"]
+    assert local.read_bytes() == before
+    assert not local.with_name(f".{local.name}.grid5000-syncing").exists()
