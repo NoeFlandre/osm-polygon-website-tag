@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import socket
 import urllib.error
@@ -260,6 +261,8 @@ def _safe_request(
         return FetchResult("unsafe_url", requested, final_url=current, message="unsafe_url")
     try:
         return transport(current, timeout_seconds, max_bytes)
+    except UnsafeUrlError:
+        return FetchResult("unsafe_url", requested, final_url=current, message="unsafe_url")
     except Exception as exc:
         return FetchResult("fetch_error", requested, final_url=current, message=type(exc).__name__)
 
@@ -369,14 +372,61 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _connect_public(address: tuple[str, int], *args: Any, **kwargs: Any) -> socket.socket:
+    """Open a TCP connection and reject it unless the connected peer is public.
+
+    ``validate_public_http_url`` resolves the host before the request, but the
+    socket layer resolves it again; a DNS answer that changes in between
+    (rebinding) would otherwise reach a private address. Checking the peer
+    before any HTTP or TLS byte is sent closes that window.
+    """
+    sock = socket.create_connection(address, *args, **kwargs)
+    peer = ipaddress.ip_address(sock.getpeername()[0])
+    if not _is_public_address(peer):
+        sock.close()
+        raise UnsafeUrlError("non_global_address")
+    return sock
+
+
+class _PublicHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_public
+
+
+class _PublicHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._create_connection = _connect_public
+
+
+class _PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_PublicHTTPConnection, req)
+
+
+class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(_PublicHTTPSConnection, req)
+
+
 def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResponse:
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _NoRedirect(),
+        _PublicHTTPHandler(),
+        _PublicHTTPSHandler(),
+    )
     # The caller has normalized and validated HTTP(S) immediately before this call.
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
     try:
         response = opener.open(request, timeout=timeout_seconds)
     except urllib.error.HTTPError as exc:
         response = exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, UnsafeUrlError):
+            raise exc.reason from exc
+        raise
     with response:
         body = response.read(max_bytes + 1)
         status = response.status

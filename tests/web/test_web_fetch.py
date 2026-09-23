@@ -225,3 +225,103 @@ def test_private_fetch_classifiers_and_redirect_helpers_are_deterministic() -> N
     )
     assert isinstance(failed, FetchResult)
     assert failed.status == "fetch_error"
+
+
+def test_fetch_classifies_transport_unsafe_error_as_unsafe_url() -> None:
+    def request(*_args):
+        raise UnsafeUrlError("non_global_address")
+
+    result = fetch_html(
+        "https://example.org",
+        request_once=request,
+        resolver=lambda *_args: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+    assert result == FetchResult(
+        "unsafe_url", "https://example.org", final_url="https://example.org", message="unsafe_url"
+    )
+
+
+class _FakeSocket:
+    def __init__(self, peer: str) -> None:
+        self.peer = peer
+        self.closed = False
+
+    def getpeername(self) -> tuple[str, int]:
+        return (self.peer, 443)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("peer", ["127.0.0.1", "169.254.169.254", "10.0.0.1", "::1"])
+def test_connect_rejects_rebound_private_peer(monkeypatch, peer: str) -> None:
+    sock = _FakeSocket(peer)
+    monkeypatch.setattr(web_fetch_module.socket, "create_connection", lambda *_a, **_k: sock)
+
+    with pytest.raises(UnsafeUrlError, match="non_global_address"):
+        web_fetch_module._connect_public(("example.org", 443), 3.0)
+
+    assert sock.closed
+
+
+def test_connect_returns_public_peer_socket(monkeypatch) -> None:
+    sock = _FakeSocket("93.184.216.34")
+    calls = []
+
+    def create_connection(*args, **kwargs):
+        calls.append((args, kwargs))
+        return sock
+
+    monkeypatch.setattr(web_fetch_module.socket, "create_connection", create_connection)
+
+    assert web_fetch_module._connect_public(("example.org", 443), 3.0, None) is sock
+    assert calls == [((("example.org", 443), 3.0, None), {})]
+    assert not sock.closed
+
+
+@pytest.mark.parametrize(
+    ("connection", "handler", "method"),
+    [
+        ("_PublicHTTPConnection", "_PublicHTTPHandler", "http_open"),
+        ("_PublicHTTPSConnection", "_PublicHTTPSHandler", "https_open"),
+    ],
+)
+def test_handlers_open_peer_checked_connections(
+    monkeypatch, connection: str, handler: str, method: str
+) -> None:
+    conn = getattr(web_fetch_module, connection)("example.org")
+    assert conn._create_connection is web_fetch_module._connect_public
+    seen = []
+    monkeypatch.setattr(
+        getattr(web_fetch_module, handler),
+        "do_open",
+        lambda _self, cls, req: seen.append((cls, req)) or "response",
+    )
+
+    assert getattr(getattr(web_fetch_module, handler)(), method)("req") == "response"
+    assert seen == [(getattr(web_fetch_module, connection), "req")]
+
+
+def test_download_once_surfaces_connect_time_unsafe_error(monkeypatch) -> None:
+    class Opener:
+        def open(self, _request, *, timeout: float):
+            raise web_fetch_module.urllib.error.URLError(UnsafeUrlError("non_global_address"))
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(UnsafeUrlError):
+        web_fetch_module._download_once("https://example.org", 3.0, 10)
+
+
+def test_download_once_reraises_other_url_errors(monkeypatch) -> None:
+    class Opener:
+        def open(self, _request, *, timeout: float):
+            raise web_fetch_module.urllib.error.URLError("refused")
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
+
+    with pytest.raises(web_fetch_module.urllib.error.URLError):
+        web_fetch_module._download_once("https://example.org", 3.0, 10)
