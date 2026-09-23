@@ -135,30 +135,36 @@ def test_download_once_reads_response_without_following_redirects(monkeypatch) -
     class Response:
         status = 200
 
-        def __init__(self) -> None:
-            self.headers = {"Content-Type": "text/plain"}
-
         def __enter__(self):
             return self
 
         def __exit__(self, *_args) -> None:
             return None
 
+        def __init__(self) -> None:
+            self.headers = {"Content-Type": "text/plain"}
+            self.pending = b"hello"
+            self.limits: list[int] = []
+
         def read(self, limit: int) -> bytes:
-            assert limit == 11
-            return b"hello"
+            self.limits.append(limit)
+            chunk, self.pending = self.pending[:limit], self.pending[limit:]
+            return chunk
+
+    response = Response()
 
     class Opener:
         def open(self, request, *, timeout: float):
             assert request.full_url == "https://example.org"
             assert timeout == 3.0
-            return Response()
+            return response
 
     monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
 
     result = web_fetch_module._download_once("https://example.org", 3.0, 10)
 
     assert result == HttpResponse(200, {"Content-Type": "text/plain"}, b"hello")
+    assert response.limits == [11, 6]
 
 
 def test_private_fetch_classifiers_and_redirect_helpers_are_deterministic() -> None:
@@ -340,6 +346,7 @@ def test_module_constants_are_pinned() -> None:
     assert web_fetch_module.MAX_RESPONSE_BYTES == 20_000_000
     assert web_fetch_module.REQUEST_TIMEOUT_SECONDS == 30.0
     assert web_fetch_module.MAX_REDIRECTS == 3
+    assert web_fetch_module.READ_CHUNK_BYTES == 65_536
     assert web_fetch_module.USER_AGENT == (
         "osm-polygon-website-tag/0.1 (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
     )
@@ -984,3 +991,76 @@ def test_fetch_classifies_http_400_as_a_status_error_not_a_redirect() -> None:
     assert result == FetchResult(
         "fetch_error", "https://example.org", final_url="https://example.org", message="http_400"
     )
+
+
+class _TrickleResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.pending = payload
+        self.limits: list[int] = []
+
+    def read(self, limit: int) -> bytes:
+        self.limits.append(limit)
+        chunk, self.pending = self.pending[:limit], self.pending[limit:]
+        return chunk
+
+
+def test_read_before_deadline_reads_in_bounded_chunks(monkeypatch) -> None:
+    monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 4)
+    response = _TrickleResponse(b"abcdefghij")
+
+    body = web_fetch_module._read_before_deadline(response, 9, deadline=float("inf"))
+
+    assert body == b"abcdefghi"
+    assert response.limits == [4, 4, 1]
+
+
+def test_read_before_deadline_stops_at_end_of_body(monkeypatch) -> None:
+    monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 4)
+    response = _TrickleResponse(b"abcde")
+
+    assert web_fetch_module._read_before_deadline(response, 100, float("inf")) == b"abcde"
+    assert response.limits == [4, 4, 4]
+
+
+def test_read_before_deadline_fails_when_whole_request_budget_is_spent(monkeypatch) -> None:
+    ticks = iter([0.0, 5.0, 10.0])
+    monkeypatch.setattr(web_fetch_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 1)
+    response = _TrickleResponse(b"abcdef")
+
+    with pytest.raises(TimeoutError, match="request deadline exceeded"):
+        web_fetch_module._read_before_deadline(response, 6, deadline=10.0)
+
+    assert response.limits == [1, 1]
+
+
+def test_download_once_deadline_starts_before_connect(monkeypatch) -> None:
+    seen = []
+
+    class Response:
+        status = 200
+
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+    class Opener:
+        def open(self, _request, *, timeout: float):
+            return Response()
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
+    monkeypatch.setattr(web_fetch_module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        web_fetch_module,
+        "_read_before_deadline",
+        lambda _response, limit, deadline: seen.append((limit, deadline)) or b"",
+    )
+
+    web_fetch_module._download_once("https://example.org", 3.0, 10)
+
+    assert seen == [(11, 103.0)]
