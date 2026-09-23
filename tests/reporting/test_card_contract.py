@@ -131,7 +131,7 @@ def test_geometry_block_preserves_prefix_and_card_newline_conventions() -> None:
     assert _append_block(b"", b"BLOCK\n", b"\n") == b"BLOCK\n"
 
 
-def testupdate_geometry_section_replaces_inserts_and_appends_without_touching_neighbors() -> None:
+def test_update_geometry_section_replaces_inserts_and_appends_without_touching_neighbors() -> None:
     geometry = GeometryStats(row_count=1)
     block = _geometry_block_bytes(geometry, b"\n")
     existing = update_geometry_section(
@@ -157,7 +157,7 @@ def testupdate_geometry_section_replaces_inserts_and_appends_without_touching_ne
     assert b"## Polygon geometry\n" not in crlf
 
 
-def testupdate_geographic_section_replaces_inserts_and_appends() -> None:
+def test_update_geographic_section_replaces_inserts_and_appends() -> None:
     stats = CardStats(occupied_h3_cell_count=3, polygon_density_row_count=7)
 
     replaced = update_geographic_section(
@@ -201,7 +201,7 @@ def test_generated_section_patchers_noop_when_legacy_heading_is_missing() -> Non
     assert b"\n" not in language.replace(b"\r\n", b"")
 
 
-def testupdate_website_text_section_replaces_only_the_generated_block() -> None:
+def test_update_website_text_section_replaces_only_the_generated_block() -> None:
     stats = CardStats(
         website_urls_present=1,
         website_text_success_count=2,
@@ -222,7 +222,7 @@ def testupdate_website_text_section_replaces_only_the_generated_block() -> None:
     assert updated.endswith(b"## Languages\nkeep\n")
 
 
-def testupdate_website_text_section_preserves_crlf_newlines() -> None:
+def test_update_website_text_section_preserves_crlf_newlines() -> None:
     stats = CardStats(
         website_text_success_count=2,
         website_total_words=3,
@@ -316,7 +316,7 @@ def test_update_release_yaml_inserts_missing_language_before_metadata_fields() -
     assert "language:\n  - eng\n  - deu\nsize_categories:\n" in updated
 
 
-def testupdate_language_section_replaces_only_the_generated_block() -> None:
+def test_update_language_section_replaces_only_the_generated_block() -> None:
     updated = update_language_section(
         b"prefix\n## Website text\nkeep\n## Languages\nSTALE\n## Polygon geometry\nkeep\n",
         _language_card_stats(),
@@ -328,7 +328,7 @@ def testupdate_language_section_replaces_only_the_generated_block() -> None:
     assert updated.endswith(b"## Polygon geometry\nkeep\n")
 
 
-def testupdate_language_section_inserts_missing_block_after_website_text() -> None:
+def test_update_language_section_inserts_missing_block_after_website_text() -> None:
     updated = update_language_section(
         b"prefix\n## Website text\nkeep\n## Polygon geometry\nkeep\n",
         _language_card_stats(),
@@ -338,14 +338,14 @@ def testupdate_language_section_inserts_missing_block_after_website_text() -> No
     assert updated.endswith(b"## Polygon geometry\nkeep\n")
 
 
-def testupdate_language_section_appends_missing_block_without_website_text() -> None:
+def test_update_language_section_appends_missing_block_without_website_text() -> None:
     updated = update_language_section(b"prefix\n", _language_card_stats())
 
     assert updated.startswith(b"prefix\n\n## Languages\n")
     assert b"| `eng_Latn` | 25 |" in updated
 
 
-def testupdate_sentence_section_replaces_and_inserts_coverage_block() -> None:
+def test_update_sentence_section_replaces_and_inserts_coverage_block() -> None:
     stats = _sentence_card_stats()
     replaced = update_sentence_section(
         b"prefix\n## Languages\nkeep\n## Sentences\nSTALE\n## Polygon geometry\nkeep\n",
@@ -371,7 +371,7 @@ def testupdate_sentence_section_replaces_and_inserts_coverage_block() -> None:
     assert appended.startswith(b"prefix\n\n## Sentences\n")
 
 
-def testupdate_sentence_section_preserves_crlf_and_removes_stale_empty_block() -> None:
+def test_update_sentence_section_preserves_crlf_and_removes_stale_empty_block() -> None:
     stats = _sentence_card_stats()
     crlf = update_sentence_section(
         b"prefix\r\n## Website text\r\nkeep\r\n## Polygon geometry\r\nkeep\r\n",

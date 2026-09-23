@@ -169,7 +169,7 @@ def test_snapshot_section_renders_its_metrics_as_markdown_rows() -> None:
     ]
 
 
-def testrender_markdown_has_a_stable_complete_output_contract() -> None:
+def test_render_markdown_has_a_stable_complete_output_contract() -> None:
     """The whole card is pinned: a public card changes deliberately or not at all."""
     expected = dedent(
         r"""
