@@ -421,7 +421,7 @@ def test_card_statistics_verifiers_forward_all_artifact_renderers(
     )
     monkeypatch.setattr(
         analysis,
-        "_render_markdown",
+        "render_markdown",
         lambda received, *, geometry, schema: (
             calls.append(("markdown", (received, geometry, schema))) or "readme"
         ),
@@ -681,7 +681,7 @@ def _recording_release_card_pipeline(
     monkeypatch.setattr(analysis, "compute_geometry_stats", record("geometry", values["geometry"]))
     monkeypatch.setattr(analysis, "render_geometry_stats", record("render", "stats-text"))
     monkeypatch.setattr(analysis, "_render_yaml_front_matter", record("yaml", "yaml-text"))
-    monkeypatch.setattr(analysis, "_render_markdown", record("markdown", "markdown-text"))
+    monkeypatch.setattr(analysis, "render_markdown", record("markdown", "markdown-text"))
     monkeypatch.setattr(analysis, "_public_schema_for_card", record("schema", "schema"))
     for name in (
         "_compare_card_file",

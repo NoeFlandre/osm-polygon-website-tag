@@ -32,7 +32,7 @@ class PreflightReport:
     errors: list[str] = field(default_factory=list)
 
 
-def preflight_legacy_refresh(run_dir: Path | str) -> PreflightReport:
+def _preflight_legacy_refresh(run_dir: Path | str) -> PreflightReport:
     """Check the local shape needed before rebuilding a card/map bundle."""
     root = Path(run_dir)
     state = load_run(root)
@@ -99,7 +99,7 @@ def _invalid_refresh_receipt(root: Path) -> list[str]:
 def refresh_card_run(run_dir: Path | str) -> FinalizationReport:
     """Rebuild and strictly finalize a local map/card bundle without source work."""
     root = Path(run_dir)
-    preflight = preflight_legacy_refresh(root)
+    preflight = _preflight_legacy_refresh(root)
     if not preflight.ok:
         return FinalizationReport(
             False,
@@ -122,4 +122,4 @@ def _finalize_after_receipt(root: Path) -> FinalizationReport:
     return finalize_run(root)
 
 
-__all__ = ["PreflightReport", "preflight_legacy_refresh", "refresh_card_run"]
+__all__ = ["PreflightReport", "refresh_card_run"]

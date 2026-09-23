@@ -18,23 +18,29 @@ from tests.fixtures.card import (
 )
 
 import osm_polygon_website_tag.reporting.card as card_module
+import osm_polygon_website_tag.reporting.card_metadata as card_metadata
+import osm_polygon_website_tag.reporting.card_rendering as card_rendering
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
 from osm_polygon_website_tag.reporting.card import (
-    _append_geometry_block,
+    build_card,
+    update_card_with_geometry,
+    update_geometry_section,
+)
+from osm_polygon_website_tag.reporting.card_patching import (
+    _append_block,
     _geometry_block_bytes,
+    update_geographic_section,
+    update_language_section,
+    update_sentence_section,
+    update_website_text_section,
+)
+from osm_polygon_website_tag.reporting.card_rendering import (
     _render_bbox,
     _render_language_section,
     _render_polygon_geometry_section,
-    _update_geographic_section,
-    _update_geometry_section,
-    _update_language_section,
-    _update_sentence_section,
-    _update_website_text_section,
-    build_card,
-    update_card_with_geometry,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats
 from osm_polygon_website_tag.reporting.geometry_stats import (
@@ -120,15 +126,15 @@ def test_geometry_block_preserves_prefix_and_card_newline_conventions() -> None:
     assert crlf_block.startswith(b"## Polygon geometry\r\n")
     assert crlf_block.endswith(b"\r\n")
     assert b"\n" not in crlf_block.replace(b"\r\n", b"")
-    assert _append_geometry_block(b"prefix", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
-    assert _append_geometry_block(b"prefix\n", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
-    assert _append_geometry_block(b"", b"BLOCK\n", b"\n") == b"BLOCK\n"
+    assert _append_block(b"prefix", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
+    assert _append_block(b"prefix\n", b"BLOCK\n", b"\n") == b"prefix\n\nBLOCK\n"
+    assert _append_block(b"", b"BLOCK\n", b"\n") == b"BLOCK\n"
 
 
-def test_update_geometry_section_replaces_inserts_and_appends_without_touching_neighbors() -> None:
+def testupdate_geometry_section_replaces_inserts_and_appends_without_touching_neighbors() -> None:
     geometry = GeometryStats(row_count=1)
     block = _geometry_block_bytes(geometry, b"\n")
-    existing = _update_geometry_section(
+    existing = update_geometry_section(
         b"prefix\n## Polygon geometry\nold\n## Next\nkeep\n",
         geometry,
     )
@@ -137,37 +143,37 @@ def test_update_geometry_section_replaces_inserts_and_appends_without_touching_n
     assert existing.endswith(b"## Next\nkeep\n")
     assert block in existing
 
-    inserted = _update_geometry_section(
+    inserted = update_geometry_section(
         b"prefix\n## Geographic distribution\nkeep\n",
         geometry,
     )
     assert inserted == b"prefix\n" + block + b"## Geographic distribution\nkeep\n"
 
-    appended = _update_geometry_section(b"prefix", geometry)
+    appended = update_geometry_section(b"prefix", geometry)
     assert appended == b"prefix\n\n" + block
 
-    crlf = _update_geometry_section(b"prefix\r\n## Geographic distribution\r\nkeep\r\n", geometry)
+    crlf = update_geometry_section(b"prefix\r\n## Geographic distribution\r\nkeep\r\n", geometry)
     assert b"## Polygon geometry\r\n" in crlf
     assert b"## Polygon geometry\n" not in crlf
 
 
-def test_update_geographic_section_replaces_inserts_and_appends() -> None:
+def testupdate_geographic_section_replaces_inserts_and_appends() -> None:
     stats = CardStats(occupied_h3_cell_count=3, polygon_density_row_count=7)
 
-    replaced = _update_geographic_section(
+    replaced = update_geographic_section(
         b"prefix\n## Geographic distribution\nstale\n## Links\nkeep\n", stats
     )
     assert b"stale" not in replaced
     assert b"**3** occupied H3 cells" in replaced
     assert replaced.endswith(b"## Links\nkeep\n")
 
-    inserted = _update_geographic_section(b"prefix\n## Polygon geometry\nkeep\n", stats)
+    inserted = update_geographic_section(b"prefix\n## Polygon geometry\nkeep\n", stats)
     assert b"## Polygon geometry\nkeep\n## Geographic distribution\n" in inserted
 
-    appended = _update_geographic_section(b"prefix", stats)
+    appended = update_geographic_section(b"prefix", stats)
     assert appended.startswith(b"prefix\n\n## Geographic distribution\n")
 
-    crlf = _update_geographic_section(
+    crlf = update_geographic_section(
         b"prefix\r\n## Geographic distribution\r\nstale\r\n## Links\r\nkeep\r\n",
         stats,
     )
@@ -186,16 +192,16 @@ def test_generated_section_patchers_noop_when_legacy_heading_is_missing() -> Non
     )
     card = b"prefix\r\n## Links\r\nkeep\r\n"
 
-    assert _update_website_text_section(card, stats) == card
+    assert update_website_text_section(card, stats) == card
 
-    language = _update_language_section(b"prefix\r\n## Links\r\nkeep\r\n", stats)
+    language = update_language_section(b"prefix\r\n## Links\r\nkeep\r\n", stats)
     assert b"## Languages\r\n" in language
     assert b"## Links\r\nkeep\r\n" in language
     assert language.endswith(b"\r\n")
     assert b"\n" not in language.replace(b"\r\n", b"")
 
 
-def test_update_website_text_section_replaces_only_the_generated_block() -> None:
+def testupdate_website_text_section_replaces_only_the_generated_block() -> None:
     stats = CardStats(
         website_urls_present=1,
         website_text_success_count=2,
@@ -206,7 +212,7 @@ def test_update_website_text_section_replaces_only_the_generated_block() -> None
         polygons_with_any_text=7,
     )
 
-    updated = _update_website_text_section(
+    updated = update_website_text_section(
         b"prefix\n## Website text\nSTALE\n## Languages\nkeep\n", stats
     )
 
@@ -216,7 +222,7 @@ def test_update_website_text_section_replaces_only_the_generated_block() -> None
     assert updated.endswith(b"## Languages\nkeep\n")
 
 
-def test_update_website_text_section_preserves_crlf_newlines() -> None:
+def testupdate_website_text_section_preserves_crlf_newlines() -> None:
     stats = CardStats(
         website_text_success_count=2,
         website_total_words=3,
@@ -224,7 +230,7 @@ def test_update_website_text_section_preserves_crlf_newlines() -> None:
     )
     card = b"prefix\r\n## Website text\r\nstale\r\n## Links\r\nkeep\r\n"
 
-    updated = _update_website_text_section(card, stats)
+    updated = update_website_text_section(card, stats)
 
     assert b"stale" not in updated
     assert b"## Website text\r\n" in updated
@@ -239,7 +245,7 @@ def test_update_density_yaml_inserts_missing_fields_before_newline_terminated_cl
         occupied_h3_cell_count=5,
     )
 
-    updated = card_module._update_density_yaml_text("license: odbl\n---\n", stats).decode()
+    updated = card_metadata._update_density_yaml_text("license: odbl\n---\n", stats).decode()
 
     assert updated == (
         "license: odbl\n"
@@ -257,8 +263,8 @@ def test_update_density_yaml_wrapper_handles_bytes_and_missing_documents() -> No
         occupied_h3_cell_count=5,
     )
 
-    assert card_module._update_density_yaml(None, stats) == b""
-    assert b"polygon_density_row_count: 7" in card_module._update_density_yaml(
+    assert card_metadata._update_density_yaml(None, stats) == b""
+    assert b"polygon_density_row_count: 7" in card_metadata._update_density_yaml(
         b"license: odbl\n---\n", stats
     )
 
@@ -287,7 +293,7 @@ def test_update_release_yaml_refreshes_global_text_fields_and_preserves_custom_f
         top_languages=[("eng_Latn", 9), ("deu_Latn", 4)],
     )
 
-    updated = card_module._update_release_yaml_text(
+    updated = card_metadata._update_release_yaml_text(
         "custom_field: keep\nlanguage:\n  - old\nwebsite_text_success_count: 99\n---\n", stats
     ).decode()
 
@@ -301,7 +307,7 @@ def test_update_release_yaml_refreshes_global_text_fields_and_preserves_custom_f
 
 
 def test_update_release_yaml_inserts_missing_language_before_metadata_fields() -> None:
-    updated = card_module._update_release_yaml_text(
+    updated = card_metadata._update_release_yaml_text(
         "---\nlicense: odbl\nsize_categories:\n  - n<1K\n---\n",
         _language_card_stats(),
     ).decode()
@@ -310,8 +316,8 @@ def test_update_release_yaml_inserts_missing_language_before_metadata_fields() -
     assert "language:\n  - eng\n  - deu\nsize_categories:\n" in updated
 
 
-def test_update_language_section_replaces_only_the_generated_block() -> None:
-    updated = _update_language_section(
+def testupdate_language_section_replaces_only_the_generated_block() -> None:
+    updated = update_language_section(
         b"prefix\n## Website text\nkeep\n## Languages\nSTALE\n## Polygon geometry\nkeep\n",
         _language_card_stats(),
     )
@@ -322,8 +328,8 @@ def test_update_language_section_replaces_only_the_generated_block() -> None:
     assert updated.endswith(b"## Polygon geometry\nkeep\n")
 
 
-def test_update_language_section_inserts_missing_block_after_website_text() -> None:
-    updated = _update_language_section(
+def testupdate_language_section_inserts_missing_block_after_website_text() -> None:
+    updated = update_language_section(
         b"prefix\n## Website text\nkeep\n## Polygon geometry\nkeep\n",
         _language_card_stats(),
     )
@@ -332,16 +338,16 @@ def test_update_language_section_inserts_missing_block_after_website_text() -> N
     assert updated.endswith(b"## Polygon geometry\nkeep\n")
 
 
-def test_update_language_section_appends_missing_block_without_website_text() -> None:
-    updated = _update_language_section(b"prefix\n", _language_card_stats())
+def testupdate_language_section_appends_missing_block_without_website_text() -> None:
+    updated = update_language_section(b"prefix\n", _language_card_stats())
 
     assert updated.startswith(b"prefix\n\n## Languages\n")
     assert b"| `eng_Latn` | 25 |" in updated
 
 
-def test_update_sentence_section_replaces_and_inserts_coverage_block() -> None:
+def testupdate_sentence_section_replaces_and_inserts_coverage_block() -> None:
     stats = _sentence_card_stats()
-    replaced = _update_sentence_section(
+    replaced = update_sentence_section(
         b"prefix\n## Languages\nkeep\n## Sentences\nSTALE\n## Polygon geometry\nkeep\n",
         stats,
     )
@@ -350,24 +356,24 @@ def test_update_sentence_section_replaces_and_inserts_coverage_block() -> None:
     assert replaced.startswith(b"prefix\n## Languages\nkeep\n## Sentences\n")
     assert replaced.endswith(b"## Polygon geometry\nkeep\n")
 
-    inserted = _update_sentence_section(
+    inserted = update_sentence_section(
         b"prefix\n## Languages\nkeep\n## Polygon geometry\nkeep\n", stats
     )
     assert b"## Languages\nkeep\n## Sentences\n" in inserted
     assert inserted.endswith(b"## Polygon geometry\nkeep\n")
 
-    after_website = _update_sentence_section(
+    after_website = update_sentence_section(
         b"prefix\n## Website text\nkeep\n## Polygon geometry\nkeep\n", stats
     )
     assert b"## Website text\nkeep\n## Sentences\n" in after_website
 
-    appended = _update_sentence_section(b"prefix\n", stats)
+    appended = update_sentence_section(b"prefix\n", stats)
     assert appended.startswith(b"prefix\n\n## Sentences\n")
 
 
-def test_update_sentence_section_preserves_crlf_and_removes_stale_empty_block() -> None:
+def testupdate_sentence_section_preserves_crlf_and_removes_stale_empty_block() -> None:
     stats = _sentence_card_stats()
-    crlf = _update_sentence_section(
+    crlf = update_sentence_section(
         b"prefix\r\n## Website text\r\nkeep\r\n## Polygon geometry\r\nkeep\r\n",
         stats,
     )
@@ -376,14 +382,14 @@ def test_update_sentence_section_preserves_crlf_and_removes_stale_empty_block() 
     assert b"## Sentences\n" not in crlf
     assert b"\n" not in crlf.replace(b"\r\n", b"")
 
-    stale = _update_sentence_section(
+    stale = update_sentence_section(
         b"prefix\n## Sentences\nSTALE\n## Polygon geometry\nkeep\n",
         _language_card_stats(),
     )
     assert stale == b"prefix\n## Polygon geometry\nkeep\n"
 
     untouched = b"prefix\n## Polygon geometry\nkeep\n"
-    assert _update_sentence_section(untouched, _language_card_stats()) == untouched
+    assert update_sentence_section(untouched, _language_card_stats()) == untouched
 
 
 def test_language_section_has_an_exact_empty_and_detected_contract() -> None:
@@ -447,7 +453,7 @@ def test_update_card_with_geometry_promotes_only_changed_staged_files_and_cleans
     )
     monkeypatch.setattr(
         card_module,
-        "_update_geometry_section",
+        "update_geometry_section",
         lambda original, received: calls.append(("update", (original, received))) or b"updated",
     )
 
@@ -483,7 +489,7 @@ def test_update_card_with_geometry_cleans_missing_staged_files_on_noop(
     monkeypatch.setattr(card_module, "compute_geometry_stats", lambda *_args, **_kwargs: geometry)
     monkeypatch.setattr(
         card_module,
-        "_update_geometry_section",
+        "update_geometry_section",
         lambda original, _geometry: original,
     )
 
@@ -528,9 +534,9 @@ def test_staged_geometry_stats_requires_explicit_utf8_for_existing_reports(
     ],
 )
 def test_dataset_status_value_and_label_cover_all_states(stats: CardStats, expected: str) -> None:
-    assert card_module._dataset_status_value(stats) == expected
+    assert card_metadata._dataset_status_value(stats) == expected
     assert (
-        card_module._dataset_status_label(stats)
+        card_rendering._dataset_status_label(stats)
         == {
             "done": "Done",
             "complete": "Complete",
@@ -540,11 +546,11 @@ def test_dataset_status_value_and_label_cover_all_states(stats: CardStats, expec
 
 
 def test_enrichment_policy_covers_frozen_and_retryable_snapshots() -> None:
-    assert card_module._enrichment_policy(CardStats()) == (
+    assert card_rendering._enrichment_policy(CardStats()) == (
         "A source is enriched only when every status is `success` or `absent`. "
         "Failed values retry on later resumptions; successful values are cached."
     )
-    assert card_module._enrichment_policy(CardStats(snapshot_status="done")) == (
+    assert card_rendering._enrichment_policy(CardStats(snapshot_status="done")) == (
         "A source is enriched only when every status is `success` or `absent`. "
         "This snapshot is frozen: failed values remain as recorded and are not "
         "retried. Successful values are cached."
@@ -553,10 +559,10 @@ def test_enrichment_policy_covers_frozen_and_retryable_snapshots() -> None:
 
 def test_render_hostnames_covers_empty_valid_and_invalid_rows() -> None:
     assert (
-        card_module._render_hostnames("website", [], hostname_key="website_hostname")
+        card_rendering._render_hostnames("website", [], hostname_key="website_hostname")
         == "### Top `website` hostnames\n\n_No hostnames observed._"
     )
-    assert card_module._render_hostnames(
+    assert card_rendering._render_hostnames(
         "website",
         [{"website_hostname": "example.org", "row_count": 1_234}],
         hostname_key="website_hostname",
@@ -565,14 +571,14 @@ def test_render_hostnames_covers_empty_valid_and_invalid_rows() -> None:
         "| Hostname | Polygons |\n| --- | ---: |\n| `example.org` | 1,234 |"
     )
     with pytest.raises(ValueError) as missing_hostname:
-        card_module._render_hostnames(
+        card_rendering._render_hostnames(
             "website",
             [{"website_hostname": None, "row_count": 1}],
             hostname_key="website_hostname",
         )
     assert str(missing_hostname.value) == "invalid hostname analysis row"
     with pytest.raises(ValueError) as invalid_count:
-        card_module._render_hostnames(
+        card_rendering._render_hostnames(
             "website",
             [{"website_hostname": "example.org", "row_count": "1"}],
             hostname_key="website_hostname",
@@ -582,7 +588,7 @@ def test_render_hostnames_covers_empty_valid_and_invalid_rows() -> None:
 
 def test_schema_rows_and_selected_public_paths_are_deterministic(tmp_path: Path) -> None:
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
-    assert card_module._schema_rows(schema) == ["| `polygon_id` | `string` | no |"]
+    assert card_rendering._schema_rows(schema) == ["| `polygon_id` | `string` | no |"]
 
     polygons = tmp_path / "polygons"
     polygons.mkdir()
@@ -603,7 +609,7 @@ def test_schema_rows_mark_nullable_fields() -> None:
         ]
     )
 
-    assert card_module._schema_rows(schema) == [
+    assert card_rendering._schema_rows(schema) == [
         "| `name` | `string` | yes |",
         "| `osm_id` | `int64` | no |",
     ]
@@ -644,3 +650,13 @@ def test_build_card_writes_h3_density_map_and_card_section(tmp_path: Path) -> No
     assert "## Geographic distribution" in card
     assert "assets/geographic_polygon_density.png" in card
     assert "occupied H3 cells at resolution 3" in card
+
+
+def test_card_patching_newline_and_block_helpers_follow_the_card_convention() -> None:
+    from osm_polygon_website_tag.reporting.card_patching import _block_bytes, _newline
+
+    assert _newline(b"a\r\nb\n") == b"\r\n"
+    assert _newline(b"a\nb\r") == b"\n"
+    assert _newline(b"") == b"\n"
+    assert _block_bytes(["## A", "", "x"], b"\r\n") == b"## A\r\n\r\nx\r\n"
+    assert _block_bytes([], b"\n") == b"\n"

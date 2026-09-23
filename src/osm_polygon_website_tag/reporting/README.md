@@ -37,8 +37,10 @@ Builds and validates public-facing local artifacts.
 - `card` is the compatibility-preserving orchestration entry point for fresh
   card builds and legacy geometry updates. `card_rendering` owns pure Markdown
   sections, `card_metadata` owns YAML/front-matter contracts, and
-  `card_patching` owns byte-preserving legacy-card updates. Release-time map,
-  README, YAML, and geometry promotion lives under `publishing/card_artifacts`.
+  `card_patching` owns byte-preserving legacy-card updates (public
+  `update_*_section` functions). `card` no longer re-exports helper names;
+  import them from their owning module. Release-time map, README, YAML, and
+  geometry promotion lives under `publishing/card_artifacts`.
 - `verify` is the stable verification entry point; its internal section
   validators live under `verification/` and are not public API. They cover
   rows, shards, text, language pairs, sentence segmentation, analysis and card

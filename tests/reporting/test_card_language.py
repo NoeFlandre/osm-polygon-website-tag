@@ -17,6 +17,7 @@ from tests.fixtures.card import (
 )
 
 import osm_polygon_website_tag.reporting.card as card_module
+import osm_polygon_website_tag.reporting.card_metadata as card_metadata
 import osm_polygon_website_tag.reporting.card_rendering as card_rendering
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -175,7 +176,9 @@ def test_incremental_card_renders_progress_and_text_statistics(tmp_path: Path) -
 
 
 def test_hostname_renderer_caps_public_table_at_ten_rows() -> None:
-    from osm_polygon_website_tag.reporting.card import _render_hostnames
+    from osm_polygon_website_tag.reporting.card_rendering import (
+        _render_hostnames,
+    )
 
     rows = [
         {"website_hostname": f"host-{index}.example", "row_count": 20 - index}
@@ -200,7 +203,7 @@ def test_language_front_matter_and_section_render_detected_labels() -> None:
     assert "website_language_count: 10" in front_matter
     assert "contact_website_language_count: 15" in front_matter
 
-    body = card_module._render_markdown(_language_card_stats(), geometry=GeometryStats())
+    body = card_module.render_markdown(_language_card_stats(), geometry=GeometryStats())
     assert "## Languages" in body
     assert "| `eng_Latn` | 25 |" in body
 
@@ -209,7 +212,7 @@ def test_language_section_is_absent_without_detected_languages() -> None:
     front_matter = card_module._render_yaml_front_matter(_golden_card_stats())
 
     assert "language:" not in front_matter
-    assert "## Languages" not in card_module._render_markdown(
+    assert "## Languages" not in card_module.render_markdown(
         _golden_card_stats(), geometry=GeometryStats()
     )
 
@@ -217,7 +220,7 @@ def test_language_section_is_absent_without_detected_languages() -> None:
 def test_release_yaml_removes_stale_language_tags_when_detection_is_empty() -> None:
     document = "---\nlanguage:\n  - eng\ndetected_language_count: 1\nlicense: odbl\n---\n"
 
-    updated = card_module._update_existing_release_yaml(document.encode(), _golden_card_stats())
+    updated = card_metadata._update_existing_release_yaml(document.encode(), _golden_card_stats())
     updated = updated.decode()
 
     assert "language:" not in updated
@@ -231,7 +234,7 @@ def test_sentence_front_matter_and_section_render_segmentation_totals() -> None:
     assert "website_segmented_count: 8" in front_matter
     assert "contact_website_segmented_count: 4" in front_matter
 
-    body = card_module._render_markdown(_sentence_card_stats(), geometry=GeometryStats())
+    body = card_module.render_markdown(_sentence_card_stats(), geometry=GeometryStats())
     assert "## Sentences" in body
     assert "| Sentences | 60 |" in body
     assert "| Segmented `website` texts | 8 |" in body
@@ -249,13 +252,13 @@ def test_sentence_section_is_absent_without_segmentation() -> None:
     front_matter = card_module._render_yaml_front_matter(_language_card_stats())
 
     assert "sentence_count:" not in front_matter
-    assert "## Sentences" not in card_module._render_markdown(
+    assert "## Sentences" not in card_module.render_markdown(
         _language_card_stats(), geometry=GeometryStats()
     )
 
 
 def test_sentence_section_has_a_stable_line_contract() -> None:
-    assert card_module._render_sentence_section(_sentence_card_stats()) == [
+    assert card_rendering._render_sentence_section(_sentence_card_stats()) == [
         "## Sentences",
         "",
         (
@@ -283,12 +286,12 @@ def test_sentence_section_has_a_stable_line_contract() -> None:
 
 
 def test_sentence_metadata_has_a_stable_line_contract() -> None:
-    assert card_module._sentence_metadata_lines(_sentence_card_stats()) == [
+    assert card_metadata._sentence_metadata_lines(_sentence_card_stats()) == [
         "sentence_count: 60",
         "website_segmented_count: 8",
         "contact_website_segmented_count: 4",
     ]
-    assert card_module._sentence_metadata_lines(_language_card_stats()) == []
+    assert card_metadata._sentence_metadata_lines(_language_card_stats()) == []
 
 
 def test_sentence_section_renders_unsupported_only_population_without_dividing_by_zero() -> None:
@@ -301,7 +304,7 @@ def test_sentence_section_renders_unsupported_only_population_without_dividing_b
     stats.sentence_split_unsupported_count = 3
     stats.unsupported_language_row_count = 3
 
-    section = card_module._render_sentence_section(stats)
+    section = card_rendering._render_sentence_section(stats)
 
     assert "| Sentence-splitting coverage | 0.0% |" in section
     assert "Mean sentences per segmented text: **n/a**" in section

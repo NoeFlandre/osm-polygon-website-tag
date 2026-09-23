@@ -176,7 +176,9 @@ def test_build_card_is_idempotent(tmp_path: Path) -> None:
     ],
 )
 def test_size_category_is_derived_from_public_row_count(row_count: int, expected: str) -> None:
-    from osm_polygon_website_tag.reporting.card import _size_category
+    from osm_polygon_website_tag.reporting.card_metadata import (
+        _size_category,
+    )
 
     assert _size_category(row_count) == expected
 
