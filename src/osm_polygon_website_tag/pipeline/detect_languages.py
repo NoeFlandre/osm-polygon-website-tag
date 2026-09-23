@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,6 +25,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, TEXT_UNFINISHED_STATUSES
 from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
 from osm_polygon_website_tag.pipeline.glotlid import LanguageDetector, LanguagePrediction
+from osm_polygon_website_tag.pipeline.grid5000_bundle import validate_positive_grid_time
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
     load_language_checkpoint,
@@ -130,19 +130,7 @@ def validate_language_detection_options(batch_rows: int, time_budget_seconds: fl
     if batch_rows < 1:
         raise ValueError("batch_rows must be positive")
     if time_budget_seconds is not None:
-        _validate_positive_time_value(time_budget_seconds)
-
-
-def _validate_positive_time_value(time_budget_seconds: object) -> None:
-    """Validate one positive finite numeric time budget."""
-    if isinstance(time_budget_seconds, bool):
-        raise ValueError("time_budget_seconds must be positive")
-    if not isinstance(time_budget_seconds, (int, float)):
-        raise ValueError("time_budget_seconds must be positive")
-    if not math.isfinite(time_budget_seconds):
-        raise ValueError("time_budget_seconds must be positive")
-    if time_budget_seconds <= 0:
-        raise ValueError("time_budget_seconds must be positive")
+        validate_positive_grid_time(time_budget_seconds)
 
 
 def _detection_deadline(
