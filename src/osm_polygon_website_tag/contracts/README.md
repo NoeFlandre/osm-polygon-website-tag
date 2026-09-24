@@ -4,7 +4,7 @@ Defines the exact public, comparison, rejection, and text Arrow schemas plus
 the shared dynamic compute-kernel adapter.
 
 - Modules: `arrow`, `polygon_schema`, `language_schema`, `comparison_schema`,
-  `rejection_schema`, `text_schema`.
+  `rejection_schema`, `sentence_schema`, `text_schema`.
 - Dependencies: no other project package.
 - Entry points: schema constants, column documentation, row validation, text statuses.
 - `polygon_schema.schema_matches` is the single exact Arrow-schema comparison
