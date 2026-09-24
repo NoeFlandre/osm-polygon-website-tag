@@ -9,14 +9,26 @@ live here so neither stage owns a private copy of them.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from uuid import uuid4
 
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
+from osm_polygon_website_tag.runtime.run_state import (
+    STATUS_ANALYZED,
+    STATUS_CARD_BUILT,
+    STATUS_COMPLETE,
+    STATUS_ENRICHED,
+    STATUS_ENRICHING,
+    STATUS_EXTRACTED,
+    RunState,
+    transition_status,
+)
+from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_MANIFEST_NAME = "bundle.json"
@@ -226,6 +238,59 @@ def remove_directory(path: Path | None) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def reject_frozen_snapshot(state: RunState, *, action: str) -> None:
+    """Refuse any mutation of a user-frozen snapshot."""
+    if (
+        state.metadata.get("status") == STATUS_COMPLETE
+        and state.metadata.get("snapshot_status") == "done"
+    ):
+        raise ValueError(f"cannot {action} a frozen snapshot")
+
+
+def prepare_stage_run_state(state: RunState, *, action: str) -> None:
+    """Enter a resumable staged run while preserving frozen snapshots."""
+    reject_frozen_snapshot(state, action=action)
+    status = state.metadata.get("status")
+    if status in {STATUS_EXTRACTED, STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}:
+        transition_status(state, STATUS_ENRICHING)
+    elif status not in {STATUS_ENRICHING, STATUS_ENRICHED}:
+        raise ValueError("Grid'5000 preparation requires an extracted/enriched run")
+
+
+def validate_stage_sync_state(state: RunState, run_id: str, *, action: str) -> None:
+    """Ensure a receipt can only mutate its original, unfrozen run."""
+    if state.run_id != run_id:
+        raise ValueError("bundle run identity does not match target run")
+    reject_frozen_snapshot(state, action=action)
+    if state.metadata.get("status") not in {STATUS_ENRICHING, STATUS_ENRICHED}:
+        raise ValueError("Grid'5000 synchronization requires an enriching/enriched run")
+
+
+def install_validated_shard(
+    local: Path,
+    remote: Path,
+    *,
+    validate: Callable[[Path], None],
+    checkpoint_directory: Path,
+) -> None:
+    """Stage, validate, and atomically promote one shard, then drop its checkpoint."""
+    staged = local.with_name(f".{local.name}.grid5000-syncing")
+    staged.unlink(missing_ok=True)
+    try:
+        shutil.copy2(remote, staged)
+        validate(staged)
+        atomic_promote_bundle([(staged, local)])
+    finally:
+        staged.unlink(missing_ok=True)
+    shutil.rmtree(checkpoint_directory, ignore_errors=True)
+
+
+def receipt_digest(payload: Mapping[str, object]) -> str:
+    """Return the short, key-order-independent digest naming a history file."""
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+
 __all__ = [
     "BUNDLE_MANIFEST_NAME",
     "BUNDLE_SCHEMA_VERSION",
@@ -234,12 +299,16 @@ __all__ = [
     "RESULT_NAME",
     "backup_directory",
     "create_bundle_directory",
+    "install_validated_shard",
     "model_from_payload",
     "model_payload",
     "nonnegative_int",
     "optional_job_id",
     "positive_int",
+    "prepare_stage_run_state",
     "read_object",
+    "receipt_digest",
+    "reject_frozen_snapshot",
     "remove_directory",
     "replace_directory",
     "required_bool",
@@ -254,4 +323,5 @@ __all__ = [
     "validate_grid_time_budget",
     "validate_job_id",
     "validate_positive_grid_time",
+    "validate_stage_sync_state",
 ]

@@ -1,6 +1,7 @@
 # GlotLID language detection
 
-**Status:** Approved for implementation
+**Status:** Implemented (public schema v1.4). Kept as the design record; the
+later sentence stage (v1.5) is described in the README and `docs/operations.md`.
 
 ## Goal
 

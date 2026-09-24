@@ -3,8 +3,9 @@
 Builds and validates public-facing local artifacts.
 
 - Modules: `artifact_inventory`, `card`, `card_rendering`, `card_metadata`,
-  `card_patching`, `card_stats`, `geometry_stats`, `geographic`, `repair`,
-  `verify`, and `finalize`.
+  `card_patching`, `card_stats`, `file_hashing`, `geometry_stats`, `geographic`,
+  `repair`, `text_population`, `verify`, `verification` (`analysis`,
+  `language`, `receipt`, `rows`, `sentence`, `shards`, `text`), and `finalize`.
 - Dependencies: `contracts`, `storage`, `pipeline`, and `runtime`.
 - `geographic` aggregates public centroids into H3 resolution-3 counts and
   atomically renders the logarithmic `assets/geographic_polygon_density.png`

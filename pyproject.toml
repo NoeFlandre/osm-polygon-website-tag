@@ -34,15 +34,15 @@ dependencies = [
     "tqdm>=4.67,<5",
     "trafilatura>=2.1,<3",
     "typer>=0.21,<1",
-    "wtpsplit",
 ]
 
 [project.optional-dependencies]
-# The segmentation backend is an extra so the default image, the Mac checkout,
+# The segmentation backend (wtpsplit and its torch runtime) is an extra so the default image, the Mac checkout,
 # and every extraction-only run stay free of a deep-learning runtime. Only the
 # reserved Grid'5000 node that segments text installs it.
 sentences = [
     "torch>=2.6,<3",
+    "wtpsplit>=2.2,<3",
 ]
 
 [project.scripts]
