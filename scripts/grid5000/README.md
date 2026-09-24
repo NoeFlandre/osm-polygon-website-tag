@@ -7,6 +7,14 @@ stop with a durable checkpoint. The model itself is CPU-bound, so the GPU is a
 resource-isolation and parallel-job requirement rather than an inference
 acceleration claim.
 
+The reserved-node job scripts source `_env.sh` for the pinned `module load`
+line and the job, checkout and uv-cache directories, so a module bump touches
+that one file. `bootstrap_runtime.sh <language|sentences>` and
+`sync_bundle.sh <language|sentences>` hold the shared logic; the
+stage-named scripts below are thin entry points kept because `oarsub -S`
+submits a script by name without arguments. A job script staged as a copy in
+the job directory falls back to the checkout's `_env.sh`.
+
 The Seagate run and model cache remain canonical. The temporary Grid'5000
 bundle is copied back before a completed shard or checkpoint is synchronized.
 Never put credentials in the bundle, repository checkout, or shell

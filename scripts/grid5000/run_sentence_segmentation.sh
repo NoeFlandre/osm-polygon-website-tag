@@ -4,20 +4,19 @@
 #OAR -E OAR_%jobid%.err
 set -euo pipefail
 
-if [[ -f /etc/profile.d/modules.sh ]]; then
-  # shellcheck source=/dev/null
-  source /etc/profile.d/modules.sh
+# A job script may run as a copy staged in the job directory, so fall back
+# to the checkout's helper when none sits beside it.
+env_script="$(dirname "${BASH_SOURCE[0]}")/_env.sh"
+if [[ ! -f "$env_script" ]]; then
+  env_script="${GRID5000_REPO_DIR:-${GRID5000_JOB_DIR:-$PWD}/checkout}/scripts/grid5000/_env.sh"
 fi
-module load python/3.12.12 uv/0.10.12 expat/2.7.1
+# shellcheck source=scripts/grid5000/_env.sh
+source "$env_script"
 
-job_dir="${GRID5000_JOB_DIR:-$PWD}"
-repo_dir="${GRID5000_REPO_DIR:-$job_dir/checkout}"
 bundle_dir="${GRID5000_BUNDLE_DIR:-$job_dir/bundle}"
 time_budget_seconds="${GRID5000_TIME_BUDGET_SECONDS:-1500}"
 batch_rows="${GRID5000_BATCH_ROWS:-256}"
-uv_cache_dir="${GRID5000_UV_CACHE_DIR:-$job_dir/uv-cache}"
 
-cd "$repo_dir"
 # The Guix-provided interpreter does not search the node's system library
 # path, so torch cannot load the NVIDIA driver stub and would silently
 # segment on CPU at a fraction of the throughput.
@@ -25,7 +24,6 @@ export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export UV_NO_DEV=1
-export UV_CACHE_DIR="$uv_cache_dir"
 
 arguments=(
   --bundle-dir "$bundle_dir"
