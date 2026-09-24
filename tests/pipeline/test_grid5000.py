@@ -942,7 +942,7 @@ def test_prepare_run_state_enters_enriching_from_previous_stages(
     state = RunState(tmp_path, "run", {"status": status})
     transitions: list[tuple[RunState, str]] = []
     monkeypatch.setattr(
-        grid5000,
+        grid5000_bundle,
         "transition_status",
         lambda actual, new_status: transitions.append((actual, new_status)),
     )
