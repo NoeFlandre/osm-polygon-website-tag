@@ -89,3 +89,14 @@ def test_sha256_directory_rejects_a_file(tmp_path: Path) -> None:
         model_identity.sha256_directory(path)
 
     assert error.value.args == (path,)
+
+
+def test_checkpoint_identity_names_each_pinned_field() -> None:
+    identity = ModelIdentity("org/repo", "model.bin", "abc123", "f" * 64)
+
+    assert identity.checkpoint_identity() == {
+        "model_repository": "org/repo",
+        "model_filename": "model.bin",
+        "model_revision": "abc123",
+        "model_sha256": "f" * 64,
+    }

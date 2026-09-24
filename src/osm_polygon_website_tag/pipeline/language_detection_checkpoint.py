@@ -46,12 +46,7 @@ def load_language_checkpoint(
         shard,
         source_row_count=source_row_count,
         source_shard_sha256=source_shard_sha256,
-        identity={
-            "model_repository": model.repository,
-            "model_filename": model.filename,
-            "model_revision": model.revision,
-            "model_sha256": model.sha256,
-        },
+        identity=model.checkpoint_identity(),
     )
 
 
