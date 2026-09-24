@@ -1290,3 +1290,37 @@ def test_sync_validates_a_tampered_remote_once_after_staging(
     assert validated == [f".{local.name}.grid5000-syncing"]
     assert local.read_bytes() == before
     assert not local.with_name(f".{local.name}.grid5000-syncing").exists()
+
+
+def test_sync_records_the_receipt_hash_without_rescanning_the_installed_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _write_enriched_run(tmp_path / "run")
+    model = tmp_path / "model_v3.bin"
+    model.write_bytes(b"model")
+    bundle_dir = tmp_path / "bundle"
+    bundle = grid5000.prepare_language_bundle(
+        run_dir, bundle_dir, model_path=model, commit="abc123"
+    )
+
+    class FakeDetector:
+        identity = bundle.model
+
+        def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]:
+            return [LanguagePrediction("eng_Latn", 0.9) for _text in texts]
+
+    monkeypatch.setattr(grid5000, "load_glotlid_detector_from_path", lambda _path: FakeDetector())
+    result = grid5000.run_language_bundle(bundle_dir)
+    scanned: list[str] = []
+    original = grid5000.shard_needs_language_detection
+
+    def spy(path: Path) -> bool:
+        scanned.append(Path(path).name)
+        return original(path)
+
+    monkeypatch.setattr(grid5000, "shard_needs_language_detection", spy)
+    grid5000.sync_language_bundle(bundle_dir, run_dir)
+
+    assert bundle.source_shard not in scanned
+    source = load_run(run_dir).sources[f"{Path(bundle.source_shard).stem}.osm.pbf"]
+    assert source["public_shard_sha256"] == result.shard_sha256
