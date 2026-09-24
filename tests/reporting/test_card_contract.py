@@ -701,3 +701,17 @@ def test_patching_missing_sections_reproduces_renderer_order() -> None:
         "## Geographic distribution",
         "## Polygon geometry",
     ]
+
+
+def test_insert_first_patched_section_goes_before_the_earliest_later_section() -> None:
+    from osm_polygon_website_tag.reporting import card_patching
+
+    card = b"# Title\n\n## Sentences\n\ns\n\n## Geographic distribution\n\ng\n"
+
+    patched = card_patching._insert_section(
+        card, card_patching._WEBSITE_TEXT_HEADING, b"## Website text\n\nw\n\n", b"\n"
+    )
+
+    assert patched == (
+        b"# Title\n\n## Website text\n\nw\n\n## Sentences\n\ns\n\n## Geographic distribution\n\ng\n"
+    )
