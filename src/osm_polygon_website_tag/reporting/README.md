@@ -40,7 +40,12 @@ Builds and validates public-facing local artifacts.
   sections, `card_metadata` owns YAML/front-matter contracts, and
   `card_patching` owns byte-preserving legacy-card updates (public
   `update_*_section` functions). `card` no longer re-exports helper names;
-  import them from their owning module. Release-time map, README, YAML, and
+  import them from their owning module. The patcher refreshes only website
+  text, languages, sentences, geography, and geometry, inserting missing ones
+  in `render_markdown` order. The snapshot ("At a glance"), hostname, and
+  method sections are frozen on legacy cards and keep their original counts;
+  regenerate the full card through a release when they must change.
+  Release-time map, README, YAML, and
   geometry promotion lives under `publishing/card_artifacts`.
 - `verify` is the stable verification entry point; its internal section
   validators live under `verification/` and are not public API. They cover

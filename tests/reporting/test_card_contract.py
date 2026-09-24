@@ -147,7 +147,7 @@ def test_update_geometry_section_replaces_inserts_and_appends_without_touching_n
         b"prefix\n## Geographic distribution\nkeep\n",
         geometry,
     )
-    assert inserted == b"prefix\n" + block + b"## Geographic distribution\nkeep\n"
+    assert inserted == b"prefix\n## Geographic distribution\nkeep\n" + block
 
     appended = update_geometry_section(b"prefix", geometry)
     assert appended == b"prefix\n\n" + block
@@ -168,7 +168,14 @@ def test_update_geographic_section_replaces_inserts_and_appends() -> None:
     assert replaced.endswith(b"## Links\nkeep\n")
 
     inserted = update_geographic_section(b"prefix\n## Polygon geometry\nkeep\n", stats)
-    assert b"## Polygon geometry\nkeep\n## Geographic distribution\n" in inserted
+    assert inserted.startswith(b"prefix\n## Geographic distribution\n")
+    assert inserted.endswith(b"## Polygon geometry\nkeep\n")
+
+    after_sentences = update_geographic_section(
+        b"## Sentences\ns\n## Other\no\n## Polygon geometry\ng\n", stats
+    )
+    assert after_sentences.startswith(b"## Sentences\ns\n## Geographic distribution\n")
+    assert after_sentences.endswith(b"## Other\no\n## Polygon geometry\ng\n")
 
     appended = update_geographic_section(b"prefix", stats)
     assert appended.startswith(b"prefix\n\n## Geographic distribution\n")
@@ -660,3 +667,51 @@ def test_card_patching_newline_and_block_helpers_follow_the_card_convention() ->
     assert _newline(b"") == b"\n"
     assert _block_bytes(["## A", "", "x"], b"\r\n") == b"## A\r\n\r\nx\r\n"
     assert _block_bytes([], b"\n") == b"\n"
+
+
+def test_update_language_section_inserts_before_later_patched_section_without_website_text() -> (
+    None
+):
+    card = b"prefix\n## Sentences\ns\n## Polygon geometry\ng\n"
+    inserted = update_language_section(card, _language_card_stats())
+    assert inserted.startswith(b"prefix\n## Languages\n")
+    assert inserted.endswith(b"## Sentences\ns\n## Polygon geometry\ng\n")
+
+
+def test_patched_section_order_matches_full_renderer() -> None:
+    from osm_polygon_website_tag.reporting.card_patching import _PATCHED_SECTION_ORDER
+    from osm_polygon_website_tag.reporting.card_rendering import render_markdown
+
+    body = render_markdown(_sentence_card_stats(), geometry=_golden_geometry_stats()).encode()
+    starts = [heading.search(body) for heading in _PATCHED_SECTION_ORDER]
+    assert all(match is not None for match in starts)
+    positions = [match.start() for match in starts if match is not None]
+    assert positions == sorted(positions)
+
+
+def test_patching_missing_sections_reproduces_renderer_order() -> None:
+    stats = _sentence_card_stats()
+    geometry = _golden_geometry_stats()
+    patched = update_geographic_section(update_geometry_section(b"# Card\n", geometry), stats)
+    patched = update_sentence_section(update_language_section(patched, stats), stats)
+    headings = [line for line in patched.decode().splitlines() if line.startswith("## ")]
+    assert headings == [
+        "## Languages",
+        "## Sentences",
+        "## Geographic distribution",
+        "## Polygon geometry",
+    ]
+
+
+def test_insert_first_patched_section_goes_before_the_earliest_later_section() -> None:
+    from osm_polygon_website_tag.reporting import card_patching
+
+    card = b"# Title\n\n## Sentences\n\ns\n\n## Geographic distribution\n\ng\n"
+
+    patched = card_patching._insert_section(
+        card, card_patching._WEBSITE_TEXT_HEADING, b"## Website text\n\nw\n\n", b"\n"
+    )
+
+    assert patched == (
+        b"# Title\n\n## Website text\n\nw\n\n## Sentences\n\ns\n\n## Geographic distribution\n\ng\n"
+    )
