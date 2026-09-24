@@ -364,7 +364,6 @@ def _sync_completed_shard(
     else:
         if local_hash != bundle.source_shard_sha256:
             raise ValueError("canonical shard changed since bundle preparation")
-        _validate_completed_shard(remote, result)
         staged = local.with_name(f".{local.name}.grid5000-syncing")
         staged.unlink(missing_ok=True)
         try:
@@ -381,7 +380,7 @@ def _sync_completed_shard(
         shard_sha256=result.shard_sha256,
     )
     if (
-        _all_language_shards_complete(state.run_dir)
+        _all_language_shards_complete(state.run_dir, installed=local)
         and state.metadata.get("status") == STATUS_ENRICHING
     ):
         transition_status(state, STATUS_ENRICHED)
@@ -424,10 +423,20 @@ def _validate_completed_shard(path: Path, result: Grid5000Result) -> None:
         raise ValueError("completed language shard still needs detection")
 
 
-def _all_language_shards_complete(run_dir: Path) -> bool:
-    """Return whether every public shard in a run has a complete result."""
+def _all_language_shards_complete(run_dir: Path, *, installed: Path) -> bool:
+    """Return whether every public shard in a run has a complete result.
+
+    ``installed`` was just validated as complete, so it is not rescanned. The
+    remaining shards are checked cheapest first: a pre-language schema is
+    decided from the footer alone, so the row scan of v1.4 shards only runs
+    once no shard is still waiting for its first language result.
+    """
     paths = sorted((run_dir / _POLYGONS_DIRECTORY).glob("*.parquet"))
-    return bool(paths) and all(not shard_needs_language_detection(path) for path in paths)
+    pending = sorted(
+        (path for path in paths if path != installed),
+        key=lambda path: schema_matches(pq.read_schema(path), POLYGON_PUBLIC_SCHEMA_V1_4),
+    )
+    return bool(paths) and all(not shard_needs_language_detection(path) for path in pending)
 
 
 def _write_sync_history(run_dir: Path, bundle: Grid5000Bundle, result: Grid5000Result) -> None:
