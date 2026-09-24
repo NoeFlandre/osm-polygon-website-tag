@@ -22,27 +22,24 @@ _GEOMETRY_HEADING = re.compile(rb"(?m)^## Polygon geometry(?:\r\n|\n|$)")
 _GEOGRAPHIC_HEADING = re.compile(rb"(?m)^## Geographic distribution(?:\r\n|\n|$)")
 
 
-def _update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
+def update_geometry_section(card: bytes, geometry: GeometryStats) -> bytes:
     """Replace or insert one geometry block without rewriting other card bytes."""
-    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    newline = _newline(card)
     block = _geometry_block_bytes(geometry, newline)
     existing = _GEOMETRY_HEADING.search(card)
     if existing is not None:
-        following = _TOP_LEVEL_HEADING.search(card, existing.end())
-        end = following.start() if following is not None else len(card)
-        return card[: existing.start()] + block + card[end:]
+        return _replace_section(card, existing, block)
 
     insertion = _GEOGRAPHIC_HEADING.search(card)
     if insertion is not None:
         return card[: insertion.start()] + block + card[insertion.start() :]
-    return _append_geometry_block(card, block, newline)
+    return _append_block(card, block, newline)
 
 
-def _update_geographic_section(card: bytes, stats: CardStats) -> bytes:
+def update_geographic_section(card: bytes, stats: CardStats) -> bytes:
     """Replace or insert the geography block using the card's newline style."""
-    newline = b"\r\n" if b"\r\n" in card else b"\n"
-    block = newline.join(line.encode() for line in _render_geographic_section(stats))
-    block += newline
+    newline = _newline(card)
+    block = _block_bytes(_render_geographic_section(stats), newline)
     existing = _GEOGRAPHIC_HEADING.search(card)
     if existing is not None:
         return _replace_section(card, existing, block)
@@ -55,22 +52,21 @@ def _insert_geographic_section(card: bytes, block: bytes, newline: bytes) -> byt
     geometry = _GEOMETRY_HEADING.search(card)
     if geometry is not None:
         return _insert_after_section(card, geometry, block)
-    return _append_geometry_block(card, block, newline)
+    return _append_block(card, block, newline)
 
 
-def _update_website_text_section(card: bytes, stats: CardStats) -> bytes:
+def update_website_text_section(card: bytes, stats: CardStats) -> bytes:
     """Replace the generated website-text block without adding it to legacy cards."""
-    newline = b"\r\n" if b"\r\n" in card else b"\n"
     existing = _WEBSITE_TEXT_HEADING.search(card)
     if existing is None:
         return card
-    block = newline.join(line.encode() for line in _render_website_text_section(stats))
-    return _replace_section(card, existing, block + newline)
+    block = _block_bytes(_render_website_text_section(stats), _newline(card))
+    return _replace_section(card, existing, block)
 
 
-def _update_language_section(card: bytes, stats: CardStats) -> bytes:
+def update_language_section(card: bytes, stats: CardStats) -> bytes:
     """Replace the generated language block with canonical population totals."""
-    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    newline = _newline(card)
     existing = _LANGUAGE_HEADING.search(card)
     if existing is not None:
         return _replace_existing_language_section(card, existing, stats, newline)
@@ -79,9 +75,9 @@ def _update_language_section(card: bytes, stats: CardStats) -> bytes:
     return _insert_new_language_section(card, stats, newline)
 
 
-def _update_sentence_section(card: bytes, stats: CardStats) -> bytes:
+def update_sentence_section(card: bytes, stats: CardStats) -> bytes:
     """Replace or insert the generated sentence-coverage section."""
-    newline = b"\r\n" if b"\r\n" in card else b"\n"
+    newline = _newline(card)
     block_lines = _render_sentence_section(stats)
     existing = _SENTENCE_HEADING.search(card)
     if existing is not None:
@@ -95,20 +91,19 @@ def _replace_sentence_section(
     card: bytes, existing: re.Match[bytes], lines: list[str], newline: bytes
 ) -> bytes:
     """Replace or remove an existing sentence section."""
-    block = newline.join(line.encode() for line in lines)
-    return _replace_section(card, existing, block + newline if block else b"")
+    return _replace_section(card, existing, _block_bytes(lines, newline) if lines else b"")
 
 
 def _insert_sentence_section(card: bytes, lines: list[str], newline: bytes) -> bytes:
     """Insert a missing sentence section after the best related section."""
-    block = newline.join(line.encode() for line in lines) + newline
+    block = _block_bytes(lines, newline)
     language = _LANGUAGE_HEADING.search(card)
     if language is not None:
         return _insert_after_section(card, language, block)
     website = _WEBSITE_TEXT_HEADING.search(card)
     if website is not None:
         return _insert_after_section(card, website, block)
-    return _append_geometry_block(card, block, newline)
+    return _append_block(card, block, newline)
 
 
 def _replace_existing_language_section(
@@ -128,12 +123,22 @@ def _insert_new_language_section(card: bytes, stats: CardStats, newline: bytes) 
     website = _WEBSITE_TEXT_HEADING.search(card)
     if website is not None:
         return _insert_after_section(card, website, _language_section_block(stats, newline))
-    return _append_geometry_block(card, _language_section_block(stats, newline), newline)
+    return _append_block(card, _language_section_block(stats, newline), newline)
 
 
 def _language_section_block(stats: CardStats, newline: bytes) -> bytes:
     """Render one language section using the card's newline convention."""
-    return newline.join(line.encode() for line in _render_language_section(stats)) + newline
+    return _block_bytes(_render_language_section(stats), newline)
+
+
+def _newline(card: bytes) -> bytes:
+    """Return the card's newline convention, preferring CRLF when present."""
+    return b"\r\n" if b"\r\n" in card else b"\n"
+
+
+def _block_bytes(lines: list[str], newline: bytes) -> bytes:
+    """Encode rendered lines as one newline-terminated block."""
+    return newline.join(line.encode() for line in lines) + newline
 
 
 def _replace_section(card: bytes, heading: re.Match[bytes], block: bytes) -> bytes:
@@ -152,12 +157,11 @@ def _insert_after_section(card: bytes, heading: re.Match[bytes], block: bytes) -
 
 def _geometry_block_bytes(geometry: GeometryStats, newline: bytes) -> bytes:
     """Render the additive block using the existing card's newline convention."""
-    lines = _render_polygon_geometry_section(geometry)
-    return newline.join(line.encode() for line in lines) + newline
+    return _block_bytes(_render_polygon_geometry_section(geometry), newline)
 
 
-def _append_geometry_block(card: bytes, block: bytes, newline: bytes) -> bytes:
-    """Append a geometry block while retaining the existing card bytes."""
+def _append_block(card: bytes, block: bytes, newline: bytes) -> bytes:
+    """Append a block after one blank line while retaining the existing card bytes."""
     prefix = card
     if prefix and not prefix.endswith(newline):
         prefix += newline

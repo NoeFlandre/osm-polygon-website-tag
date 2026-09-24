@@ -91,11 +91,11 @@ def _patch_existing_refresh_dependencies(
         return b"updated-readme"
 
     monkeypatch.setattr(card_artifacts, "_update_readme_front_matter", update_front)
-    monkeypatch.setattr(card_artifacts, "_update_website_text_section", update_website)
-    monkeypatch.setattr(card_artifacts, "_update_language_section", update_language)
-    monkeypatch.setattr(card_artifacts, "_update_sentence_section", update_sentence)
-    monkeypatch.setattr(card_artifacts, "_update_geometry_section", update_geometry)
-    monkeypatch.setattr(card_artifacts, "_update_geographic_section", update_geographic)
+    monkeypatch.setattr(card_artifacts, "update_website_text_section", update_website)
+    monkeypatch.setattr(card_artifacts, "update_language_section", update_language)
+    monkeypatch.setattr(card_artifacts, "update_sentence_section", update_sentence)
+    monkeypatch.setattr(card_artifacts, "update_geometry_section", update_geometry)
+    monkeypatch.setattr(card_artifacts, "update_geographic_section", update_geographic)
     return calls
 
 
