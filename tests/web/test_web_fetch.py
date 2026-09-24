@@ -1028,9 +1028,10 @@ def test_read_before_deadline_fails_when_whole_request_budget_is_spent(monkeypat
     monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 1)
     response = _TrickleResponse(b"abcdef")
 
-    with pytest.raises(TimeoutError, match="request deadline exceeded"):
+    with pytest.raises(TimeoutError) as exc_info:
         web_fetch_module._read_before_deadline(response, 6, deadline=10.0)
 
+    assert str(exc_info.value) == "request deadline exceeded"
     assert response.limits == [1, 1]
 
 
