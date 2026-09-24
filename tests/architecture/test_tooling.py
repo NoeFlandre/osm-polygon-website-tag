@@ -114,7 +114,6 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
         "mutation-gate *scopes",
         "mutation-module filters",
         "mutation-clean:",
-        "qa-ci",
         "quality:",
         "focused base=",
         "qa-push base=",
@@ -148,9 +147,10 @@ def test_justfile_exposes_canonical_quality_recipes() -> None:
     assert "--path src/osm_polygon_website_tag/application/workflow.py" not in justfile
     assert "python scripts/quality/mutation_runner.py" in justfile
     assert "python scripts/quality/mutation_scope.py" in justfile
-    ci = re.search(r"^qa-ci:\s*(.*)$", justfile, re.MULTILINE)
-    assert ci is not None
-    assert ci.group(1).strip() == "qa-pr"
+    assert re.search(r"^qa-ci:", justfile, re.MULTILINE) is None
+    ruff = re.search(r"^ruff:[ \t]*(.*)$", justfile, re.MULTILINE)
+    assert ruff is not None
+    assert ruff.group(1).split() == ["lint", "format-check"]
     assert "just mutation-clean" in justfile
     assert 'scopes+=(--scope "$filter")' in justfile
     assert 'mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters' in justfile
@@ -306,7 +306,7 @@ def test_the_quality_gates_are_tiered_and_do_not_duplicate_work() -> None:
     pr = re.search(r"^qa-pr:[ \t]*(.*)$", justfile, re.MULTILINE)
     assert pr is not None
     pr_gates = pr.group(1).split()
-    assert pr_gates == ["baseline", "ruff", "typecheck", "coverage", "crap"]
+    assert pr_gates == ["baseline", "ruff", "typecheck", "coverage", "crap", "build"]
     # `coverage` already collects unit, acceptance and architecture, so naming
     # any of them again would run the suite twice.
     for duplicated in ("unit", "acceptance", "architecture", "test"):
