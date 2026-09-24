@@ -848,6 +848,9 @@ def test_no_redirect_handler_returns_none() -> None:
 
 
 def test_download_once_builds_safe_opener_and_request(monkeypatch) -> None:
+    # An environment proxy must never be honoured for untrusted URLs.
+    monkeypatch.setenv("http_proxy", "http://proxy.invalid:3128")
+    monkeypatch.setenv("https_proxy", "http://proxy.invalid:3128")
     seen = {}
 
     class Response:
