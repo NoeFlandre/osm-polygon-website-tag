@@ -8,7 +8,7 @@ Implements bounded data-processing stages.
   `sat`, `sentence_languages`, `sentences`, `sentence_checkpoint`,
   `split_sentences`, `sentence_run`, `grid5000_bundle`, `grid5000`,
   `grid5000_sentences`,
-  `public_schema_migration`, `analyze`, `partition_aggregate`.
+  `public_schema_migration`, `analyze`, `partition_aggregate`, `deduplicate`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
 - Entry points: `extract_pbf`, `enrich_polygon_shard`,
   `migrate_public_shard`, `detect_language_shard`, `segment_sentence_shard`,

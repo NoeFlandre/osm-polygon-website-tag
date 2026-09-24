@@ -201,7 +201,7 @@ so `grid5000-prepare-sentences` packs unfinished shards in stable order up to
 completed batch is checkpointed, so a job that runs out of budget mid-shard is
 copied back, synchronized, and resumed by the next bundle.
 
-The segmentation backend is the optional `sentences` extra. The default image,
+The segmentation backend (`wtpsplit` and `torch`) is the optional `sentences` extra. The default image,
 the Mac checkout, and every extraction-only run stay free of a deep-learning
 runtime; only the reserved node installs it:
 

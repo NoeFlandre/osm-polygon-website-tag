@@ -25,6 +25,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 from osm_polygon_website_tag.contracts.sentence_schema import SENTENCE_SCHEMA_VERSION
 from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
+from osm_polygon_website_tag.pipeline.grid5000_bundle import validate_positive_grid_time
 from osm_polygon_website_tag.pipeline.sentence_checkpoint import (
     load_sentence_checkpoint,
     sentence_checkpoint_store,
@@ -134,8 +135,8 @@ def validate_segmentation_options(batch_rows: int, time_budget_seconds: float | 
     """Validate shared CLI and shard settings before reading run artifacts."""
     if batch_rows < 1:
         raise ValueError("batch_rows must be positive")
-    if time_budget_seconds is not None and time_budget_seconds <= 0:
-        raise ValueError("time_budget_seconds must be positive")
+    if time_budget_seconds is not None:
+        validate_positive_grid_time(time_budget_seconds)
 
 
 def _validate_source_schema(schema: pa.Schema, shard: Path) -> None:

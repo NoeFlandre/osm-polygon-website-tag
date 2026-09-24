@@ -909,15 +909,6 @@ def test_write_sync_history_names_files_by_shard_and_receipt_digest(tmp_path: Pa
     assert (fresh / "manifests" / "grid5000-sentences" / f"alpha-{digest}.json").is_file()
 
 
-def test_receipt_digest_is_short_and_key_order_independent() -> None:
-    digest = grid5000_sentences._receipt_digest({"b": 1, "a": 2})
-
-    assert len(digest) == 16
-    assert digest == grid5000_sentences._receipt_digest({"a": 2, "b": 1})
-    assert digest != grid5000_sentences._receipt_digest({"a": 2, "b": 3})
-    assert digest == hashlib.sha256(b'{"a":2,"b":1}').hexdigest()[:16]
-
-
 def test_finish_sync_state_completes_a_fully_segmented_run(tmp_path: Path) -> None:
     run_dir, bundle_dir, _ = _prepare(tmp_path, shards={"alpha": 1})
     _run(bundle_dir)

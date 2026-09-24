@@ -333,3 +333,16 @@ def test_a_paused_checkpoint_records_the_real_source_hash(tmp_path: Path) -> Non
     )
     assert metadata["source_shard_sha256"] == expected
     assert metadata["source_row_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, "1", float("nan"), float("inf"), float("-inf"), 0, -1]
+)
+def test_segmentation_options_reject_non_finite_or_non_numeric_budgets(value: object) -> None:
+    with pytest.raises(ValueError, match=r"^time_budget_seconds must be positive$"):
+        split_sentences.validate_segmentation_options(1, value)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("value", [None, 1, 0.5])
+def test_segmentation_options_accept_positive_finite_budgets(value: float | None) -> None:
+    assert split_sentences.validate_segmentation_options(1, value) is None

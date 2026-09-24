@@ -108,3 +108,16 @@ def test_every_source_package_documents_its_boundary() -> None:
         readme = package / "README.md"
         assert readme.is_file()
         assert readme.read_text().strip()
+
+
+def test_remote_identity_is_a_leaf_of_the_release_orchestrator() -> None:
+    """Remote Hub checks never import the release flow at runtime or upload."""
+    source = PACKAGE_ROOT / "publishing" / "remote_identity.py"
+    tree = ast.parse(source.read_text(), filename=str(source))
+    runtime_imports = {
+        node.module
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert "osm_polygon_website_tag.publishing.release" not in runtime_imports
+    assert "upload_folder" not in source.read_text()

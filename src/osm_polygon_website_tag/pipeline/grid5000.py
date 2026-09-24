@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -37,12 +35,15 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     DEFAULT_GRID_TIME_BUDGET_SECONDS,
     RESULT_NAME,
     create_bundle_directory,
+    install_validated_shard,
     model_from_payload,
     model_payload,
     nonnegative_int,
     optional_job_id,
     positive_int,
+    prepare_stage_run_state,
     read_object,
+    receipt_digest,
     replace_directory,
     required_bool,
     required_string,
@@ -53,18 +54,15 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     validate_commit,
     validate_grid_options,
     validate_job_id,
+    validate_stage_sync_state,
 )
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
     load_language_checkpoint,
 )
 from osm_polygon_website_tag.runtime.run_state import (
-    STATUS_ANALYZED,
-    STATUS_CARD_BUILT,
-    STATUS_COMPLETE,
     STATUS_ENRICHED,
     STATUS_ENRICHING,
-    STATUS_EXTRACTED,
     RunState,
     atomic_write_json,
     hash_shard,
@@ -72,7 +70,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     transition_status,
     update_public_shard_metadata,
 )
-from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 DEFAULT_GRID_BATCH_ROWS = DEFAULT_BATCH_ROWS
 _POLYGONS_DIRECTORY = "polygons"
@@ -307,29 +304,12 @@ def _is_unfinished_source_shard(state: RunState, path: Path) -> bool:
 
 def _prepare_run_state(state: RunState) -> None:
     """Enter the resumable language stage while preserving frozen snapshots."""
-    if (
-        state.metadata.get("status") == STATUS_COMPLETE
-        and state.metadata.get("snapshot_status") == "done"
-    ):
-        raise ValueError("cannot add languages to a frozen snapshot")
-    status = state.metadata.get("status")
-    if status in {STATUS_EXTRACTED, STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}:
-        transition_status(state, STATUS_ENRICHING)
-    elif status not in {STATUS_ENRICHING, STATUS_ENRICHED}:
-        raise ValueError("Grid'5000 preparation requires an extracted/enriched run")
+    prepare_stage_run_state(state, action="add languages to")
 
 
 def _validate_sync_state(state: RunState, bundle: Grid5000Bundle) -> None:
     """Ensure a receipt can only mutate its original, unfrozen run."""
-    if state.run_id != bundle.run_id:
-        raise ValueError("bundle run identity does not match target run")
-    if (
-        state.metadata.get("status") == STATUS_COMPLETE
-        and state.metadata.get("snapshot_status") == "done"
-    ):
-        raise ValueError("cannot sync languages into a frozen snapshot")
-    if state.metadata.get("status") not in {STATUS_ENRICHING, STATUS_ENRICHED}:
-        raise ValueError("Grid'5000 synchronization requires an enriching/enriched run")
+    validate_stage_sync_state(state, bundle.run_id, action="sync languages into")
 
 
 def _copy_checkpoint(source: Path, target: Path, bundle: Grid5000Bundle) -> None:
@@ -364,16 +344,12 @@ def _sync_completed_shard(
     else:
         if local_hash != bundle.source_shard_sha256:
             raise ValueError("canonical shard changed since bundle preparation")
-        _validate_completed_shard(remote, result)
-        staged = local.with_name(f".{local.name}.grid5000-syncing")
-        staged.unlink(missing_ok=True)
-        try:
-            shutil.copy2(remote, staged)
-            _validate_completed_shard(staged, result)
-            atomic_promote_bundle([(staged, local)])
-        finally:
-            staged.unlink(missing_ok=True)
-        shutil.rmtree(language_checkpoint_store().directory_for(local), ignore_errors=True)
+        install_validated_shard(
+            local,
+            remote,
+            validate=lambda staged: _validate_completed_shard(staged, result),
+            checkpoint_directory=language_checkpoint_store().directory_for(local),
+        )
     update_public_shard_metadata(
         state,
         filename=f"{local.stem}.osm.pbf",
@@ -381,7 +357,7 @@ def _sync_completed_shard(
         shard_sha256=result.shard_sha256,
     )
     if (
-        _all_language_shards_complete(state.run_dir)
+        _all_language_shards_complete(state.run_dir, installed=local)
         and state.metadata.get("status") == STATUS_ENRICHING
     ):
         transition_status(state, STATUS_ENRICHED)
@@ -424,19 +400,27 @@ def _validate_completed_shard(path: Path, result: Grid5000Result) -> None:
         raise ValueError("completed language shard still needs detection")
 
 
-def _all_language_shards_complete(run_dir: Path) -> bool:
-    """Return whether every public shard in a run has a complete result."""
+def _all_language_shards_complete(run_dir: Path, *, installed: Path) -> bool:
+    """Return whether every public shard in a run has a complete result.
+
+    ``installed`` was just validated as complete, so it is not rescanned. The
+    remaining shards are checked cheapest first: a pre-language schema is
+    decided from the footer alone, so the row scan of v1.4 shards only runs
+    once no shard is still waiting for its first language result.
+    """
     paths = sorted((run_dir / _POLYGONS_DIRECTORY).glob("*.parquet"))
-    return bool(paths) and all(not shard_needs_language_detection(path) for path in paths)
+    pending = sorted(
+        (path for path in paths if path != installed),
+        key=lambda path: schema_matches(pq.read_schema(path), POLYGON_PUBLIC_SCHEMA_V1_4),
+    )
+    return bool(paths) and all(not shard_needs_language_detection(path) for path in pending)
 
 
 def _write_sync_history(run_dir: Path, bundle: Grid5000Bundle, result: Grid5000Result) -> None:
     """Record a receipt-bound synchronization event without source text."""
     history_dir = run_dir / _MANIFESTS_DIRECTORY / _GRID5000_DIRECTORY
     history_dir.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(
-        json.dumps(result.payload(), sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()[:16]
+    digest = receipt_digest(result.payload())
     path = history_dir / f"{Path(bundle.source_shard).stem}-{digest}.json"
     atomic_write_json(
         path,
