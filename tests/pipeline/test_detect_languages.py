@@ -278,12 +278,12 @@ def test_invalid_time_budget_is_rejected_before_opening_the_shard(tmp_path: Path
         )
 
 
-@pytest.mark.parametrize("value", [True, None, float("nan"), float("inf"), 0, -1])
+@pytest.mark.parametrize("value", [True, "1", float("nan"), float("inf"), 0, -1])
 def test_language_budget_validation_rejects_non_positive_or_non_finite_values(
     value: object,
 ) -> None:
     with pytest.raises(ValueError, match=r"^time_budget_seconds must be positive$"):
-        detection._validate_positive_time_value(value)
+        detection.validate_language_detection_options(1, value)  # ty: ignore[invalid-argument-type]
 
 
 def test_language_detection_rejects_an_unsupported_schema(tmp_path: Path) -> None:

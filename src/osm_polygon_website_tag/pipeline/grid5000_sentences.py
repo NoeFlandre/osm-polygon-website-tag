@@ -10,8 +10,6 @@ completed or paused -- so synchronization can install exactly that much.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -30,12 +28,15 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     DEFAULT_GRID_TIME_BUDGET_SECONDS,
     RESULT_NAME,
     create_bundle_directory,
+    install_validated_shard,
     model_from_payload,
     model_payload,
     nonnegative_int,
     optional_job_id,
     positive_int,
+    prepare_stage_run_state,
     read_object,
+    receipt_digest,
     replace_directory,
     required_bool,
     required_string,
@@ -45,6 +46,7 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     validate_commit,
     validate_grid_options,
     validate_job_id,
+    validate_stage_sync_state,
 )
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
 from osm_polygon_website_tag.pipeline.sat import MODEL_REPOSITORY, sat_model_identity
@@ -61,12 +63,8 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
     shard_needs_sentence_segmentation,
 )
 from osm_polygon_website_tag.runtime.run_state import (
-    STATUS_ANALYZED,
-    STATUS_CARD_BUILT,
-    STATUS_COMPLETE,
     STATUS_ENRICHED,
     STATUS_ENRICHING,
-    STATUS_EXTRACTED,
     RunState,
     atomic_write_json,
     hash_shard,
@@ -74,7 +72,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     transition_status,
     update_public_shard_metadata,
 )
-from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
 DEFAULT_GRID_BATCH_ROWS = DEFAULT_BATCH_ROWS
 DEFAULT_GRID_MAX_ROWS = 20_000
@@ -367,30 +364,12 @@ def _hardlink_or_copy(source: str, destination: str) -> None:
 
 def _prepare_run_state(state: RunState) -> None:
     """Enter the resumable sentence stage while preserving frozen snapshots."""
-    _reject_frozen_snapshot(state, action="add sentences to")
-    status = state.metadata.get("status")
-    if status in {STATUS_EXTRACTED, STATUS_ANALYZED, STATUS_CARD_BUILT, STATUS_COMPLETE}:
-        transition_status(state, STATUS_ENRICHING)
-    elif status not in {STATUS_ENRICHING, STATUS_ENRICHED}:
-        raise ValueError("Grid'5000 preparation requires an extracted/enriched run")
+    prepare_stage_run_state(state, action="add sentences to")
 
 
 def _validate_sync_state(state: RunState, bundle: SentenceBundle) -> None:
     """Ensure a receipt can only mutate its original, unfrozen run."""
-    if state.run_id != bundle.run_id:
-        raise ValueError("bundle run identity does not match target run")
-    _reject_frozen_snapshot(state, action="sync sentences into")
-    if state.metadata.get("status") not in {STATUS_ENRICHING, STATUS_ENRICHED}:
-        raise ValueError("Grid'5000 synchronization requires an enriching/enriched run")
-
-
-def _reject_frozen_snapshot(state: RunState, *, action: str) -> None:
-    """Refuse any mutation of a user-frozen snapshot."""
-    if (
-        state.metadata.get("status") == STATUS_COMPLETE
-        and state.metadata.get("snapshot_status") == "done"
-    ):
-        raise ValueError(f"cannot {action} a frozen snapshot")
+    validate_stage_sync_state(state, bundle.run_id, action="sync sentences into")
 
 
 def _validated_staged_shard(root: Path, entry: SentenceShardEntry) -> Path:
@@ -529,15 +508,12 @@ def _sync_completed_shard(
 
 def _install_completed_shard(local: Path, remote: Path, outcome: SentenceShardOutcome) -> None:
     """Stage, validate, and atomically promote one segmented shard."""
-    staged = local.with_name(f".{local.name}.grid5000-syncing")
-    staged.unlink(missing_ok=True)
-    try:
-        shutil.copy2(remote, staged)
-        _validate_completed_shard(staged, outcome)
-        atomic_promote_bundle([(staged, local)])
-    finally:
-        staged.unlink(missing_ok=True)
-    shutil.rmtree(sentence_checkpoint_store().directory_for(local), ignore_errors=True)
+    install_validated_shard(
+        local,
+        remote,
+        validate=lambda staged: _validate_completed_shard(staged, outcome),
+        checkpoint_directory=sentence_checkpoint_store().directory_for(local),
+    )
 
 
 def _sync_paused_checkpoint(
@@ -591,7 +567,7 @@ def _write_sync_history(
     """Record a receipt-bound synchronization event without source text."""
     history_dir = run_dir / _MANIFESTS_DIRECTORY / _HISTORY_DIRECTORY
     history_dir.mkdir(parents=True, exist_ok=True)
-    digest = _receipt_digest(result.payload())
+    digest = receipt_digest(result.payload())
     stem = Path(bundle.shards[0].name).stem
     atomic_write_json(
         history_dir / f"{stem}-{digest}.json",
@@ -601,12 +577,6 @@ def _write_sync_history(
             "result": result.payload(),
         },
     )
-
-
-def _receipt_digest(payload: Mapping[str, object]) -> str:
-    """Return the short, key-order-independent digest naming a history file."""
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 def _load_result(path: Path, bundle: SentenceBundle) -> SentenceBundleResult:

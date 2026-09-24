@@ -28,6 +28,10 @@ development, recovery, and inspection of an existing run.
 | `grid5000-prepare` | Stage one unfinished shard, checkpoint, and pinned model for an offline job. |
 | `grid5000-run` | Detect one staged bundle on a reserved node without network access. |
 | `grid5000-sync` | Validate and synchronize one paused or completed bundle into the canonical run. |
+| `segment-sentences` | Segment website text into sentences for every language-complete shard. |
+| `grid5000-prepare-sentences` | Stage one offline Grid'5000 sentence-segmentation bundle. |
+| `grid5000-run-sentences` | Segment one staged sentence bundle on a reserved node without network access. |
+| `grid5000-sync-sentences` | Validate and synchronize one sentence bundle receipt into the canonical run. |
 | `run-all` | Discover, extract, enrich, analyze, verify, and resume a complete inventory. |
 
 All `--run-dir` values point to an existing run directory. The commands that

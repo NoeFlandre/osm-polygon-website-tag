@@ -3,7 +3,11 @@
 Adapts verified artifacts to Hugging Face publication.
 
 - Modules: `card_artifacts`, `hf_token`, `incremental`, `publish`, `release`,
-  and `trackio`.
+  `remote_identity`, and `trackio`.
+- `release` orchestrates the local card/report release flow; `remote_identity`
+  owns the read-only Hub checks (`default_hub_verifier`, remote revision, data,
+  Parquet, text-population, and per-file size/SHA-256 identity) that the
+  release gate runs before and after upload.
 - Dependencies: `reporting` and `runtime`.
 - `incremental` compares content hashes for one polygon shard and the global
   README/YAML/map bundle. It uploads only changed files and atomically records

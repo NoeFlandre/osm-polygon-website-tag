@@ -21,10 +21,12 @@ separate from workflow side effects.
     stderr, and delegates to application entry points.
   - `grid5000_runner`: provides the dependency-light, offline entry point for
     one staged language-detection bundle on a reserved compute node.
+  - `grid5000_sentence_runner`: the matching offline entry point for one staged
+    sentence-segmentation bundle.
 - Dependencies: any lower project package; no lower package may import `application`.
 - Entry points: `inventory.discover_sources`, `workflow.run_all`, the
   compatibility import `workflow.discover_sources`, Typer `app`, CLI
-  compatibility function `main`, and `grid5000_runner.main`.
+  compatibility function `main`, `grid5000_runner.main`, and `grid5000_sentence_runner.main`.
 - Excludes: reusable domain rules, storage primitives, stage implementations,
   and inventory writes.
 

@@ -18,6 +18,15 @@ class ModelIdentity:
     revision: str
     sha256: str
 
+    def checkpoint_identity(self) -> dict[str, str]:
+        """Return the model fields every model-bound checkpoint must match."""
+        return {
+            "model_repository": self.repository,
+            "model_filename": self.filename,
+            "model_revision": self.revision,
+            "model_sha256": self.sha256,
+        }
+
 
 def sha256_file(path: Path) -> str:
     """Hash a model artifact in bounded chunks."""

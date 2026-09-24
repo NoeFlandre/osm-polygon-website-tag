@@ -16,7 +16,17 @@ SCRIPT_NAMES = (
     "run_sentence_segmentation.sh",
     "sync_sentence_segmentation.sh",
     "bootstrap_sentence_runtime.sh",
+    "bootstrap_runtime.sh",
+    "sync_bundle.sh",
 )
+# Sourced by the node job scripts, never executed or submitted itself.
+ENV_SCRIPT = SCRIPT_ROOT / "_env.sh"
+NODE_JOB_SCRIPTS = (
+    "bootstrap_runtime.sh",
+    "run_language_detection.sh",
+    "run_sentence_segmentation.sh",
+)
+MODULE_LOAD = "module load python/3.12.12 uv/0.10.12 expat/2.7.1"
 
 
 def test_grid5000_scripts_are_executable() -> None:
@@ -24,6 +34,52 @@ def test_grid5000_scripts_are_executable() -> None:
         path = SCRIPT_ROOT / name
         assert path.is_file()
         assert os.access(path, os.X_OK)
+
+
+def test_node_environment_is_defined_once_and_shared() -> None:
+    env = ENV_SCRIPT.read_text()
+
+    assert MODULE_LOAD in env
+    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in env
+    assert "if ! command -v module" not in env
+    assert 'job_dir="${GRID5000_JOB_DIR:-$PWD}"' in env
+    assert 'repo_dir="${GRID5000_REPO_DIR:-$job_dir/checkout}"' in env
+    assert 'uv_cache_dir="${GRID5000_UV_CACHE_DIR:-$job_dir/uv-cache}"' in env
+    assert 'cd "$repo_dir"' in env
+    assert 'export UV_CACHE_DIR="$uv_cache_dir"' in env
+    for name in NODE_JOB_SCRIPTS:
+        script = (SCRIPT_ROOT / name).read_text()
+        assert 'source "$env_script"' in script
+        assert "scripts/grid5000/_env.sh" in script
+    for path in SCRIPT_ROOT.glob("*.sh"):
+        if path != ENV_SCRIPT:
+            assert "module load" not in path.read_text(), path.name
+
+
+def test_submitted_job_scripts_keep_their_oar_headers() -> None:
+    for name in (
+        "bootstrap_runtime.sh",
+        "bootstrap_language_runtime.sh",
+        "bootstrap_sentence_runtime.sh",
+        "run_language_detection.sh",
+        "run_sentence_segmentation.sh",
+    ):
+        script = (SCRIPT_ROOT / name).read_text()
+        assert "#OAR -l host=1/gpu=1,walltime=0:30" in script, name
+        assert "#OAR -O OAR_%jobid%.out" in script, name
+        assert "#OAR -E OAR_%jobid%.err" in script, name
+
+
+def test_stage_wrappers_delegate_to_the_shared_scripts() -> None:
+    for name, target, stage in (
+        ("bootstrap_language_runtime.sh", "bootstrap_runtime.sh", "language"),
+        ("bootstrap_sentence_runtime.sh", "bootstrap_runtime.sh", "sentences"),
+        ("sync_language_detection.sh", "sync_bundle.sh", "language"),
+        ("sync_sentence_segmentation.sh", "sync_bundle.sh", "sentences"),
+    ):
+        script = (SCRIPT_ROOT / name).read_text()
+        assert target in script, name
+        assert f" {stage}" in script, name
 
 
 def test_submit_script_checks_policy_around_submission() -> None:
@@ -58,9 +114,6 @@ def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
     script = (SCRIPT_ROOT / "run_language_detection.sh").read_text()
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
-    assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
-    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
-    assert "if ! command -v module" not in script
     assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
     assert "GRID5000_BATCH_ROWS:-256" in script
     assert "--offline" in script
@@ -71,13 +124,12 @@ def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
 
 
 def test_runtime_bootstrap_is_locked_and_runtime_only() -> None:
-    script = (SCRIPT_ROOT / "bootstrap_language_runtime.sh").read_text()
+    script = (SCRIPT_ROOT / "bootstrap_runtime.sh").read_text()
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
-    assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
-    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
-    assert "if ! command -v module" not in script
-    assert "uv sync --locked --no-dev --python 3.12" in script
+    assert "uv sync --locked --no-dev" in script
+    assert "--python 3.12" in script
+    assert "language) extra=() ;;" in script
     assert "--offline" not in script
 
 
@@ -85,8 +137,6 @@ def test_reserved_node_sentence_runner_is_offline_and_has_a_cleanup_margin() -> 
     script = (SCRIPT_ROOT / "run_sentence_segmentation.sh").read_text()
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
-    assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
-    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in script
     assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
     assert "GRID5000_BATCH_ROWS:-256" in script
     assert "--offline" in script
@@ -102,7 +152,7 @@ def test_reserved_node_sentence_runner_is_offline_and_has_a_cleanup_margin() -> 
 
 def test_sentence_transfer_wrappers_stay_on_the_frontend_boundary() -> None:
     prepare = (SCRIPT_ROOT / "prepare_sentence_segmentation.sh").read_text()
-    sync = (SCRIPT_ROOT / "sync_sentence_segmentation.sh").read_text()
+    sync = (SCRIPT_ROOT / "sync_bundle.sh").read_text()
 
     assert "grid5000-prepare-sentences" in prepare
     assert "--model-dir" in prepare
@@ -115,16 +165,17 @@ def test_sentence_transfer_wrappers_stay_on_the_frontend_boundary() -> None:
 
 
 def test_sentence_runtime_bootstrap_installs_only_the_locked_segmentation_extra() -> None:
-    script = (SCRIPT_ROOT / "bootstrap_sentence_runtime.sh").read_text()
+    script = (SCRIPT_ROOT / "bootstrap_runtime.sh").read_text()
 
-    assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
-    assert "module load python/3.12.12 uv/0.10.12 expat/2.7.1" in script
-    assert "uv sync --locked --no-dev --extra sentences --python 3.12" in script
+    assert "sentences) extra=(--extra sentences) ;;" in script
+    assert 'uv sync --locked --no-dev ${extra[@]+"${extra[@]}"} --python 3.12' in script
     assert "--offline" not in script
 
 
 def test_grid5000_scripts_do_not_contain_credentials() -> None:
-    scripts = "\n".join((SCRIPT_ROOT / name).read_text() for name in SCRIPT_NAMES)
+    scripts = "\n".join(
+        (SCRIPT_ROOT / name).read_text() for name in (*SCRIPT_NAMES, ENV_SCRIPT.name)
+    )
 
     assert "HF_TOKEN" not in scripts
     assert "HUGGING_FACE_HUB_TOKEN" not in scripts
