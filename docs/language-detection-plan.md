@@ -1,5 +1,11 @@
 # GlotLID Language Detection Implementation Plan
 
+> **Status: completed — historical record.** Every module in the file map below
+> has shipped. The checkboxes were never ticked and are not a to-do list. Test
+> files named here were later split: `tests/reporting/test_card.py` into
+> `tests/reporting/test_card_*.py`, and `tests/application/test_workflow.py`
+> into `tests/application/test_workflow_*.py`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an opt-in, resumable, stoppable GlotLID V3 stage that records the language and top-1 probability for every successfully extracted website text value while leaving extraction-only runs unchanged.
