@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,6 +16,7 @@ from typing import Any, Literal
 MAX_RESPONSE_BYTES = 20_000_000
 REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_REDIRECTS = 3
+READ_CHUNK_BYTES = 65_536
 USER_AGENT = "osm-polygon-website-tag/0.1 (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
 
 Resolver = Callable[[str, int], list[tuple[Any, ...]]]
@@ -410,7 +412,27 @@ class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_PublicHTTPSConnection, req)
 
 
+def _read_before_deadline(response: Any, limit: int, deadline: float) -> bytes:
+    """Read at most ``limit`` bytes, failing once the whole-request deadline passes.
+
+    The socket timeout bounds each blocking read, not the request; a server
+    trickling one byte per timeout window would otherwise hold a worker for hours.
+    """
+    chunks: list[bytes] = []
+    remaining = limit
+    while remaining > 0:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("request deadline exceeded")
+        chunk = response.read(min(READ_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResponse:
+    deadline = time.monotonic() + timeout_seconds
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _NoRedirect(),
@@ -428,7 +450,7 @@ def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResp
             raise exc.reason from exc
         raise
     with response:
-        body = response.read(max_bytes + 1)
+        body = _read_before_deadline(response, max_bytes + 1, deadline)
         status = response.status
         if status is None:
             status = 0
