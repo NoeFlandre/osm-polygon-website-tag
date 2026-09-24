@@ -11,14 +11,14 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.pipeline.analyze import ANALYSIS_FILES
-from osm_polygon_website_tag.reporting.card import (
-    _public_schema_for_card,
+from osm_polygon_website_tag.reporting.card import _public_schema_for_card
+from osm_polygon_website_tag.reporting.card_metadata import _render_yaml_front_matter
+from osm_polygon_website_tag.reporting.card_rendering import (
     _render_geographic_section,
     _render_language_section,
-    _render_markdown,
     _render_polygon_geometry_section,
     _render_website_text_section,
-    _render_yaml_front_matter,
+    render_markdown,
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
@@ -122,7 +122,7 @@ def _verify_card_statistics(root: Path, errors: list[str]) -> None:
         expected_readme = (
             expected_yaml
             + "\n"
-            + _render_markdown(stats, geometry=geometry, schema=_public_schema_for_card(root))
+            + render_markdown(stats, geometry=geometry, schema=_public_schema_for_card(root))
         )
         _compare_card_file(root / "dataset.yaml", expected_yaml, "dataset.yaml", errors)
         _compare_card_file(root / "README.md", expected_readme, "README.md", errors)

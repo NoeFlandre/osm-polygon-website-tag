@@ -18,89 +18,18 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
     POLYGON_PUBLIC_SCHEMA_V1_5,
-    column_doc,  # noqa: F401
 )
-from osm_polygon_website_tag.reporting.card_metadata import (  # noqa: F401
-    _FRONT_MATTER,
-    _RELEASE_YAML_DERIVED_KEYS,
-    CARD_LANGUAGE_TAG_LIMIT,
-    _append_density_yaml_fields,
-    _detected_language_codes,
-    _is_derived_yaml_key,
-    _is_derived_yaml_list_value,
-    _is_yaml_list_value,
-    _language_metadata_lines,
-    _language_tag_lines,
-    _language_yaml_insertion_index,
-    _language_yaml_range,
+from osm_polygon_website_tag.reporting.card_metadata import (
     _merge_yaml_custom_metadata,
-    _release_yaml_values,
     _render_yaml_front_matter,
-    _replace_density_yaml_field,
-    _replace_one_release_yaml_field,
-    _replace_release_language_tags,
-    _sentence_metadata_lines,
-    _should_append_release_yaml_field,
-    _size_category,
-    _update_density_yaml,
-    _update_density_yaml_text,
-    _update_existing_release_yaml,
-    _update_readme_front_matter,
-    _update_release_yaml,
-    _update_release_yaml_text,
-    _yaml_custom_text,
-    _yaml_derived_lines,
-    _yaml_document_bytes,
-    _yaml_top_level_key,
     readme_preserved_sha256,
     readme_preserved_sha256_bytes,
     yaml_custom_sha256,
     yaml_custom_sha256_bytes,
 )
-from osm_polygon_website_tag.reporting.card_patching import (  # noqa: F401
-    _GEOGRAPHIC_HEADING,
-    _GEOMETRY_HEADING,
-    _LANGUAGE_HEADING,
-    _TOP_LEVEL_HEADING,
-    _WEBSITE_TEXT_HEADING,
-    _append_geometry_block,
-    _geometry_block_bytes,
-    _insert_after_section,
-    _insert_new_language_section,
-    _language_section_block,
-    _replace_existing_language_section,
-    _replace_section,
-    _update_geographic_section,
-    _update_geometry_section,
-    _update_language_section,
-    _update_sentence_section,
-    _update_website_text_section,
-)
-from osm_polygon_website_tag.reporting.card_rendering import (  # noqa: F401
-    CARD_TOP_LANGUAGE_LIMIT,
-    _dataset_status_label,
-    _dataset_status_value,
-    _enrichment_policy,
-    _hostname_sections,
-    _render_bbox,
-    _render_citation_section,
-    _render_dataset_contents_section,
-    _render_geographic_section,
-    _render_hostnames,
-    _render_intro_section,
-    _render_language_section,
-    _render_links_section,
-    _render_markdown,
-    _render_methodology_section,
-    _render_polygon_geometry_section,
-    _render_provenance_section,
-    _render_schema_section,
-    _render_sentence_section,
-    _render_snapshot_section,
-    _render_website_text_section,
-    _schema_rows,
-)
-from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats  # noqa: F401
+from osm_polygon_website_tag.reporting.card_patching import update_geometry_section
+from osm_polygon_website_tag.reporting.card_rendering import render_markdown
+from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
@@ -158,7 +87,7 @@ def render_card_bundle(
         source_names=source_names,
         text_population=text_population,
     )
-    body = _render_markdown(
+    body = render_markdown(
         stats,
         geometry=geometry,
         schema=_public_schema_for_card(root, source_names),
@@ -229,7 +158,7 @@ def update_card_with_geometry(
 
     geometry = compute_geometry_stats(root, source_names=source_names)
     original = readme.read_bytes()
-    updated = _update_geometry_section(original, geometry)
+    updated = update_geometry_section(original, geometry)
     staged_readme = root / ".README.md.geometry.building"
     staged_stats = root / ".stats.json.geometry.building"
     promotions: list[tuple[Path, Path]] = []

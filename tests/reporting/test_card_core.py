@@ -23,8 +23,10 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
 )
 from osm_polygon_website_tag.reporting.card import (
-    _render_snapshot_section,
     build_card,
+)
+from osm_polygon_website_tag.reporting.card_rendering import (
+    _render_snapshot_section,
 )
 from osm_polygon_website_tag.reporting.card_stats import CardStats
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
@@ -274,7 +276,7 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
     schema = pa.schema([POLYGON_PUBLIC_SCHEMA.field("polygon_id")])
 
     assert (
-        card_module._render_markdown(
+        card_module.render_markdown(
             _golden_card_stats(), geometry=_golden_geometry_stats(), schema=schema
         )
         == expected
@@ -368,7 +370,7 @@ def test_render_card_bundle_retains_the_text_population_summary(
         lambda *_args, **_kwargs: geometry,
     )
     monkeypatch.setattr(card_module, "_public_schema_for_card", lambda *_args: pa.schema([]))
-    monkeypatch.setattr(card_module, "_render_markdown", lambda *_args, **_kwargs: "body")
+    monkeypatch.setattr(card_module, "render_markdown", lambda *_args, **_kwargs: "body")
     monkeypatch.setattr(card_module, "_render_yaml_front_matter", lambda *_args: "front")
 
     bundle = card_module.render_card_bundle(tmp_path)
@@ -473,7 +475,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
         calls.append(("geometry", (path, text_population, source_names)))
         return geometry
 
-    def fake_render_markdown(
+    def fakerender_markdown(
         rendered_stats: CardStats,
         *,
         geometry: GeometryStats,
@@ -524,7 +526,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(
     monkeypatch.setattr(card_module, "compute_geometry_stats", fake_geometry_stats)
     monkeypatch.setattr(card_module, "render_geometry_stats", fake_render_geometry)
     monkeypatch.setattr(card_module, "build_polygon_density_map", fake_map)
-    monkeypatch.setattr(card_module, "_render_markdown", fake_render_markdown)
+    monkeypatch.setattr(card_module, "render_markdown", fakerender_markdown)
     monkeypatch.setattr(card_module, "_render_yaml_front_matter", fake_render_yaml)
     monkeypatch.setattr(card_module, "_public_schema_for_card", fake_public_schema)
     monkeypatch.setattr(Path, "write_text", fake_write_text)

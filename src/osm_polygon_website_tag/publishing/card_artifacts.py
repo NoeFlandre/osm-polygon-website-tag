@@ -23,11 +23,11 @@ from osm_polygon_website_tag.reporting.card_metadata import (
     yaml_custom_sha256_bytes,
 )
 from osm_polygon_website_tag.reporting.card_patching import (
-    _update_geographic_section,
-    _update_geometry_section,
-    _update_language_section,
-    _update_sentence_section,
-    _update_website_text_section,
+    update_geographic_section,
+    update_geometry_section,
+    update_language_section,
+    update_sentence_section,
+    update_website_text_section,
 )
 from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
@@ -110,11 +110,11 @@ def refresh_card_for_release(
     )
     original_readme = readme.read_bytes()
     updated_readme = _update_readme_front_matter(original_readme, stats)
-    updated_readme = _update_website_text_section(updated_readme, stats)
-    updated_readme = _update_language_section(updated_readme, stats)
-    updated_readme = _update_sentence_section(updated_readme, stats)
-    updated_readme = _update_geographic_section(
-        _update_geometry_section(updated_readme, geometry), stats
+    updated_readme = update_website_text_section(updated_readme, stats)
+    updated_readme = update_language_section(updated_readme, stats)
+    updated_readme = update_sentence_section(updated_readme, stats)
+    updated_readme = update_geographic_section(
+        update_geometry_section(updated_readme, geometry), stats
     )
     yaml_path = root / "dataset.yaml"
     original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None

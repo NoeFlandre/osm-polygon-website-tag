@@ -28,7 +28,7 @@ CARD_TOP_UNSUPPORTED_LIMIT = 5
 CARD_TOP_HOSTNAME_LIMIT = 5
 
 
-def _render_markdown(
+def render_markdown(
     stats: CardStats,
     *,
     geometry: GeometryStats,
@@ -271,23 +271,6 @@ def _render_geographic_section(stats: CardStats) -> list[str]:
             f"{stats.polygon_density_h3_resolution}, covering "
             f"**{stats.polygon_density_row_count:,}** unique polygons with extracted text. "
             "Log colour scale, Natural Earth 1:110m backdrop."
-        ),
-        "",
-    ]
-
-
-def _render_links_section() -> list[str]:
-    """Render links to the live metrics and source repository."""
-    return [
-        "## Links",
-        "",
-        (
-            f"Live metrics: [Trackio dashboard]({TRACKIO_DASHBOARD_URL}); "
-            "it shows this frozen dataset snapshot."
-        ),
-        (
-            "Code and README: "
-            f"[GitHub repository and README]({DEFAULT_GITHUB_REPO.removesuffix('.git')})."
         ),
         "",
     ]
