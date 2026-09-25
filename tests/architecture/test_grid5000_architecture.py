@@ -114,13 +114,50 @@ def test_reserved_node_runner_is_offline_and_has_a_cleanup_margin() -> None:
     script = (SCRIPT_ROOT / "run_language_detection.sh").read_text()
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
-    assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
-    assert "GRID5000_BATCH_ROWS:-256" in script
+    assert "grid5000_run_setup\n" in script
+    assert '"${run_arguments[@]}"' in script
     assert "--offline" in script
-    assert "HF_HUB_OFFLINE=1" in script
-    assert "UV_NO_DEV=1" in script
     assert "python -m osm_polygon_website_tag.application.grid5000_runner" in script
     assert "osm-polygon-website-tag" not in script
+
+
+def test_shared_runner_setup_is_offline_and_has_a_cleanup_margin() -> None:
+    env = ENV_SCRIPT.read_text()
+
+    assert "grid5000_run_setup() {" in env
+    assert 'bundle_dir="${GRID5000_BUNDLE_DIR:-$job_dir/bundle}"' in env
+    assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in env
+    assert "GRID5000_BATCH_ROWS:-256" in env
+    assert "export HF_HUB_OFFLINE=1" in env
+    assert "export TRANSFORMERS_OFFLINE=1" in env
+    assert "export UV_NO_DEV=1" in env
+    assert 'run_arguments+=(--job-id "$OAR_JOB_ID")' in env
+    for name in ("run_language_detection.sh", "run_sentence_segmentation.sh"):
+        script = (SCRIPT_ROOT / name).read_text()
+        assert "grid5000_run_setup" in script, name
+        assert "HF_HUB_OFFLINE" not in script, name
+        assert "--batch-rows" not in script, name
+
+
+def _env_locator(script: str) -> str:
+    start = script.index('env_script="$(dirname')
+    end = script.index('source "$env_script"')
+    return script[start:end]
+
+
+def test_env_locator_snippet_is_identical_in_every_node_job_script() -> None:
+    locators = {_env_locator((SCRIPT_ROOT / name).read_text()) for name in NODE_JOB_SCRIPTS}
+
+    assert len(locators) == 1
+
+
+def test_bootstrap_stage_wrappers_differ_only_in_the_stage_argument() -> None:
+    language = (SCRIPT_ROOT / "bootstrap_language_runtime.sh").read_text()
+    sentences = (SCRIPT_ROOT / "bootstrap_sentence_runtime.sh").read_text()
+
+    assert language.endswith('exec bash "$shared" language\n')
+    assert sentences.endswith('exec bash "$shared" sentences\n')
+    assert language.removesuffix("language\n") == sentences.removesuffix("sentences\n")
 
 
 def test_runtime_bootstrap_is_locked_and_runtime_only() -> None:
@@ -137,15 +174,11 @@ def test_reserved_node_sentence_runner_is_offline_and_has_a_cleanup_margin() -> 
     script = (SCRIPT_ROOT / "run_sentence_segmentation.sh").read_text()
 
     assert "#OAR -l host=1/gpu=1,walltime=0:30" in script
-    assert "GRID5000_TIME_BUDGET_SECONDS:-1500" in script
-    assert "GRID5000_BATCH_ROWS:-256" in script
+    assert '"${run_arguments[@]}"' in script
     assert "--offline" in script
-    assert "HF_HUB_OFFLINE=1" in script
-    assert "TRANSFORMERS_OFFLINE=1" in script
-    assert "UV_NO_DEV=1" in script
     assert "--extra sentences" in script
     assert 'LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu' in script
-    assert '--device "${GRID5000_DEVICE:-cuda}"' in script
+    assert 'grid5000_run_setup --device "${GRID5000_DEVICE:-cuda}"' in script
     assert "python -m osm_polygon_website_tag.application.grid5000_sentence_runner" in script
     assert "osm-polygon-website-tag" not in script
 
