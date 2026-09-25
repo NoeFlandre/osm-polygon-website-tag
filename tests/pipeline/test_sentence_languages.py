@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import pytest
+from scripts.quality.wtpsplit_languages import FIXTURE, render_snapshot
 
 from osm_polygon_website_tag.pipeline.sentence_languages import (
     SAT_LANGUAGE_CODES,
@@ -10,15 +14,39 @@ from osm_polygon_website_tag.pipeline.sentence_languages import (
     sat_code_for_glotlid_label,
 )
 
+ROOT = Path(__file__).resolve().parents[2]
 
-def test_supported_codes_match_the_installed_model_metadata() -> None:
-    """The pinned table must not drift from what wtpsplit actually ships."""
-    # wtpsplit ships in the optional `sentences` extra; the default install
-    # cannot see the model metadata, so the contract is checked where it can.
-    utils = pytest.importorskip("wtpsplit.utils")
-    constants = utils.Constants
 
-    assert frozenset(constants.LANGINFO.index) == SAT_LANGUAGE_CODES
+def _snapshot() -> tuple[str, frozenset[str]]:
+    lines = FIXTURE.read_text(encoding="utf-8").splitlines()
+    return lines[0].removeprefix("# wtpsplit=="), frozenset(lines[1:])
+
+
+def test_supported_codes_match_the_wtpsplit_metadata_snapshot() -> None:
+    """The pinned table must not drift from what wtpsplit actually ships.
+
+    wtpsplit is in the optional `sentences` extra, so the default suite reads
+    its `Constants.LANGINFO.index` from a snapshot written by
+    `scripts/quality/wtpsplit_languages.py`.
+    """
+    _, codes = _snapshot()
+
+    assert codes == SAT_LANGUAGE_CODES
+
+
+def test_the_wtpsplit_snapshot_matches_the_locked_version() -> None:
+    """A pin bump must regenerate the snapshot, or the contract above is stale."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    locked = {package["name"]: package["version"] for package in lock["package"]}
+    version, _ = _snapshot()
+
+    assert version == locked["wtpsplit"]
+
+
+def test_the_snapshot_script_renders_sorted_unique_codes() -> None:
+    csv_text = ",ud,opus100\nfr,UD_French,fr-en\naf,UD_Afrikaans,af-en\nfr,x,y\n\n"
+
+    assert render_snapshot("9.9", csv_text) == "# wtpsplit==9.9\naf\nfr\n"
 
 
 def test_every_supported_code_is_reachable_from_at_least_one_subtag() -> None:
