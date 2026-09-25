@@ -163,7 +163,30 @@ def extract_pbf(
         )
         raise
     handler.ledger.path.unlink(missing_ok=True)
+    return _finish_extraction(
+        pbf_path,
+        run_state,
+        source_after,
+        region=region,
+        final_paths=final_paths,
+        counts=counts,
+        started=started,
+        started_iso=started_iso,
+    )
 
+
+def _finish_extraction(
+    pbf_path: Path,
+    run_state: RunState | None,
+    source_after: SourceFingerprint,
+    *,
+    region: str,
+    final_paths: tuple[Path, Path, Path],
+    counts: tuple[int, int, int],
+    started: dt.datetime,
+    started_iso: str,
+) -> ExtractionResult:
+    """Record the finished extraction in the run state and summarize it."""
     finished = dt.datetime.now(tz=dt.UTC)
     finished_iso = finished.replace(microsecond=0).isoformat()
     duration = (finished - started).total_seconds()

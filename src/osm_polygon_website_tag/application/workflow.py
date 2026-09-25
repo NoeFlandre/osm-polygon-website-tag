@@ -152,24 +152,14 @@ def run_all(
         detect_languages=detect_languages,
         language_detector=detector,
     )
-    processed_names, retry_names = _resume_source_names(
-        setup.state,
-        upload_checkpoint,
-        apply=apply,
-    )
-    partial_names, retry_priorities = prepare_resume_priorities(
-        setup.run_dir,
-        setup.state,
-        setup.sources,
-        retry_names=retry_names,
-    )
-    ordered_sources = prioritize_sources(
-        setup.sources,
-        processed_names,
-        retry_names=retry_names,
-        partial_names=partial_names,
-        retry_priorities=retry_priorities,
-    )
+    return _process_and_complete(setup, context, apply=apply)
+
+
+def _process_and_complete(
+    setup: _WorkflowSetup, context: SourceProcessingContext, *, apply: bool
+) -> WorkflowResult:
+    """Run every source phase in resume order, then complete the run."""
+    ordered_sources = _order_sources_for_resume(setup, context.upload_checkpoint, apply=apply)
     status, counts = _run_source_phases(
         setup.status,
         setup.sources,
@@ -186,6 +176,33 @@ def run_all(
         uploaded_count=counts.uploaded,
         complete=status == STATUS_COMPLETE,
         dry_run=not apply,
+    )
+
+
+def _order_sources_for_resume(
+    setup: _WorkflowSetup,
+    upload_checkpoint: CheckpointV2,
+    *,
+    apply: bool,
+) -> list[Path]:
+    """Order sources so partial and retryable work resumes first."""
+    processed_names, retry_names = _resume_source_names(
+        setup.state,
+        upload_checkpoint,
+        apply=apply,
+    )
+    partial_names, retry_priorities = prepare_resume_priorities(
+        setup.run_dir,
+        setup.state,
+        setup.sources,
+        retry_names=retry_names,
+    )
+    return prioritize_sources(
+        setup.sources,
+        processed_names,
+        retry_names=retry_names,
+        partial_names=partial_names,
+        retry_priorities=retry_priorities,
     )
 
 
