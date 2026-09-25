@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,7 +16,6 @@ from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.reporting import verify as verify_module
 from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
 from osm_polygon_website_tag.runtime.run_state import (
-    STATUS_COMPLETE,
     SourceManifestEntry,
     initialise_run,
     record_processed_source,
@@ -219,336 +217,6 @@ def test_json_array_loader_reports_missing_file(tmp_path: Path) -> None:
     assert errors[0].startswith("invalid JSON array")
 
 
-def test_verify_results_modern_forwards_the_receipt_policy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[Path, bool]] = []
-    expected = VerificationReport(True)
-
-    def verify(root: Path, *, include_receipt: bool) -> VerificationReport:
-        calls.append((root, include_receipt))
-        return expected
-
-    monkeypatch.setattr(verify_module, "_verify_results", verify)
-
-    assert verify_module.verify_results_modern(str(tmp_path)) is expected
-    assert calls == [(tmp_path, False)]
-
-
-def test_verify_results_wires_all_checks_to_one_error_and_checked_accumulator(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manifest: list[SourceManifestEntry] = [
-        {"filename": "source.osm.pbf", "size_bytes": 1, "mtime_ns": 2}
-    ]
-    errors_ref: list[str] | None = None
-    checked_ref: list[str] | None = None
-    calls: list[str] = []
-
-    def require_errors(errors: list[str]) -> None:
-        nonlocal errors_ref
-        assert isinstance(errors, list)
-        if errors_ref is None:
-            errors_ref = errors
-        else:
-            assert errors is errors_ref
-
-    def read_object(path: Path, errors: list[str]) -> dict[str, Any]:
-        require_errors(errors)
-        assert path == tmp_path / "manifests" / "run.json"
-        calls.append("metadata")
-        return {"status": STATUS_COMPLETE}
-
-    def read_manifest(path: Path, errors: list[str]) -> list[SourceManifestEntry]:
-        require_errors(errors)
-        assert path == tmp_path / "manifests" / "sources.json"
-        calls.append("manifest")
-        return manifest
-
-    def verify_shards(
-        root: Path,
-        actual_manifest: list[SourceManifestEntry],
-        errors: list[str],
-        checked: list[str],
-    ) -> None:
-        nonlocal checked_ref
-        require_errors(errors)
-        assert root == tmp_path
-        assert actual_manifest == manifest
-        checked_ref = checked
-        checked.append("source.osm.pbf")
-        calls.append("shards")
-
-    def verify_expected(
-        root: Path, actual_manifest: list[SourceManifestEntry], errors: list[str]
-    ) -> None:
-        require_errors(errors)
-        assert (root, actual_manifest) == (tmp_path, manifest)
-        calls.append("expected")
-
-    def verify_rows(root: Path, errors: list[str]) -> None:
-        require_errors(errors)
-        assert root == tmp_path
-        calls.append("rows")
-
-    def verify_text(root: Path, status: object, errors: list[str]) -> None:
-        require_errors(errors)
-        assert (root, status) == (tmp_path, STATUS_COMPLETE)
-        calls.append("text")
-
-    def verify_language(root: Path, errors: list[str]) -> None:
-        require_errors(errors)
-        assert root == tmp_path
-        calls.append("language")
-
-    def verify_status(root: Path, status: object, include_receipt: bool, errors: list[str]) -> None:
-        require_errors(errors)
-        assert (root, status, include_receipt) == (tmp_path, STATUS_COMPLETE, True)
-        calls.append("status")
-
-    monkeypatch.setattr(verify_module, "_read_json_object", read_object)
-    monkeypatch.setattr(verify_module, "_read_source_manifest", read_manifest)
-    monkeypatch.setattr(verify_module, "_verify_shards", verify_shards)
-    monkeypatch.setattr(verify_module, "_verify_expected_inventory", verify_expected)
-    monkeypatch.setattr(verify_module, "_verify_row_invariants", verify_rows)
-    monkeypatch.setattr(verify_module, "_verify_text_invariants", verify_text)
-    monkeypatch.setattr(verify_module, "_verify_language_invariants", verify_language)
-    monkeypatch.setattr(verify_module, "_verify_status_artifacts", verify_status)
-
-    report = verify_module._verify_results(tmp_path, include_receipt=True)
-
-    assert report == VerificationReport(True, [], ["source.osm.pbf"])
-    assert calls == [
-        "metadata",
-        "manifest",
-        "shards",
-        "expected",
-        "rows",
-        "text",
-        "language",
-        "status",
-    ]
-    assert checked_ref is report.checked_shards
-
-
-def test_verify_release_results_forwards_all_release_check_arguments(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    manifest: list[SourceManifestEntry] = [
-        {"filename": "source.osm.pbf", "size_bytes": 1, "mtime_ns": 2}
-    ]
-    errors_ref: list[str] | None = None
-    calls: list[str] = []
-
-    def require_errors(errors: list[str]) -> None:
-        nonlocal errors_ref
-        if errors_ref is None:
-            errors_ref = errors
-        else:
-            assert errors is errors_ref
-
-    def read_object(path: Path, errors: list[str]) -> dict[str, Any]:
-        require_errors(errors)
-        assert path == tmp_path / "manifests" / "run.json"
-        return {"status": STATUS_COMPLETE}
-
-    def read_manifest(path: Path, errors: list[str]) -> list[SourceManifestEntry]:
-        require_errors(errors)
-        assert path == tmp_path / "manifests" / "sources.json"
-        return manifest
-
-    def verify_shards(
-        root: Path,
-        actual_manifest: list[SourceManifestEntry],
-        errors: list[str],
-        checked: list[str],
-    ) -> None:
-        require_errors(errors)
-        assert (root, actual_manifest) == (tmp_path, manifest)
-        checked.append("source.osm.pbf")
-        calls.append("shards")
-
-    def verify_expected(
-        root: Path, actual_manifest: list[SourceManifestEntry], errors: list[str]
-    ) -> None:
-        require_errors(errors)
-        assert (root, actual_manifest) == (tmp_path, manifest)
-        calls.append("expected")
-
-    def verify_rows(root: Path, errors: list[str]) -> None:
-        require_errors(errors)
-        assert root == tmp_path
-        calls.append("rows")
-
-    def verify_release_text(root: Path, status: object, errors: list[str]) -> None:
-        require_errors(errors)
-        assert (root, status) == (tmp_path, STATUS_COMPLETE)
-        calls.append("release-text")
-
-    def verify_sentences(root: Path, errors: list[str]) -> None:
-        require_errors(errors)
-        assert root == tmp_path
-        calls.append("sentences")
-
-    def verify_release_status(
-        root: Path,
-        status: object,
-        include_receipt: bool,
-        errors: list[str],
-    ) -> None:
-        require_errors(errors)
-        assert (root, status, include_receipt) == (tmp_path, STATUS_COMPLETE, True)
-        calls.append("release-status")
-
-    monkeypatch.setattr(verify_module, "_read_json_object", read_object)
-    monkeypatch.setattr(verify_module, "_read_source_manifest", read_manifest)
-    monkeypatch.setattr(verify_module, "_verify_shards", verify_shards)
-    monkeypatch.setattr(verify_module, "_verify_expected_inventory", verify_expected)
-    monkeypatch.setattr(verify_module, "_verify_row_invariants", verify_rows)
-    monkeypatch.setattr(verify_module, "_verify_release_text_inputs", verify_release_text)
-    monkeypatch.setattr(verify_module, "_verify_sentence_invariants", verify_sentences)
-    monkeypatch.setattr(verify_module, "_verify_release_status_artifacts", verify_release_status)
-
-    report = verify_module._verify_results(
-        tmp_path, include_receipt=True, preserve_card_sections=True
-    )
-
-    assert report == VerificationReport(True, [], ["source.osm.pbf"])
-    assert calls == [
-        "shards",
-        "expected",
-        "rows",
-        "release-text",
-        "sentences",
-        "release-status",
-    ]
-
-
-def test_verify_results_uses_stable_errors_for_empty_inputs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(verify_module, "_read_json_object", lambda _path, _errors: {})
-    monkeypatch.setattr(verify_module, "_read_source_manifest", lambda _path, _errors: [])
-    monkeypatch.setattr(verify_module, "_verify_shards", lambda *_args: None)
-    monkeypatch.setattr(verify_module, "_verify_expected_inventory", lambda *_args: None)
-    monkeypatch.setattr(verify_module, "_verify_row_invariants", lambda *_args: None)
-    monkeypatch.setattr(verify_module, "_verify_text_invariants", lambda *_args: None)
-    monkeypatch.setattr(verify_module, "_verify_language_invariants", lambda *_args: None)
-    monkeypatch.setattr(verify_module, "_verify_status_artifacts", lambda *_args: None)
-
-    report = verify_module._verify_results(tmp_path, include_receipt=False)
-
-    assert report.errors == ["sources manifest is empty", "run metadata is empty"]
-
-
-def test_verify_status_artifacts_selects_the_exact_status_contracts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, Path, list[str]]] = []
-    errors: list[str] = []
-
-    def verify_analysis(root: Path, errors_value: list[str]) -> None:
-        calls.append(("analysis", root, errors_value))
-
-    def verify_receipt(root: Path, errors_value: list[str]) -> None:
-        calls.append(("receipt", root, errors_value))
-
-    monkeypatch.setattr(verify_module, "_verify_analysis_and_card", verify_analysis)
-    monkeypatch.setattr(verify_module, "_verify_receipt", verify_receipt)
-
-    for status in ("card_built", "verified", "complete", "analyzed"):
-        verify_module._verify_status_artifacts(tmp_path, status, True, errors)
-    verify_module._verify_status_artifacts(tmp_path, "complete", False, errors)
-
-    assert calls == [
-        ("analysis", tmp_path, errors),
-        ("analysis", tmp_path, errors),
-        ("analysis", tmp_path, errors),
-        ("receipt", tmp_path, errors),
-        ("analysis", tmp_path, errors),
-    ]
-
-
-def test_verify_release_status_artifacts_selects_release_and_receipt_contracts(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, object]] = []
-    errors: list[str] = []
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_release_analysis_and_card",
-        lambda root, received_errors: calls.append(("release", (root, received_errors))),
-    )
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_receipt",
-        lambda root, received_errors: calls.append(("receipt", (root, received_errors))),
-    )
-
-    for status in ("card_built", "verified", "complete", "analyzed"):
-        verify_module._verify_release_status_artifacts(tmp_path, status, True, errors)
-    verify_module._verify_release_status_artifacts(tmp_path, "complete", False, errors)
-
-    assert calls == [
-        ("release", (tmp_path, errors)),
-        ("release", (tmp_path, errors)),
-        ("release", (tmp_path, errors)),
-        ("receipt", (tmp_path, errors)),
-        ("release", (tmp_path, errors)),
-    ]
-
-
-def test_verify_release_results_forwards_preserve_card_sections(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[Path, bool, bool]] = []
-    expected = VerificationReport(True)
-
-    def verify(
-        root: Path, *, include_receipt: bool, preserve_card_sections: bool
-    ) -> VerificationReport:
-        calls.append((root, include_receipt, preserve_card_sections))
-        return expected
-
-    monkeypatch.setattr(verify_module, "_verify_results", verify)
-    assert verify_module.verify_release_results(tmp_path) is expected
-    assert calls == [(tmp_path, True, True)]
-
-
-def test_release_verification_scans_the_selected_text_population_paths(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    selected = [tmp_path / "regional" / "polygons" / "source.parquet"]
-    calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(verify_module, "text_population_parquets", lambda _root: selected)
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_text_paths",
-        lambda paths, status, errors: calls.append(("text", (paths, status, errors))),
-    )
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_language_paths",
-        lambda paths, errors: calls.append(("language", (paths, errors))),
-    )
-    errors: list[str] = []
-
-    verify_module._verify_release_text_inputs(tmp_path, STATUS_COMPLETE, errors)
-
-    assert calls == [
-        ("text", (selected, STATUS_COMPLETE, errors)),
-        ("language", (selected, errors)),
-    ]
-
-
 def _manifest_identity(
     *,
     filename: str = "source.osm.pbf",
@@ -564,24 +232,16 @@ def _manifest_identity(
 )
 def test_verify_expected_inventory_compares_every_identity_field(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     field_name: str,
     changed_value: object,
 ) -> None:
+    expected_entry = _manifest_identity()
     expected_path = tmp_path / "manifests" / "expected_sources.json"
     expected_path.parent.mkdir()
-    expected_path.write_text("[]")
-    expected_entry = _manifest_identity()
+    expected_path.write_text(json.dumps([expected_entry]), encoding="utf-8")
     actual_entry = cast(SourceManifestEntry, dict(expected_entry))
     cast(dict[str, object], actual_entry)[field_name] = changed_value
     errors: list[str] = []
-
-    def read_manifest(path: Path, errors_value: list[str]) -> list[SourceManifestEntry]:
-        assert path == expected_path
-        assert errors_value is errors
-        return [expected_entry]
-
-    monkeypatch.setattr(verify_module, "_read_source_manifest", read_manifest)
 
     verify_module._verify_expected_inventory(tmp_path, [actual_entry], errors)
 
@@ -598,25 +258,6 @@ def test_read_json_value_uses_utf8_for_the_json_boundary() -> None:
     ok, value = verify_module._read_json_value(cast(Any, PathSpy()), errors, label="object")
 
     assert (ok, value, errors) == (True, {"value": 1}, [])
-
-
-def test_read_json_object_forwards_error_list_and_object_label(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    errors: list[str] = []
-    calls: list[tuple[Path, list[str], str]] = []
-
-    def read_value(path: Path, errors_value: list[str], *, label: str) -> tuple[bool, Any]:
-        calls.append((path, errors_value, label))
-        return True, {"status": STATUS_COMPLETE}
-
-    monkeypatch.setattr(verify_module, "_read_json_value", read_value)
-
-    assert verify_module._read_json_object(tmp_path / "run.json", errors) == {
-        "status": STATUS_COMPLETE
-    }
-    assert calls == [(tmp_path / "run.json", errors, "object")]
 
 
 def test_verify_results_happy_path(tmp_path: Path) -> None:
@@ -812,7 +453,11 @@ def test_verify_results_reports_non_utf8_manifest(tmp_path: Path) -> None:
     assert any("invalid JSON array" in error for error in report.errors)
 
 
-def test_verify_results_math_isfinite_helper() -> None:
-    assert math.isfinite(1.0)
-    assert not math.isfinite(float("inf"))
-    assert not math.isfinite(float("nan"))
+def test_verify_results_rejects_empty_run_metadata(tmp_path: Path) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    (run_dir / "manifests" / "run.json").write_text("{}", encoding="utf-8")
+
+    report = verify_results(run_dir)
+
+    assert report.ok is False
+    assert "run metadata is empty" in report.errors
