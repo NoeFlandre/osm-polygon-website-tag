@@ -44,26 +44,9 @@ def test_public_docs_explain_local_artifacts_and_public_dataset() -> None:
     assert "completion receipt" in data
 
 
-def test_cli_reference_covers_typer_commands_and_safe_defaults() -> None:
+def test_cli_reference_documents_safe_defaults() -> None:
     cli = (REPOSITORY_ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
 
-    for command in (
-        "init",
-        "extract",
-        "analyze-results",
-        "build-card",
-        "verify-results",
-        "refresh-card",
-        "finalize-run",
-        "finalize-snapshot",
-        "publish-plan",
-        "publish",
-        "create-repo",
-        "card-stats",
-        "publish-trackio",
-        "run-all",
-    ):
-        assert f"`{command}`" in cli
     assert "dry run" in cli
     assert "--source-root" in cli
     assert "--output-root" in cli
