@@ -44,3 +44,16 @@ def test_rejection_schema_helpers_follow_declared_schema() -> None:
 def test_analysis_schema_docs_reject_unknown_columns(column_doc) -> None:
     with pytest.raises(KeyError, match="no documentation"):
         column_doc("not_a_column")
+
+
+def test_comparison_and_rejection_schemas_share_observation_prefix() -> None:
+    from osm_polygon_website_tag.contracts.comparison_schema import (
+        COMPARISON_OBSERVATION_SCHEMA,
+        OBSERVATION_FIELDS,
+    )
+    from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
+
+    prefix = len(OBSERVATION_FIELDS)
+    assert prefix == 14
+    assert list(COMPARISON_OBSERVATION_SCHEMA)[:prefix] == list(OBSERVATION_FIELDS)
+    assert list(REJECTION_SCHEMA)[:prefix] == list(OBSERVATION_FIELDS)

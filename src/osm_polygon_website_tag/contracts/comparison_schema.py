@@ -20,22 +20,29 @@ import pyarrow as pa
 COMPARISON_OBSERVATION_SCHEMA_VERSION = "v1.1"
 
 
+# Shared OSM identity and website/wikidata prefix. ``REJECTION_SCHEMA`` starts
+# with the same fields in the same order; the Parquet layout is public.
+OBSERVATION_FIELDS: tuple[pa.Field, ...] = (
+    pa.field("osm_type", pa.string(), nullable=False),
+    pa.field("osm_id", pa.int64(), nullable=False),
+    pa.field("osm_version", pa.int32(), nullable=False),
+    pa.field("osm_timestamp", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("source_pbf", pa.string(), nullable=False),
+    pa.field("region", pa.string(), nullable=False),
+    pa.field("primary_category", pa.string(), nullable=False),
+    pa.field("website", pa.string(), nullable=True),
+    pa.field("contact_website", pa.string(), nullable=True),
+    pa.field("wikidata", pa.string(), nullable=True),
+    pa.field("has_website", pa.bool_(), nullable=False),
+    pa.field("has_contact_website", pa.bool_(), nullable=False),
+    pa.field("has_any_website", pa.bool_(), nullable=False),
+    pa.field("has_wikidata", pa.bool_(), nullable=False),
+)
+
+
 COMPARISON_OBSERVATION_SCHEMA: pa.Schema = pa.schema(
     [
-        pa.field("osm_type", pa.string(), nullable=False),
-        pa.field("osm_id", pa.int64(), nullable=False),
-        pa.field("osm_version", pa.int32(), nullable=False),
-        pa.field("osm_timestamp", pa.timestamp("us", tz="UTC"), nullable=False),
-        pa.field("source_pbf", pa.string(), nullable=False),
-        pa.field("region", pa.string(), nullable=False),
-        pa.field("primary_category", pa.string(), nullable=False),
-        pa.field("website", pa.string(), nullable=True),
-        pa.field("contact_website", pa.string(), nullable=True),
-        pa.field("wikidata", pa.string(), nullable=True),
-        pa.field("has_website", pa.bool_(), nullable=False),
-        pa.field("has_contact_website", pa.bool_(), nullable=False),
-        pa.field("has_any_website", pa.bool_(), nullable=False),
-        pa.field("has_wikidata", pa.bool_(), nullable=False),
+        *OBSERVATION_FIELDS,
         pa.field("schema_version", pa.string(), nullable=False),
     ]
 )
@@ -80,6 +87,7 @@ def column_documentation() -> dict[str, str]:
 __all__ = [
     "COMPARISON_OBSERVATION_SCHEMA",
     "COMPARISON_OBSERVATION_SCHEMA_VERSION",
+    "OBSERVATION_FIELDS",
     "column_doc",
     "column_documentation",
     "comparison_column_names",
