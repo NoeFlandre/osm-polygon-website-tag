@@ -9,6 +9,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import v1_2_polygon_row as _row
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -29,93 +30,6 @@ from osm_polygon_website_tag.runtime.run_state import (
 
 def _ts():
     return pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py()
-
-
-def _row(
-    *,
-    polygon_id: str,
-    region: str,
-    source_pbf: str,
-    lat: float = 0.0,
-    lon: float = 0.0,
-    area_m2: float = 50.0,
-    website: str = "https://example.com",
-    contact_website: str | None = None,
-    has_website: bool = True,
-    has_contact_website: bool = False,
-    has_any_website: bool = True,
-    preferred_website: str = "https://example.com",
-    preferred_website_source: str = "website",
-    website_class: str = "absolute_url",
-    contact_website_class: str | None = None,
-    website_hostname: str = "example.com",
-    contact_website_hostname: str | None = None,
-    wikidata: str | None = "Q42",
-    wikidata_qid: str | None = "Q42",
-    wikidata_class: str | None = "canonical_qid",
-    name: str | None = None,
-    tags: str = "{}",
-    tag_keys: str = "[]",
-    tag_count: int = 0,
-    osm_primary_tag: str = "building",
-    geometry: str = json.dumps({"type": "Polygon", "coordinates": []}),
-    centroid: str = json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
-    bbox: str = "[0.0,0.0,0.0,0.0]",
-    area_km2: float = 5e-5,
-    area_bucket: str = "10-100m2",
-    centroid_kind: str = "lambert_azimuthal_equal_area",
-    schema_version: str = "v1.2",
-    website_text: str | None = "example text",
-    website_word_count: int | None = 2,
-    website_text_status: str = "success",
-    contact_website_text: str | None = None,
-    contact_website_word_count: int | None = None,
-    contact_website_text_status: str = "absent",
-) -> dict[str, object]:
-    return {
-        "polygon_id": polygon_id,
-        "region": region,
-        "source_pbf": source_pbf,
-        "osm_type": "way",
-        "osm_id": 100,
-        "osm_version": 1,
-        "osm_timestamp": _ts(),
-        "website": website,
-        "contact_website": contact_website,
-        "has_website": has_website,
-        "has_contact_website": has_contact_website,
-        "has_any_website": has_any_website,
-        "preferred_website": preferred_website,
-        "preferred_website_source": preferred_website_source,
-        "website_class": website_class,
-        "contact_website_class": contact_website_class,
-        "website_hostname": website_hostname,
-        "contact_website_hostname": contact_website_hostname,
-        "wikidata": wikidata,
-        "wikidata_qid": wikidata_qid,
-        "wikidata_class": wikidata_class,
-        "name": name,
-        "tags": tags,
-        "tag_keys": tag_keys,
-        "tag_count": tag_count,
-        "osm_primary_tag": osm_primary_tag,
-        "geometry": geometry,
-        "centroid": centroid,
-        "lat": lat,
-        "lon": lon,
-        "bbox": bbox,
-        "area_m2": area_m2,
-        "area_km2": area_km2,
-        "area_bucket": area_bucket,
-        "centroid_kind": centroid_kind,
-        "schema_version": schema_version,
-        "website_text": website_text,
-        "website_word_count": website_word_count,
-        "website_text_status": website_text_status,
-        "contact_website_text": contact_website_text,
-        "contact_website_word_count": contact_website_word_count,
-        "contact_website_text_status": contact_website_text_status,
-    }
 
 
 def _make_shard(run_dir: Path, *, stem: str, rows: list[dict[str, object]], kind: str) -> Path:

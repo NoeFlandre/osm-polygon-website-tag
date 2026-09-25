@@ -36,7 +36,7 @@ def test_analysis_and_row_verification_helpers_are_deterministic(tmp_path: Path)
         [{"cell": "a"}, {"cell": "b"}], "observation", expected, errors
     )
     assert not analysis._verify_cell_set([{"cell": "a"}], "canonical", expected, errors)
-    assert errors
+    assert errors == ["canonical analysis does not contain exactly eight cells"]
     (tmp_path / "manifests").mkdir()
     (tmp_path / "manifests" / "sources.json").write_text(
         json.dumps([{"observation_row_count": 2}]), encoding="utf-8"
@@ -81,7 +81,16 @@ def test_verification_entrypoints_and_nested_helpers_are_safe_on_incomplete_runs
     text._verify_text_shard(tmp_path / "missing.parquet", True, errors)
     text._verify_success_text("one two", 2, "website", errors)
     text._verify_empty_text("", 0, "website", errors)
-    assert errors
+    for message in (
+        "missing exact expected source inventory",
+        "missing card artifact: README.md",
+        "completion receipt has no artifact list",
+        "receipt has stale card_contract_version: 1",
+        "invalid completion receipt artifact entry",
+        "completion receipt artifact inventory mismatch",
+    ):
+        assert message in errors
+    assert errors[-1].startswith("text invariant verification failed for missing.parquet: ")
 
 
 def test_analysis_entrypoints_forward_the_selected_card_compatibility_mode(

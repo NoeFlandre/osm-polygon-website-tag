@@ -8,13 +8,12 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import legacy_polygon_row
+from tests.fixtures.polygon_shards import polygon_row_v1_3
 
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
-from osm_polygon_website_tag.contracts.text_schema import initial_text_fields
 from osm_polygon_website_tag.pipeline.deduplicate import (
     _validate_source_names,
     deduplicate_public_shards,
@@ -32,32 +31,17 @@ def _row(
     timestamp_day: int,
 ) -> dict[str, object]:
     stem = source_pbf.removesuffix(".osm.pbf")
-    row = legacy_polygon_row(
+    row = polygon_row_v1_3(
         polygon_id=f"{stem}:way/{osm_id}",
         website=website,
         contact=None,
-    )
-    for field in (
-        "preferred_website",
-        "preferred_website_source",
-        "wikidata",
-        "wikidata_qid",
-        "wikidata_class",
-        "area_km2",
-    ):
-        row.pop(field)
-    row.update(initial_text_fields(website_present=True, contact_website_present=False))
-    row.update(
-        {
-            "source_pbf": source_pbf,
-            "osm_id": osm_id,
-            "osm_version": osm_version,
-            "osm_timestamp": dt.datetime(2026, 1, timestamp_day, tzinfo=dt.UTC),
-            "website_text": f"text from {website}",
-            "website_word_count": 3,
-            "website_text_status": "success",
-            "schema_version": "v1.3",
-        }
+        source_pbf=source_pbf,
+        osm_id=osm_id,
+        osm_version=osm_version,
+        osm_timestamp=dt.datetime(2026, 1, timestamp_day, tzinfo=dt.UTC),
+        website_text=f"text from {website}",
+        website_word_count=3,
+        website_text_status="success",
     )
     return {field.name: row[field.name] for field in POLYGON_PUBLIC_SCHEMA}
 

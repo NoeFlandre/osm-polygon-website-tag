@@ -9,6 +9,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import v1_2_polygon_row as _row
 
 import osm_polygon_website_tag.reporting.finalize as finalize_module
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
@@ -45,55 +46,6 @@ from osm_polygon_website_tag.runtime.run_state import (
 
 def _ts():
     return pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py()
-
-
-def _row(
-    *, polygon_id: str = "p1", region: str = "monaco", source_pbf: str = "monaco-latest.osm.pbf"
-):
-    return {
-        "polygon_id": polygon_id,
-        "region": region,
-        "source_pbf": source_pbf,
-        "osm_type": "way",
-        "osm_id": 100,
-        "osm_version": 1,
-        "osm_timestamp": _ts(),
-        "website": "https://example.com",
-        "contact_website": None,
-        "has_website": True,
-        "has_contact_website": False,
-        "has_any_website": True,
-        "preferred_website": "https://example.com",
-        "preferred_website_source": "website",
-        "website_class": "absolute_url",
-        "contact_website_class": None,
-        "website_hostname": "example.com",
-        "contact_website_hostname": None,
-        "wikidata": "Q42",
-        "wikidata_qid": "Q42",
-        "wikidata_class": "canonical_qid",
-        "name": None,
-        "tags": "{}",
-        "tag_keys": "[]",
-        "tag_count": 0,
-        "osm_primary_tag": "building",
-        "geometry": json.dumps({"type": "Polygon", "coordinates": []}),
-        "centroid": json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
-        "lat": 0.0,
-        "lon": 0.0,
-        "bbox": "[0.0,0.0,0.0,0.0]",
-        "area_m2": 50.0,
-        "area_km2": 5e-5,
-        "area_bucket": "10-100m2",
-        "centroid_kind": "lambert_azimuthal_equal_area",
-        "schema_version": "v1.2",
-        "website_text": "example text",
-        "website_word_count": 2,
-        "website_text_status": "success",
-        "contact_website_text": None,
-        "contact_website_word_count": None,
-        "contact_website_text_status": "absent",
-    }
 
 
 def _setup(tmp_path: Path) -> tuple[Path, object]:
