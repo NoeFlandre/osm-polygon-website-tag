@@ -102,7 +102,7 @@ def test_mutation_gate_covers_the_whole_package_and_behavior_suite() -> None:
     } <= set(config["also_copy"])
 
 
-def test_github_actions_is_read_only_pinned_and_runs_just() -> None:
+def test_github_actions_are_read_only_and_sha_pinned() -> None:
     """Workflows get read-only tokens, no secrets, and SHA-pinned actions."""
     for name in ("quality.yml", "mutation-sweep.yml"):
         workflow = (ROOT / ".github" / "workflows" / name).read_text()
