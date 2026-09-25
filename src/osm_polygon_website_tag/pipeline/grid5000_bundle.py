@@ -26,6 +26,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ENRICHING,
     STATUS_EXTRACTED,
     RunState,
+    atomic_write_json,
     transition_status,
 )
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -296,6 +297,41 @@ def receipt_digest(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
+def is_unfinished_source_shard(
+    state: RunState,
+    path: Path,
+    *,
+    label: str,
+    needs_work: Callable[[Path], bool],
+) -> bool:
+    """Validate run membership and return whether one shard still needs a stage."""
+    source_name = f"{path.stem}.osm.pbf"
+    if source_name not in state.sources:
+        raise ValueError(f"{label} shard is not in the source manifest: {path.name}")
+    return needs_work(path)
+
+
+def write_sync_history(
+    history_dir: Path,
+    stem: str,
+    bundle_payload: Mapping[str, object],
+    result_payload: Mapping[str, object],
+    *,
+    completed: bool,
+) -> None:
+    """Record a receipt-bound synchronization event without source text."""
+    history_dir.mkdir(parents=True, exist_ok=True)
+    digest = receipt_digest(result_payload)
+    atomic_write_json(
+        history_dir / f"{stem}-{digest}.json",
+        {
+            "action": "completed" if completed else "paused",
+            "bundle": bundle_payload,
+            "result": result_payload,
+        },
+    )
+
+
 __all__ = [
     "BUNDLE_MANIFEST_NAME",
     "BUNDLE_SCHEMA_VERSION",
@@ -307,6 +343,7 @@ __all__ = [
     "backup_directory",
     "create_bundle_directory",
     "install_validated_shard",
+    "is_unfinished_source_shard",
     "model_from_payload",
     "model_payload",
     "nonnegative_int",
@@ -331,4 +368,5 @@ __all__ = [
     "validate_job_id",
     "validate_positive_grid_time",
     "validate_stage_sync_state",
+    "write_sync_history",
 ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -36,6 +37,7 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     RESULT_NAME,
     create_bundle_directory,
     install_validated_shard,
+    is_unfinished_source_shard,
     model_from_payload,
     model_payload,
     nonnegative_int,
@@ -43,7 +45,6 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     positive_int,
     prepare_stage_run_state,
     read_object,
-    receipt_digest,
     replace_directory,
     required_bool,
     required_string,
@@ -55,6 +56,7 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     validate_grid_options,
     validate_job_id,
     validate_stage_sync_state,
+    write_sync_history,
 )
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
@@ -295,15 +297,13 @@ def _select_named_unfinished_shard(
 
 def _is_unfinished_source_shard(state: RunState, path: Path) -> bool:
     """Validate run membership and return whether one shard needs detection."""
-    source_name = f"{path.stem}.osm.pbf"
-    if source_name not in state.sources:
-        raise ValueError(f"language shard is not in the source manifest: {path.name}")
-    return shard_needs_language_detection(path)
+    return is_unfinished_source_shard(
+        state, path, label="language", needs_work=shard_needs_language_detection
+    )
 
 
-def _prepare_run_state(state: RunState) -> None:
-    """Enter the resumable language stage while preserving frozen snapshots."""
-    prepare_stage_run_state(state, action="add languages to")
+# Enter the resumable language stage while preserving frozen snapshots.
+_prepare_run_state = partial(prepare_stage_run_state, action="add languages to")
 
 
 def _validate_sync_state(state: RunState, bundle: Grid5000Bundle) -> None:
@@ -417,17 +417,12 @@ def _all_language_shards_complete(run_dir: Path, *, installed: Path) -> bool:
 
 def _write_sync_history(run_dir: Path, bundle: Grid5000Bundle, result: Grid5000Result) -> None:
     """Record a receipt-bound synchronization event without source text."""
-    history_dir = run_dir / _MANIFESTS_DIRECTORY / _GRID5000_DIRECTORY
-    history_dir.mkdir(parents=True, exist_ok=True)
-    digest = receipt_digest(result.payload())
-    path = history_dir / f"{Path(bundle.source_shard).stem}-{digest}.json"
-    atomic_write_json(
-        path,
-        {
-            "action": "completed" if result.completed else "paused",
-            "bundle": bundle.payload(),
-            "result": result.payload(),
-        },
+    write_sync_history(
+        run_dir / _MANIFESTS_DIRECTORY / _GRID5000_DIRECTORY,
+        Path(bundle.source_shard).stem,
+        bundle.payload(),
+        result.payload(),
+        completed=result.completed,
     )
 
 
