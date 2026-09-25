@@ -94,6 +94,7 @@ def test_draw_landmasses_draws_polygons_multipolygons_and_holes(tmp_path: Path) 
     ]
     assert all(patch.get_edgecolor() == to_rgba(basemap.LAND_EDGE_COLOR) for patch in patches)
     assert all(patch.get_linewidth() == 0.3 for patch in patches)
+    assert all(patch.get_closed() is True for patch in patches)
     assert patches[1].get_xy()[:3].tolist() == HOLE
 
 

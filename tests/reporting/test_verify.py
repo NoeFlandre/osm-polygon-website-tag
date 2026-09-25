@@ -11,7 +11,10 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
-from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
+from osm_polygon_website_tag.contracts.polygon_schema import (
+    POLYGON_PUBLIC_SCHEMA,
+    POLYGON_PUBLIC_SCHEMA_V1_4,
+)
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.reporting import verify as verify_module
 from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
@@ -461,3 +464,122 @@ def test_verify_results_rejects_empty_run_metadata(tmp_path: Path) -> None:
 
     assert report.ok is False
     assert "run metadata is empty" in report.errors
+
+
+def _set_status(run_dir: Path, status: str) -> None:
+    path = run_dir / "manifests" / "run.json"
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata["status"] = status
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def _rewrite_public_row(
+    run_dir: Path, state: Any, schema: pa.Schema = POLYGON_PUBLIC_SCHEMA, **changes: object
+) -> None:
+    shard = run_dir / "polygons" / "monaco-latest.parquet"
+    rows = pq.read_table(shard).to_pylist()
+    rows[0].update(changes)
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), shard)
+    update_public_shard_metadata(
+        state, filename="monaco-latest.osm.pbf", row_count=1, shard_sha256=_sha256(shard)
+    )
+
+
+VERIFIERS = {
+    "strict": verify_module.verify_results,
+    "modern": verify_module.verify_results_modern,
+    "release": verify_module.verify_release_results,
+}
+
+
+@pytest.mark.parametrize("verifier", sorted(VERIFIERS))
+@pytest.mark.parametrize("status", ["extracted", "card_built", "verified", "complete"])
+def test_status_selects_the_card_release_and_receipt_contracts(
+    tmp_path: Path, verifier: str, status: str
+) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    _set_status(run_dir, status)
+
+    errors = VERIFIERS[verifier](run_dir).errors
+
+    card_checked = status != "extracted"
+    assert ("missing card artifact: README.md" in errors) is card_checked
+    release_checked = card_checked and verifier == "release"
+    assert any(e.startswith("README geometry section is unreadable") for e in errors) is (
+        release_checked
+    )
+    receipt_checked = status == "complete" and verifier != "modern"
+    assert ("completion receipt has no artifact list" in errors) is receipt_checked
+
+
+def test_verify_results_reports_the_empty_sources_manifest_exactly(tmp_path: Path) -> None:
+    run_dir, _ = initialise_run(tmp_path, run_id="r")
+
+    assert "sources manifest is empty" in verify_results(run_dir).errors
+
+
+def test_verify_results_reports_corrupt_run_metadata_as_an_invalid_object(
+    tmp_path: Path,
+) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    run_json = run_dir / "manifests" / "run.json"
+    run_json.write_text("{not-json", encoding="utf-8")
+
+    errors = verify_results(run_dir).errors
+
+    assert any(e.startswith(f"invalid JSON object {run_json}: ") for e in errors)
+    assert "run metadata is empty" in errors
+
+
+def test_verify_results_rejects_a_mismatched_expected_inventory(tmp_path: Path) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    expected = [_manifest_identity(filename="other.osm.pbf")]
+    (run_dir / "manifests" / "expected_sources.json").write_text(
+        json.dumps(expected), encoding="utf-8"
+    )
+
+    errors = verify_results(run_dir).errors
+
+    assert "processed sources do not exactly match expected source inventory" in errors
+
+
+@pytest.mark.parametrize("verifier", sorted(VERIFIERS))
+def test_every_verifier_rejects_text_left_pending_after_completion(
+    tmp_path: Path, verifier: str
+) -> None:
+    run_dir, state = _setup_minimal_run(tmp_path)
+    _rewrite_public_row(
+        run_dir, state, website_text=None, website_word_count=None, website_text_status="pending"
+    )
+    _set_status(run_dir, "complete")
+
+    errors = VERIFIERS[verifier](run_dir).errors
+
+    assert "monaco-latest.parquet:website remains pending after enrichment" in errors
+
+
+def test_release_verification_rejects_bad_text_and_language_fields(tmp_path: Path) -> None:
+    run_dir, state = _setup_minimal_run(tmp_path)
+    _rewrite_public_row(
+        run_dir,
+        state,
+        POLYGON_PUBLIC_SCHEMA_V1_4,
+        website_word_count=99,
+        website_language="en",
+        website_language_probability=2.0,
+    )
+
+    errors = verify_module.verify_release_results(run_dir).errors
+
+    assert "monaco-latest.parquet:website word count does not match stored text" in errors
+    assert any(e.endswith("row 0 website language probability is invalid") for e in errors)
+
+
+def test_verify_results_reports_a_corrupt_expected_inventory(tmp_path: Path) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    expected = run_dir / "manifests" / "expected_sources.json"
+    expected.write_text("{not-json", encoding="utf-8")
+
+    errors = verify_results(run_dir).errors
+
+    assert any(e.startswith(f"invalid JSON array {expected}: ") for e in errors)

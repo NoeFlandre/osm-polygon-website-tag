@@ -176,3 +176,38 @@ def test_invariants_scan_public_shards_in_sorted_order(tmp_path: Path) -> None:
         "a.parquet:website word count does not match stored text",
         "b.parquet:website word count does not match stored text",
     ]
+
+
+def test_invariants_reject_pending_text_once_the_run_is_enriched(tmp_path: Path) -> None:
+    _shard(
+        tmp_path / "polygons" / "a.parquet", [_row(text=None, word_count=None, status="pending")]
+    )
+    errors: list[str] = []
+
+    verify_text_invariants(tmp_path, "enriched", errors)
+
+    assert errors == ["a.parquet:website remains pending after enrichment"]
+
+
+def test_pending_contact_website_is_rejected_once_the_run_is_enriched(tmp_path: Path) -> None:
+    row = _row()
+    row["contact_website"] = URL
+    row["contact_website_text_status"] = "pending"
+
+    assert _errors([row], tmp_path) == [
+        "a.parquet:contact_website remains pending after enrichment"
+    ]
+
+
+def test_boolean_word_counts_are_rejected(tmp_path: Path) -> None:
+    schema = TEXT_SCHEMA.set(
+        TEXT_SCHEMA.get_field_index("website_word_count"),
+        pa.field("website_word_count", pa.bool_()),
+    )
+    path = tmp_path / "a.parquet"
+    pq.write_table(pa.Table.from_pylist([_row(text="one", word_count=True)], schema=schema), path)
+    errors: list[str] = []
+
+    verify_text_paths([path], "complete", errors)
+
+    assert errors == ["a.parquet:website word count does not match stored text"]

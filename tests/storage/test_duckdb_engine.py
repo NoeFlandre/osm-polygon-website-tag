@@ -336,3 +336,10 @@ def test_temp_directory_lifecycle_preserves_nonempty_failure_evidence(tmp_path: 
     assert sentinel.read_text(encoding="utf-8") == "evidence"
     sentinel.unlink()
     assert cleanup_temp_dir(run_dir) is True
+
+
+def test_ensure_temp_dir_is_idempotent(tmp_path: Path) -> None:
+    first = ensure_temp_dir(tmp_path / "run")
+
+    assert ensure_temp_dir(tmp_path / "run") == first
+    assert first.is_dir()

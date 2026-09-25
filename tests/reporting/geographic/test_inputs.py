@@ -24,6 +24,7 @@ from osm_polygon_website_tag.reporting.geographic.inputs import (
     _text_success_mask,
     _validated_coordinates,
     iter_lat_lon_runs,
+    iter_unique_text_lat_lon_runs,
 )
 
 
@@ -324,9 +325,11 @@ def test_text_polygon_iterator_prefers_regional_copies_and_falls_back_to_public(
     regional_polygons.mkdir(parents=True)
     regional_path = regional_polygons / "source.parquet"
     regional_path.touch()
+    (regional_polygons / "other.parquet").touch()
     (tmp_path / "polygons").mkdir()
     public_path = tmp_path / "polygons" / "source.parquet"
     public_path.touch()
+    (tmp_path / "polygons" / "other.parquet").touch()
     (tmp_path / "analysis_observations").symlink_to(regional_observations, target_is_directory=True)
 
     assert _text_polygon_parquets(tmp_path, source_names={"source.osm.pbf"}) == [regional_path]
@@ -392,13 +395,18 @@ def _write_text_shard(path: Path, rows: list[dict[str, object]]) -> Path:
 
 
 def _text_row(
-    osm_id: int, *, lat: float | None = 1.0, text: str = "text", status: str = "success"
+    osm_id: int,
+    *,
+    lat: float | None = 1.0,
+    lon: float | None = 2.0,
+    text: str | None = "text",
+    status: str | None = "success",
 ) -> dict[str, object]:
     return {
         "osm_type": "way",
         "osm_id": osm_id,
         "lat": lat,
-        "lon": 2.0,
+        "lon": lon,
         "website_text": text,
         "website_text_status": status,
         "contact_website_text": None,
@@ -407,13 +415,23 @@ def _text_row(
 
 
 def test_path_rows_keep_offsets_across_batches(tmp_path: Path) -> None:
-    rows = [_text_row(index, text="" if index < 8192 else "text") for index in range(8195)]
+    rows = [_text_row(index, text="" if index < 16384 else "text") for index in range(16387)]
     path = _write_text_shard(tmp_path / "polygons" / "source.parquet", rows)
 
-    assert len(list(iter_lat_lon_runs(tmp_path))) == 8195
+    everything = list(iter_lat_lon_runs(tmp_path))
+    assert [row_index for _, row_index, _, _ in everything] == list(range(16387))
     assert list(iter_lat_lon_runs(tmp_path, extracted_text_only=True)) == [
-        (path, index, 1.0, 2.0) for index in (8192, 8193, 8194)
+        (path, index, 1.0, 2.0) for index in (16384, 16385, 16386)
     ]
+
+
+def test_rows_without_any_text_status_are_not_extracted_text(tmp_path: Path) -> None:
+    path = _write_text_shard(
+        tmp_path / "polygons" / "source.parquet",
+        [_text_row(1, text=None, status=None), _text_row(2)],
+    )
+
+    assert list(iter_lat_lon_runs(tmp_path, extracted_text_only=True)) == [(path, 1, 1.0, 2.0)]
 
 
 def test_path_rows_reject_null_coordinates(tmp_path: Path) -> None:
@@ -425,28 +443,47 @@ def test_path_rows_reject_null_coordinates(tmp_path: Path) -> None:
         list(iter_lat_lon_runs(tmp_path))
 
 
+@pytest.mark.parametrize("extracted_text_only", [False, True])
+def test_path_rows_reject_null_longitude(tmp_path: Path, extracted_text_only: bool) -> None:
+    _write_text_shard(
+        tmp_path / "polygons" / "source.parquet", [_text_row(1), _text_row(2, lon=None)]
+    )
+
+    with pytest.raises(ValueError, match=r"null coordinate in source.parquet row 1"):
+        list(iter_lat_lon_runs(tmp_path, extracted_text_only=extracted_text_only))
+
+
+def test_unique_text_path_rows_reject_null_longitude(tmp_path: Path) -> None:
+    path = _write_text_shard(tmp_path / "source.parquet", [_text_row(1), _text_row(2, lon=None)])
+
+    with pytest.raises(ValueError, match=r"null coordinate in source.parquet row 1"):
+        list(_iter_unique_text_path_rows(path, set()))
+
+
 def test_path_rows_reject_missing_coordinate_columns(tmp_path: Path) -> None:
     path = tmp_path / "polygons" / "source.parquet"
     path.parent.mkdir()
     pq.write_table(pa.table({"lat": [1.0]}), path)
 
-    with pytest.raises(ValueError, match=r"missing coordinate columns \['lon'\]"):
+    with pytest.raises(ValueError, match=rf"missing coordinate columns \['lon'\] in {path}$"):
         list(iter_lat_lon_runs(tmp_path))
+    with pytest.raises(ValueError, match=rf"missing coordinate columns \['lon'\] in {path}$"):
+        list(_iter_unique_text_path_rows(path, set()))
 
 
 def test_unique_text_path_rows_reserve_each_identity_once_across_batches(
     tmp_path: Path,
 ) -> None:
     rows = [
-        _text_row(index % 3, status="failed" if index < 8192 else "success")
-        for index in range(8196)
+        _text_row(index % 3, status="failed" if index < 16384 else "success")
+        for index in range(16388)
     ]
     path = _write_text_shard(tmp_path / "source.parquet", rows)
     seen: set[tuple[str, int]] = {("way", 2)}
 
     assert list(_iter_unique_text_path_rows(path, seen)) == [
-        (path, 8193, 1.0, 2.0),
-        (path, 8194, 1.0, 2.0),
+        (path, 16384, 1.0, 2.0),
+        (path, 16386, 1.0, 2.0),
     ]
     assert seen == {("way", 0), ("way", 1), ("way", 2)}
 
@@ -457,3 +494,12 @@ def test_unique_text_path_rows_skip_shards_without_identity(tmp_path: Path) -> N
     pq.write_table(pq.read_table(full).drop_columns(["osm_type", "osm_id"]), path)
 
     assert list(_iter_unique_text_path_rows(path, set())) == []
+
+
+def test_unique_text_runs_honour_the_source_scope(tmp_path: Path) -> None:
+    kept = _write_text_shard(tmp_path / "polygons" / "kept.parquet", [_text_row(1)])
+    _write_text_shard(tmp_path / "polygons" / "other.parquet", [_text_row(2)])
+
+    runs = list(iter_unique_text_lat_lon_runs(tmp_path, source_names={"kept.osm.pbf"}))
+
+    assert [(path, row_index) for path, row_index, _, _ in runs] == [(kept, 0)]
