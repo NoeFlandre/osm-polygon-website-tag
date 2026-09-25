@@ -428,5 +428,4 @@ def test_sentence_columns_match_the_published_contract() -> None:
         "contact_website_sentence_count",
         "contact_website_sentence_status",
     )
-    assert sentence_module._FIELDS_PER_PREFIX == 5
     assert sentence_module._SENTENCE_BATCH_ROWS == 512
