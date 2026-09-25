@@ -25,6 +25,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     BUNDLE_MANIFEST_NAME,
     BUNDLE_SCHEMA_VERSION,
+    DEFAULT_GRID_SENTENCE_BATCH_ROWS,
     DEFAULT_GRID_TIME_BUDGET_SECONDS,
     RESULT_NAME,
     create_bundle_directory,
@@ -73,7 +74,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
 )
 
-DEFAULT_GRID_BATCH_ROWS = DEFAULT_BATCH_ROWS
 DEFAULT_GRID_MAX_ROWS = 20_000
 _POLYGONS_DIRECTORY = "polygons"
 _MANIFESTS_DIRECTORY = "manifests"
@@ -176,7 +176,7 @@ def prepare_sentence_bundle(
     model_revision: str,
     commit: str,
     time_budget_seconds: int = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: int = DEFAULT_GRID_BATCH_ROWS,
+    batch_rows: int = DEFAULT_GRID_SENTENCE_BATCH_ROWS,
     max_rows: int = DEFAULT_GRID_MAX_ROWS,
 ) -> SentenceBundle:
     """Stage the next unfinished shards, their checkpoints, and the model."""
@@ -694,8 +694,8 @@ def _validate_model(model: ModelIdentity) -> None:
 
 
 __all__ = [
-    "DEFAULT_GRID_BATCH_ROWS",
     "DEFAULT_GRID_MAX_ROWS",
+    "DEFAULT_GRID_SENTENCE_BATCH_ROWS",
     "SentenceBundle",
     "SentenceBundleResult",
     "SentenceShardEntry",

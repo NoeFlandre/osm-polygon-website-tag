@@ -28,7 +28,7 @@ from osm_polygon_website_tag.pipeline.extraction import (
 )
 from osm_polygon_website_tag.pipeline.glotlid import load_glotlid_detector
 from osm_polygon_website_tag.pipeline.grid5000 import (
-    DEFAULT_GRID_BATCH_ROWS,
+    DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
     DEFAULT_GRID_TIME_BUDGET_SECONDS,
     prepare_language_bundle,
     run_language_bundle,
@@ -36,6 +36,7 @@ from osm_polygon_website_tag.pipeline.grid5000 import (
 )
 from osm_polygon_website_tag.pipeline.grid5000_sentences import (
     DEFAULT_GRID_MAX_ROWS,
+    DEFAULT_GRID_SENTENCE_BATCH_ROWS,
     load_sentence_bundle,
     prepare_sentence_bundle,
     run_sentence_bundle,
@@ -732,7 +733,7 @@ def grid5000_prepare_command(
     batch_rows: Annotated[
         int,
         typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
-    ] = DEFAULT_GRID_BATCH_ROWS,
+    ] = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
 ) -> int:
     """Prepare one Seagate-backed, offline Grid'5000 language bundle."""
     normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
@@ -809,7 +810,7 @@ def grid5000_prepare_sentences_command(
     batch_rows: Annotated[
         int,
         typer.Option("--batch-rows", help="Rows processed per sentence checkpoint batch."),
-    ] = DEFAULT_SENTENCE_BATCH_ROWS,
+    ] = DEFAULT_GRID_SENTENCE_BATCH_ROWS,
     max_rows: Annotated[
         int,
         typer.Option("--max-rows", help="Row budget packed into one bundle."),

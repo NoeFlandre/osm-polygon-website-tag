@@ -34,7 +34,12 @@ BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_MANIFEST_NAME = "bundle.json"
 RESULT_NAME = "result.json"
 DEFAULT_GRID_JOB_SECONDS = 1_800
+# The Grid'5000 job defaults. scripts/grid5000/_env.sh (grid5000_run_setup)
+# repeats the time budget and batch rows as shell literals; an architecture test
+# keeps them equal to these constants.
 DEFAULT_GRID_TIME_BUDGET_SECONDS = 1_500
+DEFAULT_GRID_LANGUAGE_BATCH_ROWS = 256
+DEFAULT_GRID_SENTENCE_BATCH_ROWS = 256
 
 _SHA256_LENGTH = 64
 _SAFE_FILENAME_SUFFIX = ".parquet"
@@ -295,6 +300,8 @@ __all__ = [
     "BUNDLE_MANIFEST_NAME",
     "BUNDLE_SCHEMA_VERSION",
     "DEFAULT_GRID_JOB_SECONDS",
+    "DEFAULT_GRID_LANGUAGE_BATCH_ROWS",
+    "DEFAULT_GRID_SENTENCE_BATCH_ROWS",
     "DEFAULT_GRID_TIME_BUDGET_SECONDS",
     "RESULT_NAME",
     "backup_directory",

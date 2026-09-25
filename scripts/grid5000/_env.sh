@@ -22,7 +22,9 @@ export UV_CACHE_DIR="$uv_cache_dir"
 # run_sentence_segmentation.sh. Sets bundle_dir, time_budget_seconds and
 # batch_rows, exports the offline environment, and fills run_arguments with
 # the common runner flags. Stage-specific flags passed as arguments are
-# appended before --job-id.
+# appended before --job-id. The 1500 and 256 literals mirror
+# DEFAULT_GRID_TIME_BUDGET_SECONDS and DEFAULT_GRID_*_BATCH_ROWS in
+# src/osm_polygon_website_tag/pipeline/grid5000_bundle.py.
 grid5000_run_setup() {
   bundle_dir="${GRID5000_BUNDLE_DIR:-$job_dir/bundle}"
   time_budget_seconds="${GRID5000_TIME_BUDGET_SECONDS:-1500}"

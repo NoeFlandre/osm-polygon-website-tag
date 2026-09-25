@@ -5,6 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from osm_polygon_website_tag.pipeline.grid5000_bundle import (
+    DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
+    DEFAULT_GRID_SENTENCE_BATCH_ROWS,
+    DEFAULT_GRID_TIME_BUDGET_SECONDS,
+)
+
 SCRIPT_ROOT = Path("scripts/grid5000")
 SCRIPT_NAMES = (
     "bootstrap_language_runtime.sh",
@@ -212,3 +218,13 @@ def test_grid5000_scripts_do_not_contain_credentials() -> None:
 
     assert "HF_TOKEN" not in scripts
     assert "HUGGING_FACE_HUB_TOKEN" not in scripts
+
+
+def test_shell_and_docs_defaults_match_the_python_grid_constants() -> None:
+    env = ENV_SCRIPT.read_text()
+    readme = (SCRIPT_ROOT / "README.md").read_text()
+
+    assert DEFAULT_GRID_LANGUAGE_BATCH_ROWS == DEFAULT_GRID_SENTENCE_BATCH_ROWS == 256
+    assert f"GRID5000_BATCH_ROWS:-{DEFAULT_GRID_LANGUAGE_BATCH_ROWS}}}" in env
+    assert f"GRID5000_TIME_BUDGET_SECONDS:-{DEFAULT_GRID_TIME_BUDGET_SECONDS}}}" in env
+    assert f"at most {DEFAULT_GRID_LANGUAGE_BATCH_ROWS} rows per detector batch" in readme

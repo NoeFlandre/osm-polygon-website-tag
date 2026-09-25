@@ -15,7 +15,6 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.pipeline.detect_languages import (
-    DEFAULT_BATCH_ROWS,
     LanguageDetectionResult,
     detect_language_shard,
     shard_needs_language_detection,
@@ -32,6 +31,7 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     BUNDLE_MANIFEST_NAME,
     BUNDLE_SCHEMA_VERSION,
     DEFAULT_GRID_JOB_SECONDS,
+    DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
     DEFAULT_GRID_TIME_BUDGET_SECONDS,
     RESULT_NAME,
     create_bundle_directory,
@@ -71,7 +71,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
 )
 
-DEFAULT_GRID_BATCH_ROWS = DEFAULT_BATCH_ROWS
 _POLYGONS_DIRECTORY = "polygons"
 _MANIFESTS_DIRECTORY = "manifests"
 _GRID5000_DIRECTORY = "grid5000"
@@ -148,7 +147,7 @@ def prepare_language_bundle(
     model_path: Path | str,
     commit: str,
     time_budget_seconds: int = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: int = DEFAULT_GRID_BATCH_ROWS,
+    batch_rows: int = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
     shard_name: str | None = None,
 ) -> Grid5000Bundle:
     """Stage one unfinished shard, its checkpoint, and the pinned model."""
@@ -557,8 +556,8 @@ def _validate_model(model: ModelIdentity) -> None:
 __all__ = [
     "BUNDLE_MANIFEST_NAME",
     "BUNDLE_SCHEMA_VERSION",
-    "DEFAULT_GRID_BATCH_ROWS",
     "DEFAULT_GRID_JOB_SECONDS",
+    "DEFAULT_GRID_LANGUAGE_BATCH_ROWS",
     "DEFAULT_GRID_TIME_BUDGET_SECONDS",
     "RESULT_NAME",
     "Grid5000Bundle",
