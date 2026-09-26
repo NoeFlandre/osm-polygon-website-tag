@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_ABSENT,
@@ -22,13 +21,16 @@ from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_UNSUPPORTED_LANGUAGE,
 )
 from osm_polygon_website_tag.pipeline.sentence_languages import sat_code_for_glotlid_label
+from osm_polygon_website_tag.reporting.verification.shard_scan import (
+    iter_bounded_batches,
+    verify_optional_shard,
+)
 
 _SENTENCE_BATCH_ROWS = 512
 _TEXT_SUCCESS = "success"
 _TEXT_ABSENT = "absent"
 _PREFIXES = ("website", "contact_website")
-# Written out rather than generated: the read order is what the batch column
-# indices below rely on, and a comprehension would hide that coupling.
+# Written out so the exact read projection is visible at a glance.
 _SENTENCE_COLUMNS = (
     "website_text_status",
     "website_language",
@@ -41,7 +43,6 @@ _SENTENCE_COLUMNS = (
     "contact_website_sentence_count",
     "contact_website_sentence_status",
 )
-_FIELDS_PER_PREFIX = 5
 
 
 def verify_sentence_invariants(root: Path, errors: list[str]) -> None:
@@ -52,24 +53,13 @@ def verify_sentence_invariants(root: Path, errors: list[str]) -> None:
 
 def _verify_sentence_file(path: Path, errors: list[str]) -> None:
     """Read and verify one sentence-bearing shard, reporting corrupt files."""
-    try:
-        schema = pq.read_schema(path)
-    except Exception as exc:
-        errors.append(f"unreadable sentence shard {path}: {exc}")
-        return
-    if not all(name in schema.names for name in SENTENCE_COLUMN_NAMES):
-        return
-    try:
-        _verify_sentence_shard(path, errors)
-    except Exception as exc:
-        errors.append(f"sentence invariant verification failed for {path}: {exc}")
+    verify_optional_shard(path, SENTENCE_COLUMN_NAMES, "sentence", _verify_sentence_shard, errors)
 
 
 def _verify_sentence_shard(path: Path, errors: list[str]) -> None:
     """Verify bounded batches from one shard that includes sentence fields."""
-    parquet = pq.ParquetFile(path)
-    for batch_number, batch in enumerate(
-        parquet.iter_batches(batch_size=_SENTENCE_BATCH_ROWS, columns=list(_SENTENCE_COLUMNS))
+    for batch_number, batch in iter_bounded_batches(
+        path, list(_SENTENCE_COLUMNS), _SENTENCE_BATCH_ROWS
     ):
         _verify_sentence_batch(path, batch_number, batch, errors)
 
@@ -80,16 +70,21 @@ def _verify_sentence_batch(
     """Verify each row in one bounded Arrow batch."""
     for row_number in range(batch.num_rows):
         absolute_row = batch_number * _SENTENCE_BATCH_ROWS + row_number
-        for index, prefix in enumerate(_PREFIXES):
+        for prefix in _PREFIXES:
             _verify_sentence_field(
                 location=f"{path} row {absolute_row} {prefix}",
-                text_status=batch.column(index * _FIELDS_PER_PREFIX)[row_number].as_py(),
-                language=batch.column(index * _FIELDS_PER_PREFIX + 1)[row_number].as_py(),
-                sentences=batch.column(index * _FIELDS_PER_PREFIX + 2)[row_number].as_py(),
-                count=batch.column(index * _FIELDS_PER_PREFIX + 3)[row_number].as_py(),
-                status=batch.column(index * _FIELDS_PER_PREFIX + 4)[row_number].as_py(),
+                text_status=_cell(batch, f"{prefix}_text_status", row_number),
+                language=_cell(batch, f"{prefix}_language", row_number),
+                sentences=_cell(batch, f"{prefix}_sentences", row_number),
+                count=_cell(batch, f"{prefix}_sentence_count", row_number),
+                status=_cell(batch, f"{prefix}_sentence_status", row_number),
                 errors=errors,
             )
+
+
+def _cell(batch: pa.RecordBatch, column: str, row_number: int) -> object:
+    """Return one named column's Python value for one batch row."""
+    return batch.column(column)[row_number].as_py()
 
 
 def _verify_sentence_field(

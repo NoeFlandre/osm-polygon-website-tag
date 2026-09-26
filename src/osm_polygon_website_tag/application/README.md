@@ -23,6 +23,8 @@ separate from workflow side effects.
     one staged language-detection bundle on a reserved compute node.
   - `grid5000_sentence_runner`: the matching offline entry point for one staged
     sentence-segmentation bundle.
+  - `grid5000_runner_base`: the flags and JSON-receipt printing both Grid'5000
+    node runners share.
 - Dependencies: any lower project package; no lower package may import `application`.
 - Entry points: `inventory.discover_sources`, `workflow.run_all`, the
   compatibility import `workflow.discover_sources`, Typer `app`, CLI

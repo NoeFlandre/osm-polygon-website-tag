@@ -7,9 +7,12 @@ from collections.abc import Collection
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_COLUMN_NAMES
+from osm_polygon_website_tag.reporting.verification.shard_scan import (
+    iter_bounded_batches,
+    verify_optional_shard,
+)
 
 _LANGUAGE_BATCH_ROWS = 512
 _LANGUAGE_COLUMNS = (
@@ -35,25 +38,12 @@ def verify_language_paths(paths: Collection[Path], errors: list[str]) -> None:
 
 def _verify_language_file(path: Path, errors: list[str]) -> None:
     """Read and verify one language-bearing shard, reporting corrupt files."""
-    try:
-        schema = pq.read_schema(path)
-    except Exception as exc:
-        errors.append(f"unreadable language shard {path}: {exc}")
-        return
-    if not all(name in schema.names for name in LANGUAGE_COLUMN_NAMES):
-        return
-    try:
-        _verify_language_shard(path, errors)
-    except Exception as exc:
-        errors.append(f"language invariant verification failed for {path}: {exc}")
+    verify_optional_shard(path, LANGUAGE_COLUMN_NAMES, "language", _verify_language_shard, errors)
 
 
 def _verify_language_shard(path: Path, errors: list[str]) -> None:
     """Verify bounded batches from one shard that includes language fields."""
-    parquet = pq.ParquetFile(path)
-    for batch_number, batch in enumerate(
-        parquet.iter_batches(batch_size=_LANGUAGE_BATCH_ROWS, columns=_LANGUAGE_COLUMNS)
-    ):
+    for batch_number, batch in iter_bounded_batches(path, _LANGUAGE_COLUMNS, _LANGUAGE_BATCH_ROWS):
         _verify_language_batch(path, batch_number, batch, errors)
 
 
@@ -62,7 +52,7 @@ def _verify_language_batch(
 ) -> None:
     """Verify each row in one bounded Arrow batch."""
     for row_number in range(batch.num_rows):
-        values = [batch.column(index)[row_number].as_py() for index in range(6)]
+        values = [batch.column(name)[row_number].as_py() for name in _LANGUAGE_COLUMNS]
         absolute_row = batch_number * _LANGUAGE_BATCH_ROWS + row_number
         _verify_language_row(path, absolute_row, values, errors)
 
@@ -71,10 +61,17 @@ def _verify_language_row(
     path: Path, row_number: int, values: list[object], errors: list[str]
 ) -> None:
     """Verify website and contact language pairs from one row."""
-    _verify_language_pair(path, row_number, "website", values[0], values[1], values[2], errors)
-    _verify_language_pair(
-        path, row_number, "contact_website", values[3], values[4], values[5], errors
-    )
+    row = dict(zip(_LANGUAGE_COLUMNS, values, strict=True))
+    for prefix in ("website", "contact_website"):
+        _verify_language_pair(
+            path,
+            row_number,
+            prefix,
+            row[f"{prefix}_text_status"],
+            row[f"{prefix}_language"],
+            row[f"{prefix}_language_probability"],
+            errors,
+        )
 
 
 def _verify_language_pair(

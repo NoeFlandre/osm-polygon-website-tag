@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -15,7 +16,6 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.pipeline.detect_languages import (
-    DEFAULT_BATCH_ROWS,
     LanguageDetectionResult,
     detect_language_shard,
     shard_needs_language_detection,
@@ -32,10 +32,12 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     BUNDLE_MANIFEST_NAME,
     BUNDLE_SCHEMA_VERSION,
     DEFAULT_GRID_JOB_SECONDS,
+    DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
     DEFAULT_GRID_TIME_BUDGET_SECONDS,
     RESULT_NAME,
     create_bundle_directory,
     install_validated_shard,
+    is_unfinished_source_shard,
     model_from_payload,
     model_payload,
     nonnegative_int,
@@ -43,7 +45,6 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     positive_int,
     prepare_stage_run_state,
     read_object,
-    receipt_digest,
     replace_directory,
     required_bool,
     required_string,
@@ -55,6 +56,7 @@ from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     validate_grid_options,
     validate_job_id,
     validate_stage_sync_state,
+    write_sync_history,
 )
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
@@ -71,7 +73,6 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
 )
 
-DEFAULT_GRID_BATCH_ROWS = DEFAULT_BATCH_ROWS
 _POLYGONS_DIRECTORY = "polygons"
 _MANIFESTS_DIRECTORY = "manifests"
 _GRID5000_DIRECTORY = "grid5000"
@@ -148,7 +149,7 @@ def prepare_language_bundle(
     model_path: Path | str,
     commit: str,
     time_budget_seconds: int = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: int = DEFAULT_GRID_BATCH_ROWS,
+    batch_rows: int = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
     shard_name: str | None = None,
 ) -> Grid5000Bundle:
     """Stage one unfinished shard, its checkpoint, and the pinned model."""
@@ -296,15 +297,13 @@ def _select_named_unfinished_shard(
 
 def _is_unfinished_source_shard(state: RunState, path: Path) -> bool:
     """Validate run membership and return whether one shard needs detection."""
-    source_name = f"{path.stem}.osm.pbf"
-    if source_name not in state.sources:
-        raise ValueError(f"language shard is not in the source manifest: {path.name}")
-    return shard_needs_language_detection(path)
+    return is_unfinished_source_shard(
+        state, path, label="language", needs_work=shard_needs_language_detection
+    )
 
 
-def _prepare_run_state(state: RunState) -> None:
-    """Enter the resumable language stage while preserving frozen snapshots."""
-    prepare_stage_run_state(state, action="add languages to")
+# Enter the resumable language stage while preserving frozen snapshots.
+_prepare_run_state = partial(prepare_stage_run_state, action="add languages to")
 
 
 def _validate_sync_state(state: RunState, bundle: Grid5000Bundle) -> None:
@@ -418,17 +417,12 @@ def _all_language_shards_complete(run_dir: Path, *, installed: Path) -> bool:
 
 def _write_sync_history(run_dir: Path, bundle: Grid5000Bundle, result: Grid5000Result) -> None:
     """Record a receipt-bound synchronization event without source text."""
-    history_dir = run_dir / _MANIFESTS_DIRECTORY / _GRID5000_DIRECTORY
-    history_dir.mkdir(parents=True, exist_ok=True)
-    digest = receipt_digest(result.payload())
-    path = history_dir / f"{Path(bundle.source_shard).stem}-{digest}.json"
-    atomic_write_json(
-        path,
-        {
-            "action": "completed" if result.completed else "paused",
-            "bundle": bundle.payload(),
-            "result": result.payload(),
-        },
+    write_sync_history(
+        run_dir / _MANIFESTS_DIRECTORY / _GRID5000_DIRECTORY,
+        Path(bundle.source_shard).stem,
+        bundle.payload(),
+        result.payload(),
+        completed=result.completed,
     )
 
 
@@ -557,8 +551,8 @@ def _validate_model(model: ModelIdentity) -> None:
 __all__ = [
     "BUNDLE_MANIFEST_NAME",
     "BUNDLE_SCHEMA_VERSION",
-    "DEFAULT_GRID_BATCH_ROWS",
     "DEFAULT_GRID_JOB_SECONDS",
+    "DEFAULT_GRID_LANGUAGE_BATCH_ROWS",
     "DEFAULT_GRID_TIME_BUDGET_SECONDS",
     "RESULT_NAME",
     "Grid5000Bundle",

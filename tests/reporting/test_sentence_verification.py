@@ -8,6 +8,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import sentence_verification_row as _row
 
 from osm_polygon_website_tag.reporting.verification import sentence as sentence_module
 from osm_polygon_website_tag.reporting.verification.sentence import verify_sentence_invariants
@@ -28,23 +29,6 @@ _SCHEMA = pa.schema(
         pa.field("contact_website_sentence_status", pa.string()),
     ]
 )
-
-
-def _row(**overrides: Any) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "website_text_status": "success",
-        "website_language": "eng_Latn",
-        "website_sentences": ["One. ", "Two."],
-        "website_sentence_count": 2,
-        "website_sentence_status": "success",
-        "contact_website_text_status": "absent",
-        "contact_website_language": None,
-        "contact_website_sentences": None,
-        "contact_website_sentence_count": None,
-        "contact_website_sentence_status": "absent",
-    }
-    row.update(overrides)
-    return row
 
 
 def _write(tmp_path: Path, rows: list[dict[str, Any]], *, schema: pa.Schema = _SCHEMA) -> Path:
@@ -428,5 +412,4 @@ def test_sentence_columns_match_the_published_contract() -> None:
         "contact_website_sentence_count",
         "contact_website_sentence_status",
     )
-    assert sentence_module._FIELDS_PER_PREFIX == 5
     assert sentence_module._SENTENCE_BATCH_ROWS == 512

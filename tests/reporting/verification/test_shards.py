@@ -25,7 +25,7 @@ def test_shard_helpers_report_metadata_errors_without_network(tmp_path: Path) ->
     assert any("missing public shard" in error for error in errors)
     errors.clear()
     shards._verify_row_count(1, "a.osm.pbf", contract, {"public_row_count": 0}, errors)
-    assert errors
+    assert errors == ["public row count mismatch for a.osm.pbf: manifest=0, parquet=1"]
     path = tmp_path / "file"
     path.write_bytes(b"x")
     shards._verify_shard_hash(

@@ -9,7 +9,9 @@ acceleration claim.
 
 The reserved-node job scripts source `_env.sh` for the pinned `module load`
 line and the job, checkout and uv-cache directories, so a module bump touches
-that one file. `bootstrap_runtime.sh <language|sentences>` and
+that one file. Its `grid5000_run_setup` function also holds the runners' shared
+bundle, time-budget and batch defaults, the offline exports and the common
+runner flags. `bootstrap_runtime.sh <language|sentences>` and
 `sync_bundle.sh <language|sentences>` hold the shared logic; the
 stage-named scripts below are thin entry points kept because `oarsub -S`
 submits a script by name without arguments. A job script staged as a copy in

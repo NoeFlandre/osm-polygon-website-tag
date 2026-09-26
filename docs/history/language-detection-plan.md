@@ -6,8 +6,6 @@
 > `tests/reporting/test_card_*.py`, and `tests/application/test_workflow.py`
 > into `tests/application/test_workflow_*.py`.
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** Add an opt-in, resumable, stoppable GlotLID V3 stage that records the language and top-1 probability for every successfully extracted website text value while leaving extraction-only runs unchanged.
 
 **Architecture:** Keep URL fetching and language inference as separate stages. A small GlotLID adapter owns model download, hashing, and FastText output normalization; a shard pipeline owns bounded row batches, source/model-bound checkpoint parts, and atomic promotion to schema v1.4. Existing v1.3 shards remain the default output, while `detect-languages` and `run-all --detect-languages` explicitly upgrade public shards to v1.4.

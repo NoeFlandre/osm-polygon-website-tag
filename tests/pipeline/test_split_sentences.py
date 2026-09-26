@@ -10,6 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 import osm_polygon_website_tag.pipeline.split_sentences as split_sentences
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -46,35 +47,14 @@ class _FakeSplitter:
 
 
 def _row(index: int, *, language: str | None = "eng_Latn", text: str = "One|Two") -> dict:
-    values: dict[str, object] = {}
-    for field in POLYGON_PUBLIC_SCHEMA_V1_4:
-        if field.name == "polygon_id":
-            values[field.name] = f"source:way/{index}"
-        elif pa.types.is_boolean(field.type):
-            values[field.name] = False
-        elif pa.types.is_integer(field.type):
-            values[field.name] = 0
-        elif pa.types.is_floating(field.type):
-            values[field.name] = 0.0
-        elif pa.types.is_timestamp(field.type):
-            values[field.name] = pa.scalar(0, type=field.type).as_py()
-        else:
-            values[field.name] = ""
-    values.update(
-        has_any_website=True,
-        has_website=True,
-        website="https://example.org",
+    return polygon_row(
+        "v1.4",
+        polygon_id=f"source:way/{index}",
         website_text=text,
         website_text_status="success",
         website_language=language,
         website_language_probability=0.99,
-        contact_website_text_status="absent",
-        contact_website_text=None,
-        contact_website_language=None,
-        contact_website_language_probability=None,
-        schema_version="v1.4",
     )
-    return values
 
 
 def _write(shard: Path, rows: list[dict], schema: pa.Schema = POLYGON_PUBLIC_SCHEMA_V1_4) -> Path:

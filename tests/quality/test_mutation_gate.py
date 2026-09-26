@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
@@ -183,8 +184,8 @@ def test_baseline_generation_is_sorted_deduplicated_and_documented(tmp_path: Pat
 def test_baseline_generation_defaults_to_the_repository_file() -> None:
     from scripts.quality import mutation_baseline
 
-    parser_default = mutation_baseline.main.__doc__
-    assert parser_default
+    parser_default = 'default=Path("docs/quality/mutation-baseline.txt")'
+    assert parser_default in inspect.getsource(mutation_baseline.main)
     assert mutation_baseline.render([]).endswith("\n")
     assert "# Recorded mutants: 0" in mutation_baseline.render([])
 
