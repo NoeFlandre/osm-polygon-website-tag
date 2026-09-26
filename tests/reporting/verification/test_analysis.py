@@ -1073,6 +1073,40 @@ def test_release_geographic_section_compares_the_exact_section(
     assert errors == expected
 
 
+def test_release_density_yaml_matches_all_geographic_summary_fields(tmp_path: Path) -> None:
+    stats = SimpleNamespace(
+        polygon_density_h3_resolution=7,
+        polygon_density_row_count=11,
+        occupied_h3_cell_count=5,
+    )
+    path = tmp_path / "dataset.yaml"
+    path.write_text(
+        "polygon_density_h3_resolution: 6\n"
+        "polygon_density_row_count: 12\n"
+        "occupied_h3_cell_count: 4\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+
+    analysis._verify_release_density_yaml(tmp_path, stats, errors)
+
+    assert errors == [
+        "dataset.yaml polygon_density_h3_resolution does not match the unique-text summary",
+        "dataset.yaml polygon_density_row_count does not match the unique-text summary",
+        "dataset.yaml occupied_h3_cell_count does not match the unique-text summary",
+    ]
+
+    path.write_text(
+        "polygon_density_h3_resolution: 7\n"
+        "polygon_density_row_count: 11\n"
+        "occupied_h3_cell_count: 5\n",
+        encoding="utf-8",
+    )
+    errors.clear()
+    analysis._verify_release_density_yaml(tmp_path, stats, errors)
+    assert errors == []
+
+
 def test_readability_of_no_artifacts_is_true(tmp_path: Path) -> None:
     assert analysis._verify_analysis_readability(tmp_path, set(), []) is True
 

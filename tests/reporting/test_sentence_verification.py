@@ -226,6 +226,24 @@ def test_every_row_of_a_large_shard_is_verified(tmp_path: Path) -> None:
     ]
 
 
+def test_contact_sentence_errors_keep_the_absolute_row_after_a_batch_boundary(
+    tmp_path: Path,
+) -> None:
+    rows = [_row() for _ in range(sentence_module._SENTENCE_BATCH_ROWS + 1)]
+    rows[-1] = _row(
+        contact_website_text_status="success",
+        contact_website_language="fra_Latn",
+        contact_website_sentences=None,
+        contact_website_sentence_count=None,
+        contact_website_sentence_status="success",
+    )
+    path = _write(tmp_path, rows)
+
+    assert _verify(tmp_path) == [
+        f"{path} row {sentence_module._SENTENCE_BATCH_ROWS} contact_website sentences are missing"
+    ]
+
+
 def _field(**overrides: Any) -> list[str]:
     """Verify one website field directly and return the errors it produced."""
     errors: list[str] = []

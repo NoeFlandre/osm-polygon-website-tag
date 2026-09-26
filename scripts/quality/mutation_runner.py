@@ -102,6 +102,11 @@ def _mutant_names_from_cli(arguments: Iterable[str]) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _is_empty_filter_error(error: AssertionError) -> bool:
+    """Recognize mutmut's specific empty-selection assertion for a shard."""
+    return str(error).startswith("Filtered for specific mutants, but nothing matches")
+
+
 def _project_root() -> Path:
     """Return the original checkout root from either source copy."""
     source_root = Path(__file__).resolve().parents[2]
@@ -377,7 +382,13 @@ def main() -> None:
     if mutant_names:
         _configure_source_scope(mutant_names)
     sys.argv[0] = "mutmut"
-    mutmut_main.cli()
+    try:
+        mutmut_main.cli()
+    except AssertionError as exc:
+        if mutant_names and _is_empty_filter_error(exc):
+            print("No mutants match this generated shard; skipping the empty selection.")
+            return
+        raise
 
 
 if __name__ == "__main__":

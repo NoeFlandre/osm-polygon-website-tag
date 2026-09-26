@@ -44,7 +44,7 @@ def _row(
     osm_primary_tag: str = "building",
     area_bucket: str = "10-100m2",
 ) -> dict[str, object]:
-    row = polygon_row(
+    return polygon_row(
         "v1.3",
         polygon_id=polygon_id,
         region=region,
@@ -62,14 +62,11 @@ def _row(
         osm_primary_tag=osm_primary_tag,
         area_m2=0.0,
         area_bucket=area_bucket,
-    )
-    row.update(
         extraction_version="v1.0",
         extracted_at=pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
         wikidata=wikidata,
         wikidata_class=wikidata_class,
     )
-    return row
 
 
 def _table(rows: list[dict[str, object]]) -> pa.Table:
@@ -224,6 +221,23 @@ def test_aggregate_shard_top_hostnames() -> None:
     assert agg.top_hostnames == [("example.com", 2), ("foo.com", 1)]
 
 
+def test_aggregate_shard_sorts_hostname_ties_and_keeps_empty_non_null_names() -> None:
+    table = _table(
+        [
+            _row(polygon_id="p1", source_pbf="x.osm.pbf", website_hostname="z.example"),
+            _row(polygon_id="p2", source_pbf="x.osm.pbf", website_hostname="a.example"),
+            _row(polygon_id="p3", source_pbf="x.osm.pbf", website_hostname=""),
+            _row(polygon_id="p4", source_pbf="x.osm.pbf", website_hostname=None),
+        ]
+    )
+
+    assert aggregate_shard(table).top_hostnames == [
+        ("", 1),
+        ("a.example", 1),
+        ("z.example", 1),
+    ]
+
+
 def test_aggregate_shard_per_region_counts() -> None:
     table = _table(
         [
@@ -253,10 +267,15 @@ def test_aggregate_shard_per_polygon_id_count() -> None:
         [
             _row(polygon_id="p1", source_pbf="x.osm.pbf"),
             _row(polygon_id="p1", source_pbf="x.osm.pbf"),
+            _row(polygon_id="p1", source_pbf="x.osm.pbf"),
+            _row(polygon_id="p2", source_pbf="x.osm.pbf"),
+            _row(polygon_id="p2", source_pbf="x.osm.pbf"),
         ]
     )
     agg = aggregate_shard(table)
-    assert agg.duplicate_within_shard_count == 2  # two duplicates
+    assert agg.row_count == 5
+    assert agg.unique_polygon_ids == {"p1", "p2"}
+    assert agg.duplicate_within_shard_count == 5
 
 
 def test_aggregate_shard_unique_polygon_ids() -> None:

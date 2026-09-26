@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -181,11 +180,19 @@ def test_baseline_generation_is_sorted_deduplicated_and_documented(tmp_path: Pat
     assert mutation_gate.read_baseline(baseline) == {"a.x_f__mutmut_1", "b.x_f__mutmut_2"}
 
 
-def test_baseline_generation_defaults_to_the_repository_file() -> None:
+def test_baseline_generation_defaults_to_the_repository_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from scripts.quality import mutation_baseline
 
-    parser_default = 'default=Path("docs/quality/mutation-baseline.txt")'
-    assert parser_default in inspect.getsource(mutation_baseline.main)
+    monkeypatch.chdir(tmp_path)
+    results = tmp_path / "results.txt"
+    results.write_text("    module.x_f__mutmut_1: survived\n", encoding="utf-8")
+
+    assert mutation_baseline.main(["--results", str(results)]) == 0
+
+    baseline = tmp_path / "docs" / "quality" / "mutation-baseline.txt"
+    assert mutation_gate.read_baseline(baseline) == {"module.x_f__mutmut_1"}
     assert mutation_baseline.render([]).endswith("\n")
     assert "# Recorded mutants: 0" in mutation_baseline.render([])
 

@@ -239,7 +239,7 @@ def test_deduplicate_infers_source_names_when_inventory_is_omitted(tmp_path: Pat
 
 def test_deduplicate_escapes_quotes_and_creates_nested_output_parent(tmp_path: Path) -> None:
     source_dir = tmp_path / "source's polygons"
-    output_dir = tmp_path / "new parent" / "canonical's"
+    output_dir = tmp_path / "new parent" / "another level" / "canonical's"
     row = _row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=22,

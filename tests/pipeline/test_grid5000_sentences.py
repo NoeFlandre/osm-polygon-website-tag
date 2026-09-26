@@ -172,6 +172,27 @@ def test_prepare_packs_unfinished_shards_and_stages_the_model(tmp_path: Path) ->
     assert (bundle_dir / "beta.parquet").is_file()
 
 
+def test_unfinished_sentence_shard_checks_manifest_and_sentence_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _write_language_run(tmp_path, shards={"alpha": 1})
+    state = load_run(run_dir)
+    source = run_dir / "polygons" / "alpha.parquet"
+
+    assert grid5000_sentences._is_unfinished_source_shard(state, source)
+    monkeypatch.setattr(
+        grid5000_sentences, "shard_needs_sentence_segmentation", lambda _path: False
+    )
+    assert not grid5000_sentences._is_unfinished_source_shard(state, source)
+
+    state.sources.pop("alpha.osm.pbf")
+    with pytest.raises(
+        ValueError,
+        match=r"^sentence shard is not in the source manifest: alpha\.parquet$",
+    ):
+        grid5000_sentences._is_unfinished_source_shard(state, source)
+
+
 def test_prepare_stops_packing_at_the_row_budget(tmp_path: Path) -> None:
     _, _, bundle = _prepare(tmp_path, shards={"alpha": 2, "beta": 3, "gamma": 4}, max_rows=5)
 

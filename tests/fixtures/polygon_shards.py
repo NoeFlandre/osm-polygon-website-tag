@@ -196,6 +196,12 @@ def polygon_row(
         "contact_website_sentence_count": None,
         "contact_website_sentence_status": "absent",
     }
+    if schema_version == "v1.5":
+        stage_defaults.update(
+            website_text="example text.",
+            website_text_status="success",
+            website_sentence_status="success",
+        )
     row.update({name: value for name, value in stage_defaults.items() if name in row})
     return _apply_overrides(row, overrides)
 
