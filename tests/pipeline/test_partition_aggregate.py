@@ -6,6 +6,7 @@ import json
 
 import pyarrow as pa
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 from osm_polygon_website_tag.pipeline.partition_aggregate import (
     ShardAggregate,
@@ -43,35 +44,32 @@ def _row(
     osm_primary_tag: str = "building",
     area_bucket: str = "10-100m2",
 ) -> dict[str, object]:
-    return {
-        "polygon_id": polygon_id,
-        "region": region,
-        "source_pbf": source_pbf,
-        "osm_type": osm_type,
-        "osm_id": 100,
-        "osm_version": 1,
-        "osm_timestamp": pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
-        "website": website,
-        "website_class": website_class,
-        "website_hostname": website_hostname,
-        "wikidata": wikidata,
-        "wikidata_class": wikidata_class,
-        "name": None,
-        "tags": json.dumps({"wikidata": wikidata} if wikidata else {}),
-        "tag_keys": "[]",
-        "tag_count": 0,
-        "osm_primary_tag": osm_primary_tag,
-        "geometry": json.dumps({"type": "Polygon", "coordinates": []}),
-        "centroid": json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
-        "lat": 0.0,
-        "lon": 0.0,
-        "bbox": "[0.0,0.0,0.0,0.0]",
-        "area_m2": 0.0,
-        "area_km2": 0.0,
-        "area_bucket": area_bucket,
-        "extraction_version": "v1.0",
-        "extracted_at": pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
-    }
+    row = polygon_row(
+        "v1.3",
+        polygon_id=polygon_id,
+        region=region,
+        source_pbf=source_pbf,
+        osm_type=osm_type,
+        osm_id=100,
+        osm_version=1,
+        website=website,
+        website_class=website_class,
+        website_hostname=website_hostname,
+        name=None,
+        tags=json.dumps({"wikidata": wikidata} if wikidata else {}),
+        tag_keys="[]",
+        tag_count=0,
+        osm_primary_tag=osm_primary_tag,
+        area_m2=0.0,
+        area_bucket=area_bucket,
+    )
+    row.update(
+        extraction_version="v1.0",
+        extracted_at=pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
+        wikidata=wikidata,
+        wikidata_class=wikidata_class,
+    )
+    return row
 
 
 def _table(rows: list[dict[str, object]]) -> pa.Table:

@@ -7,8 +7,8 @@ import json
 import re
 from pathlib import Path
 
-import pyarrow as pa
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 import osm_polygon_website_tag.pipeline.enrichment_checkpoint as enrichment_checkpoint
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -20,25 +20,7 @@ from osm_polygon_website_tag.pipeline.enrichment_checkpoint import enrichment_ch
 
 
 def _row(index: int) -> dict[str, object]:
-    values: dict[str, object] = {}
-    for field in POLYGON_PUBLIC_SCHEMA:
-        if field.name == "polygon_id":
-            values[field.name] = f"source:way/{index}"
-        elif pa.types.is_boolean(field.type):
-            values[field.name] = False
-        elif pa.types.is_integer(field.type):
-            values[field.name] = 0
-        elif pa.types.is_floating(field.type):
-            values[field.name] = 0.0
-        elif pa.types.is_timestamp(field.type):
-            values[field.name] = pa.scalar(0, type=field.type).as_py()
-        else:
-            values[field.name] = ""
-    values["has_any_website"] = True
-    values["has_website"] = True
-    values["website"] = "https://example.org"
-    values["schema_version"] = "v1.3"
-    return values
+    return polygon_row("v1.3", polygon_id=f"source:way/{index}")
 
 
 def test_enrichment_checkpoint_module_exposes_focused_boundary() -> None:

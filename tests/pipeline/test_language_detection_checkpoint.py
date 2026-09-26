@@ -7,8 +7,8 @@ import json
 import re
 from pathlib import Path
 
-import pyarrow as pa
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 import osm_polygon_website_tag.pipeline.language_detection_checkpoint as language_checkpoint
 from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_SCHEMA_VERSION
@@ -25,44 +25,15 @@ def _model(sha256: str = "a" * 64) -> ModelIdentity:
 
 
 def _row(index: int) -> dict[str, object]:
-    values: dict[str, object] = {}
-    for field in POLYGON_PUBLIC_SCHEMA_V1_4:
-        if field.name == "polygon_id":
-            values[field.name] = f"source:way/{index}"
-        elif field.name == "website":
-            values[field.name] = "https://example.org"
-        elif field.name in {"has_website", "has_any_website"}:
-            values[field.name] = True
-        elif field.name == "website_text":
-            values[field.name] = f"text {index}"
-        elif field.name == "website_word_count":
-            values[field.name] = 2
-        elif field.name == "website_text_status":
-            values[field.name] = "success"
-        elif field.name == "contact_website_text_status":
-            values[field.name] = "absent"
-        elif field.name == "schema_version":
-            values[field.name] = "v1.4"
-        elif field.name in {
-            "contact_website",
-            "website_language",
-            "website_language_probability",
-            "contact_website_language",
-            "contact_website_language_probability",
-        }:
-            values[field.name] = None
-        elif pa.types.is_boolean(field.type):
-            values[field.name] = False
-        elif pa.types.is_integer(field.type):
-            values[field.name] = 0
-        elif pa.types.is_floating(field.type):
-            values[field.name] = 0.0
-        elif pa.types.is_timestamp(field.type):
-            values[field.name] = pa.scalar(0, type=field.type).as_py()
-        else:
-            values[field.name] = ""
-    values["has_contact_website"] = False
-    return values
+    return polygon_row(
+        "v1.4",
+        polygon_id=f"source:way/{index}",
+        website_text=f"text {index}",
+        website_word_count=2,
+        website_text_status="success",
+        website_language=None,
+        website_language_probability=None,
+    )
 
 
 def test_language_checkpoint_module_exposes_focused_boundary() -> None:

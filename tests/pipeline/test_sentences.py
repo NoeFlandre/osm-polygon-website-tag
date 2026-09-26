@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 
 import pytest
+from tests.fixtures.polygon_shards import sentence_input_row as _row
 
 from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_ABSENT,
@@ -35,19 +36,6 @@ class _FakeSplitter:
     def split(self, texts: Sequence[str]) -> list[list[str]]:
         self.batches.append(list(texts))
         return [self._mapping.get(text, [text]) for text in texts]
-
-
-def _row(**overrides: object) -> dict[str, object]:
-    row: dict[str, object] = {
-        "website_text_status": "success",
-        "website_text": "One. Two.",
-        "website_language": "eng_Latn",
-        "contact_website_text_status": "absent",
-        "contact_website_text": None,
-        "contact_website_language": None,
-    }
-    row.update(overrides)
-    return row
 
 
 def test_gate_defers_to_the_model_only_for_successful_supported_text() -> None:

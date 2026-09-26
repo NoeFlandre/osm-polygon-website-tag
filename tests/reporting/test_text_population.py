@@ -8,6 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 from osm_polygon_website_tag.reporting import text_population
 from osm_polygon_website_tag.reporting.artifact_inventory import data_manifest_sha256
@@ -36,26 +37,27 @@ def _row(
     contact_status: str | None,
     contact_words: int | None,
 ) -> dict[str, object]:
-    return {
-        "osm_type": "way",
-        "osm_id": osm_id,
-        "osm_version": osm_version,
-        "osm_timestamp": datetime(2026, 1, 1, tzinfo=UTC),
-        "source_pbf": source_pbf,
-        "polygon_id": polygon_id,
-        "lat": lat,
-        "lon": lon,
-        "website": "https://example.org" if website_text else None,
-        "contact_website": "https://contact.example.org" if contact_text else None,
-        "website_text": website_text,
-        "website_text_status": website_status,
-        "website_word_count": website_words,
-        "contact_website_text": contact_text,
-        "contact_website_text_status": contact_status,
-        "contact_website_word_count": contact_words,
-        "website_language": "eng" if website_text else None,
-        "contact_website_language": "fra" if contact_text else None,
-    }
+    return polygon_row(
+        "v1.4",
+        osm_type="way",
+        osm_id=osm_id,
+        osm_version=osm_version,
+        osm_timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+        source_pbf=source_pbf,
+        polygon_id=polygon_id,
+        lat=lat,
+        lon=lon,
+        website="https://example.org" if website_text else None,
+        contact_website="https://contact.example.org" if contact_text else None,
+        website_text=website_text,
+        website_text_status=website_status,
+        website_word_count=website_words,
+        contact_website_text=contact_text,
+        contact_website_text_status=contact_status,
+        contact_website_word_count=contact_words,
+        website_language="eng" if website_text else None,
+        contact_website_language="fra" if contact_text else None,
+    )
 
 
 def _write_run(root: Path, rows: list[dict[str, object]], *, split: bool) -> None:
