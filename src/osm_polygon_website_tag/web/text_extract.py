@@ -5,6 +5,7 @@ from __future__ import annotations
 import codecs
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.metadata import version
@@ -34,6 +35,14 @@ _extractor_state = threading.local()
 # inside functions only adds mutants no test can tell apart.
 _UTF8 = "utf-8"
 _LATIN1 = "latin-1"
+# WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
+_WEB_ALIASES = {
+    "ascii": "cp1252",
+    "iso8859-1": "cp1252",
+    "iso8859-9": "cp1254",
+    "iso8859-11": "cp874",
+    "tis-620": "cp874",
+}
 
 
 @lru_cache(maxsize=1)
@@ -102,9 +111,10 @@ def _codec(name: str | None) -> str | None:
     if name is None:
         return None
     try:
-        return codecs.lookup(name).name
+        codec = codecs.lookup(name).name
     except LookupError:
         return None
+    return _WEB_ALIASES.get(codec, codec)
 
 
 def _bom_codec(html: bytes) -> str | None:
@@ -118,17 +128,49 @@ def _wide_codec(charset: str | None) -> str | None:
 
 
 def decode_html(html: bytes, charset: str | None = None) -> str:
-    """Decode HTML: BOM, declared UTF-16/32, valid UTF-8, charset, meta, detection."""
-    candidates = [_bom_codec(html), _wide_codec(charset), _UTF8]
-    candidates += [_codec(charset), _meta_charset(html), *detect_encoding(html)]
-    for encoding in candidates:
+    """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
+
+    Strict decodes run in order: BOM, declared UTF-16/32, UTF-8, the HTTP
+    charset, then ``<meta charset>``. If none fits, a page that is mostly
+    UTF-8, or else one with a declared charset, keeps that codec and replaces
+    only its bad bytes; detection is the last resort.
+    """
+    declared = [_codec(charset), _meta_charset(html)]
+    strict = [_bom_codec(html), _wide_codec(charset), _UTF8, *declared]
+    decoded = _first_decoding(html, strict)
+    if decoded is not None:
+        return decoded
+    lenient = _lenient_codec(html, declared)
+    if lenient is not None:
+        return str(html, lenient, "replace")
+    return _first_decoding(html, detect_encoding(html)) or str(html, _UTF8, "replace")
+
+
+def _first_decoding(html: bytes, encodings: Iterable[str | None]) -> str | None:
+    for encoding in encodings:
         if encoding is None:
             continue
         try:
             return html.decode(encoding)
         except (LookupError, UnicodeDecodeError):
             continue
-    return str(html, _UTF8, "replace")
+    return None
+
+
+def _lenient_codec(html: bytes, declared: list[str | None]) -> str | None:
+    if _mostly_utf8(html):
+        return _UTF8
+    return next((codec for codec in declared if codec is not None), None)
+
+
+def _mostly_utf8(html: bytes) -> bool:
+    """More valid multi-byte UTF-8 characters than invalid sequences.
+
+    Legacy single-byte text almost never forms valid multi-byte sequences.
+    """
+    text = str(html, _UTF8, "replace")
+    invalid = text.count("\ufffd")
+    return sum(1 for char in text if ord(char) > 127) - invalid > invalid
 
 
 def extract_main_text(html: bytes, *, url: str, charset: str | None = None) -> TextExtraction:

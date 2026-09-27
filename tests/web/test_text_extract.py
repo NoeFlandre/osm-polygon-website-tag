@@ -279,3 +279,57 @@ def test_invalid_meta_charset_does_not_hide_a_later_valid_one() -> None:
     head = b'<meta charset="no-such-codec"><meta charset="windows-1251">'
 
     assert text_extract._meta_charset(head) == "cp1251"
+
+
+@pytest.mark.parametrize(
+    ("label", "codec"),
+    [
+        ("iso-8859-1", "cp1252"),
+        ("latin1", "cp1252"),
+        ("us-ascii", "cp1252"),
+        ("iso-8859-9", "cp1254"),
+        ("iso-8859-11", "cp874"),
+        ("tis-620", "cp874"),
+        ("koi8-r", "koi8-r"),
+    ],
+)
+def test_web_charset_labels_map_to_their_windows_supersets(label, codec) -> None:
+    assert text_extract._codec(label) == codec
+
+
+def test_latin1_label_decodes_windows_1252_punctuation() -> None:
+    html = _page("“Café” costs 5€. " * 30).encode("cp1252")
+
+    assert "“Café” costs 5€." in decode_html(html, "iso-8859-1")
+
+
+def test_isolated_bad_byte_in_utf8_page_keeps_utf8() -> None:
+    html = _page("Café crème coûte 5€. " * 30).encode("utf-8") + b"\xff"
+
+    decoded = decode_html(html)
+
+    assert "Café crème coûte 5€." in decoded
+    assert decoded.endswith("�")
+
+
+def test_isolated_bad_byte_keeps_the_declared_charset() -> None:
+    body = _page("Москва большой город. " * 30, '<meta charset="windows-1251">')
+    html = body.encode("cp1251") + b"\x98"  # 0x98 is undefined in cp1251
+
+    decoded = decode_html(html)
+
+    assert "Москва большой город." in decoded
+    assert decoded.endswith("�")
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        ("é€".encode() + b"\xff", True),
+        ("é".encode() + b"\xff", False),
+        (b"caf\xe9 cr\xe8me", False),
+        (b"plain ascii", False),
+    ],
+)
+def test_mostly_utf8_counts_valid_against_invalid_sequences(html: bytes, expected: bool) -> None:
+    assert text_extract._mostly_utf8(html) is expected
