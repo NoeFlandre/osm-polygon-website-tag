@@ -586,3 +586,24 @@ def test_meta_content_skips_quoted_parameters() -> None:
 @pytest.mark.parametrize("label", ["x-x-big5", "cn-big5", "csbig5", "big5-hkscs"])
 def test_big5_web_labels_resolve(label: str) -> None:
     assert text_extract._codec(label) == "big5hkscs"
+
+
+def test_bare_charset_attribute_falls_through_to_http_equiv() -> None:
+    tag = b'<meta charset http-equiv="Content-Type" content="text/html; charset=koi8-r">'
+
+    assert text_extract._meta_charset(tag) == "koi8-r"
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [b'<meta content="text/html; charset=koi8-r">', b'<meta http-equiv="Content-Type">'],
+)
+def test_http_equiv_needs_both_attributes(tag: bytes) -> None:
+    assert text_extract._meta_charset(tag) is None
+
+
+def test_a_meta_charset_that_decodes_wins_over_a_mostly_utf8_body() -> None:
+    # No HTTP charset: like browsers, a declaration that decodes is honoured.
+    html = _page("Café " * 10, '<meta charset="windows-1252">').encode() + b"\xff"
+
+    assert decode_html(html) == html.decode("cp1252")

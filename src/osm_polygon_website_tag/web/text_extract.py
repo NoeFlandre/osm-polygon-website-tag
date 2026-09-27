@@ -125,7 +125,7 @@ class _MetaCharsetParser(HTMLParser):
     """
 
     def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
+        super().__init__()
         self.declared: list[str] = []
         self._text_only: str | None = None
 
@@ -150,9 +150,10 @@ class _MetaCharsetParser(HTMLParser):
 
 
 def _http_equiv_charset(attributes: dict[str, str]) -> str | None:
-    if attributes.get("http-equiv", "").lower() != "content-type":
+    http_equiv, content = attributes.get("http-equiv"), attributes.get("content")
+    if http_equiv is None or content is None or http_equiv.lower() != "content-type":
         return None
-    return charset_parameter(attributes.get("content", ""))
+    return charset_parameter(content)
 
 
 def _meta_charset(html: bytes) -> str | None:
