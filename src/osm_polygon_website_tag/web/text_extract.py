@@ -151,7 +151,13 @@ def _meta_charset(html: bytes) -> str | None:
     """Return the codec of the first real meta charset declaration naming a known codec."""
     parser = _MetaCharsetParser()
     parser.feed(html[:4096].decode(_LATIN1))
-    return next(filter(None, map(_codec, parser.declared)), None)
+    return next(filter(None, map(_meta_codec, parser.declared)), None)
+
+
+def _meta_codec(label: str) -> str | None:
+    """HTML reads a <meta> naming UTF-16/32 as UTF-8 (the page is already ASCII-readable)."""
+    codec = _codec(label)
+    return _UTF8 if codec is not None and codec.startswith(_WIDE_PREFIXES) else codec
 
 
 def _codec(name: str | None) -> str | None:
@@ -177,26 +183,34 @@ def _ascii_lookalike(codec: str | None, prefixes: tuple[str, ...]) -> str | None
 def decode_html(html: bytes, charset: str | None = None) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
-    Strict decodes run in order: BOM, declared codecs whose bytes can pass as
-    UTF-8 (UTF-16/32 from HTTP; 7-bit ISO-2022/UTF-7/HZ and multi-byte CJK
-    from HTTP or meta), UTF-8, the HTTP charset, then ``<meta charset>``. If none fits, a page that is mostly
-    UTF-8, or else one with a declared charset, keeps that codec and replaces
-    only its bad bytes; detection is the last resort.
+    Order: a BOM decides outright. Then strict decodes of declared codecs
+    whose bytes can pass as UTF-8 (UTF-16/32 from HTTP; 7-bit ISO-2022/UTF-7/HZ
+    and multi-byte CJK from HTTP or meta), UTF-8, and the HTTP charset. An
+    HTTP charset that still fails keeps its codec with bad bytes replaced,
+    before ``<meta charset>`` is considered at all.
     """
     bom = _bom_codec(html)
     if bom is not None:  # a byte-order mark is authoritative; only bad bytes are replaced
         return str(html, bom, "replace")
     header, meta = _codec(charset), _meta_charset(html)
-    declared = [header, meta]
     lookalikes = [
         _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
         _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
     ]
-    strict = [*lookalikes, _UTF8, *declared]
-    decoded = _first_decoding(html, strict)
+    decoded = _first_decoding(html, [*lookalikes, _UTF8, header])
     if decoded is not None:
         return decoded
-    lenient = _lenient_codec(html, declared)
+    if header is not None:  # the HTTP charset outranks meta
+        return str(html, header, "replace")
+    return _decode_by_meta(html, meta)
+
+
+def _decode_by_meta(html: bytes, meta: str | None) -> str:
+    """No usable HTTP charset: strict meta, then a lenient codec, then detection."""
+    decoded = _first_decoding(html, [meta])
+    if decoded is not None:
+        return decoded
+    lenient = _lenient_codec(html, meta)
     if lenient is not None:
         return str(html, lenient, "replace")
     return _first_decoding(html, detect_encoding(html)) or str(html, _UTF8, "replace")
@@ -213,10 +227,8 @@ def _first_decoding(html: bytes, encodings: Iterable[str | None]) -> str | None:
     return None
 
 
-def _lenient_codec(html: bytes, declared: list[str | None]) -> str | None:
-    if _mostly_utf8(html):
-        return _UTF8
-    return next((codec for codec in declared if codec is not None), None)
+def _lenient_codec(html: bytes, meta: str | None) -> str | None:
+    return _UTF8 if _mostly_utf8(html) else meta
 
 
 def _mostly_utf8(html: bytes) -> bool:

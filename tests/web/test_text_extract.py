@@ -514,3 +514,24 @@ def test_bare_charset_attribute_is_not_a_declaration() -> None:
 @pytest.mark.parametrize(("label", "codec"), [("windows-31j", "cp932"), ("Windows-949", "cp949")])
 def test_windows_cjk_labels_resolve(label: str, codec: str) -> None:
     assert text_extract._codec(label) == codec
+
+
+@pytest.mark.parametrize("label", ["utf-16le", "UTF-32"])
+def test_wide_meta_labels_mean_utf8(label: str) -> None:
+    assert text_extract._meta_charset(f'<meta charset="{label}">'.encode()) == "utf-8"
+
+
+def test_meta_utf16_label_never_decodes_a_single_byte_page_as_utf16() -> None:
+    html = _page("Café crème. " * 10, '<meta charset="utf-16le">').encode("cp1252")
+
+    assert "Caf" in decode_html(html)
+    assert "慃" not in decode_html(html)  # "Ca" read as one UTF-16LE unit
+
+
+def test_http_charset_with_a_bad_byte_beats_a_conflicting_meta() -> None:
+    html = _page("Café crème coûte 5€. " * 10, '<meta charset="windows-1252">').encode() + b"\xff"
+
+    decoded = decode_html(html, "utf-8")
+
+    assert "Café crème coûte 5€." in decoded
+    assert decoded.endswith("�")

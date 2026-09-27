@@ -282,7 +282,19 @@ def test_parse_diff_tracks_line_numbers_across_hunks_and_files() -> None:
         "+++ b/b.py\n@@ -1 +1,0 @@\n-gone\n"
     )
 
-    assert mutation_scope.parse_diff(diff) == {"a.py": {1, 2, 11}}
+    assert mutation_scope.parse_diff(diff) == {"a.py": {1, 2, 11}, "b.py": {0}}
+
+
+def test_a_deletion_only_hunk_scopes_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "shrunk.py"
+    module.parent.mkdir(parents=True)
+    module.write_text('"""Module."""\n\n\ndef kept() -> int:\n    return 1\n', encoding="utf-8")
+    relative = "src/osm_polygon_website_tag/reporting/shrunk.py"
+    lines = mutation_scope.parse_diff(f"+++ b/{relative}\n@@ -3 +2,0 @@\n-LIMIT = 3\n")
+
+    assert mutation_scope.function_filters(lines, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.shrunk": ["osm_polygon_website_tag.reporting.shrunk.*"]
+    }
 
 
 def test_a_changed_module_constant_still_charges_the_whole_module(tmp_path: Path) -> None:

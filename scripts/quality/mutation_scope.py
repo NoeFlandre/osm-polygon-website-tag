@@ -108,6 +108,7 @@ def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, set[int]]:
 def parse_diff(diff: str) -> dict[str, set[int]]:
     """Return the added or modified new-side line numbers of a ``-U0`` diff.
 
+    A deletion-only hunk records line 0, which scopes the whole module.
     In a pure-addition hunk (nothing removed), blank and comment-only lines
     are dropped: adding a function also adds blank separators, which must
     not charge the whole module. In any other hunk every new line counts,
@@ -123,6 +124,10 @@ def parse_diff(diff: str) -> dict[str, set[int]]:
         elif current is not None and (match := _HUNK.match(raw)):
             pure_addition = match.group("old") == "0"
             number = int(match.group("start"))
+            if match.group("count") == "0":
+                # Deletion only: no new-side line to point at. Line 0 lies
+                # outside every function, so the whole module is scoped.
+                lines.setdefault(current, set()).add(0)
         elif current is not None and raw.startswith("+"):
             if not (pure_addition and _is_blank_or_comment(raw[1:])):
                 lines.setdefault(current, set()).add(number)
