@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import codecs
-import re
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from trafilatura.settings import Extractor
 from trafilatura.utils import detect_encoding
 
 from osm_polygon_website_tag.contracts.text_schema import count_words
+from osm_polygon_website_tag.web.content_type import charset_parameter
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,10 @@ _WEB_LABELS = {
     "x-euc-jp": "euc_jp",
     "x-mac-cyrillic": "mac-cyrillic",
     "x-mac-roman": "mac-roman",
+    "x-x-big5": "big5hkscs",
+    "cn-big5": "big5hkscs",
+    "csbig5": "big5hkscs",
+    "big5-hkscs": "big5hkscs",
     "windows-31j": "cp932",
     "windows-949": "cp949",
     "ks_c_5601-1989": "cp949",
@@ -98,7 +102,6 @@ def _extractor_options(url: str) -> Extractor:
     return options
 
 
-_CONTENT_CHARSET = re.compile(r"""(?:^|;)\s*charset\s*=\s*["']?([A-Za-z0-9_.:-]+)""", re.IGNORECASE)
 # HTML only honours encoding declarations within the first 1024 bytes.
 _PRESCAN_BYTES = 1024
 # html.parser already treats script/style as raw text; these hold text, not
@@ -149,8 +152,7 @@ class _MetaCharsetParser(HTMLParser):
 def _http_equiv_charset(attributes: dict[str, str]) -> str | None:
     if attributes.get("http-equiv", "").lower() != "content-type":
         return None
-    match = _CONTENT_CHARSET.search(attributes.get("content", ""))
-    return match.group(1) if match else None
+    return charset_parameter(attributes.get("content", ""))
 
 
 def _meta_charset(html: bytes) -> str | None:
@@ -186,19 +188,20 @@ def _ascii_lookalike(codec: str | None, prefixes: tuple[str, ...]) -> str | None
     return codec if codec is not None and codec.startswith(prefixes) else None
 
 
-def decode_html(html: bytes, charset: str | None = None) -> str:
+def decode_html(html: bytes, charset: str | None = None, *, sniff_meta: bool = True) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
     Order: a BOM decides outright. Then strict decodes of declared codecs
     whose bytes can pass as UTF-8 (UTF-16/32 from HTTP; 7-bit ISO-2022/UTF-7/HZ
     and multi-byte CJK from HTTP or meta), UTF-8, and the HTTP charset. An
     HTTP charset that still fails keeps its codec with bad bytes replaced,
-    before ``<meta charset>`` is considered at all.
+    before ``<meta charset>`` is considered at all. ``sniff_meta=False``
+    (plain-text responses) skips the meta scan: there it is literal text.
     """
     bom = _bom_codec(html)
     if bom is not None:  # a byte-order mark is authoritative; only bad bytes are replaced
         return str(html, bom, "replace")
-    header, meta = _codec(charset), _meta_charset(html)
+    header, meta = _codec(charset), _meta_charset(html) if sniff_meta else None
     lookalikes = [
         _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
         _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
@@ -247,10 +250,12 @@ def _mostly_utf8(html: bytes) -> bool:
     return sum(1 for char in text if ord(char) > 127) - invalid > invalid
 
 
-def extract_main_text(html: bytes, *, url: str, charset: str | None = None) -> TextExtraction:
-    """Extract full main text from already downloaded HTML."""
+def extract_main_text(
+    html: bytes, *, url: str, charset: str | None = None, media_type: str | None = None
+) -> TextExtraction:
+    """Extract full main text from already downloaded HTML (or plain text)."""
     library_version = _trafilatura_version()
-    decoded = decode_html(html, charset)
+    decoded = decode_html(html, charset, sniff_meta=media_type != "text/plain")
     try:
         # An Extractor ``options`` object overrides trafilatura's per-call
         # keyword settings, so the URL and output settings live only there.

@@ -621,7 +621,7 @@ def _extract_fetched(
             invocation_id,
         )
     final_url = fetched.final_url or url
-    extracted = _run_extractor(extractor, fetched.body, final_url, fetched.charset)
+    extracted = _run_extractor(extractor, fetched.body, final_url, fetched)
     return CachedText(
         url,
         extracted.status,
@@ -637,28 +637,36 @@ def _extract_fetched(
 
 
 def _run_extractor(
-    extractor: Extractor, body: bytes, url: str, charset: str | None
+    extractor: Extractor, body: bytes, url: str, fetched: FetchResult
 ) -> TextExtraction:
-    if charset is None or not _accepts_charset(extractor):
-        return extractor(body, url=url)
-    return extractor(body, url=url, charset=charset)
+    """Call ``extractor``, forwarding response metadata only where it is accepted.
+
+    Older custom extractors take only ``url=``; ``charset`` and ``media_type``
+    are passed just to extractors whose signature accepts them by keyword.
+    """
+    extras = {"charset": fetched.charset, "media_type": fetched.media_type}
+    accepted = {
+        name: value
+        for name, value in extras.items()
+        if value is not None and _accepts_keyword(extractor, name)
+    }
+    return extractor(body, url=url, **accepted)
 
 
-def _accepts_charset(extractor: Extractor) -> bool:
-    """Whether a custom extractor takes ``charset=`` (older ones only take ``url=``)."""
+def _accepts_keyword(extractor: Extractor, name: str) -> bool:
+    """Whether ``extractor`` can take ``name=`` (a keyword parameter or ``**kwargs``)."""
     try:
         parameters = inspect.signature(extractor).parameters.values()
     except (TypeError, ValueError):
         return False
-    return any(_forwards_charset(parameter) for parameter in parameters)
+    return any(_forwards(parameter, name) for parameter in parameters)
 
 
-def _forwards_charset(parameter: inspect.Parameter) -> bool:
-    """``**kwargs``, or a ``charset`` parameter that can be passed by keyword."""
+def _forwards(parameter: inspect.Parameter, name: str) -> bool:
     if parameter.kind is parameter.VAR_KEYWORD:
         return True
     keyword_kinds = (parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY)
-    return parameter.name == "charset" and parameter.kind in keyword_kinds
+    return parameter.name == name and parameter.kind in keyword_kinds
 
 
 def _apply_result(row: dict[str, object], prefix: str, value: CachedText) -> None:

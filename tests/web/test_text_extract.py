@@ -555,3 +555,34 @@ def test_a_late_meta_after_1024_bytes_cannot_override_utf8() -> None:
     html = ("<p>" + "专业" * 400 + "</p><meta charset=gb2312>").encode()
 
     assert decode_html(html) == html.decode()
+
+
+def test_plain_text_responses_do_not_sniff_meta() -> None:
+    body = "<meta charset=gb2312> 专业 plain text".encode()
+
+    result = extract_main_text(body, url="https://example.org", media_type="text/plain")
+
+    assert text_extract.decode_html(body, sniff_meta=False) == body.decode()
+    assert "涓" not in (result.text or "")  # GB18030 misreading of UTF-8 专
+
+
+def test_html_media_type_still_sniffs_meta() -> None:
+    html = _page("Москва большой город. " * 10, '<meta charset="windows-1251">').encode("cp1251")
+
+    result = extract_main_text(html, url="https://example.org", media_type="text/html")
+
+    assert "Москва" in (result.text or "")
+
+
+def test_meta_content_skips_quoted_parameters() -> None:
+    tag = (
+        b'<meta http-equiv="Content-Type" '
+        b"content='text/html; note=\"; charset=koi8-r\"; charset=windows-1251'>"
+    )
+
+    assert text_extract._meta_charset(tag) == "cp1251"
+
+
+@pytest.mark.parametrize("label", ["x-x-big5", "cn-big5", "csbig5", "big5-hkscs"])
+def test_big5_web_labels_resolve(label: str) -> None:
+    assert text_extract._codec(label) == "big5hkscs"

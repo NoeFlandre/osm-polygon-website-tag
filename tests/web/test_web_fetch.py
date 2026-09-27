@@ -649,7 +649,9 @@ def test_redirect_limit_boundary(max_redirects: int) -> None:
         max_redirects=max_redirects,
     )
     final = f"https://example.org/r{max_redirects}" if max_redirects else "https://example.org"
-    assert result == FetchResult("ok", "https://example.org", final_url=final, body=b"done")
+    assert result == FetchResult(
+        "ok", "https://example.org", final_url=final, body=b"done", media_type="text/html"
+    )
     assert len(urls) == max_redirects + 1
 
 
@@ -810,6 +812,7 @@ def test_content_type_allowed(content_type: str) -> None:
         "https://example.org",
         b"x",
         charset=web_fetch_module._header_charset(response.headers),
+        media_type=web_fetch_module._header_media_type(response.headers),
     )
 
 

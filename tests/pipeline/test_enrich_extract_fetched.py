@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from osm_polygon_website_tag.pipeline import enrich
-from osm_polygon_website_tag.pipeline.enrich import _accepts_charset, _extract_fetched
+from osm_polygon_website_tag.pipeline.enrich import _accepts_keyword, _extract_fetched
 from osm_polygon_website_tag.web.text_cache import CachedText
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
@@ -99,9 +99,9 @@ def test_accepts_charset_reads_the_extractor_signature() -> None:
     def url_only(html: bytes, *, url: str) -> TextExtraction:
         return result
 
-    assert _accepts_charset(named)
-    assert _accepts_charset(keywords)
-    assert not _accepts_charset(url_only)
+    assert _accepts_keyword(named, "charset")
+    assert _accepts_keyword(keywords, "charset")
+    assert not _accepts_keyword(url_only, "charset")
 
 
 def test_uninspectable_extractor_is_called_without_charset(monkeypatch) -> None:
@@ -113,7 +113,7 @@ def test_uninspectable_extractor_is_called_without_charset(monkeypatch) -> None:
     def keywords(html: bytes, **kwargs: object) -> TextExtraction:
         return TextExtraction("success", "x", 1, None, "2.1.0")
 
-    assert not _accepts_charset(keywords)
+    assert not _accepts_keyword(keywords, "charset")
 
 
 def test_positional_only_charset_is_not_forwarded() -> None:
@@ -133,12 +133,32 @@ def test_positional_only_charset_is_not_forwarded() -> None:
     def variadic(html: bytes, *charset: str, url: str) -> TextExtraction:
         return result
 
-    assert not _accepts_charset(positional)
-    assert not _accepts_charset(variadic)
-    assert _accepts_charset(keyword_only)
-    assert _accepts_charset(positional_or_keyword)
+    assert not _accepts_keyword(positional, "charset")
+    assert not _accepts_keyword(variadic, "charset")
+    assert _accepts_keyword(keyword_only, "charset")
+    assert _accepts_keyword(positional_or_keyword, "charset")
     fetched = FetchResult("ok", URL, final_url=URL, body=b"x", charset="koi8-r")
     assert (
         _extract_fetched(URL, fetched, invocation_id="run", extractor=positional).status
         == "success"
     )
+
+
+def test_media_type_is_forwarded_only_to_extractors_that_take_it() -> None:
+    seen: list[dict[str, object]] = []
+
+    def full(html: bytes, *, url: str, charset: str | None = None, media_type: str | None = None):
+        seen.append({"charset": charset, "media_type": media_type})
+        return TextExtraction("success", "x", 1, None, "2.1.0")
+
+    fetched = FetchResult(
+        "ok", URL, final_url=URL, body=b"x", charset="utf-8", media_type="text/plain"
+    )
+    _extract_fetched(URL, fetched, invocation_id="run", extractor=full)
+
+    assert seen == [{"charset": "utf-8", "media_type": "text/plain"}]
+
+    def url_only(html: bytes, *, url: str) -> TextExtraction:
+        return TextExtraction("success", "x", 1, None, "2.1.0")
+
+    assert not _accepts_keyword(url_only, "media_type")

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
-import re
 import socket
 import time
 import urllib.error
@@ -13,6 +12,8 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from osm_polygon_website_tag.web.content_type import charset_parameter, media_type
 
 MAX_RESPONSE_BYTES = 20_000_000
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -47,6 +48,7 @@ class FetchResult:
     body: bytes | None = None
     message: str | None = None
     charset: str | None = None
+    media_type: str | None = None
 
 
 def normalize_http_url(raw: str) -> str:
@@ -313,6 +315,7 @@ def _terminal_response(
         final_url=current,
         body=response.body,
         charset=_header_charset(response.headers),
+        media_type=_header_media_type(response.headers),
     )
 
 
@@ -344,20 +347,17 @@ def _size_error(
     return None
 
 
-# One ``; name=value`` Content-Type parameter. Quoted values are consumed whole,
-# so a ``charset=`` inside another parameter's quotes is never read.
-_HEADER_PARAMETER = re.compile(r"""\s*;\s*([^=;\s]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))""")
-
-
 _CONTENT_TYPE = "content-type"
 
 
 def _header_charset(headers: Mapping[str, str]) -> str | None:
     """Return the ``charset=`` parameter of the Content-Type header, if any."""
-    for name, quoted, token in _HEADER_PARAMETER.findall(str(_header(headers, _CONTENT_TYPE))):
-        if name.lower() == "charset":
-            return quoted + token or None
-    return None
+    return charset_parameter(str(_header(headers, _CONTENT_TYPE)))
+
+
+def _header_media_type(headers: Mapping[str, str]) -> str | None:
+    value = _header(headers, _CONTENT_TYPE)
+    return None if value is None else media_type(value)
 
 
 def _content_type_error(
