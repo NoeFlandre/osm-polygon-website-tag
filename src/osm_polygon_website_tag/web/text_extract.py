@@ -35,6 +35,10 @@ _extractor_state = threading.local()
 # inside functions only adds mutants no test can tell apart.
 _UTF8 = "utf-8"
 _LATIN1 = "latin-1"
+# Codec name prefixes: UTF-16/32 (only trusted from HTTP; a <meta> naming them
+# is read as UTF-8 by HTML) and 7-bit stateful encodings.
+_WIDE_PREFIXES = ("utf-16", "utf-32")
+_SEVEN_BIT_PREFIXES = ("iso2022", "utf-7", "hz")
 # WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
 _WEB_ALIASES = {
     "ascii": "cp1252",
@@ -62,7 +66,11 @@ def _extractor_options(url: str) -> Extractor:
     return options
 
 
-_COMMENT = re.compile(rb"<!--.*?(?:-->|$)", re.DOTALL)
+# Comments and raw-text elements can hold <meta>-shaped text that is not markup.
+_INACTIVE = re.compile(
+    rb"<!--.*?(?:-->|$)|<(script|style|textarea|title|noscript|xmp)\b.*?(?:</\1\s*>|$)",
+    re.DOTALL | re.IGNORECASE,
+)
 _META_TAG = re.compile(rb"<meta\s[^>]*>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""")
 _CONTENT_CHARSET = re.compile(rb"charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
@@ -94,7 +102,7 @@ def _http_equiv_charset(attributes: dict[bytes, bytes]) -> bytes | None:
 
 def _meta_charset(html: bytes) -> str | None:
     """Return the codec of the first active meta charset tag naming a known codec."""
-    head = _COMMENT.sub(b"", html[:4096])
+    head = _INACTIVE.sub(b"", html[:4096])
     for tag in _META_TAG.findall(head):
         codec = _tag_codec(tag)
         if codec is not None:
@@ -121,22 +129,27 @@ def _bom_codec(html: bytes) -> str | None:
     return next((codec for bom, codec in _BOMS if html.startswith(bom)), None)
 
 
-def _wide_codec(charset: str | None) -> str | None:
-    """Declared UTF-16/32 codec: ASCII text in those is also valid UTF-8."""
-    codec = _codec(charset)
-    return codec if codec is not None and codec.startswith(("utf-16", "utf-32")) else None
+def _ascii_lookalike(codec: str | None, prefixes: tuple[str, ...]) -> str | None:
+    """Declared codec whose ASCII-only bytes also pass as valid UTF-8."""
+    return codec if codec is not None and codec.startswith(prefixes) else None
 
 
 def decode_html(html: bytes, charset: str | None = None) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
-    Strict decodes run in order: BOM, declared UTF-16/32, UTF-8, the HTTP
-    charset, then ``<meta charset>``. If none fits, a page that is mostly
+    Strict decodes run in order: BOM, declared codecs whose bytes can look
+    like ASCII (UTF-16/32 from HTTP, 7-bit ISO-2022/UTF-7/HZ from HTTP or
+    meta), UTF-8, the HTTP charset, then ``<meta charset>``. If none fits, a page that is mostly
     UTF-8, or else one with a declared charset, keeps that codec and replaces
     only its bad bytes; detection is the last resort.
     """
-    declared = [_codec(charset), _meta_charset(html)]
-    strict = [_bom_codec(html), _wide_codec(charset), _UTF8, *declared]
+    header, meta = _codec(charset), _meta_charset(html)
+    declared = [header, meta]
+    lookalikes = [
+        _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES),
+        _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES),
+    ]
+    strict = [_bom_codec(html), *lookalikes, _UTF8, *declared]
     decoded = _first_decoding(html, strict)
     if decoded is not None:
         return decoded

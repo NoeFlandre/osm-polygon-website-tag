@@ -333,3 +333,40 @@ def test_isolated_bad_byte_keeps_the_declared_charset() -> None:
 )
 def test_mostly_utf8_counts_valid_against_invalid_sequences(html: bytes, expected: bool) -> None:
     assert text_extract._mostly_utf8(html) is expected
+
+
+@pytest.mark.parametrize("label", ["iso-2022-jp", "utf-7"])
+def test_declared_seven_bit_codec_beats_utf8(label: str) -> None:
+    text = _page("東京の公園はとても美しい場所です。" * 10)
+
+    assert decode_html(text.encode(label), label) == text
+
+
+def test_seven_bit_codec_declared_in_meta_beats_utf8() -> None:
+    text = _page("東京の公園はとても美しい場所です。" * 10, '<meta charset="iso-2022-jp">')
+
+    assert decode_html(text.encode("iso-2022-jp")) == text
+
+
+def test_utf16_declared_in_meta_does_not_override_utf8() -> None:
+    html = _page("plain words " * 10, '<meta charset="utf-16">').encode()
+
+    assert decode_html(html) == html.decode()
+
+
+@pytest.mark.parametrize(
+    "inactive",
+    [
+        "<script>const t = '<meta charset=\"koi8-r\">';</script>",
+        "<STYLE>/* <meta charset=koi8-r> */</STYLE >",
+        "<title><meta charset=koi8-r></title>",
+    ],
+)
+def test_meta_text_inside_raw_text_elements_is_ignored(inactive: str) -> None:
+    head = f'{inactive}<meta charset="windows-1251">'.encode()
+
+    assert text_extract._meta_charset(head) == "cp1251"
+
+
+def test_unclosed_script_hides_everything_after_it() -> None:
+    assert text_extract._meta_charset(b"<script><meta charset=koi8-r>") is None
