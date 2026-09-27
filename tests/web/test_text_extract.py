@@ -290,6 +290,11 @@ def test_invalid_meta_charset_does_not_hide_a_later_valid_one() -> None:
         ("iso-8859-9", "cp1254"),
         ("iso-8859-11", "cp874"),
         ("tis-620", "cp874"),
+        ("gb2312", "gb18030"),
+        ("GBK", "gb18030"),
+        ("Shift_JIS", "cp932"),
+        ("euc-kr", "cp949"),
+        ("big5", "big5hkscs"),
         ("koi8-r", "koi8-r"),
     ],
 )
@@ -370,3 +375,16 @@ def test_meta_text_inside_raw_text_elements_is_ignored(inactive: str) -> None:
 
 def test_unclosed_script_hides_everything_after_it() -> None:
     assert text_extract._meta_charset(b"<script><meta charset=koi8-r>") is None
+
+
+@pytest.mark.parametrize(
+    ("label", "codec", "sentence"),
+    [
+        ("gb2312", "gbk", "镕基在北京开会。"),
+        ("Shift_JIS", "cp932", "①番目の東京の公園です。"),
+    ],
+)
+def test_legacy_asian_labels_decode_extension_characters(label, codec, sentence) -> None:
+    html = _page(sentence * 20).encode(codec)
+
+    assert sentence in decode_html(html, label)

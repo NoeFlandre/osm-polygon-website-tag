@@ -46,6 +46,11 @@ _WEB_ALIASES = {
     "iso8859-9": "cp1254",
     "iso8859-11": "cp874",
     "tis-620": "cp874",
+    "gb2312": "gb18030",
+    "gbk": "gb18030",
+    "shift_jis": "cp932",
+    "euc_kr": "cp949",
+    "big5": "big5hkscs",
 }
 
 
