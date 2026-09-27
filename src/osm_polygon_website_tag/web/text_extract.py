@@ -39,6 +39,11 @@ _LATIN1 = "latin-1"
 # is read as UTF-8 by HTML) and 7-bit stateful encodings.
 _WIDE_PREFIXES = ("utf-16", "utf-32")
 _SEVEN_BIT_PREFIXES = ("iso2022", "utf-7", "hz")
+# Declared multi-byte CJK codecs also beat UTF-8: short CJK text in them can
+# happen to be valid UTF-8 (GBK "专业" is d7 a8 d2 b5). Single-byte labels do
+# not, because mislabelled UTF-8 pages are common and cp1252 text is rarely
+# valid UTF-8 by accident.
+_MULTIBYTE_PREFIXES = ("gb18030", "cp932", "cp949", "big5", "euc_j", "shift_jis")
 # WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
 _WEB_ALIASES = {
     "ascii": "cp1252",
@@ -78,7 +83,7 @@ _INACTIVE = re.compile(
 )
 _META_TAG = re.compile(rb"<meta\s[^>]*>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""")
-_CONTENT_CHARSET = re.compile(rb"charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+_CONTENT_CHARSET = re.compile(rb"(?:^|;)\s*charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
 # Byte-order marks win over any declaration, as in the WHATWG sniffing algorithm.
 _BOMS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -142,17 +147,17 @@ def _ascii_lookalike(codec: str | None, prefixes: tuple[str, ...]) -> str | None
 def decode_html(html: bytes, charset: str | None = None) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
-    Strict decodes run in order: BOM, declared codecs whose bytes can look
-    like ASCII (UTF-16/32 from HTTP, 7-bit ISO-2022/UTF-7/HZ from HTTP or
-    meta), UTF-8, the HTTP charset, then ``<meta charset>``. If none fits, a page that is mostly
+    Strict decodes run in order: BOM, declared codecs whose bytes can pass as
+    UTF-8 (UTF-16/32 from HTTP; 7-bit ISO-2022/UTF-7/HZ and multi-byte CJK
+    from HTTP or meta), UTF-8, the HTTP charset, then ``<meta charset>``. If none fits, a page that is mostly
     UTF-8, or else one with a declared charset, keeps that codec and replaces
     only its bad bytes; detection is the last resort.
     """
     header, meta = _codec(charset), _meta_charset(html)
     declared = [header, meta]
     lookalikes = [
-        _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES),
-        _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES),
+        _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
+        _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
     ]
     strict = [_bom_codec(html), *lookalikes, _UTF8, *declared]
     decoded = _first_decoding(html, strict)

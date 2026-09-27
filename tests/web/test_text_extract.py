@@ -388,3 +388,25 @@ def test_legacy_asian_labels_decode_extension_characters(label, codec, sentence)
     html = _page(sentence * 20).encode(codec)
 
     assert sentence in decode_html(html, label)
+
+
+def test_meta_content_charset_needs_a_parameter_boundary() -> None:
+    tag = b"<meta http-equiv='Content-Type' content='text/html; xcharset=koi8-r; charset=windows-1252'>"
+
+    assert text_extract._meta_charset(tag) == "cp1252"
+
+
+@pytest.mark.parametrize("via_meta", [False, True])
+def test_declared_cjk_codec_beats_coincidentally_valid_utf8(via_meta: bool) -> None:
+    head = '<meta charset="gb2312">' if via_meta else ""
+    text = _page("专业", head)
+    html = text.encode("gbk")
+    assert html.decode("utf-8")  # the GBK bytes are also valid UTF-8
+
+    assert decode_html(html, None if via_meta else "gb2312") == text
+
+
+def test_single_byte_label_does_not_override_valid_utf8() -> None:
+    html = _page("Café crème. " * 10).encode("utf-8")
+
+    assert decode_html(html, "windows-1252") == html.decode("utf-8")
