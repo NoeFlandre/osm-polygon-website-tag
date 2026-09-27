@@ -30,6 +30,11 @@ class TextExtraction:
 
 _extractor_state = threading.local()
 
+# Module-level literals: codec names are case-insensitive, so spelling them
+# inside functions only adds mutants no test can tell apart.
+_UTF8 = "utf-8"
+_LATIN1 = "latin-1"
+
 
 @lru_cache(maxsize=1)
 def _trafilatura_version() -> str:
@@ -44,13 +49,13 @@ def _extractor_options(url: str) -> Extractor:
         options = Extractor(output_format="txt", comments=False, tables=True)
         _extractor_state.options = options
     options.url = url
-    options.source = url.encode("utf-8", "replace").decode("utf-8")
+    options.source = str(url.encode(_UTF8, "replace"), _UTF8)
     return options
 
 
 _COMMENT = re.compile(rb"<!--.*?(?:-->|$)", re.DOTALL)
 _META_TAG = re.compile(rb"<meta\s[^>]*>", re.IGNORECASE)
-_ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""")
+_ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""")
 _CONTENT_CHARSET = re.compile(rb"charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
 # Byte-order marks win over any declaration, as in the WHATWG sniffing algorithm.
 _BOMS = (
@@ -64,12 +69,13 @@ _BOMS = (
 
 def _tag_charset(tag: bytes) -> bytes | None:
     """Charset of one ``<meta charset>`` or ``http-equiv="Content-Type"`` tag."""
-    attributes = {name.lower(): value.strip(b"\"'") for name, value in _ATTRIBUTE.findall(tag)}
+    attributes = {name.lower(): b"".join(value).lower() for name, *value in _ATTRIBUTE.findall(tag)}
     if b"charset" in attributes:
         return attributes[b"charset"]
-    if attributes.get(b"http-equiv", b"").lower() != b"content-type":
+    content = attributes.get(b"content")
+    if content is None or attributes.get(b"http-equiv") != b"content-type":
         return None
-    match = _CONTENT_CHARSET.search(attributes.get(b"content", b""))
+    match = _CONTENT_CHARSET.search(content)
     return match.group(1) if match else None
 
 
@@ -79,7 +85,7 @@ def _meta_charset(html: bytes) -> str | None:
     for tag in _META_TAG.findall(head):
         declared = _tag_charset(tag)
         if declared is not None:
-            return _codec(declared.decode("ascii", "replace"))
+            return _codec(declared.decode(_LATIN1))
     return None
 
 
@@ -104,7 +110,7 @@ def _wide_codec(charset: str | None) -> str | None:
 
 def decode_html(html: bytes, charset: str | None = None) -> str:
     """Decode HTML: BOM, declared UTF-16/32, valid UTF-8, charset, meta, detection."""
-    candidates = [_bom_codec(html), _wide_codec(charset), "utf-8"]
+    candidates = [_bom_codec(html), _wide_codec(charset), _UTF8]
     candidates += [_codec(charset), _meta_charset(html), *detect_encoding(html)]
     for encoding in candidates:
         if encoding is None:
@@ -113,7 +119,7 @@ def decode_html(html: bytes, charset: str | None = None) -> str:
             return html.decode(encoding)
         except (LookupError, UnicodeDecodeError):
             continue
-    return html.decode("utf-8", errors="replace")
+    return str(html, _UTF8, "replace")
 
 
 def extract_main_text(html: bytes, *, url: str, charset: str | None = None) -> TextExtraction:

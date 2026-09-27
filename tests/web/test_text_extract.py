@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from osm_polygon_website_tag.web import text_extract
@@ -218,3 +220,56 @@ def test_meta_without_charset_declaration_yields_none() -> None:
     assert (
         text_extract._meta_charset(b'<meta http-equiv="Content-Type" content="text/html">') is None
     )
+
+
+def test_extractor_options_drop_comments_keep_tables_and_sanitise_url(monkeypatch) -> None:
+    text_extract._extractor_state.__dict__.clear()
+    constructed: list[dict[str, object]] = []
+    real = text_extract.Extractor
+
+    def record(**kwargs: Any):
+        constructed.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(text_extract, "Extractor", record)
+    try:
+        options = text_extract._extractor_options("https://example.org/\udcff")
+    finally:
+        text_extract._extractor_state.__dict__.clear()
+
+    assert constructed == [{"output_format": "txt", "comments": False, "tables": True}]
+    assert options.url == "https://example.org/\udcff"
+    assert options.source == "https://example.org/?"
+
+
+def test_non_ascii_meta_charset_is_ignored() -> None:
+    assert text_extract._meta_charset(b'<meta charset="\xe9">') is None
+
+
+def test_comment_inside_meta_tag_is_removed_before_parsing() -> None:
+    assert text_extract._meta_charset(b"<meta charset=koi8-r<!-- x -->>") == "koi8-r"
+
+
+def test_meta_charset_is_only_read_from_the_first_4096_bytes() -> None:
+    tag = b"<meta charset=koi8-r>"
+
+    assert text_extract._meta_charset(b" " * (4096 - len(tag)) + tag) == "koi8-r"
+    assert text_extract._meta_charset(b" " * (4097 - len(tag)) + tag) is None
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        b'<meta http-equiv="Content-Type">',
+        b'<meta content="text/html; charset=koi8-r">',
+        b'<meta http-equiv="refresh" content="0; charset=koi8-r">',
+    ],
+)
+def test_incomplete_http_equiv_declarations_yield_none(tag: bytes) -> None:
+    assert text_extract._meta_charset(tag) is None
+
+
+def test_single_quoted_http_equiv_charset_is_read() -> None:
+    tag = b"<META HTTP-EQUIV='content-type' CONTENT='text/html; Charset=KOI8-R'>"
+
+    assert text_extract._meta_charset(tag) == "koi8-r"
