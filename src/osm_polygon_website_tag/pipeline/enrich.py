@@ -620,7 +620,10 @@ def _extract_fetched(
             invocation_id,
         )
     final_url = fetched.final_url or url
-    extracted = extractor(fetched.body, url=final_url)
+    if fetched.charset is None:
+        extracted = extractor(fetched.body, url=final_url)
+    else:
+        extracted = extractor(fetched.body, url=final_url, charset=fetched.charset)
     return CachedText(
         url,
         extracted.status,

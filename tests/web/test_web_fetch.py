@@ -113,6 +113,27 @@ def test_fetch_returns_full_bounded_html() -> None:
     assert result.status == "ok"
     assert result.body == body
     assert result.final_url == "https://example.org"
+    assert result.charset is None
+
+
+@pytest.mark.parametrize(
+    ("content_type", "charset"),
+    [
+        ("text/html; charset=Shift_JIS", "Shift_JIS"),
+        ('text/html; charset="windows-1252"', "windows-1252"),
+        ("text/html; charset=", None),
+    ],
+)
+def test_fetch_reports_header_charset(content_type: str, charset: str | None) -> None:
+    result = fetch_html(
+        "example.org",
+        request_once=lambda *_args: HttpResponse(200, {"Content-Type": content_type}, b"<p>x</p>"),
+        resolver=lambda *_args: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+    assert result.charset == charset
 
 
 def test_fetch_classifies_request_exception_without_leaking_details() -> None:
@@ -772,7 +793,13 @@ def test_content_type_allowed(content_type: str) -> None:
     assert web_fetch_module._content_type_error(response, "c", "r", 0) is None
     assert fetch_html(
         "https://example.org", request_once=lambda *_a: response, resolver=_public_resolver
-    ) == FetchResult("ok", "https://example.org", "https://example.org", b"x")
+    ) == FetchResult(
+        "ok",
+        "https://example.org",
+        "https://example.org",
+        b"x",
+        charset=web_fetch_module._header_charset(response.headers),
+    )
 
 
 @pytest.mark.parametrize(

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from osm_polygon_website_tag.web import text_extract
-from osm_polygon_website_tag.web.text_extract import extract_main_text
+from osm_polygon_website_tag.web.text_extract import decode_html, extract_main_text
 
 
 def test_extract_main_text_from_static_html() -> None:
@@ -121,3 +123,62 @@ def test_full_text_is_retained_without_truncation(monkeypatch) -> None:
 
     assert result.text == full
     assert result.word_count == 1_000_000
+
+
+def _page(body: str, head: str = "") -> str:
+    return f"<html><head>{head}</head><body><article><p>{body}</p></article></body></html>"
+
+
+def test_http_charset_decodes_unlabelled_cp1252_page() -> None:
+    html = _page("Café crème à Paris près de la rivière. " * 30).encode("cp1252")
+
+    result = extract_main_text(html, url="https://example.org", charset="windows-1252")
+
+    assert "\ufffd" not in (result.text or "")
+    assert "Café crème à Paris" in (result.text or "")
+
+
+def test_invalid_http_charset_falls_back_to_detection() -> None:
+    html = _page("Москва большой красивый город. " * 30, '<meta charset="koi8-r">').encode("koi8-r")
+
+    assert "Москва" in decode_html(html, "no-such-codec")
+
+
+@pytest.mark.parametrize(
+    ("encoding", "sentence", "head"),
+    [
+        ("cp1252", "Café crème à Paris près de la rivière. ", '<meta charset="windows-1252">'),
+        ("shift_jis", "東京の公園はとても美しい場所です。", '<meta charset="shift_jis">'),
+        (
+            "koi8-r",
+            "Москва большой красивый город. ",
+            '<meta http-equiv="Content-Type" content="text/html; charset=koi8-r">',
+        ),
+    ],
+)
+def test_non_utf8_pages_decode_without_replacement_chars(encoding, sentence, head) -> None:
+    html = _page(sentence * 30, head).encode(encoding)
+
+    result = extract_main_text(html, url="https://example.org")
+
+    assert result.status == "success"
+    assert "�" not in (result.text or "")
+    assert sentence.strip()[:8] in (result.text or "")
+
+
+def test_utf8_page_decodes_as_before() -> None:
+    html = _page("Café crème à Paris. " * 30).encode("utf-8")
+
+    assert decode_html(html) == html.decode("utf-8", errors="replace")
+
+
+def test_unknown_meta_charset_is_ignored() -> None:
+    html = _page("Café crème. " * 30, '<meta charset="no-such-codec">').encode("cp1252")
+
+    assert "�" not in decode_html(html)
+
+
+def test_undecodable_page_falls_back_to_replacement(monkeypatch) -> None:
+    monkeypatch.setattr(text_extract, "detect_encoding", lambda _html: ["no-such-codec", "ascii"])
+
+    assert decode_html(b"caf\xe9") == "caf�"

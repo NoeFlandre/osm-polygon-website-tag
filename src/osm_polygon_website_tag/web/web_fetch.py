@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import email.message
 import http.client
 import ipaddress
 import socket
@@ -45,6 +46,7 @@ class FetchResult:
     final_url: str | None = None
     body: bytes | None = None
     message: str | None = None
+    charset: str | None = None
 
 
 def normalize_http_url(raw: str) -> str:
@@ -305,7 +307,13 @@ def _terminal_response(
         error = checker(response, current, requested, max_bytes)
         if error is not None:
             return error
-    return FetchResult("ok", requested, final_url=current, body=response.body)
+    return FetchResult(
+        "ok",
+        requested,
+        final_url=current,
+        body=response.body,
+        charset=_header_charset(response.headers),
+    )
 
 
 def _status_error(
@@ -334,6 +342,14 @@ def _size_error(
             "fetch_error", requested, final_url=current, message="response_too_large"
         )
     return None
+
+
+def _header_charset(headers: Mapping[str, str]) -> str | None:
+    """Return the ``charset=`` parameter of the Content-Type header, if any."""
+    message = email.message.Message()
+    message["content-type"] = _header(headers, "content-type") or ""
+    charset = message.get_param("charset")
+    return charset.strip() or None if isinstance(charset, str) else None
 
 
 def _content_type_error(
