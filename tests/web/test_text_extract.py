@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 from typing import Any
 
 import pytest
@@ -461,3 +462,13 @@ def test_windows_874_declared_thai_page_decodes() -> None:
     text = _page("สวัสดีครับ")
 
     assert decode_html(text.encode("cp874"), "windows-874") == text
+
+
+def test_bom_codec_survives_a_stray_bad_byte_despite_a_declaration() -> None:
+    html = codecs.BOM_UTF8 + _page("Café crème. " * 10).encode() + b"\xff"
+
+    decoded = decode_html(html, "windows-1252")
+
+    assert decoded.startswith("<html>")
+    assert "Café crème." in decoded
+    assert decoded.endswith("�")

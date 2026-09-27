@@ -33,7 +33,7 @@ PACKAGE_ROOT = Path("src/osm_polygon_website_tag")
 PACKAGE_NAME = "osm_polygon_website_tag"
 TESTS_ROOT = Path("tests")
 _TEST_PREFIX = "test_"
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+_HUNK = re.compile(r"^@@ -\d+(?:,(?P<old>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
 
 
 def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
@@ -102,16 +102,37 @@ def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, set[int]]:
         capture_output=True,
         text=True,
     )
+    return parse_diff(result.stdout)
+
+
+def parse_diff(diff: str) -> dict[str, set[int]]:
+    """Return the added or modified new-side line numbers of a ``-U0`` diff.
+
+    In a pure-addition hunk (nothing removed), blank and comment-only lines
+    are dropped: adding a function also adds blank separators, which must
+    not charge the whole module. In any other hunk every new line counts,
+    since a comment or blank line there may replace module-level code.
+    """
     lines: dict[str, set[int]] = {}
     current: str | None = None
-    for raw in result.stdout.splitlines():
+    pure_addition = False
+    number = 0
+    for raw in diff.splitlines():
         if raw.startswith("+++ b/"):
             current = raw[len("+++ b/") :].strip()
         elif current is not None and (match := _HUNK.match(raw)):
-            start = int(match.group("start"))
-            count = int(match.group("count") or 1)
-            lines.setdefault(current, set()).update(range(start, start + count))
+            pure_addition = match.group("old") == "0"
+            number = int(match.group("start"))
+        elif current is not None and raw.startswith("+"):
+            if not (pure_addition and _is_blank_or_comment(raw[1:])):
+                lines.setdefault(current, set()).add(number)
+            number += 1
     return lines
+
+
+def _is_blank_or_comment(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
 
 
 def function_filters(
@@ -158,11 +179,10 @@ def function_filters(
 def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
     """Return the mutant prefixes a change reaches, or ``None`` for whole-module."""
     try:
-        text = source.read_text(encoding="utf-8")
-        tree = ast.parse(text)
+        tree = ast.parse(source.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeError):
         return None
-    covered: set[int] = set(_import_lines(tree)) | set(_blank_or_comment_lines(text))
+    covered: set[int] = set(_import_lines(tree))
     names: set[str] = set()
     for name, start, end in _iter_functions(tree):
         span = range(start, end + 1)
@@ -172,14 +192,6 @@ def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
     if any(line not in covered for line in lines):
         return None
     return names
-
-
-def _blank_or_comment_lines(text: str) -> Iterator[int]:
-    """Yield lines holding no code: adding a function also adds blank separators."""
-    for number, line in enumerate(text.splitlines(), start=1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            yield number
 
 
 def _import_lines(tree: ast.Module) -> Iterator[int]:

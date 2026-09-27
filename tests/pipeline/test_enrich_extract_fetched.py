@@ -130,7 +130,11 @@ def test_positional_only_charset_is_not_forwarded() -> None:
     ) -> TextExtraction:
         return result
 
+    def variadic(html: bytes, *charset: str, url: str) -> TextExtraction:
+        return result
+
     assert not _accepts_charset(positional)
+    assert not _accepts_charset(variadic)
     assert _accepts_charset(keyword_only)
     assert _accepts_charset(positional_or_keyword)
     fetched = FetchResult("ok", URL, final_url=URL, body=b"x", charset="koi8-r")

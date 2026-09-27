@@ -170,13 +170,16 @@ def decode_html(html: bytes, charset: str | None = None) -> str:
     UTF-8, or else one with a declared charset, keeps that codec and replaces
     only its bad bytes; detection is the last resort.
     """
+    bom = _bom_codec(html)
+    if bom is not None:  # a byte-order mark is authoritative; only bad bytes are replaced
+        return str(html, bom, "replace")
     header, meta = _codec(charset), _meta_charset(html)
     declared = [header, meta]
     lookalikes = [
         _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
         _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
     ]
-    strict = [_bom_codec(html), *lookalikes, _UTF8, *declared]
+    strict = [*lookalikes, _UTF8, *declared]
     decoded = _first_decoding(html, strict)
     if decoded is not None:
         return decoded

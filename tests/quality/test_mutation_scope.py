@@ -259,21 +259,30 @@ def test_a_changed_import_does_not_charge_the_whole_module(tmp_path: Path) -> No
     }
 
 
-def test_blank_and_comment_lines_do_not_charge_the_whole_module(tmp_path: Path) -> None:
-    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "added.py"
-    module.parent.mkdir(parents=True)
-    module.write_text(
-        '"""Module."""\n\n\ndef old() -> int:\n    return 1\n\n\n# helper\n'
-        "def new() -> int:\n    return 2\n",
-        encoding="utf-8",
+def test_pure_additions_ignore_blank_and_comment_lines() -> None:
+    diff = (
+        "+++ b/src/pkg/mod.py\n"
+        "@@ -5,0 +6,5 @@ def old() -> int:\n"
+        "+\n+\n+# helper\n+def new() -> int:\n+    return 2\n"
     )
-    relative = "src/osm_polygon_website_tag/reporting/added.py"
 
-    assert mutation_scope.function_filters({relative: {6, 7, 8, 9, 10}}, root=tmp_path) == {
-        "osm_polygon_website_tag.reporting.added": [
-            "osm_polygon_website_tag.reporting.added.x_new__mutmut_*"
-        ]
-    }
+    assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {9, 10}}
+
+
+def test_a_comment_replacing_code_still_counts() -> None:
+    diff = "+++ b/src/pkg/mod.py\n@@ -3 +3 @@\n-LIMIT = 3\n+# LIMIT removed\n"
+
+    assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {3}}
+
+
+def test_parse_diff_tracks_line_numbers_across_hunks_and_files() -> None:
+    diff = (
+        "+++ b/a.py\n@@ -1,2 +1,2 @@\n-x\n-y\n+x = 1\n+\n"
+        "@@ -9,0 +10,2 @@\n+\n+z = 2\n"
+        "+++ b/b.py\n@@ -1 +1,0 @@\n-gone\n"
+    )
+
+    assert mutation_scope.parse_diff(diff) == {"a.py": {1, 2, 11}}
 
 
 def test_a_changed_module_constant_still_charges_the_whole_module(tmp_path: Path) -> None:
