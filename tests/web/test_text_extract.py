@@ -473,3 +473,15 @@ def test_bom_codec_survives_a_stray_bad_byte_despite_a_declaration() -> None:
     assert decoded.startswith("<html>")
     assert "Café crème." in decoded
     assert decoded.endswith("�")
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        b'<div title="<meta charset=koi8-r>"></div>',
+        b"<a data-x='<meta charset=\"koi8-r\">'>x</a>",
+        b"<metadata charset=koi8-r>",
+    ],
+)
+def test_meta_text_inside_other_tags_is_ignored(prefix: bytes) -> None:
+    assert text_extract._meta_charset(prefix + b"<meta charset=windows-1251>") == "cp1251"

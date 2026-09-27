@@ -96,7 +96,9 @@ _INACTIVE = re.compile(
     rb"<!--.*?(?:-->|$)|<(script|style|textarea|title|noscript|xmp)\b.*?(?:</\1\s*>|$)",
     re.DOTALL | re.IGNORECASE,
 )
-_META_TAG = re.compile(rb"<meta\s[^>]*>", re.IGNORECASE)
+# One whole start tag, quoted attribute values included, so "<meta ...>" text
+# inside another tag's attribute is consumed with that tag, never matched alone.
+_TAG = re.compile(rb"""<([A-Za-z][A-Za-z0-9-]*)(?:[^"'>]|"[^"]*"|'[^']*')*>""")
 _ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""")
 _CONTENT_CHARSET = re.compile(rb"(?:^|;)\s*charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
 # Byte-order marks win over any declaration, as in the WHATWG sniffing algorithm.
@@ -130,7 +132,8 @@ def _http_equiv_charset(attributes: dict[bytes, bytes]) -> bytes | None:
 def _meta_charset(html: bytes) -> str | None:
     """Return the codec of the first active meta charset tag naming a known codec."""
     head = _INACTIVE.sub(b"", html[:4096])
-    for tag in _META_TAG.findall(head):
+    meta_tags = (m.group(0) for m in _TAG.finditer(head) if m.group(1).lower() == b"meta")
+    for tag in meta_tags:
         codec = _tag_codec(tag)
         if codec is not None:
             return codec
