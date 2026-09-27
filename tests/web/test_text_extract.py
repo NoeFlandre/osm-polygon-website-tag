@@ -182,3 +182,39 @@ def test_undecodable_page_falls_back_to_replacement(monkeypatch) -> None:
     monkeypatch.setattr(text_extract, "detect_encoding", lambda _html: ["no-such-codec", "ascii"])
 
     assert decode_html(b"caf\xe9") == "caf�"
+
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le"])
+def test_declared_wide_unicode_charset_beats_utf8_fast_path(encoding) -> None:
+    html = _page("plain ascii words " * 30).encode(encoding)
+
+    assert decode_html(html, encoding) == _page("plain ascii words " * 30)
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
+def test_byte_order_mark_selects_the_codec(encoding) -> None:
+    html = _page("Café crème. " * 30).encode(encoding)
+
+    assert decode_html(html, "iso-8859-1") == _page("Café crème. " * 30)
+
+
+def test_commented_out_meta_charset_is_ignored() -> None:
+    head = '<!-- <meta charset="iso-8859-1"> --><meta charset="koi8-r">'
+    html = _page("Москва большой красивый город. " * 30, head).encode("koi8-r")
+
+    assert "Москва" in decode_html(html)
+
+
+def test_unrelated_meta_content_mentioning_charset_is_ignored() -> None:
+    head = '<meta name="description" content="set charset=iso-8859-1 here">'
+    head += '<meta http-equiv="Content-Type" content="text/html; charset=koi8-r">'
+    html = _page("Москва большой красивый город. " * 30, head).encode("koi8-r")
+
+    assert "Москва" in decode_html(html)
+
+
+def test_meta_without_charset_declaration_yields_none() -> None:
+    assert text_extract._meta_charset(b'<meta http-equiv="refresh" content="0">') is None
+    assert (
+        text_extract._meta_charset(b'<meta http-equiv="Content-Type" content="text/html">') is None
+    )

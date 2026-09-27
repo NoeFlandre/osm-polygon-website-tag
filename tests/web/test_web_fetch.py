@@ -122,6 +122,8 @@ def test_fetch_returns_full_bounded_html() -> None:
         ("text/html; charset=Shift_JIS", "Shift_JIS"),
         ('text/html; charset="windows-1252"', "windows-1252"),
         ("text/html; charset=", None),
+        ("text/html", None),
+        ("TEXT/HTML;CHARSET = 'koi8-r' ; x=1", "koi8-r"),
     ],
 )
 def test_fetch_reports_header_charset(content_type: str, charset: str | None) -> None:
@@ -134,6 +136,10 @@ def test_fetch_reports_header_charset(content_type: str, charset: str | None) ->
     )
 
     assert result.charset == charset
+
+
+def test_header_charset_ignores_missing_header() -> None:
+    assert web_fetch_module._header_charset({}) is None
 
 
 def test_fetch_classifies_request_exception_without_leaking_details() -> None:

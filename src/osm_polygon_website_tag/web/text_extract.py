@@ -48,17 +48,39 @@ def _extractor_options(url: str) -> Extractor:
     return options
 
 
-_META_CHARSET = re.compile(
-    rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9_.:-]+)""", re.IGNORECASE
+_COMMENT = re.compile(rb"<!--.*?(?:-->|$)", re.DOTALL)
+_META_TAG = re.compile(rb"<meta\s[^>]*>", re.IGNORECASE)
+_ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""")
+_CONTENT_CHARSET = re.compile(rb"charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+# Byte-order marks win over any declaration, as in the WHATWG sniffing algorithm.
+_BOMS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
 )
 
 
-def _meta_charset(html: bytes) -> str | None:
-    """Return the codec named by a ``<meta charset>`` in the page head, if valid."""
-    match = _META_CHARSET.search(html[:4096])
-    if match is None:
+def _tag_charset(tag: bytes) -> bytes | None:
+    """Charset of one ``<meta charset>`` or ``http-equiv="Content-Type"`` tag."""
+    attributes = {name.lower(): value.strip(b"\"'") for name, value in _ATTRIBUTE.findall(tag)}
+    if b"charset" in attributes:
+        return attributes[b"charset"]
+    if attributes.get(b"http-equiv", b"").lower() != b"content-type":
         return None
-    return _codec(match.group(1).decode("ascii"))
+    match = _CONTENT_CHARSET.search(attributes.get(b"content", b""))
+    return match.group(1) if match else None
+
+
+def _meta_charset(html: bytes) -> str | None:
+    """Return the codec declared by the first active meta charset tag, if valid."""
+    head = _COMMENT.sub(b"", html[:4096])
+    for tag in _META_TAG.findall(head):
+        declared = _tag_charset(tag)
+        if declared is not None:
+            return _codec(declared.decode("ascii", "replace"))
+    return None
 
 
 def _codec(name: str | None) -> str | None:
@@ -70,13 +92,20 @@ def _codec(name: str | None) -> str | None:
         return None
 
 
+def _bom_codec(html: bytes) -> str | None:
+    return next((codec for bom, codec in _BOMS if html.startswith(bom)), None)
+
+
+def _wide_codec(charset: str | None) -> str | None:
+    """Declared UTF-16/32 codec: ASCII text in those is also valid UTF-8."""
+    codec = _codec(charset)
+    return codec if codec is not None and codec.startswith(("utf-16", "utf-32")) else None
+
+
 def decode_html(html: bytes, charset: str | None = None) -> str:
-    """Decode HTML bytes: valid UTF-8, then HTTP charset, ``<meta charset>``, detection."""
-    try:
-        return html.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-    candidates = [_codec(charset), _meta_charset(html), *detect_encoding(html)]
+    """Decode HTML: BOM, declared UTF-16/32, valid UTF-8, charset, meta, detection."""
+    candidates = [_bom_codec(html), _wide_codec(charset), "utf-8"]
+    candidates += [_codec(charset), _meta_charset(html), *detect_encoding(html)]
     for encoding in candidates:
         if encoding is None:
             continue

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import email.message
 import http.client
 import ipaddress
+import re
 import socket
 import time
 import urllib.error
@@ -344,12 +344,13 @@ def _size_error(
     return None
 
 
+_HEADER_CHARSET = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.IGNORECASE)
+
+
 def _header_charset(headers: Mapping[str, str]) -> str | None:
     """Return the ``charset=`` parameter of the Content-Type header, if any."""
-    message = email.message.Message()
-    message["content-type"] = _header(headers, "content-type") or ""
-    charset = message.get_param("charset")
-    return charset.strip() or None if isinstance(charset, str) else None
+    match = _HEADER_CHARSET.search(_header(headers, "content-type") or "")
+    return match.group(1) if match else None
 
 
 def _content_type_error(

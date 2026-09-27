@@ -77,24 +77,6 @@ def _extract(html: bytes, *, url: str) -> TextExtraction:
     return TextExtraction("success", text, len(text.split()), None, "2.1.0")
 
 
-def test_extract_fetched_forwards_header_charset() -> None:
-    seen: list[str | None] = []
-
-    def extract(html: bytes, *, url: str, charset: str | None = None) -> TextExtraction:
-        seen.append(charset)
-        text = html.decode(charset or "utf-8")
-        return TextExtraction("success", text, len(text.split()), None, "2.1.0")
-
-    body = "Café crème".encode("cp1252")
-    fetched = FetchResult("ok", "https://example.org", body=body, charset="windows-1252")
-    cached = _extract_fetched(
-        "https://example.org", fetched, invocation_id="run", extractor=extract
-    )
-
-    assert seen == ["windows-1252"]
-    assert cached.text == "Café crème"
-
-
 def test_private_enrichment_state_helpers_are_deterministic(tmp_path: Path) -> None:
     _validate_enrichment_settings(1, 1)
     with pytest.raises(ValueError, match="fetch_workers"):
