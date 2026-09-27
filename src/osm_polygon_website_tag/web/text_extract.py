@@ -8,6 +8,7 @@ import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
+from html.parser import HTMLParser
 from importlib.metadata import version
 from typing import Literal
 
@@ -57,6 +58,8 @@ _WEB_LABELS = {
     "x-euc-jp": "euc_jp",
     "x-mac-cyrillic": "mac-cyrillic",
     "x-mac-roman": "mac-roman",
+    "windows-31j": "cp932",
+    "windows-949": "cp949",
     **{f"x-cp125{digit}": f"cp125{digit}" for digit in range(9)},
 }
 # WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
@@ -91,16 +94,10 @@ def _extractor_options(url: str) -> Extractor:
     return options
 
 
-# Comments and raw-text elements can hold <meta>-shaped text that is not markup.
-_INACTIVE = re.compile(
-    rb"<!--.*?(?:-->|$)|<(script|style|textarea|title|noscript|xmp)\b.*?(?:</\1\s*>|$)",
-    re.DOTALL | re.IGNORECASE,
-)
-# One whole start tag, quoted attribute values included, so "<meta ...>" text
-# inside another tag's attribute is consumed with that tag, never matched alone.
-_TAG = re.compile(rb"""<([A-Za-z][A-Za-z0-9-]*)(?:[^"'>]|"[^"]*"|'[^']*')*>""")
-_ATTRIBUTE = re.compile(rb"""([A-Za-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))""")
-_CONTENT_CHARSET = re.compile(rb"(?:^|;)\s*charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+_CONTENT_CHARSET = re.compile(r"(?:^|;)\s*charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+# html.parser already treats script/style as raw text; these hold text, not
+# markup, too, so a <meta> inside them is ignored.
+_TEXT_ONLY_ELEMENTS = frozenset({"title", "textarea", "noscript", "xmp"})
 # Byte-order marks win over any declaration, as in the WHATWG sniffing algorithm.
 _BOMS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -111,38 +108,50 @@ _BOMS = (
 )
 
 
-def _tag_charset(tag: bytes) -> bytes | None:
-    """Charset of one ``<meta charset>`` or ``http-equiv="Content-Type"`` tag."""
-    # dict(reversed(...)) keeps the first of repeated attributes, as HTML parsing does.
-    pairs = [(name.lower(), b"".join(value).lower()) for name, *value in _ATTRIBUTE.findall(tag)]
-    attributes = dict(reversed(pairs))
-    if b"charset" in attributes:
-        return attributes[b"charset"]
-    return _http_equiv_charset(attributes)
+class _MetaCharsetParser(HTMLParser):
+    """Collect charset declarations from real ``<meta>`` tags, in document order.
+
+    The standard parser handles quoted attributes, comments, full attribute
+    names and script/style content, so meta-shaped text there is not a tag.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.declared: list[str] = []
+        self._text_only: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._text_only is not None:
+            return
+        if tag in _TEXT_ONLY_ELEMENTS:
+            self._text_only = tag
+        elif tag == "meta":
+            self._record(attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == self._text_only:
+            self._text_only = None
+
+    def _record(self, attrs: list[tuple[str, str | None]]) -> None:
+        # dict(reversed(...)) keeps the first of repeated attributes, as HTML does.
+        attributes = dict(reversed([(name, value or "") for name, value in attrs]))
+        declared = attributes.get("charset") or _http_equiv_charset(attributes)
+        if declared:
+            self.declared.append(declared)
 
 
-def _http_equiv_charset(attributes: dict[bytes, bytes]) -> bytes | None:
-    content = attributes.get(b"content")
-    if content is None or attributes.get(b"http-equiv") != b"content-type":
+def _http_equiv_charset(attributes: dict[str, str]) -> str | None:
+    if attributes.get("http-equiv", "").lower() != "content-type":
         return None
-    match = _CONTENT_CHARSET.search(content)
+    match = _CONTENT_CHARSET.search(attributes.get("content", ""))
     return match.group(1) if match else None
 
 
 def _meta_charset(html: bytes) -> str | None:
-    """Return the codec of the first active meta charset tag naming a known codec."""
-    head = _INACTIVE.sub(b"", html[:4096])
-    meta_tags = (m.group(0) for m in _TAG.finditer(head) if m.group(1).lower() == b"meta")
-    for tag in meta_tags:
-        codec = _tag_codec(tag)
-        if codec is not None:
-            return codec
-    return None
-
-
-def _tag_codec(tag: bytes) -> str | None:
-    declared = _tag_charset(tag)
-    return None if declared is None else _codec(declared.decode(_LATIN1))
+    """Return the codec of the first real meta charset declaration naming a known codec."""
+    parser = _MetaCharsetParser()
+    parser.feed(html[:4096].decode(_LATIN1))
+    return next(filter(None, map(_codec, parser.declared)), None)
 
 
 def _codec(name: str | None) -> str | None:

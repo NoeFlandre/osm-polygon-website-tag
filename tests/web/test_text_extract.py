@@ -485,3 +485,32 @@ def test_bom_codec_survives_a_stray_bad_byte_despite_a_declaration() -> None:
 )
 def test_meta_text_inside_other_tags_is_ignored(prefix: bytes) -> None:
     assert text_extract._meta_charset(prefix + b"<meta charset=windows-1251>") == "cp1251"
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        b'<div title="<script>"></div>',
+        b'<div title="<!--"></div>',
+        b"<meta data_charset=koi8-r>",
+        b"<meta xml:charset=koi8-r>",
+        b"<textarea><meta charset=koi8-r></textarea>",
+    ],
+)
+def test_prescan_follows_html_tokenisation(prefix: bytes) -> None:
+    assert text_extract._meta_charset(prefix + b'<meta charset="windows-1251">') == "cp1251"
+
+
+def test_mismatched_end_tag_does_not_leave_text_only_mode() -> None:
+    html = b"<title></textarea><meta charset=koi8-r></title><meta charset=windows-1251>"
+
+    assert text_extract._meta_charset(html) == "cp1251"
+
+
+def test_bare_charset_attribute_is_not_a_declaration() -> None:
+    assert text_extract._meta_charset(b"<meta charset><meta charset=koi8-r>") == "koi8-r"
+
+
+@pytest.mark.parametrize(("label", "codec"), [("windows-31j", "cp932"), ("Windows-949", "cp949")])
+def test_windows_cjk_labels_resolve(label: str, codec: str) -> None:
+    assert text_extract._codec(label) == codec
