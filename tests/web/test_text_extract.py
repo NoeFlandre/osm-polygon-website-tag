@@ -273,3 +273,9 @@ def test_single_quoted_http_equiv_charset_is_read() -> None:
     tag = b"<META HTTP-EQUIV='content-type' CONTENT='text/html; Charset=KOI8-R'>"
 
     assert text_extract._meta_charset(tag) == "koi8-r"
+
+
+def test_invalid_meta_charset_does_not_hide_a_later_valid_one() -> None:
+    head = b'<meta charset="no-such-codec"><meta charset="windows-1251">'
+
+    assert text_extract._meta_charset(head) == "cp1251"

@@ -344,13 +344,18 @@ def _size_error(
     return None
 
 
-_HEADER_CHARSET = re.compile(r"""charset\s*=\s*["']?([^"';\s]+)""", re.IGNORECASE)
+# One ``; name=value`` Content-Type parameter. Quoted values are consumed whole,
+# so a ``charset=`` inside another parameter's quotes is never read.
+_HEADER_PARAMETER = re.compile(r"""\s*;\s*([^=;\s]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))""")
 
 
 def _header_charset(headers: Mapping[str, str]) -> str | None:
     """Return the ``charset=`` parameter of the Content-Type header, if any."""
-    match = _HEADER_CHARSET.search(_header(headers, "content-type") or "")
-    return match.group(1) if match else None
+    value = _header(headers, "content-type") or ""
+    for name, quoted, token in _HEADER_PARAMETER.findall(value):
+        if name.lower() == "charset":
+            return quoted + token or None
+    return None
 
 
 def _content_type_error(

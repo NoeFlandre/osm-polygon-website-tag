@@ -80,13 +80,11 @@ def _tag_charset(tag: bytes) -> bytes | None:
 
 
 def _meta_charset(html: bytes) -> str | None:
-    """Return the codec declared by the first active meta charset tag, if valid."""
+    """Return the codec of the first active meta charset tag naming a known codec."""
     head = _COMMENT.sub(b"", html[:4096])
-    for tag in _META_TAG.findall(head):
-        declared = _tag_charset(tag)
-        if declared is not None:
-            return _codec(declared.decode(_LATIN1))
-    return None
+    declared = (_tag_charset(tag) for tag in _META_TAG.findall(head))
+    found = (_codec(name.decode(_LATIN1)) for name in declared if name is not None)
+    return next((codec for codec in found if codec is not None), None)
 
 
 def _codec(name: str | None) -> str | None:

@@ -123,7 +123,12 @@ def test_fetch_returns_full_bounded_html() -> None:
         ('text/html; charset="windows-1252"', "windows-1252"),
         ("text/html; charset=", None),
         ("text/html", None),
-        ("TEXT/HTML;CHARSET = 'koi8-r' ; x=1", "koi8-r"),
+        ('TEXT/HTML;CHARSET = "koi8-r" ; x=1', "koi8-r"),
+        ('text/html; note="charset=koi8-r"; charset=windows-1252', "windows-1252"),
+        ('text/html; note="a \\" ; charset=koi8-r"; charset=utf-8', "utf-8"),
+        ("text/html; xcharset=koi8-r", None),
+        ("text/html; charset=koi8-r; charset=utf-8", "koi8-r"),
+        ('text/html; charset=""', None),
     ],
 )
 def test_fetch_reports_header_charset(content_type: str, charset: str | None) -> None:
