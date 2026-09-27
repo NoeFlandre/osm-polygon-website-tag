@@ -96,7 +96,9 @@ _BOMS = (
 
 def _tag_charset(tag: bytes) -> bytes | None:
     """Charset of one ``<meta charset>`` or ``http-equiv="Content-Type"`` tag."""
-    attributes = {name.lower(): b"".join(value).lower() for name, *value in _ATTRIBUTE.findall(tag)}
+    # dict(reversed(...)) keeps the first of repeated attributes, as HTML parsing does.
+    pairs = [(name.lower(), b"".join(value).lower()) for name, *value in _ATTRIBUTE.findall(tag)]
+    attributes = dict(reversed(pairs))
     if b"charset" in attributes:
         return attributes[b"charset"]
     return _http_equiv_charset(attributes)
@@ -201,14 +203,9 @@ def extract_main_text(html: bytes, *, url: str, charset: str | None = None) -> T
     library_version = _trafilatura_version()
     decoded = decode_html(html, charset)
     try:
-        value = trafilatura.extract(
-            decoded,
-            url=url,
-            output_format="txt",
-            include_comments=False,
-            include_tables=True,
-            options=_extractor_options(url),
-        )
+        # An Extractor ``options`` object overrides trafilatura's per-call
+        # keyword settings, so the URL and output settings live only there.
+        value = trafilatura.extract(decoded, options=_extractor_options(url))
     except Exception as exc:
         return TextExtraction(
             "extract_error",

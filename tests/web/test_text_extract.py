@@ -410,3 +410,34 @@ def test_single_byte_label_does_not_override_valid_utf8() -> None:
     html = _page("Café crème. " * 10).encode("utf-8")
 
     assert decode_html(html, "windows-1252") == html.decode("utf-8")
+
+
+def test_first_of_repeated_meta_attributes_wins() -> None:
+    assert text_extract._meta_charset(b'<meta charset="koi8-r" charset="windows-1252">') == "koi8-r"
+
+
+def test_first_decoding_skips_missing_and_failing_codecs() -> None:
+    assert text_extract._first_decoding(b"\xff", [None, "ascii", "no-such-codec", "latin-1"]) == "ÿ"
+    assert text_extract._first_decoding(b"\xff", ["ascii"]) is None
+
+
+@pytest.mark.parametrize(
+    ("html", "expected"),
+    [
+        (b"\x7f\x7f\xff", False),  # DEL is ASCII, not a multi-byte character
+        ("\u0080".encode() * 2 + b"\xff", True),  # U+0080 is the first multi-byte one
+    ],
+)
+def test_mostly_utf8_ascii_boundary(html: bytes, expected: bool) -> None:
+    assert text_extract._mostly_utf8(html) is expected
+
+
+def test_extractor_failure_reports_the_library_version(monkeypatch) -> None:
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(text_extract.trafilatura, "extract", fail)
+
+    result = extract_main_text(b"<html/>", url="https://example.org")
+
+    assert result.trafilatura_version == text_extract._trafilatura_version()

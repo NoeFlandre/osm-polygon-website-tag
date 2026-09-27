@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import shutil
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -620,10 +621,7 @@ def _extract_fetched(
             invocation_id,
         )
     final_url = fetched.final_url or url
-    if fetched.charset is None:
-        extracted = extractor(fetched.body, url=final_url)
-    else:
-        extracted = extractor(fetched.body, url=final_url, charset=fetched.charset)
+    extracted = _run_extractor(extractor, fetched.body, final_url, fetched.charset)
     return CachedText(
         url,
         extracted.status,
@@ -636,6 +634,23 @@ def _extract_fetched(
         extracted.trafilatura_version,
         invocation_id,
     )
+
+
+def _run_extractor(
+    extractor: Extractor, body: bytes, url: str, charset: str | None
+) -> TextExtraction:
+    if charset is None or not _accepts_charset(extractor):
+        return extractor(body, url=url)
+    return extractor(body, url=url, charset=charset)
+
+
+def _accepts_charset(extractor: Extractor) -> bool:
+    """Whether a custom extractor takes ``charset=`` (older ones only take ``url=``)."""
+    try:
+        parameters = inspect.signature(extractor).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "charset" or p.kind is p.VAR_KEYWORD for p in parameters)
 
 
 def _apply_result(row: dict[str, object], prefix: str, value: CachedText) -> None:

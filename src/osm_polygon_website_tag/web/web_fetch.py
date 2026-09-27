@@ -349,10 +349,12 @@ def _size_error(
 _HEADER_PARAMETER = re.compile(r"""\s*;\s*([^=;\s]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;\s]*))""")
 
 
+_CONTENT_TYPE = "content-type"
+
+
 def _header_charset(headers: Mapping[str, str]) -> str | None:
     """Return the ``charset=`` parameter of the Content-Type header, if any."""
-    value = _header(headers, "content-type") or ""
-    for name, quoted, token in _HEADER_PARAMETER.findall(value):
+    for name, quoted, token in _HEADER_PARAMETER.findall(str(_header(headers, _CONTENT_TYPE))):
         if name.lower() == "charset":
             return quoted + token or None
     return None

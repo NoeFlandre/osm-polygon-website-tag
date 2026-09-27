@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from osm_polygon_website_tag.pipeline.enrich import _extract_fetched
+from osm_polygon_website_tag.pipeline import enrich
+from osm_polygon_website_tag.pipeline.enrich import _accepts_charset, _extract_fetched
 from osm_polygon_website_tag.web.text_cache import CachedText
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
@@ -69,3 +70,47 @@ def test_missing_charset_keeps_the_two_argument_extractor_call() -> None:
 
     assert calls == [(b"<p>x</p>", {"url": URL})]
     assert cached.final_url == URL
+
+
+def test_url_only_extractor_still_works_when_a_charset_is_known() -> None:
+    seen: list[str] = []
+
+    def url_only(html: bytes, *, url: str) -> TextExtraction:
+        seen.append(url)
+        return TextExtraction("success", "x", 1, None, "2.1.0")
+
+    fetched = FetchResult("ok", URL, final_url=URL, body=b"x", charset="koi8-r")
+
+    cached = _extract_fetched(URL, fetched, invocation_id="run", extractor=url_only)
+
+    assert seen == [URL]
+    assert cached.status == "success"
+
+
+def test_accepts_charset_reads_the_extractor_signature() -> None:
+    result = TextExtraction("success", "x", 1, None, "2.1.0")
+
+    def named(html: bytes, *, url: str, charset: str | None = None) -> TextExtraction:
+        return result
+
+    def keywords(html: bytes, **kwargs: object) -> TextExtraction:
+        return result
+
+    def url_only(html: bytes, *, url: str) -> TextExtraction:
+        return result
+
+    assert _accepts_charset(named)
+    assert _accepts_charset(keywords)
+    assert not _accepts_charset(url_only)
+
+
+def test_uninspectable_extractor_is_called_without_charset(monkeypatch) -> None:
+    def no_signature(_callable: object) -> None:
+        raise ValueError("no signature found")
+
+    monkeypatch.setattr(enrich.inspect, "signature", no_signature)
+
+    def keywords(html: bytes, **kwargs: object) -> TextExtraction:
+        return TextExtraction("success", "x", 1, None, "2.1.0")
+
+    assert not _accepts_charset(keywords)
