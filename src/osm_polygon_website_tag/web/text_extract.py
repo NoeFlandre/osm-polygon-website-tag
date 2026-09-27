@@ -72,6 +72,10 @@ def _tag_charset(tag: bytes) -> bytes | None:
     attributes = {name.lower(): b"".join(value).lower() for name, *value in _ATTRIBUTE.findall(tag)}
     if b"charset" in attributes:
         return attributes[b"charset"]
+    return _http_equiv_charset(attributes)
+
+
+def _http_equiv_charset(attributes: dict[bytes, bytes]) -> bytes | None:
     content = attributes.get(b"content")
     if content is None or attributes.get(b"http-equiv") != b"content-type":
         return None
@@ -82,9 +86,16 @@ def _tag_charset(tag: bytes) -> bytes | None:
 def _meta_charset(html: bytes) -> str | None:
     """Return the codec of the first active meta charset tag naming a known codec."""
     head = _COMMENT.sub(b"", html[:4096])
-    declared = (_tag_charset(tag) for tag in _META_TAG.findall(head))
-    found = (_codec(name.decode(_LATIN1)) for name in declared if name is not None)
-    return next((codec for codec in found if codec is not None), None)
+    for tag in _META_TAG.findall(head):
+        codec = _tag_codec(tag)
+        if codec is not None:
+            return codec
+    return None
+
+
+def _tag_codec(tag: bytes) -> str | None:
+    declared = _tag_charset(tag)
+    return None if declared is None else _codec(declared.decode(_LATIN1))
 
 
 def _codec(name: str | None) -> str | None:
