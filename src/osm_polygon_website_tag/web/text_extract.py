@@ -44,6 +44,20 @@ _SEVEN_BIT_PREFIXES = ("iso2022", "utf-7", "hz")
 # not, because mislabelled UTF-8 pages are common and cp1252 text is rarely
 # valid UTF-8 by accident.
 _MULTIBYTE_PREFIXES = ("gb18030", "cp932", "cp949", "big5", "euc_j", "shift_jis")
+# WHATWG labels Python's codec registry does not know.
+_WEB_LABELS = {
+    "windows-874": "cp874",
+    "iso-8859-6-i": "iso8859-6",
+    "iso-8859-6-e": "iso8859-6",
+    "iso-8859-8-i": "iso8859-8",
+    "iso-8859-8-e": "iso8859-8",
+    "x-sjis": "cp932",
+    "x-gbk": "gb18030",
+    "x-euc-jp": "euc_jp",
+    "x-mac-cyrillic": "mac-cyrillic",
+    "x-mac-roman": "mac-roman",
+    **{f"x-cp125{digit}": f"cp125{digit}" for digit in range(9)},
+}
 # WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
 _WEB_ALIASES = {
     "ascii": "cp1252",
@@ -130,8 +144,9 @@ def _tag_codec(tag: bytes) -> str | None:
 def _codec(name: str | None) -> str | None:
     if name is None:
         return None
+    label = name.strip().lower()
     try:
-        codec = codecs.lookup(name).name
+        codec = codecs.lookup(_WEB_LABELS.get(label, label)).name
     except LookupError:
         return None
     return _WEB_ALIASES.get(codec, codec)

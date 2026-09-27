@@ -114,3 +114,27 @@ def test_uninspectable_extractor_is_called_without_charset(monkeypatch) -> None:
         return TextExtraction("success", "x", 1, None, "2.1.0")
 
     assert not _accepts_charset(keywords)
+
+
+def test_positional_only_charset_is_not_forwarded() -> None:
+    result = TextExtraction("success", "x", 1, None, "2.1.0")
+
+    def positional(html: bytes, charset: str | None = None, /, *, url: str) -> TextExtraction:
+        return result
+
+    def keyword_only(html: bytes, *, url: str, charset: str | None = None) -> TextExtraction:
+        return result
+
+    def positional_or_keyword(
+        html: bytes, charset: str | None = None, *, url: str
+    ) -> TextExtraction:
+        return result
+
+    assert not _accepts_charset(positional)
+    assert _accepts_charset(keyword_only)
+    assert _accepts_charset(positional_or_keyword)
+    fetched = FetchResult("ok", URL, final_url=URL, body=b"x", charset="koi8-r")
+    assert (
+        _extract_fetched(URL, fetched, invocation_id="run", extractor=positional).status
+        == "success"
+    )

@@ -441,3 +441,23 @@ def test_extractor_failure_reports_the_library_version(monkeypatch) -> None:
     result = extract_main_text(b"<html/>", url="https://example.org")
 
     assert result.trafilatura_version == text_extract._trafilatura_version()
+
+
+@pytest.mark.parametrize(
+    ("label", "codec"),
+    [
+        ("windows-874", "cp874"),
+        (" ISO-8859-8-I ", "iso8859-8"),
+        ("x-sjis", "cp932"),
+        ("x-cp1251", "cp1251"),
+        ("x-mac-cyrillic", "mac-cyrillic"),
+    ],
+)
+def test_web_only_labels_resolve_to_python_codecs(label: str, codec: str) -> None:
+    assert text_extract._codec(label) == codec
+
+
+def test_windows_874_declared_thai_page_decodes() -> None:
+    text = _page("สวัสดีครับ")
+
+    assert decode_html(text.encode("cp874"), "windows-874") == text

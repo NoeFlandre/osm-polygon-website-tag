@@ -650,7 +650,14 @@ def _accepts_charset(extractor: Extractor) -> bool:
         parameters = inspect.signature(extractor).parameters.values()
     except (TypeError, ValueError):
         return False
-    return any(p.name == "charset" or p.kind is p.VAR_KEYWORD for p in parameters)
+    return any(_forwards_charset(parameter) for parameter in parameters)
+
+
+def _forwards_charset(parameter: inspect.Parameter) -> bool:
+    """``**kwargs``, or a ``charset`` parameter that can be passed by keyword."""
+    if parameter.kind is parameter.VAR_KEYWORD:
+        return True
+    return parameter.name == "charset" and parameter.kind is not parameter.POSITIONAL_ONLY
 
 
 def _apply_result(row: dict[str, object], prefix: str, value: CachedText) -> None:

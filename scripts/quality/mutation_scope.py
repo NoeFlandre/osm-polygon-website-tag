@@ -158,10 +158,11 @@ def function_filters(
 def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
     """Return the mutant prefixes a change reaches, or ``None`` for whole-module."""
     try:
-        tree = ast.parse(source.read_text(encoding="utf-8"))
+        text = source.read_text(encoding="utf-8")
+        tree = ast.parse(text)
     except (OSError, SyntaxError, UnicodeError):
         return None
-    covered: set[int] = set(_import_lines(tree))
+    covered: set[int] = set(_import_lines(tree)) | set(_blank_or_comment_lines(text))
     names: set[str] = set()
     for name, start, end in _iter_functions(tree):
         span = range(start, end + 1)
@@ -171,6 +172,14 @@ def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
     if any(line not in covered for line in lines):
         return None
     return names
+
+
+def _blank_or_comment_lines(text: str) -> Iterator[int]:
+    """Yield lines holding no code: adding a function also adds blank separators."""
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            yield number
 
 
 def _import_lines(tree: ast.Module) -> Iterator[int]:

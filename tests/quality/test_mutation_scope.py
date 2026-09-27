@@ -259,6 +259,23 @@ def test_a_changed_import_does_not_charge_the_whole_module(tmp_path: Path) -> No
     }
 
 
+def test_blank_and_comment_lines_do_not_charge_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "added.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        '"""Module."""\n\n\ndef old() -> int:\n    return 1\n\n\n# helper\n'
+        "def new() -> int:\n    return 2\n",
+        encoding="utf-8",
+    )
+    relative = "src/osm_polygon_website_tag/reporting/added.py"
+
+    assert mutation_scope.function_filters({relative: {6, 7, 8, 9, 10}}, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.added": [
+            "osm_polygon_website_tag.reporting.added.x_new__mutmut_*"
+        ]
+    }
+
+
 def test_a_changed_module_constant_still_charges_the_whole_module(tmp_path: Path) -> None:
     module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "constant.py"
     module.parent.mkdir(parents=True)
