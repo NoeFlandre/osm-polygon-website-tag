@@ -252,11 +252,11 @@ def test_comment_inside_meta_tag_is_removed_before_parsing() -> None:
     assert text_extract._meta_charset(b"<meta charset=koi8-r<!-- x -->>") == "koi8-r"
 
 
-def test_meta_charset_is_only_read_from_the_first_4096_bytes() -> None:
+def test_meta_charset_is_only_read_from_the_first_1024_bytes() -> None:
     tag = b"<meta charset=koi8-r>"
 
-    assert text_extract._meta_charset(b" " * (4096 - len(tag)) + tag) == "koi8-r"
-    assert text_extract._meta_charset(b" " * (4097 - len(tag)) + tag) is None
+    assert text_extract._meta_charset(b" " * (1024 - len(tag)) + tag) == "koi8-r"
+    assert text_extract._meta_charset(b" " * (1025 - len(tag)) + tag) is None
 
 
 @pytest.mark.parametrize(
@@ -535,3 +535,23 @@ def test_http_charset_with_a_bad_byte_beats_a_conflicting_meta() -> None:
 
     assert "Café crème coûte 5€." in decoded
     assert decoded.endswith("�")
+
+
+@pytest.mark.parametrize("label", ["ks_c_5601-1989", "csksc56011987", "cseuckr", "iso-ir-149"])
+def test_euc_kr_web_labels_resolve_to_cp949(label: str) -> None:
+    assert text_extract._codec(label) == "cp949"
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_quoted_charset_in_meta_content_is_read(quote: str) -> None:
+    content = f"text/html; charset={quote}windows-874{quote}"
+    q = "'" if quote == '"' else '"'
+    tag = f"<meta http-equiv={q}Content-Type{q} content={q}{content}{q}>".encode()
+
+    assert text_extract._meta_charset(tag) == "cp874"
+
+
+def test_a_late_meta_after_1024_bytes_cannot_override_utf8() -> None:
+    html = ("<p>" + "专业" * 400 + "</p><meta charset=gb2312>").encode()
+
+    assert decode_html(html) == html.decode()

@@ -108,31 +108,41 @@ def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, set[int]]:
 def parse_diff(diff: str) -> dict[str, set[int]]:
     """Return the added or modified new-side line numbers of a ``-U0`` diff.
 
-    A deletion-only hunk records line 0, which scopes the whole module.
-    In a pure-addition hunk (nothing removed), blank and comment-only lines
-    are dropped: adding a function also adds blank separators, which must
-    not charge the whole module. In any other hunk every new line counts,
-    since a comment or blank line there may replace module-level code.
+    Line 0 lies outside every function, so recording it scopes the whole
+    module. That is recorded for a deletion-only hunk, and for a hunk that
+    keeps no line. In a pure-addition hunk (nothing removed), blank and
+    comment-only lines are dropped: adding a function also adds blank
+    separators, which must not charge the whole module. Such a hunk that
+    holds only those lines may be text inside a string, so it scopes the
+    module. In any other hunk every new line counts, since a comment or
+    blank line there may replace module-level code.
     """
     lines: dict[str, set[int]] = {}
+    for path, pure_addition, start, added in _hunks(diff):
+        kept = [
+            start + offset
+            for offset, text in enumerate(added)
+            if not (pure_addition and _is_blank_or_comment(text))
+        ]
+        lines.setdefault(path, set()).update(kept or [0])
+    return lines
+
+
+def _hunks(diff: str) -> Iterator[tuple[str, bool, int, list[str]]]:
+    """Yield ``(path, pure addition, first new line, added lines)`` per hunk."""
+    hunk: tuple[str, bool, int, list[str]] | None = None
     current: str | None = None
-    pure_addition = False
-    number = 0
     for raw in diff.splitlines():
         if raw.startswith("+++ b/"):
             current = raw[len("+++ b/") :].strip()
         elif current is not None and (match := _HUNK.match(raw)):
-            pure_addition = match.group("old") == "0"
-            number = int(match.group("start"))
-            if match.group("count") == "0":
-                # Deletion only: no new-side line to point at. Line 0 lies
-                # outside every function, so the whole module is scoped.
-                lines.setdefault(current, set()).add(0)
-        elif current is not None and raw.startswith("+"):
-            if not (pure_addition and _is_blank_or_comment(raw[1:])):
-                lines.setdefault(current, set()).add(number)
-            number += 1
-    return lines
+            if hunk is not None:
+                yield hunk
+            hunk = (current, match.group("old") == "0", int(match.group("start")), [])
+        elif hunk is not None and raw.startswith("+"):
+            hunk[3].append(raw[1:])
+    if hunk is not None:
+        yield hunk
 
 
 def _is_blank_or_comment(line: str) -> bool:

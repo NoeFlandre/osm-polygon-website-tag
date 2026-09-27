@@ -443,3 +443,9 @@ def test_methods_are_sharded_under_their_mutmut_prefix(tmp_path: Path) -> None:
     assert mutation_scope.module_function_filters(module, root=tmp_path) == [
         f"{module}.xǁStoreǁappend__mutmut_*"
     ]
+
+
+def test_a_hunk_of_only_blank_or_hash_lines_scopes_the_whole_module() -> None:
+    diff = "+++ b/src/pkg/mod.py\n@@ -7,0 +8,2 @@\n+\n+# inside a triple-quoted string\n"
+
+    assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {0}}

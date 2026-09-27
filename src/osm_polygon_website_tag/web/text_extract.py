@@ -60,6 +60,10 @@ _WEB_LABELS = {
     "x-mac-roman": "mac-roman",
     "windows-31j": "cp932",
     "windows-949": "cp949",
+    "ks_c_5601-1989": "cp949",
+    "csksc56011987": "cp949",
+    "cseuckr": "cp949",
+    "iso-ir-149": "cp949",
     **{f"x-cp125{digit}": f"cp125{digit}" for digit in range(9)},
 }
 # WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
@@ -94,7 +98,9 @@ def _extractor_options(url: str) -> Extractor:
     return options
 
 
-_CONTENT_CHARSET = re.compile(r"(?:^|;)\s*charset\s*=\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+_CONTENT_CHARSET = re.compile(r"""(?:^|;)\s*charset\s*=\s*["']?([A-Za-z0-9_.:-]+)""", re.IGNORECASE)
+# HTML only honours encoding declarations within the first 1024 bytes.
+_PRESCAN_BYTES = 1024
 # html.parser already treats script/style as raw text; these hold text, not
 # markup, too, so a <meta> inside them is ignored.
 _TEXT_ONLY_ELEMENTS = frozenset({"title", "textarea", "noscript", "xmp"})
@@ -150,7 +156,7 @@ def _http_equiv_charset(attributes: dict[str, str]) -> str | None:
 def _meta_charset(html: bytes) -> str | None:
     """Return the codec of the first real meta charset declaration naming a known codec."""
     parser = _MetaCharsetParser()
-    parser.feed(html[:4096].decode(_LATIN1))
+    parser.feed(html[:_PRESCAN_BYTES].decode(_LATIN1))
     return next(filter(None, map(_meta_codec, parser.declared)), None)
 
 
