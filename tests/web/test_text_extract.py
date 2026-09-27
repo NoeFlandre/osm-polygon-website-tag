@@ -102,6 +102,7 @@ def test_empty_trafilatura_result_is_explicit(monkeypatch) -> None:
     assert result.status == "empty"
     assert result.text == ""
     assert result.word_count == 0
+    assert result.trafilatura_version == text_extract._trafilatura_version()
 
 
 def test_extractor_failure_is_sanitized(monkeypatch) -> None:

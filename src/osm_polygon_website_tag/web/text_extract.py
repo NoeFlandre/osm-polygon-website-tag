@@ -35,6 +35,7 @@ _extractor_state = threading.local()
 # inside functions only adds mutants no test can tell apart.
 _UTF8 = "utf-8"
 _LATIN1 = "latin-1"
+_REPLACEMENT = "\ufffd"
 # Codec name prefixes: UTF-16/32 (only trusted from HTTP; a <meta> naming them
 # is read as UTF-8 by HTML) and 7-bit stateful encodings.
 _WIDE_PREFIXES = ("utf-16", "utf-32")
@@ -212,7 +213,7 @@ def _mostly_utf8(html: bytes) -> bool:
     Legacy single-byte text almost never forms valid multi-byte sequences.
     """
     text = str(html, _UTF8, "replace")
-    invalid = text.count("\ufffd")
+    invalid = text.count(_REPLACEMENT)
     return sum(1 for char in text if ord(char) > 127) - invalid > invalid
 
 
