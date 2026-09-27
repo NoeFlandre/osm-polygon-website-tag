@@ -17,6 +17,7 @@ from trafilatura.utils import detect_encoding
 
 from osm_polygon_website_tag.contracts.text_schema import count_words
 from osm_polygon_website_tag.web.content_type import charset_parameter
+from osm_polygon_website_tag.web.encoding_labels import WEB_LABELS
 
 
 @dataclass(frozen=True)
@@ -46,31 +47,7 @@ _SEVEN_BIT_PREFIXES = ("iso2022", "utf-7", "hz")
 # not, because mislabelled UTF-8 pages are common and cp1252 text is rarely
 # valid UTF-8 by accident.
 _MULTIBYTE_PREFIXES = ("gb18030", "cp932", "cp949", "big5", "euc_j", "shift_jis")
-# WHATWG labels Python's codec registry does not know.
-_WEB_LABELS = {
-    "windows-874": "cp874",
-    "iso-8859-6-i": "iso8859-6",
-    "iso-8859-6-e": "iso8859-6",
-    "iso-8859-8-i": "iso8859-8",
-    "iso-8859-8-e": "iso8859-8",
-    "x-sjis": "cp932",
-    "x-gbk": "gb18030",
-    "x-euc-jp": "euc_jp",
-    "x-mac-cyrillic": "mac-cyrillic",
-    "x-mac-roman": "mac-roman",
-    "x-x-big5": "big5hkscs",
-    "cn-big5": "big5hkscs",
-    "csbig5": "big5hkscs",
-    "big5-hkscs": "big5hkscs",
-    "windows-31j": "cp932",
-    "windows-949": "cp949",
-    "ks_c_5601-1989": "cp949",
-    "csksc56011987": "cp949",
-    "cseuckr": "cp949",
-    "iso-ir-149": "cp949",
-    **{f"x-cp125{digit}": f"cp125{digit}" for digit in range(9)},
-}
-# WHATWG Encoding Standard: HTML reads these labels as their Windows supersets.
+# Python names outside the WHATWG table that HTML reads as Windows supersets.
 _WEB_ALIASES = {
     "ascii": "cp1252",
     "iso8859-1": "cp1252",
@@ -174,7 +151,7 @@ def _codec(name: str | None) -> str | None:
         return None
     label = name.strip().lower()
     try:
-        codec = codecs.lookup(_WEB_LABELS.get(label, label)).name
+        codec = codecs.lookup(WEB_LABELS.get(label, label)).name
     except LookupError:
         return None
     return _WEB_ALIASES.get(codec, codec)
