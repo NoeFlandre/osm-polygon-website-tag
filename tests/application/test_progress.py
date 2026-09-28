@@ -97,6 +97,7 @@ def test_interactive_progress_starts_a_new_bar_when_source_index_resets(monkeypa
 
     assert len(_FakeTqdm.instances) == 2
     assert _FakeTqdm.instances[0].closed is True
+    assert _FakeTqdm.instances[0].n == _FakeTqdm.instances[0].total == 3  # finished, not abandoned
     assert _FakeTqdm.instances[1].description == "Enriching a.osm.pbf"
 
 

@@ -864,3 +864,24 @@ def test_importing_the_cli_does_not_load_trafilatura() -> None:
     )
 
     assert result.stdout.strip() == "False"
+
+
+def test_extract_main_text_decodes_with_the_supplied_charset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+    monkeypatch.setattr(
+        trafilatura, "extract", lambda decoded, **_kwargs: seen.append(decoded) or "text"
+    )
+    body = "Привет мир".encode("windows-1251")
+
+    extract_main_text(body, url="https://example.org/", charset="windows-1251")
+
+    assert seen == ["Привет мир"]
+
+
+def test_an_xml_declaration_after_leading_whitespace_is_still_honoured() -> None:
+    text = "<p>专业</p>" * 5
+    body = ('\n  <?xml version="1.0" encoding="GBK"?>' + text).encode("gbk")
+
+    assert decode_html(body, media_type="application/xhtml+xml").endswith(text)

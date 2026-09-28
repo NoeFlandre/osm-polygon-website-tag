@@ -92,9 +92,6 @@ class PolygonGeometry:
     area_bucket: str
 
 
-_LOGGER = logging.getLogger(__name__)
-
-
 def _round_coord(value: float) -> float:
     return round(float(value), COORDINATE_PRECISION)
 
@@ -267,10 +264,10 @@ def _projected_centroid(
     proj_string = f"+proj=laea +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +ellps=WGS84"
     crs = pyproj.CRS.from_proj4(proj_string)
 
-    def _to_xy(x: float, y: float, _z: Any = None) -> tuple[float, float]:
+    def _to_xy(x: float, y: float, z: Any = None) -> tuple[float, float]:
         return pyproj.Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(x, y)
 
-    def _to_ll(x: float, y: float, _z: Any = None) -> tuple[float, float]:
+    def _to_ll(x: float, y: float, z: Any = None) -> tuple[float, float]:
         return pyproj.Transformer.from_crs(crs, "EPSG:4326", always_xy=True).transform(x, y)
 
     projected = shapely_transform(_to_xy, shapely_geom)
@@ -379,7 +376,9 @@ def compute_polygon_area_m2(ring: list[list[float]]) -> float:
     try:
         return _finite_abs_area(geod, shapely_ring)
     except (pyproj.exceptions.GeodError, ValueError) as error:
-        _LOGGER.warning("geodesic area failed for a ring; counted as 0.0: %s", error)
+        logging.getLogger(__name__).warning(
+            "geodesic area failed for a ring; counted as 0.0: %s", error
+        )
         return 0.0
 
 

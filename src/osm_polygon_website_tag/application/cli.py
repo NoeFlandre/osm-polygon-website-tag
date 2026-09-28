@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import sys
 from dataclasses import dataclass
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -55,6 +54,7 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
     shard_needs_sentence_segmentation,
     validate_segmentation_options,
 )
+from osm_polygon_website_tag.publishing.errors import TrackioUnavailableError
 from osm_polygon_website_tag.publishing.publish import (
     build_publish_plan,
     create_repo,
@@ -63,7 +63,6 @@ from osm_polygon_website_tag.publishing.publish import (
 )
 from osm_polygon_website_tag.publishing.release import release_card_and_stats
 from osm_polygon_website_tag.publishing.trackio import (
-    TrackioUnavailableError,
     build_trackio_snapshot,
     publish_trackio_snapshot,
 )
@@ -200,7 +199,7 @@ def _log_level(verbose: int, *, quiet: bool) -> int:
 def _configure_logging(level: int) -> None:
     """Log the package to the current stderr, so stdout stays pure JSON."""
     _reset_logging()
-    handler = logging.StreamHandler(sys.stderr)
+    handler = logging.StreamHandler()  # no argument: the current sys.stderr
     handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
     _LOGGER.addHandler(handler)
     _LOGGER.setLevel(level)

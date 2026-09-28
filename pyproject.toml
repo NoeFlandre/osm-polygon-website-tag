@@ -137,6 +137,8 @@ max-args = 6
 # The quality scripts are CLIs that print their reports.
 "scripts/**/*.py" = ["T201"]
 "src/osm_polygon_website_tag/application/cli.py" = ["E501", "PLR0913", "FBT001", "FBT002"]
+# shapely's transform() passes a z argument that the projection closures ignore.
+"src/osm_polygon_website_tag/domain/geometry.py" = ["ARG001"]
 # Signatures that predate the argument-count and boolean-flag rules. New modules
 # are held to them; shrink this list as each function is reshaped (TODO(#76)).
 "src/osm_polygon_website_tag/application/source_processing.py" = ["FBT001", "PLR0913"]

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from osm_polygon_website_tag.publishing.errors import TrackioUnavailableError
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import (
@@ -119,10 +120,6 @@ def _validate_trackio_destination(space_id: str, project: str) -> None:
         raise ValueError("Trackio space_id must not be empty")
     if not project.strip():
         raise ValueError("Trackio project must not be empty")
-
-
-class TrackioUnavailableError(RuntimeError):
-    """The optional ``trackio`` package is not installed."""
 
 
 def _load_trackio() -> Any:
