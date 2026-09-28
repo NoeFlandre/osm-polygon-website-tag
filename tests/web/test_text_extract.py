@@ -757,3 +757,41 @@ def test_a_meta_x_user_defined_declaration_reads_as_windows_1252() -> None:
     html = b"<meta charset=x-user-defined><p>price \x80</p>"
 
     assert decode_html(html).endswith("price \u20ac</p>")
+
+
+def test_a_malformed_wide_http_charset_is_not_read_as_utf8() -> None:
+    html = "<p>Hello</p>".encode("utf-16le") + b"X"
+
+    assert decode_html(html, "utf-16le") == "<p>Hello</p>�"
+
+
+def _gbk_meta_page() -> bytes:
+    return '<meta charset="gb2312"/><article><p>专业</p></article>'.encode() * 40
+
+
+@pytest.mark.parametrize(
+    ("media_type", "sniffed"),
+    [(None, True), ("text/html", True), ("application/xhtml+xml", False), ("text/plain", False)],
+)
+def test_only_html_responses_get_the_meta_prescan(
+    monkeypatch: pytest.MonkeyPatch, media_type: str | None, sniffed: bool
+) -> None:
+    seen: list[bool] = []
+    real = text_extract.decode_html
+
+    def spy(html: bytes, charset: str | None = None, *, sniff_meta: bool = True) -> str:
+        seen.append(sniff_meta)
+        return real(html, charset, sniff_meta=sniff_meta)
+
+    monkeypatch.setattr(text_extract, "decode_html", spy)
+
+    text_extract.extract_main_text(_gbk_meta_page(), url="https://e.org/", media_type=media_type)
+
+    assert seen == [sniffed]
+
+
+def test_without_the_prescan_a_legacy_meta_does_not_override_utf8() -> None:
+    page = _gbk_meta_page()
+
+    assert "专业" in decode_html(page, None, sniff_meta=False)
+    assert "专业" not in decode_html(page, None, sniff_meta=True)

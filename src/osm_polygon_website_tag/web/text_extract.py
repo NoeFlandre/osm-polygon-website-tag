@@ -80,6 +80,10 @@ def _extractor_options(url: str) -> Extractor:
     return options
 
 
+# The HTML meta prescan applies to HTML only: in plain text a <meta> is literal
+# text, and XHTML is XML, which a <meta> does not declare. An unknown type is
+# treated as HTML.
+_META_SNIFFED_TYPES = (None, "text/html")
 # HTML only honours encoding declarations within the first 1024 bytes.
 _PRESCAN_BYTES = 1024
 # html.parser already treats script/style as raw text; these hold text, not
@@ -173,19 +177,26 @@ def _ascii_lookalike(codec: str | None, prefixes: tuple[str, ...]) -> str | None
 def decode_html(html: bytes, charset: str | None = None, *, sniff_meta: bool = True) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
-    Order: a BOM decides outright. Then strict decodes of declared codecs
-    whose bytes can pass as UTF-8 (UTF-16/32 from HTTP; 7-bit ISO-2022/UTF-7/HZ
-    and multi-byte CJK from HTTP or meta), UTF-8, and the HTTP charset. An
+    Order: a BOM decides outright, then a UTF-16/32 HTTP charset (bad bytes
+    replaced). Then strict decodes of declared codecs whose bytes can pass as
+    UTF-8 (7-bit ISO-2022/UTF-7/HZ and multi-byte CJK from HTTP or meta),
+    UTF-8, and the HTTP charset. An
     HTTP charset that still fails keeps its codec with bad bytes replaced,
     before ``<meta charset>`` is considered at all. ``sniff_meta=False``
-    (plain-text responses) skips the meta scan: there it is literal text.
+    (plain-text and XHTML responses) skips the HTML meta scan.
     """
     bom = _bom_codec(html)
     if bom is not None:  # a byte-order mark is authoritative; only bad bytes are replaced
         return str(html, bom, "replace")
-    header, meta = _codec(charset), _meta_charset(html) if sniff_meta else None
+    header = _codec(charset)
+    wide = _ascii_lookalike(header, _WIDE_PREFIXES)
+    if wide is not None:
+        # Declared UTF-16/32 is authoritative even when malformed: its ASCII
+        # text, NULs included, would otherwise pass as UTF-8.
+        return str(html, wide, "replace")
+    meta = _meta_charset(html) if sniff_meta else None
     lookalikes = [
-        _ascii_lookalike(header, _WIDE_PREFIXES + _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
+        _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
         _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
     ]
     decoded = _first_decoding(html, [*lookalikes, _UTF8, header])
@@ -237,7 +248,7 @@ def extract_main_text(
 ) -> TextExtraction:
     """Extract full main text from already downloaded HTML (or plain text)."""
     library_version = _trafilatura_version()
-    decoded = decode_html(html, charset, sniff_meta=media_type != "text/plain")
+    decoded = decode_html(html, charset, sniff_meta=media_type in _META_SNIFFED_TYPES)
     try:
         # An Extractor ``options`` object overrides trafilatura's per-call
         # keyword settings, so the URL and output settings live only there.
