@@ -5,6 +5,21 @@ The installed command is `osm-polygon-website-tag`. Run
 Typer. `run-all` is the normal entry point; the phase commands are useful for
 development, recovery, and inspection of an existing run.
 
+## Exit codes and errors
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. |
+| `1` | A check failed (`verify-results`, `finalize-*`). |
+| `2` | Usage error: unknown command or option, missing value. |
+| `3` | Invalid input or state: a bad value, a missing or unreadable file, a corrupt manifest. |
+| `4` | Remote failure: a Hugging Face Hub HTTP or authentication error. |
+| `130` | Interrupted with Ctrl-C. |
+
+Errors print one `error: ...` line on stderr, never a traceback. Pass
+`--debug` before the command (`osm-polygon-website-tag --debug run-all ...`)
+or set `OSM_PWT_DEBUG=1` to get the full traceback instead.
+
 ## Commands
 
 | Command | Purpose |

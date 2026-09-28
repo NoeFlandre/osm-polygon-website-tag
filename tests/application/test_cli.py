@@ -6,11 +6,14 @@ import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
+import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import typer
+from huggingface_hub.errors import HfHubHTTPError
 
 from osm_polygon_website_tag.application import cli
 from osm_polygon_website_tag.application.cli import app, main
@@ -315,7 +318,7 @@ def test_cli_init_rejects_output_inside_source_root(tmp_path: Path, capsys) -> N
         ]
     )
 
-    assert rc == 2
+    assert rc == 3  # invalid input
     assert not (source_root / "runs").exists()
     assert capsys.readouterr().err.startswith("error: ")
 
@@ -403,7 +406,7 @@ def test_cli_verify_results_returns_nonzero_on_failure(tmp_path: Path) -> None:
     assert rc == 1
 
 
-def test_cli_detect_languages_rejects_non_seagate_before_model_loading(
+def test_cli_detect_languages_rejects_a_run_outside_the_data_root_before_model_loading(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -415,7 +418,7 @@ def test_cli_detect_languages_rejects_non_seagate_before_model_loading(
         raising=False,
     )
 
-    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 2
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 3  # invalid input
 
 
 def test_cli_detect_languages_loads_one_model_and_updates_run(
@@ -535,7 +538,7 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
         lambda *_args, **_kwargs: pytest.fail("frozen snapshot must not load GlotLID"),
     )
 
-    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 2
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 3  # invalid input
 
 
 def test_cli_frozen_snapshot_error_message_is_stable() -> None:
@@ -611,7 +614,7 @@ def test_cli_release_stats_refuses_noncanonical_repository(tmp_path: Path, capsy
         ]
     )
 
-    assert rc == 2
+    assert rc == 3  # invalid input
     assert "canonical" in capsys.readouterr().err
 
 
@@ -1121,7 +1124,7 @@ def test_cli_main_preserves_app_exit_and_error_contracts(
         {
             "args": ["ok"],
             "prog_name": "osm-polygon-website-tag",
-            "standalone_mode": True,
+            "standalone_mode": False,
         }
     ]
 
@@ -1135,7 +1138,7 @@ def test_cli_main_preserves_app_exit_and_error_contracts(
         "app",
         lambda **_kwargs: (_ for _ in ()).throw(ValueError("bad input")),
     )
-    assert cli.main(["bad"]) == 2
+    assert cli.main(["bad"]) == 3
     assert capsys.readouterr().err == "error: bad input\n"
 
 
@@ -1161,3 +1164,104 @@ def test_cli_records_completed_language_shard_metadata(monkeypatch: pytest.Monke
             },
         )
     ]
+
+
+def _raising_app(error: BaseException) -> Any:
+    def app(**_kwargs: object) -> None:
+        raise error
+
+    return app
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (ValueError("bad state"), 3),
+        (json.JSONDecodeError("corrupt run.json", "{", 0), 3),
+        (FileNotFoundError("missing run.json"), 3),
+        (
+            HfHubHTTPError(
+                "401 Unauthorized",
+                response=httpx.Response(401, request=httpx.Request("GET", "https://hf.co")),
+            ),
+            4,
+        ),
+    ],
+)
+def test_each_error_class_exits_with_its_documented_code(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    error: Exception,
+    code: int,
+) -> None:
+    monkeypatch.delenv(cli.DEBUG_ENV, raising=False)
+    monkeypatch.setattr(cli, "app", _raising_app(error))
+
+    assert cli.main(["x"]) == code
+    err = capsys.readouterr().err
+    assert err == f"error: {error}\n"
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize("error", [KeyboardInterrupt(), typer.Abort()])
+def test_ctrl_c_exits_130_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: BaseException
+) -> None:
+    monkeypatch.setattr(cli, "app", _raising_app(error))
+
+    assert cli.main(["x"]) == 130
+    assert capsys.readouterr().err == "interrupted\n"
+
+
+def test_a_click_usage_error_keeps_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["verify-results"]) == 2
+    assert "Missing option '--run-dir'" in capsys.readouterr().err
+
+
+def test_an_exit_code_returned_by_the_app_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "app", lambda **_kwargs: 5)
+
+    assert cli.main(["x"]) == 5
+
+
+def test_a_missing_run_dir_is_an_invalid_input_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(["detect-languages", "--run-dir", str(tmp_path / "missing")])
+
+    assert code == 3
+    assert "Traceback" not in capsys.readouterr().err
+
+
+def test_debug_flag_brings_the_traceback_back(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        cli.main(["--debug", "detect-languages", "--run-dir", str(tmp_path / "missing")])
+    # One invocation only.
+    assert cli._debug == {"enabled": False}
+
+
+def test_debug_environment_variable_brings_the_traceback_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli.DEBUG_ENV, "1")
+    monkeypatch.setattr(cli, "app", _raising_app(OSError("disk")))
+
+    with pytest.raises(OSError, match="disk"):
+        cli.main(["x"])
+
+
+def test_debug_environment_variable_must_be_exactly_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli.DEBUG_ENV, "0")
+    monkeypatch.setattr(cli, "app", _raising_app(OSError("disk")))
+
+    assert cli.main(["x"]) == 3
+
+
+def test_the_exit_code_table_is_documented() -> None:
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "cli.md").read_text(encoding="utf-8")
+
+    for code in {code for _type, code in cli._EXIT_CODES} | {0, 1, 2, cli.EXIT_INTERRUPTED}:
+        assert f"| `{code}` |" in doc
+    assert cli.DEBUG_ENV in doc

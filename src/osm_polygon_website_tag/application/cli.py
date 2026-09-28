@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
+from huggingface_hub.errors import HfHubHTTPError
 from rich.console import Console
 
 from osm_polygon_website_tag.application.progress import ProgressReporter
@@ -104,6 +106,37 @@ app = typer.Typer(
     rich_markup_mode=None,
 )
 _error_console = Console(stderr=True, markup=False, highlight=False)
+
+# Exit codes, documented in docs/cli.md. 1 is a failed check (verify-results,
+# finalize-*), and 2 is a usage error from Click.
+EXIT_INVALID_INPUT = 3
+EXIT_REMOTE = 4
+EXIT_INTERRUPTED = 130
+# Most specific first: HfHubHTTPError is also an OSError.
+_EXIT_CODES: tuple[tuple[type[Exception], int], ...] = (
+    (HfHubHTTPError, EXIT_REMOTE),
+    (ValueError, EXIT_INVALID_INPUT),
+    (OSError, EXIT_INVALID_INPUT),
+)
+_HANDLED_ERRORS = tuple(error_type for error_type, _code in _EXIT_CODES)
+DEBUG_ENV = "OSM_PWT_DEBUG"
+# Typer re-exports no ClickException, but its BadParameter derives from it.
+_CLICK_EXCEPTION = cast(
+    "type[Exception]",
+    next(kind for kind in typer.BadParameter.__mro__ if kind.__name__ == "ClickException"),
+)
+_debug = {"enabled": False}
+
+
+@app.callback()
+def _global_options(
+    debug: Annotated[
+        bool,
+        typer.Option("--debug", help=f"Show full tracebacks (also: {DEBUG_ENV}=1)."),
+    ] = False,
+) -> None:
+    _debug["enabled"] = debug
+
 
 RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
 RepoId = Annotated[str, typer.Option("--repo-id", help="Hugging Face dataset repository.")]
@@ -882,20 +915,49 @@ def grid5000_sync_sentences_command(
     return 0
 
 
+def exit_code_for(error: Exception) -> int:
+    """Map a handled error to its documented exit code."""
+    return next(code for error_type, code in _EXIT_CODES if isinstance(error, error_type))
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Run the Typer app while preserving the historical integer API."""
+    """Run the Typer app and turn every expected failure into one stderr line."""
     try:
-        app(
-            args=argv,
-            prog_name="osm-polygon-website-tag",
-            standalone_mode=True,
-        )
+        return _run_app(argv)
+    except _HANDLED_ERRORS as exc:
+        if _debug_requested():
+            raise
+        _error_console.print(f"error: {exc}")
+        return exit_code_for(exc)
+    finally:
+        _debug["enabled"] = False
+
+
+def _run_app(argv: list[str] | None) -> int:
+    try:
+        result = app(args=argv, prog_name="osm-polygon-website-tag", standalone_mode=False)
+    except _CLICK_EXCEPTION as exc:
+        return _show_click_error(exc)
+    except (KeyboardInterrupt, typer.Abort):
+        _error_console.print("interrupted")
+        return EXIT_INTERRUPTED
     except SystemExit as exc:
         return int(exc.code or 0)
-    except ValueError as exc:
-        _error_console.print(f"error: {exc}")
-        return 2
-    return 0
+    return _as_exit_code(result)
+
+
+def _as_exit_code(result: object) -> int:
+    """Without standalone mode, Click returns an Exit's code instead of raising."""
+    return result if isinstance(result, int) else 0
+
+
+def _show_click_error(error: Any) -> int:
+    error.show()
+    return int(error.exit_code)
+
+
+def _debug_requested() -> bool:
+    return _debug["enabled"] or os.environ.get(DEBUG_ENV) == "1"
 
 
 if __name__ == "__main__":  # pragma: no cover
