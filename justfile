@@ -72,6 +72,15 @@ release-stats run_dir:
         --confirm-repo 'NoeFlandre/osm-polygon-website-tag' \
         --apply
 
+# Check every locked dependency against the PyPI advisory database.
+audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requirements="$(mktemp)"
+    trap 'rm -f "$requirements"' EXIT
+    uv export --locked --no-hashes --no-emit-project --quiet > "$requirements"
+    uvx pip-audit==2.10.1 --requirement "$requirements" --disable-pip --no-deps
+
 build:
     uv build --out-dir "{{ BUILD_OUTPUT_DIR }}"
 
@@ -202,11 +211,12 @@ qa-push base="origin/main": ruff typecheck
 # run, and `crap` reads that run's artifact. The per-module mutation matrix
 # runs beside this job; `mutation_scope.py` emits one shard per changed
 # function. `build` proves the sdist and wheel still package.
+# `audit` fails the gate on a known-vulnerable pin in uv.lock.
 # Tier 3: the pull-request gate.
-qa-pr: baseline ruff typecheck coverage crap build
+qa-pr: baseline ruff typecheck coverage crap build audit
 
 # Everything the pull request proved, plus the container smoke test. In CI the
-# Docker workflow owns the container gate and runs it beside the quality job,
+# Quality workflow's `docker` job owns the container gate and runs it beside the quality job,
 # so this recipe is for proving a merge locally in one command.
 # Tier 4: the merge gate.
 qa-merge: qa-pr

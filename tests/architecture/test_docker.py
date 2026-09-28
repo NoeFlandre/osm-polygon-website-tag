@@ -41,7 +41,7 @@ def test_dockerignore_excludes_credentials_and_production_data() -> None:
 
 
 def test_docker_smoke_workflow_builds_without_production_inputs() -> None:
-    workflow = _read(".github/workflows/docker.yml")
+    workflow = _read(".github/workflows/quality.yml")
 
     assert "docker build" in workflow
     assert "--target runtime" in workflow

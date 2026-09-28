@@ -15,6 +15,9 @@ match it.
   errors, and `--debug` / `OSM_PWT_DEBUG=1` for tracebacks (#68).
 - `CONTRIBUTING.md`, `SECURITY.md`, issue forms and a pull request template (#88).
 - This changelog and a tag-driven release workflow (#87).
+- CI: `ci-ok` is the one check to require; pull requests build the docs and audit
+  `uv.lock` with `pip-audit` (`just audit`); every job has a timeout; mutation
+  shards start beside the gate and run on pull requests only (#74, #75).
 
 ### Changed
 
