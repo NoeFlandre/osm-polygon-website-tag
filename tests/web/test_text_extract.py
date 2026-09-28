@@ -32,7 +32,7 @@ def test_extract_main_text_from_static_html() -> None:
     assert result.word_count > 0
 
 
-def test_trafilatura_version_lookup_is_cached(monkeypatch) -> None:
+def test_trafilatura_version_lookup_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated URL extraction must not rescan package metadata each time."""
     calls: list[str] = []
 
@@ -57,7 +57,7 @@ def test_trafilatura_version_lookup_is_cached(monkeypatch) -> None:
     assert calls == ["trafilatura"]
 
 
-def test_trafilatura_options_are_reused_per_thread(monkeypatch) -> None:
+def test_trafilatura_options_are_reused_per_thread(monkeypatch: pytest.MonkeyPatch) -> None:
     """Repeated extraction reuses setup while updating the current URL."""
     state = getattr(text_extract, "_extractor_state", None)
     if state is not None:
@@ -94,7 +94,7 @@ def test_trafilatura_options_are_reused_per_thread(monkeypatch) -> None:
     assert seen_options[1].source == "https://example.org/two"
 
 
-def test_empty_trafilatura_result_is_explicit(monkeypatch) -> None:
+def test_empty_trafilatura_result_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: None)
 
     result = extract_main_text(b"<html/>", url="https://example.org")
@@ -105,8 +105,8 @@ def test_empty_trafilatura_result_is_explicit(monkeypatch) -> None:
     assert result.trafilatura_version == text_extract._trafilatura_version()
 
 
-def test_extractor_failure_is_sanitized(monkeypatch) -> None:
-    def fail(*_args, **_kwargs):
+def test_extractor_failure_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("secret response body")
 
     monkeypatch.setattr(text_extract.trafilatura, "extract", fail)
@@ -119,7 +119,7 @@ def test_extractor_failure_is_sanitized(monkeypatch) -> None:
     assert result.message == "RuntimeError"
 
 
-def test_full_text_is_retained_without_truncation(monkeypatch) -> None:
+def test_full_text_is_retained_without_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
     full = "word " * 1_000_000
     monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: full)
 
@@ -160,7 +160,9 @@ def test_invalid_http_charset_falls_back_to_detection() -> None:
         ),
     ],
 )
-def test_non_utf8_pages_decode_without_replacement_chars(encoding, sentence, head) -> None:
+def test_non_utf8_pages_decode_without_replacement_chars(
+    encoding: str, sentence: str, head: str
+) -> None:
     html = _page(sentence * 30, head).encode(encoding)
 
     result = extract_main_text(html, url="https://example.org")
@@ -182,21 +184,21 @@ def test_unknown_meta_charset_is_ignored() -> None:
     assert "�" not in decode_html(html)
 
 
-def test_undecodable_page_falls_back_to_replacement(monkeypatch) -> None:
+def test_undecodable_page_falls_back_to_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(text_extract, "detect_encoding", lambda _html: ["no-such-codec", "ascii"])
 
     assert decode_html(b"caf\xe9") == "caf�"
 
 
 @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le"])
-def test_declared_wide_unicode_charset_beats_utf8_fast_path(encoding) -> None:
+def test_declared_wide_unicode_charset_beats_utf8_fast_path(encoding: str) -> None:
     html = _page("plain ascii words " * 30).encode(encoding)
 
     assert decode_html(html, encoding) == _page("plain ascii words " * 30)
 
 
 @pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
-def test_byte_order_mark_selects_the_codec(encoding) -> None:
+def test_byte_order_mark_selects_the_codec(encoding: str) -> None:
     html = _page("Café crème. " * 30).encode(encoding)
 
     assert decode_html(html, "iso-8859-1") == _page("Café crème. " * 30)
@@ -224,12 +226,14 @@ def test_meta_without_charset_declaration_yields_none() -> None:
     )
 
 
-def test_extractor_options_drop_comments_keep_tables_and_sanitise_url(monkeypatch) -> None:
+def test_extractor_options_drop_comments_keep_tables_and_sanitise_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     text_extract._extractor_state.__dict__.clear()
     constructed: list[dict[str, object]] = []
     real = text_extract.Extractor
 
-    def record(**kwargs: Any):
+    def record(**kwargs: Any) -> Any:
         constructed.append(kwargs)
         return real(**kwargs)
 
@@ -300,7 +304,7 @@ def test_invalid_meta_charset_does_not_hide_a_later_valid_one() -> None:
         ("koi8-r", "koi8-r"),
     ],
 )
-def test_web_charset_labels_map_to_their_windows_supersets(label, codec) -> None:
+def test_web_charset_labels_map_to_their_windows_supersets(label: str, codec: str) -> None:
     assert text_extract._codec(label) == codec
 
 
@@ -386,7 +390,9 @@ def test_unclosed_script_hides_everything_after_it() -> None:
         ("Shift_JIS", "cp932", "①番目の東京の公園です。"),
     ],
 )
-def test_legacy_asian_labels_decode_extension_characters(label, codec, sentence) -> None:
+def test_legacy_asian_labels_decode_extension_characters(
+    label: str, codec: str, sentence: str
+) -> None:
     html = _page(sentence * 20).encode(codec)
 
     assert sentence in decode_html(html, label)
@@ -434,8 +440,8 @@ def test_mostly_utf8_ascii_boundary(html: bytes, expected: bool) -> None:
     assert text_extract._mostly_utf8(html) is expected
 
 
-def test_extractor_failure_reports_the_library_version(monkeypatch) -> None:
-    def fail(*_args, **_kwargs):
+def test_extractor_failure_reports_the_library_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(text_extract.trafilatura, "extract", fail)

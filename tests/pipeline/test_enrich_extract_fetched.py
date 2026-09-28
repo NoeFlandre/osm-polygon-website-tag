@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+import pytest
+
 from osm_polygon_website_tag.pipeline import enrich
 from osm_polygon_website_tag.pipeline.enrich import _accepts_keyword, _extract_fetched
 from osm_polygon_website_tag.web.text_cache import CachedText
@@ -11,7 +15,9 @@ from osm_polygon_website_tag.web.web_fetch import FetchResult
 URL = "https://example.org"
 
 
-def _recording_extractor(calls: list[tuple[bytes, dict[str, object]]]):
+def _recording_extractor(
+    calls: list[tuple[bytes, dict[str, object]]],
+) -> Callable[..., TextExtraction]:
     def extract(html: bytes, **kwargs: object) -> TextExtraction:
         calls.append((html, kwargs))
         return TextExtraction("success", "Café crème", 2, "note", "2.1.0")
@@ -104,7 +110,9 @@ def test_accepts_charset_reads_the_extractor_signature() -> None:
     assert not _accepts_keyword(url_only, "charset")
 
 
-def test_uninspectable_extractor_is_called_without_charset(monkeypatch) -> None:
+def test_uninspectable_extractor_is_called_without_charset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def no_signature(_callable: object) -> None:
         raise ValueError("no signature found")
 
@@ -147,7 +155,9 @@ def test_positional_only_charset_is_not_forwarded() -> None:
 def test_media_type_is_forwarded_only_to_extractors_that_take_it() -> None:
     seen: list[dict[str, object]] = []
 
-    def full(html: bytes, *, url: str, charset: str | None = None, media_type: str | None = None):
+    def full(
+        html: bytes, *, url: str, charset: str | None = None, media_type: str | None = None
+    ) -> TextExtraction:
         seen.append({"charset": charset, "media_type": media_type})
         return TextExtraction("success", "x", 1, None, "2.1.0")
 

@@ -239,8 +239,8 @@ def _iter_functions(tree: ast.AST, class_name: str | None = None) -> Iterator[tu
 SHARD_FUNCTIONS = 8
 
 
-def module_function_filters(module: str, *, root: Path | None = None) -> list[str]:
-    """Return one filter per function in ``module``, or ``[]`` if unreadable.
+def module_function_filters(module: str, *, root: Path | None = None) -> list[str] | None:
+    """Return one filter per function in ``module``, or ``None`` if unreadable.
 
     Every mutmut mutant belongs to a function -- module level code is not
     mutated -- so the per-function filters of a module cover exactly what its
@@ -253,7 +253,7 @@ def module_function_filters(module: str, *, root: Path | None = None) -> list[st
     try:
         tree = ast.parse(source.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeError):
-        return []
+        return None
     return [f"{module}.{name}__mutmut_*" for name, _start, _end in _iter_functions(tree)]
 
 
@@ -269,8 +269,12 @@ def shards(
         filters = scoped[module]
         if filters == [f"{module}.*"]:
             expanded = module_function_filters(module, root=root)
-            # A module with no functions has no mutants to split; keep the
-            # whole-module filter so the scope is never silently narrowed.
+            if expanded == []:
+                # No functions means no mutants: a shard would only make
+                # mutmut stop with "no test case for any mutant".
+                continue
+            # An unreadable module keeps the whole-module filter so the scope
+            # is never silently narrowed.
             filters = expanded or filters
         groups = [filters[start : start + size] for start in range(0, len(filters), size)] or [
             filters

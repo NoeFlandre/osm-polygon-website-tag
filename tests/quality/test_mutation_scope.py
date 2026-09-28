@@ -410,23 +410,29 @@ def test_a_single_shard_keeps_the_plain_module_name() -> None:
     assert matrix == [{"name": module, "filters": f"{module}.x_compute_card_stats__mutmut_*"}]
 
 
-def test_a_module_without_functions_keeps_its_whole_module_filter(tmp_path: Path) -> None:
-    """Never silently narrow a scope we cannot expand."""
+def test_a_module_without_functions_gets_no_shard(tmp_path: Path) -> None:
+    """mutmut only mutates functions, so such a shard has nothing to run.
+
+    It used to keep a whole-module filter, and mutmut then stopped with "could
+    not find any test case for any mutant", failing CI on a constants module.
+    """
     module = f"{mutation_scope.PACKAGE_NAME}.constants"
     source = tmp_path / mutation_scope.PACKAGE_ROOT / "constants.py"
     source.parent.mkdir(parents=True)
-    source.write_text("VALUE = 1\n", encoding="utf-8")
+    source.write_text("class Settings:\n    value: int = 1\n", encoding="utf-8")
+    other = f"{mutation_scope.PACKAGE_NAME}.other"
+    (source.parent / "other.py").write_text("def f():\n    return 1\n", encoding="utf-8")
 
     assert mutation_scope.module_function_filters(module, root=tmp_path) == []
-    assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == [
-        {"name": module, "filters": f"{module}.*"}
-    ]
+    assert mutation_scope.shards(
+        {module: [f"{module}.*"], other: [f"{other}.*"]}, root=tmp_path
+    ) == [{"name": other, "filters": f"{other}.x_f__mutmut_*"}]
 
 
 def test_an_unreadable_module_keeps_its_whole_module_filter(tmp_path: Path) -> None:
     module = f"{mutation_scope.PACKAGE_NAME}.missing"
 
-    assert mutation_scope.module_function_filters(module, root=tmp_path) == []
+    assert mutation_scope.module_function_filters(module, root=tmp_path) is None
     assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == [
         {"name": module, "filters": f"{module}.*"}
     ]
