@@ -11,7 +11,8 @@ scoped run judges only what it actually exercised. Verdicts also persist in the
 mutant workspace between runs, so a scoped run passes its own scope with
 ``--scope`` and stale verdicts from other modules are left out rather than
 wiping and regenerating the whole workspace. A baseline entry the suite now
-kills is reported so the file can shrink.
+kills is reported so the file can shrink; ``--strict-baseline`` makes that a
+failure, so the baseline can only ever get smaller.
 """
 
 from __future__ import annotations
@@ -91,6 +92,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--scope", action="append", default=[])
+    parser.add_argument(
+        "--strict-baseline",
+        action="store_true",
+        help="fail when a baseline entry is now killed, so the file must shrink with the code",
+    )
     args = parser.parse_args(argv)
     lines = args.results.read_text(encoding="utf-8").splitlines()
     baseline = read_baseline(args.baseline)
@@ -112,9 +118,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
     if healed:
-        print(f"{len(healed)} baseline mutant(s) are now killed; remove them from {args.baseline}:")
+        stream = sys.stderr if args.strict_baseline else sys.stdout
+        print(
+            f"{len(healed)} baseline mutant(s) are now killed; remove them from {args.baseline}:",
+            file=stream,
+        )
         for name in healed:
-            print(f"  {name}")
+            print(f"  {name}", file=stream)
+    if healed and args.strict_baseline:
+        return 1
     if regressions:
         print(
             f"Mutation gate failed: {len(regressions)} unverified mutant(s) outside the baseline.",

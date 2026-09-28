@@ -159,7 +159,7 @@ mutation-gate *scopes:
     results="${TMPDIR:-/tmp}/osm-polygon-website-tag-mutmut-results.txt"
     uv run --locked mutmut results --all true > "$results"
     uv run --locked python scripts/quality/mutation_gate.py \
-        --results "$results" --baseline docs/quality/mutation-baseline.txt {{ scopes }}
+        --results "$results" --baseline docs/quality/mutation-baseline.txt --strict-baseline {{ scopes }}
 
 smoke:
     just docker-smoke

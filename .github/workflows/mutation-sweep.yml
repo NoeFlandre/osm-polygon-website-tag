@@ -93,15 +93,21 @@ jobs:
           pattern: mutation-results-*
           merge-multiple: true
 
-      - name: Merge the areas into one baseline
+      # The recorded baseline is never rewritten upward by the sweep: a new
+      # survivor fails this job, and the regenerated file is only an artifact
+      # to review and commit deliberately.
+      - name: Merge the areas into a candidate baseline
         run: |
           cat areas/results-*.txt > merged.txt
           uv run --locked python scripts/quality/mutation_baseline.py \
-            --results merged.txt --baseline docs/quality/mutation-baseline.txt
-          cat docs/quality/mutation-baseline.txt | head -20
+            --results merged.txt --baseline docs/quality/mutation-baseline.txt \
+            --output mutation-baseline-candidate.txt --fail-on-growth
+          head -20 mutation-baseline-candidate.txt
 
-      - name: Upload the merged baseline
+      - name: Upload the candidate baseline
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mutation-baseline
-          path: docs/quality/mutation-baseline.txt
+          name: mutation-baseline-candidate
+          path: mutation-baseline-candidate.txt
+          if-no-files-found: ignore

@@ -247,3 +247,111 @@ def test_the_gate_lists_every_finding_not_a_prefix(
     captured = capsys.readouterr()
     assert code == 1
     assert all(name in captured.err for name in names)
+
+
+_HEALED = "osm_polygon_website_tag.pipeline.sat.x_select_device__mutmut_1"
+
+
+def _healed_baseline() -> str:
+    return "\n".join([*mutation_gate.unverified_mutants(_RESULTS.splitlines()), _HEALED])
+
+
+def test_a_healed_baseline_entry_fails_a_strict_gate(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    results, baseline = _write(tmp_path, baseline=_healed_baseline())
+
+    code = mutation_gate.main(
+        ["--results", str(results), "--baseline", str(baseline), "--strict-baseline"]
+    )
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "1 baseline mutant(s) are now killed" in captured.err
+    assert f"  {_HEALED}" in captured.err
+    assert "Mutation gate passed" not in captured.out
+
+
+def test_a_strict_gate_passes_when_the_baseline_is_exact(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = "\n".join(mutation_gate.unverified_mutants(_RESULTS.splitlines()))
+    results, baseline_path = _write(tmp_path, baseline=baseline)
+
+    code = mutation_gate.main(
+        ["--results", str(results), "--baseline", str(baseline_path), "--strict-baseline"]
+    )
+
+    assert code == 0
+    assert "Mutation gate passed" in capsys.readouterr().out
+
+
+def test_a_strict_gate_ignores_healed_entries_outside_its_scope(tmp_path: Path) -> None:
+    baseline = "\n".join(mutation_gate.unverified_mutants(_RESULTS.splitlines()))
+    results, baseline_path = _write(tmp_path, baseline=f"{baseline}\n{_HEALED}")
+
+    code = mutation_gate.main(
+        [
+            *("--results", str(results), "--baseline", str(baseline_path)),
+            *("--strict-baseline", "--scope", "osm_polygon_website_tag.web.*"),
+        ]
+    )
+
+    assert code == 0
+
+
+def _sweep(tmp_path: Path, survivors: list[str], recorded: list[str]) -> tuple[Path, Path, Path]:
+    results = tmp_path / "results.txt"
+    results.write_text("".join(f"    {name}: survived\n" for name in survivors), encoding="utf-8")
+    baseline = tmp_path / "baseline.txt"
+    baseline.write_text("\n".join(recorded) + "\n", encoding="utf-8")
+    return results, baseline, tmp_path / "candidate.txt"
+
+
+def test_a_sweep_that_grows_the_backlog_fails_and_leaves_the_baseline_alone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.quality import mutation_baseline
+
+    results, baseline, candidate = _sweep(
+        tmp_path, ["a.x_f__mutmut_1", "a.x_g__mutmut_2"], ["a.x_f__mutmut_1"]
+    )
+
+    code = mutation_baseline.main(
+        [
+            *("--results", str(results), "--baseline", str(baseline)),
+            *("--output", str(candidate), "--fail-on-growth"),
+        ]
+    )
+
+    assert code == 1
+    assert "1 survivor(s) outside" in capsys.readouterr().err
+    assert baseline.read_text(encoding="utf-8") == "a.x_f__mutmut_1\n"
+    assert mutation_gate.read_baseline(candidate) == {"a.x_f__mutmut_1", "a.x_g__mutmut_2"}
+
+
+def test_a_sweep_that_only_shrinks_the_backlog_passes(tmp_path: Path) -> None:
+    from scripts.quality import mutation_baseline
+
+    results, baseline, candidate = _sweep(
+        tmp_path, ["a.x_f__mutmut_1"], ["a.x_f__mutmut_1", "a.x_g__mutmut_2"]
+    )
+
+    code = mutation_baseline.main(
+        [
+            *("--results", str(results), "--baseline", str(baseline)),
+            *("--output", str(candidate), "--fail-on-growth"),
+        ]
+    )
+
+    assert code == 0
+    assert mutation_gate.read_baseline(candidate) == {"a.x_f__mutmut_1"}
+
+
+def test_growth_is_allowed_without_the_flag_and_rewrites_the_baseline(tmp_path: Path) -> None:
+    from scripts.quality import mutation_baseline
+
+    results, baseline, _candidate = _sweep(tmp_path, ["a.x_f__mutmut_1", "a.x_g__mutmut_2"], [])
+
+    assert mutation_baseline.main(["--results", str(results), "--baseline", str(baseline)]) == 0
+    assert mutation_gate.read_baseline(baseline) == {"a.x_f__mutmut_1", "a.x_g__mutmut_2"}
