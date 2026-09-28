@@ -94,7 +94,12 @@ apply-mode upload.
 | `--area-workers` | 4 | Bounded geometry workers per PBF. |
 | `--max-in-flight-areas` | 32 | Maximum queued geometry payloads per PBF. |
 | `--fetch-workers` | 8 | Bounded concurrent URL fetch workers per enrichment batch. |
+| `--host-concurrency` | 2 | Maximum simultaneous requests to one website host (`OSM_PWT_HOST_CONCURRENCY`). |
+| `--host-delay-seconds` | 0.2 | Minimum seconds between request starts to one host (`OSM_PWT_HOST_DELAY_SECONDS`). |
 | `--detect-languages` | off | Load the pinned GlotLID model and add schema-v1.4 language fields. |
+
+A `429` or `503` reply with a `Retry-After` of at most 30 seconds pauses that host and
+is retried once; a longer or missing `Retry-After` stays a retryable `http_429` / `http_503`.
 
 For a manually staged run, the phase sequence is:
 

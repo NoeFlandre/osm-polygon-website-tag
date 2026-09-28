@@ -28,6 +28,9 @@ match it.
 - Fetching refuses a redirect, an error page, an unsupported media type or a
   declared `Content-Length` over the limit from the headers alone, without
   downloading the body; media types are matched exactly (#84).
+- Per-host politeness: `--host-concurrency` (default 2) and `--host-delay-seconds`
+  (default 0.2) cap and space requests to one website, and a short `Retry-After`
+  on 429/503 is honoured with one retry (#85).
 - `publish-trackio` without the `trackio` package exits 5 with one clear line.
 
 ## [0.1.0]

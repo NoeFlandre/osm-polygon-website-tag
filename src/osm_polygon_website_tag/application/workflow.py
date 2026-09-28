@@ -57,6 +57,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     upsert_run_metadata,
 )
 from osm_polygon_website_tag.runtime.safety import assert_path_safe_against, normalize_path
+from osm_polygon_website_tag.web.politeness import HostPolicy
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ def run_all(
     area_workers: int | None = None,
     max_in_flight_areas: int | None = None,
     fetch_workers: int | None = None,
+    host_policy: HostPolicy | None = None,
     detect_languages: bool = False,
     language_detector: LanguageDetector | None = None,
 ) -> WorkflowResult:
@@ -149,6 +151,7 @@ def run_all(
         area_workers=area_workers,
         max_in_flight_areas=max_in_flight_areas,
         fetch_workers=fetch_workers,
+        host_policy=host_policy,
         detect_languages=detect_languages,
         language_detector=detector,
     )

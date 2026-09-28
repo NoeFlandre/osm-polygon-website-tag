@@ -45,6 +45,8 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
     update_source_enrichment_status,
 )
+from osm_polygon_website_tag.web.politeness import HostPolicy
+from osm_polygon_website_tag.web.web_fetch import FetchResult, make_polite_fetcher
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,7 @@ class SourceProcessingContext:
     area_workers: int | None
     max_in_flight_areas: int | None
     fetch_workers: int | None
+    host_policy: HostPolicy | None
     detect_languages: bool
     language_detector: LanguageDetector | None
 
@@ -104,6 +107,7 @@ class _EnrichmentKwargs(TypedDict, total=False):
     cache_path: Path
     invocation_id: str
     fetch_workers: int | None
+    fetcher: Callable[[str], FetchResult]
 
 
 def process_sources(
@@ -377,6 +381,8 @@ def _enrich_shard(shard: Path, context: SourceProcessingContext) -> EnrichmentRe
     }
     if context.fetch_workers is not None:
         kwargs["fetch_workers"] = context.fetch_workers
+    if context.host_policy is not None:
+        kwargs["fetcher"] = make_polite_fetcher(context.host_policy)
     return enrich_polygon_shard(shard, **kwargs)
 
 

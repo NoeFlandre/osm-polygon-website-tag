@@ -15,6 +15,13 @@ from typing import Any, Literal
 
 from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.web.content_type import charset_parameter, media_type
+from osm_polygon_website_tag.web.politeness import (
+    RETRY_STATUSES,
+    HostLimiter,
+    HostPolicy,
+    host_of,
+    retry_after_seconds,
+)
 
 MAX_RESPONSE_BYTES = 20_000_000
 REQUEST_TIMEOUT_SECONDS = 30.0
@@ -178,20 +185,62 @@ def fetch_html(
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     max_bytes: int = MAX_RESPONSE_BYTES,
     max_redirects: int = MAX_REDIRECTS,
+    limiter: HostLimiter | None = None,
 ) -> FetchResult:
-    """Fetch one HTML document while validating each redirect target."""
+    """Fetch one HTML document while validating each redirect target.
+
+    With a ``limiter``, requests to one host are capped and spaced, and a 429 or
+    503 that carries a short ``Retry-After`` is retried once after the pause.
+    """
     requested_or_error = _normalise_requested_url(raw_url)
     if isinstance(requested_or_error, FetchResult):
         return requested_or_error
     requested = requested_or_error
+    transport = request_once or _download_once
     return _follow_redirects(
         requested,
-        request_once or _download_once,
+        transport if limiter is None else _polite(transport, limiter),
         resolver,
         timeout_seconds,
         max_bytes,
         max_redirects,
     )
+
+
+def make_polite_fetcher(policy: HostPolicy) -> Callable[[str], FetchResult]:
+    """A ``fetch_html`` that shares one per-host limiter across all its callers."""
+    limiter = HostLimiter(policy)
+    return lambda url: fetch_html(url, limiter=limiter)
+
+
+def _polite(transport: RequestOnce, limiter: HostLimiter) -> RequestOnce:
+    """Wrap a transport with the host limits and one bounded Retry-After retry."""
+
+    def request(url: str, timeout_seconds: float, max_bytes: int) -> HttpResponse:
+        host = host_of(url)
+        response = _throttled(transport, limiter, host, (url, timeout_seconds, max_bytes))
+        wait = _retry_wait(response, limiter.policy.max_retry_after_seconds)
+        if wait is None:
+            return response
+        limiter.back_off(host, wait)
+        return _throttled(transport, limiter, host, (url, timeout_seconds, max_bytes))
+
+    return request
+
+
+def _throttled(
+    transport: RequestOnce, limiter: HostLimiter, host: str, args: tuple[str, float, int]
+) -> HttpResponse:
+    with limiter.slot(host):
+        return transport(*args)
+
+
+def _retry_wait(response: HttpResponse, cap: float) -> float | None:
+    """Seconds to pause before retrying, when the server asked for a short one."""
+    if response.status_code not in RETRY_STATUSES:
+        return None
+    wait = retry_after_seconds(_header(response.headers, "retry-after"))
+    return wait if wait is not None and wait <= cap else None
 
 
 def _normalise_requested_url(raw_url: str) -> str | FetchResult:
@@ -488,6 +537,7 @@ __all__ = [
     "HttpResponse",
     "UnsafeUrlError",
     "fetch_html",
+    "make_polite_fetcher",
     "normalize_http_url",
     "validate_public_http_url",
 ]

@@ -8,6 +8,7 @@ import pytest
 
 import osm_polygon_website_tag.web.web_fetch as web_fetch_module
 from osm_polygon_website_tag import __version__
+from osm_polygon_website_tag.web.politeness import HostLimiter, HostPolicy
 from osm_polygon_website_tag.web.web_fetch import (
     FetchResult,
     HttpResponse,
@@ -1202,3 +1203,158 @@ def test_status_outranks_size_and_size_outranks_type() -> None:
     assert error(HttpResponse(200, {"Content-Type": "image/png"}, b""), 10) == (
         "unsupported_content_type"
     )
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _polite_fetch(responses: list[HttpResponse], url: str = "https://example.org/a", **policy):
+    clock = _FakeClock()
+    limiter = HostLimiter(HostPolicy(**policy), clock=clock, sleep=clock.sleep)
+    calls: list[str] = []
+
+    def transport(target: str, _timeout: float, _max_bytes: int) -> HttpResponse:
+        calls.append(target)
+        return responses[len(calls) - 1]
+
+    result = fetch_html(url, request_once=transport, resolver=_public_resolver, limiter=limiter)
+    return result, calls, clock
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_a_short_retry_after_is_waited_out_then_retried_once(status: int) -> None:
+    result, calls, clock = _polite_fetch(
+        [
+            HttpResponse(status, {"Retry-After": "2"}, b""),
+            HttpResponse(200, {"Content-Type": "text/html"}, b"<p>ok</p>"),
+        ],
+        concurrency=1,
+        delay_seconds=0.0,
+    )
+
+    assert result.status == "ok"
+    assert result.body == b"<p>ok</p>"
+    assert calls == ["https://example.org/a"] * 2
+    assert clock.sleeps == [0.0, 2.0]
+
+
+def test_only_one_retry_is_made() -> None:
+    busy = HttpResponse(429, {"Retry-After": "1"}, b"")
+
+    result, calls, _clock = _polite_fetch([busy, busy], concurrency=1, delay_seconds=0.0)
+
+    assert (result.status, result.message) == ("fetch_error", "http_429")
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        HttpResponse(429, {"Retry-After": "31"}, b""),
+        HttpResponse(429, {}, b""),
+        HttpResponse(429, {"Retry-After": "later"}, b""),
+        HttpResponse(404, {"Retry-After": "1"}, b""),
+        HttpResponse(500, {"Retry-After": "1"}, b""),
+    ],
+)
+def test_other_failures_are_not_retried(response: HttpResponse) -> None:
+    result, calls, _clock = _polite_fetch([response], concurrency=1, delay_seconds=0.0)
+
+    assert result.message == f"http_{response.status_code}"
+    assert len(calls) == 1
+
+
+def test_a_retry_after_at_the_cap_is_still_honoured() -> None:
+    _result, calls, clock = _polite_fetch(
+        [HttpResponse(429, {"Retry-After": "30"}, b""), HttpResponse(200, {}, b"x")],
+        concurrency=1,
+        delay_seconds=0.0,
+    )
+
+    assert len(calls) == 2
+    assert clock.sleeps == [0.0, 30.0]
+
+
+def test_the_retry_after_cap_is_configurable() -> None:
+    _result, calls, _clock = _polite_fetch(
+        [HttpResponse(429, {"Retry-After": "5"}, b"")],
+        concurrency=1,
+        delay_seconds=0.0,
+        max_retry_after_seconds=4.0,
+    )
+
+    assert len(calls) == 1
+
+
+def test_a_polite_fetch_spaces_two_requests_to_one_host() -> None:
+    clock = _FakeClock()
+    limiter = HostLimiter(
+        HostPolicy(concurrency=1, delay_seconds=1.5), clock=clock, sleep=clock.sleep
+    )
+
+    for path in ("a", "b"):
+        fetch_html(
+            f"https://example.org/{path}",
+            request_once=lambda *_a: HttpResponse(200, {}, b"x"),
+            resolver=_public_resolver,
+            limiter=limiter,
+        )
+
+    assert clock.sleeps == [0.0, 1.5]
+
+
+def test_the_limiter_is_keyed_by_the_requested_host() -> None:
+    clock = _FakeClock()
+    limiter = HostLimiter(
+        HostPolicy(concurrency=1, delay_seconds=9.0), clock=clock, sleep=clock.sleep
+    )
+
+    for host in ("a.example", "b.example"):
+        fetch_html(
+            f"https://{host}/",
+            request_once=lambda *_a: HttpResponse(200, {}, b"x"),
+            resolver=_public_resolver,
+            limiter=limiter,
+        )
+
+    assert clock.sleeps == [0.0, 0.0]
+
+
+def test_without_a_limiter_the_transport_is_called_directly() -> None:
+    seen: list[str] = []
+
+    fetch_html(
+        "https://example.org/",
+        request_once=lambda url, *_a: seen.append(url) or HttpResponse(200, {}, b"x"),
+        resolver=_public_resolver,
+    )
+
+    assert seen == ["https://example.org/"]
+
+
+def test_make_polite_fetcher_shares_one_limiter_between_calls(monkeypatch) -> None:
+    limiters: list[HostLimiter] = []
+
+    def fake_fetch(url: str, *, limiter: HostLimiter) -> FetchResult:
+        limiters.append(limiter)
+        return FetchResult("ok", url)
+
+    monkeypatch.setattr(web_fetch_module, "fetch_html", fake_fetch)
+    policy = HostPolicy(concurrency=3, delay_seconds=0.1)
+    fetcher = web_fetch_module.make_polite_fetcher(policy)
+
+    assert fetcher("https://a.example/") == FetchResult("ok", "https://a.example/")
+    fetcher("https://b.example/")
+
+    assert limiters[0] is limiters[1]
+    assert limiters[0].policy == policy

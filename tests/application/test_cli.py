@@ -40,6 +40,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     transition_status,
     upsert_run_metadata,
 )
+from osm_polygon_website_tag.web.politeness import HostPolicy
 
 
 def _ts():
@@ -688,12 +689,15 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
             area_workers=1,
             max_in_flight_areas=1,
             fetch_workers=1,
+            host_concurrency=3,
+            host_delay_seconds=0.5,
             detect_languages=True,
         )
         == 0
     )
     assert events == [True]
     assert calls[0]["detect_languages"] is True
+    assert calls[0]["host_policy"] == HostPolicy(concurrency=3, delay_seconds=0.5)
     assert '"complete": true' in capsys.readouterr().out
 
 

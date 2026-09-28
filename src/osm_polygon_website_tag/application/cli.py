@@ -107,6 +107,11 @@ from osm_polygon_website_tag.runtime.run_state import (
     upsert_run_metadata,
 )
 from osm_polygon_website_tag.runtime.safety import assert_path_safe_against, normalize_path
+from osm_polygon_website_tag.web.politeness import (
+    DEFAULT_HOST_CONCURRENCY,
+    DEFAULT_HOST_DELAY_SECONDS,
+    HostPolicy,
+)
 
 app = typer.Typer(
     name="osm-polygon-website-tag",
@@ -579,6 +584,22 @@ def run_all_command(
         int,
         typer.Option("--fetch-workers", help="Bounded concurrent URL fetch workers."),
     ] = DEFAULT_FETCH_WORKERS,
+    host_concurrency: Annotated[
+        int,
+        typer.Option(
+            "--host-concurrency",
+            envvar="OSM_PWT_HOST_CONCURRENCY",
+            help="Maximum simultaneous requests to one website host.",
+        ),
+    ] = DEFAULT_HOST_CONCURRENCY,
+    host_delay_seconds: Annotated[
+        float,
+        typer.Option(
+            "--host-delay-seconds",
+            envvar="OSM_PWT_HOST_DELAY_SECONDS",
+            help="Minimum seconds between request starts to one website host.",
+        ),
+    ] = DEFAULT_HOST_DELAY_SECONDS,
     detect_languages: Annotated[
         bool,
         typer.Option("--detect-languages", help="Run the opt-in GlotLID language stage."),
@@ -600,6 +621,7 @@ def run_all_command(
             area_workers=area_workers,
             max_in_flight_areas=max_in_flight_areas,
             fetch_workers=fetch_workers,
+            host_policy=HostPolicy(host_concurrency, host_delay_seconds),
             detect_languages=detect_languages,
         )
     except BaseException:
