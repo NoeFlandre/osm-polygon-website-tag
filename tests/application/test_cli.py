@@ -590,7 +590,7 @@ def test_cli_create_repo_requires_token(monkeypatch: pytest.MonkeyPatch) -> None
         lambda **kwargs: reached.append(str(kwargs)) or "foo/bar",
     )
 
-    rc = main(["create-repo", "--repo-id", "foo/bar"])
+    rc = main(["create-repo", "--repo-id", "foo/bar", "--apply"])
 
     assert rc != 0
     assert reached == []
@@ -1363,3 +1363,84 @@ def test_run_all_silences_progress_when_quiet(
     assert cli.main(["-q", *argv]) == 3
     assert cli.main(argv) == 3
     assert seen == [True, False]
+
+
+def test_create_repo_is_a_dry_run_without_apply(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    writes: list[object] = []
+    checked: list[str] = []
+    monkeypatch.setattr(cli, "create_repo", lambda **kwargs: writes.append(kwargs))
+    monkeypatch.setattr(cli, "repo_exists", lambda *, repo_id: checked.append(repo_id) or True)
+
+    assert main(["create-repo", "--repo-id", "owner/name"]) == 0
+
+    assert writes == []
+    assert checked == ["owner/name"]
+    assert json.loads(capsys.readouterr().out) == {
+        "applied": False,
+        "exists": True,
+        "repo_id": "owner/name",
+    }
+
+
+def test_create_repo_with_apply_creates_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(cli, "create_repo", lambda **kwargs: calls.append(kwargs) or "owner/name")
+
+    assert main(["create-repo", "--repo-id", "owner/name", "--exist-ok", "--apply"]) == 0
+
+    assert calls == [{"repo_id": "owner/name", "exist_ok": True}]
+    assert capsys.readouterr().out == "owner/name\n"
+
+
+def test_repo_exists_asks_the_hub_with_the_resolved_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import huggingface_hub
+
+    seen: list[tuple[object, ...]] = []
+
+    class FakeApi:
+        def __init__(self, *, token: str | None) -> None:
+            seen.append(("token", token))
+
+        def repo_exists(self, repo_id: str, *, repo_type: str) -> bool:
+            seen.append((repo_id, repo_type))
+            return False
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+    monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: "tok")
+
+    assert publish_module.repo_exists(repo_id="o/n") is False
+    assert seen == [("token", "tok"), ("o/n", "dataset")]
+
+
+def test_every_option_of_every_command_has_help_text() -> None:
+    import typer.main
+
+    missing: list[str] = []
+
+    def walk(command: object, path: str) -> None:
+        missing.extend(
+            f"{path or '<root>'} {param.opts[0]}"
+            for param in getattr(command, "params", [])
+            if param.param_type_name == "option" and not getattr(param, "help", None)
+        )
+        for name, sub in getattr(command, "commands", {}).items():
+            walk(sub, f"{path} {name}".strip())
+
+    walk(typer.main.get_command(app), "")
+
+    assert missing == []
+
+
+@pytest.mark.parametrize(
+    "command", ["init", "extract", "run-all", "publish", "release-stats", "grid5000-prepare"]
+)
+def test_main_workflow_commands_show_an_example(command: str) -> None:
+    import typer.main
+
+    click_command = typer.main.get_command(app).commands[command]  # ty: ignore[unresolved-attribute]
+
+    assert click_command.epilog.startswith("Example: osm-polygon-website-tag ")

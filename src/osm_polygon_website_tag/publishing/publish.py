@@ -169,6 +169,13 @@ def create_repo(
     return _create_repo_remote(repo_id=repo_id, repo_kind=repo_kind, exist_ok=exist_ok)
 
 
+def repo_exists(*, repo_id: str, repo_kind: str = "dataset") -> bool:
+    """Return whether the Hub repository exists (a read; nothing is written)."""
+    from huggingface_hub import HfApi
+
+    return bool(HfApi(token=resolve_hf_token()).repo_exists(repo_id, repo_type=repo_kind))
+
+
 def _upload_folder(
     run_dir: Path,
     *,

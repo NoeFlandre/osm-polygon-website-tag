@@ -12,8 +12,11 @@ PACKAGE = ROOT / "src" / "osm_polygon_website_tag"
 
 
 def test_cli_reference_lists_every_command() -> None:
-    cli = (PACKAGE / "application" / "cli.py").read_text(encoding="utf-8")
-    commands = set(re.findall(r'@app\.command\("([^"]+)"\)', cli))
+    import typer.main
+
+    from osm_polygon_website_tag.application.cli import app
+
+    commands = set(typer.main.get_command(app).commands)  # ty: ignore[unresolved-attribute]
     reference = (ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
     table = reference.split("## Commands", 1)[1].split("\n## ", 1)[0]
     documented = set(re.findall(r"^\| `([^`]+)` \|", table, re.MULTILINE))

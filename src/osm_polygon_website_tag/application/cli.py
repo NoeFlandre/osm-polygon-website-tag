@@ -59,6 +59,7 @@ from osm_polygon_website_tag.publishing.publish import (
     build_publish_plan,
     create_repo,
     publish_to_hf,
+    repo_exists,
 )
 from osm_polygon_website_tag.publishing.release import release_card_and_stats
 from osm_polygon_website_tag.publishing.trackio import (
@@ -220,10 +221,17 @@ def _json(payload: Any, *, sort_keys: bool = False) -> None:
     typer.echo(json.dumps(payload, default=str, indent=2, sort_keys=sort_keys))
 
 
-@app.command("init")
+@app.command(
+    "init",
+    epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "$OSM_POLY_DATA_DIR/runs" --run-id website-v1',
+)
 def init_command(
-    output_root: Annotated[Path, typer.Option("--output-root")],
-    source_root: Annotated[Path, typer.Option("--source-root")],
+    output_root: Annotated[
+        Path, typer.Option("--output-root", help="Writable directory holding one run per --run-id.")
+    ],
+    source_root: Annotated[
+        Path, typer.Option("--source-root", help="Read-only directory of source .osm.pbf files.")
+    ],
     expected_source: Annotated[
         list[Path],
         typer.Option(
@@ -231,7 +239,9 @@ def init_command(
             help="Expected source PBF path; repeat once per source.",
         ),
     ],
-    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    run_id: Annotated[
+        str | None, typer.Option("--run-id", help="Run directory name [default: generated].")
+    ] = None,
 ) -> int:
     """Initialise a new run directory."""
     normalized_source_root = normalize_path(source_root)
@@ -252,7 +262,10 @@ def init_command(
     return 0
 
 
-@app.command("extract")
+@app.command(
+    "extract",
+    epilog='Example: osm-polygon-website-tag extract region.osm.pbf --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1"',
+)
 def extract_command(
     pbf_path: Annotated[Path, typer.Argument(help="Source .osm.pbf file.")],
     run_dir: RunDir,
@@ -398,7 +411,10 @@ def publish_plan_command(
     return 0
 
 
-@app.command("publish")
+@app.command(
+    "publish",
+    epilog='Example: osm-polygon-website-tag publish --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1" --apply',
+)
 def publish_command(
     run_dir: RunDir,
     repo_id: RepoId = DEFAULT_HF_DATASET,
@@ -413,7 +429,10 @@ def publish_command(
     return 0
 
 
-@app.command("release-stats")
+@app.command(
+    "release-stats",
+    epilog='Example: osm-polygon-website-tag release-stats --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1"',
+)
 def release_stats_command(
     run_dir: RunDir,
     confirm_repo: Annotated[
@@ -437,12 +456,25 @@ def release_stats_command(
     return 0
 
 
-@app.command("create-repo")
+@app.command(
+    "create-repo",
+    epilog="Example: osm-polygon-website-tag create-repo --repo-id owner/name --apply",
+)
 def create_repo_command(
-    repo_id: Annotated[str, typer.Option("--repo-id")],
-    exist_ok: Annotated[bool, typer.Option("--exist-ok")] = False,
+    repo_id: Annotated[
+        str, typer.Option("--repo-id", help="Hugging Face dataset repository to create.")
+    ],
+    exist_ok: Annotated[
+        bool, typer.Option("--exist-ok", help="Succeed if the repository already exists.")
+    ] = False,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Create it; without this, only report the plan.")
+    ] = False,
 ) -> int:
-    """Create the Hugging Face dataset repository."""
+    """Create the Hugging Face dataset repository (dry run unless --apply)."""
+    if not apply:
+        _json({"applied": False, "exists": repo_exists(repo_id=repo_id), "repo_id": repo_id})
+        return 0
     repo = create_repo(repo_id=repo_id, exist_ok=exist_ok)
     typer.echo(repo)
     return 0
@@ -503,11 +535,20 @@ def publish_trackio_command(
     return 0
 
 
-@app.command("run-all")
+@app.command(
+    "run-all",
+    epilog='Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root "$OSM_POLY_DATA_DIR/runs" --run-id website-v1',
+)
 def run_all_command(
-    source_root: Annotated[Path, typer.Option("--source-root")],
-    output_root: Annotated[Path, typer.Option("--output-root")],
-    run_id: Annotated[str, typer.Option("--run-id")],
+    source_root: Annotated[
+        Path, typer.Option("--source-root", help="Read-only directory of source .osm.pbf files.")
+    ],
+    output_root: Annotated[
+        Path, typer.Option("--output-root", help="Writable directory holding one run per --run-id.")
+    ],
+    run_id: Annotated[
+        str, typer.Option("--run-id", help="Run directory name under --output-root.")
+    ],
     repo_id: RepoId = DEFAULT_HF_DATASET,
     apply: Annotated[
         bool,
@@ -812,12 +853,19 @@ def _finish_language_command_state(state: RunState) -> None:
         transition_status(state, STATUS_ENRICHED)
 
 
-@app.command("grid5000-prepare")
+@app.command(
+    "grid5000-prepare",
+    epilog='Example: osm-polygon-website-tag grid5000-prepare --run-dir <run> --bundle-dir <bundle> --model-path <model_v3.bin> --commit "$(git rev-parse HEAD)"',
+)
 def grid5000_prepare_command(
     run_dir: RunDir,
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
-    model_path: Annotated[Path, typer.Option("--model-path")],
-    commit: Annotated[str, typer.Option("--commit")],
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    model_path: Annotated[
+        Path, typer.Option("--model-path", help="Verified pinned GlotLID model binary.")
+    ],
+    commit: Annotated[
+        str, typer.Option("--commit", help="Repository commit recorded in the bundle.")
+    ],
     shard: Annotated[
         str | None,
         typer.Option("--shard", help="Optional source shard basename to stage."),
@@ -850,7 +898,7 @@ def grid5000_prepare_command(
 
 @app.command("grid5000-run")
 def grid5000_run_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
     time_budget_seconds: Annotated[
         float | None,
         typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
@@ -859,7 +907,9 @@ def grid5000_run_command(
         int | None,
         typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
     ] = None,
-    job_id: Annotated[str | None, typer.Option("--job-id")] = None,
+    job_id: Annotated[
+        str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
+    ] = None,
 ) -> int:
     """Run one staged bundle on a reserved node without network access."""
     result = run_language_bundle(
@@ -874,7 +924,7 @@ def grid5000_run_command(
 
 @app.command("grid5000-sync")
 def grid5000_sync_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
     run_dir: RunDir,
 ) -> int:
     """Synchronize one Grid'5000 result into the canonical run."""
@@ -895,10 +945,16 @@ def grid5000_sync_command(
 @app.command("grid5000-prepare-sentences")
 def grid5000_prepare_sentences_command(
     run_dir: RunDir,
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
-    model_dir: Annotated[Path, typer.Option("--model-dir")],
-    model_revision: Annotated[str, typer.Option("--model-revision")],
-    commit: Annotated[str, typer.Option("--commit")],
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    model_dir: Annotated[
+        Path, typer.Option("--model-dir", help="Locally staged SaT model directory.")
+    ],
+    model_revision: Annotated[
+        str, typer.Option("--model-revision", help="Pinned Hugging Face revision of the SaT model.")
+    ],
+    commit: Annotated[
+        str, typer.Option("--commit", help="Repository commit recorded in the bundle.")
+    ],
     time_budget_seconds: Annotated[
         int,
         typer.Option("--time-budget-seconds", help="Segmentation budget within the job."),
@@ -932,7 +988,7 @@ def grid5000_prepare_sentences_command(
 
 @app.command("grid5000-run-sentences")
 def grid5000_run_sentences_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
     time_budget_seconds: Annotated[
         float | None,
         typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
@@ -941,7 +997,9 @@ def grid5000_run_sentences_command(
         int | None,
         typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
     ] = None,
-    job_id: Annotated[str | None, typer.Option("--job-id")] = None,
+    job_id: Annotated[
+        str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
+    ] = None,
 ) -> int:
     """Segment one staged sentence bundle on a reserved node, offline."""
     bundle = load_sentence_bundle(bundle_dir)
@@ -962,7 +1020,7 @@ def grid5000_run_sentences_command(
 
 @app.command("grid5000-sync-sentences")
 def grid5000_sync_sentences_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
+    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
     run_dir: RunDir,
 ) -> int:
     """Synchronize one sentence receipt into the canonical run."""

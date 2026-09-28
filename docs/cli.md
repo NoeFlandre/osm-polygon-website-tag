@@ -48,7 +48,7 @@ or set `OSM_PWT_DEBUG=1` to get the full traceback instead.
 | `publish-plan` | Show the receipt-bound files that would be uploaded. |
 | `publish` | Dry-run publication, or upload with explicit `--apply`. |
 | `release-stats` | Recompute and publish only the dataset card and the statistics report. |
-| `create-repo` | Explicitly create a public Hugging Face dataset repository. |
+| `create-repo` | Report whether a Hugging Face dataset repository exists; `--apply` creates it. |
 | `card-stats` | Recompute and print card statistics for a run. |
 | `geometry-stats` | Recompute and print the polygon geometry statistics of a run. |
 | `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
@@ -176,8 +176,8 @@ uv run --locked osm-polygon-website-tag publish \
 
 `publish` is read-only unless `--apply` is present. Apply mode requires a
 Hugging Face credential supplied through the environment or local `hf auth
-login`; the CLI never accepts a token flag. `create-repo` is separate and
-explicit, and `--ensure-repo` is rejected unless `run-all` is also in apply
+login`; the CLI never accepts a token flag. `create-repo` is separate and,
+like `publish`, only reports what it would do until `--apply` is added; and `--ensure-repo` is rejected unless `run-all` is also in apply
 mode.
 
 ### Releasing the card and statistics report
