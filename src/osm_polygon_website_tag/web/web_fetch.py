@@ -13,13 +13,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.web.content_type import charset_parameter, media_type
 
 MAX_RESPONSE_BYTES = 20_000_000
 REQUEST_TIMEOUT_SECONDS = 30.0
 MAX_REDIRECTS = 3
 READ_CHUNK_BYTES = 65_536
-USER_AGENT = "osm-polygon-website-tag/0.1 (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
+USER_AGENT = f"osm-polygon-website-tag/{__version__} (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
 
 Resolver = Callable[[str, int], list[tuple[Any, ...]]]
 RequestOnce = Callable[[str, float, int], "HttpResponse"]

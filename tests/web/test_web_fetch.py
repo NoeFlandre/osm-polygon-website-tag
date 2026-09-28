@@ -7,6 +7,7 @@ import socket
 import pytest
 
 import osm_polygon_website_tag.web.web_fetch as web_fetch_module
+from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.web.web_fetch import (
     FetchResult,
     HttpResponse,
@@ -379,9 +380,9 @@ def test_module_constants_are_pinned() -> None:
     assert web_fetch_module.REQUEST_TIMEOUT_SECONDS == 30.0
     assert web_fetch_module.MAX_REDIRECTS == 3
     assert web_fetch_module.READ_CHUNK_BYTES == 65_536
-    assert web_fetch_module.USER_AGENT == (
-        "osm-polygon-website-tag/0.1 (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
-    )
+    assert (
+        f"osm-polygon-website-tag/{__version__} (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
+    ) == web_fetch_module.USER_AGENT
 
 
 @pytest.mark.parametrize(

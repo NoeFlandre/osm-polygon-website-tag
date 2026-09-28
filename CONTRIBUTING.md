@@ -48,6 +48,15 @@ One issue per commit, with a short conventional prefix (`fix:`, `perf:`,
 Reference the issue (`Closes #NN`). The pull request template has the
 checklist.
 
+## Releasing
+
+1. Bump `version` in `pyproject.toml`, `CITATION.cff` and the README's BibTeX
+   (a test checks they agree), and move the `[Unreleased]` entries in
+   [CHANGELOG.md](CHANGELOG.md) under the new version.
+2. Merge that to `main`, then tag it: `git tag v1.2.3 && git push origin v1.2.3`.
+3. The `release` workflow checks the tag equals `v` + the pyproject version,
+   builds the sdist and wheel, and attaches them to a GitHub Release.
+
 ## Reporting a vulnerability
 
 Do not open a public issue. See [SECURITY.md](SECURITY.md).
