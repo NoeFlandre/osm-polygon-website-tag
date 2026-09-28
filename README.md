@@ -199,7 +199,8 @@ Useful commands:
 Ruff, `ty`, pytest, pre-commit, Just, Docker, and GitHub Actions keep the
 workflow reproducible and reviewable. The detailed [CLI reference](docs/cli.md)
 and [architecture guide](docs/architecture.md) explain the implementation
-boundaries.
+boundaries. See [CONTRIBUTING.md](CONTRIBUTING.md) for the gates to pass before
+a pull request, and [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## License and data boundaries
 
