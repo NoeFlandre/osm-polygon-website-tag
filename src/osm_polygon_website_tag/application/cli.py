@@ -74,7 +74,7 @@ from osm_polygon_website_tag.runtime.config import (
     DEFAULT_TRACKIO_PROJECT,
     DEFAULT_TRACKIO_SPACE,
 )
-from osm_polygon_website_tag.runtime.paths import assert_seagate_path, glotlid_model_cache_dir
+from osm_polygon_website_tag.runtime.paths import model_cache_dir, require_under_data_root
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -482,7 +482,7 @@ def detect_languages_command(
 ) -> int:
     """Detect GlotLID languages for every completed text shard."""
     validate_language_detection_options(batch_rows, time_budget_seconds)
-    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     state = load_run(normalized_run_dir)
     paths = sorted((normalized_run_dir / "polygons").glob("*.parquet"))
     _validate_language_shard_membership(state, paths)
@@ -501,8 +501,7 @@ def detect_languages_command(
         )
         return 0
     _prepare_language_command_state(state)
-    model_cache = glotlid_model_cache_dir()
-    assert_seagate_path(model_cache, label="GlotLID model cache")
+    model_cache = model_cache_dir("glotlid")
     detector = load_glotlid_detector(model_cache)
     progress = _run_language_shards(
         needed,
@@ -548,7 +547,7 @@ def segment_sentences_command(
 ) -> int:
     """Segment website text into sentences for every language-complete shard."""
     validate_segmentation_options(batch_rows, time_budget_seconds)
-    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     state = load_run(normalized_run_dir)
     paths = sorted((normalized_run_dir / "polygons").glob("*.parquet"))
     _validate_language_shard_membership(state, paths)
@@ -567,7 +566,7 @@ def segment_sentences_command(
         )
         return 0
     splitter = load_sat_splitter_from_path(
-        assert_seagate_path(model_dir, label="SaT model directory"),
+        require_under_data_root(model_dir, label="SaT model directory"),
         revision=model_revision,
     )
     progress = run_sentence_shards(
@@ -734,10 +733,10 @@ def grid5000_prepare_command(
         typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
     ] = DEFAULT_GRID_BATCH_ROWS,
 ) -> int:
-    """Prepare one Seagate-backed, offline Grid'5000 language bundle."""
-    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
-    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
-    normalized_model_path = assert_seagate_path(model_path, label="GlotLID model path")
+    """Prepare one data-root, offline Grid'5000 language bundle."""
+    normalized_run_dir = require_under_data_root(run_dir, label="run directory")
+    normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_model_path = require_under_data_root(model_path, label="GlotLID model path")
     bundle = prepare_language_bundle(
         normalized_run_dir,
         normalized_bundle_dir,
@@ -780,9 +779,9 @@ def grid5000_sync_command(
     bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
     run_dir: RunDir,
 ) -> int:
-    """Synchronize one Grid'5000 result into the Seagate canonical run."""
-    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
-    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    """Synchronize one Grid'5000 result into the canonical run."""
+    normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     result = sync_language_bundle(normalized_bundle_dir, normalized_run_dir)
     _json(
         {
@@ -815,10 +814,10 @@ def grid5000_prepare_sentences_command(
         typer.Option("--max-rows", help="Row budget packed into one bundle."),
     ] = DEFAULT_GRID_MAX_ROWS,
 ) -> int:
-    """Prepare one Seagate-backed, offline Grid'5000 sentence bundle."""
-    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
-    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
-    normalized_model_dir = assert_seagate_path(model_dir, label="SaT model directory")
+    """Prepare one data-root, offline Grid'5000 sentence bundle."""
+    normalized_run_dir = require_under_data_root(run_dir, label="run directory")
+    normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_model_dir = require_under_data_root(model_dir, label="SaT model directory")
     bundle = prepare_sentence_bundle(
         normalized_run_dir,
         normalized_bundle_dir,
@@ -868,9 +867,9 @@ def grid5000_sync_sentences_command(
     bundle_dir: Annotated[Path, typer.Option("--bundle-dir")],
     run_dir: RunDir,
 ) -> int:
-    """Synchronize one sentence receipt into the Seagate canonical run."""
-    normalized_bundle_dir = assert_seagate_path(bundle_dir, label="Grid'5000 bundle directory")
-    normalized_run_dir = assert_seagate_path(run_dir, label="run directory")
+    """Synchronize one sentence receipt into the canonical run."""
+    normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
+    normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     result = sync_sentence_bundle(normalized_bundle_dir, normalized_run_dir)
     _json(
         {

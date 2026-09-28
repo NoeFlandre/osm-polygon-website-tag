@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from osm_polygon_website_tag.runtime import config
@@ -22,7 +20,11 @@ def test_settings_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.hf_dataset_repo == "someone/else"
 
 
-def test_resolved_data_root_returns_string(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(tmp_path))
-    settings = config.Settings()
-    assert settings.resolved_data_root() == str(tmp_path)
+def test_the_settings_read_the_data_root_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", "/somewhere")
+    assert config.Settings().osm_poly_data_dir == "/somewhere"
+
+
+def test_there_is_no_module_level_singleton_or_alias() -> None:
+    assert not hasattr(config, "settings")
+    assert not hasattr(config, "TRACKIO_DASHBOARD_URL")

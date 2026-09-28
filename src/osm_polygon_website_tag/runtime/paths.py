@@ -1,109 +1,52 @@
-"""Generated-data path resolution.
+"""Generated-data root resolution.
 
-Everything lives on the Seagate project volume: the checkout sits in ``repo/``
-beside the runs, models and Grid'5000 bundles it produces. Immutable PBF
-sources are supplied explicitly to the CLI and are never represented as an
-output data root here.
-
-Override with the ``OSM_POLY_DATA_DIR`` environment variable (see ``.env.example``).
+The data root holds runs, model caches and Grid'5000 bundles. It comes from
+``OSM_POLY_DATA_DIR`` (the environment or ``.env``), else ``./data`` under the
+current directory. Immutable PBF sources are supplied explicitly to the CLI
+and are never represented as an output data root here.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-DEFAULT_DATA_ROOT = Path("/Volumes/Seagate M3/projects/osm-polygon-website-tag")
+from osm_polygon_website_tag.runtime.config import Settings
 
-# Sub-directory layout under the data root. Add constants here as we grow
-# instead of inlining path joins across the codebase.
-RAW_DIRNAME = "raw"
-PROCESSED_DIRNAME = "processed"
-EXPORTS_DIRNAME = "exports"
+DATA_ROOT_ENV = "OSM_POLY_DATA_DIR"
+DEFAULT_DATA_DIRNAME = "data"
 
 
-def data_root() -> Path:
-    """Return the generated-data root, creating it if missing.
-
-    Order of resolution:
-      1. ``OSM_POLY_DATA_DIR`` environment variable (if set and non-empty).
-      2. The canonical Seagate project directory.
-
-    The directory is created on first call so callers can treat it as always-present.
-    """
-    root = _configured_data_root()
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+def resolve_data_root() -> Path:
+    """Return the absolute generated-data root, without creating it."""
+    configured = Settings().osm_poly_data_dir.strip()
+    root = Path(configured).expanduser() if configured else Path.cwd() / DEFAULT_DATA_DIRNAME
+    return root.resolve()
 
 
-def raw_dir() -> Path:
-    """Directory for raw, immutable OSM extracts (PBF, Overpass dumps)."""
-    return _data_subdirectory(RAW_DIRNAME)
-
-
-def processed_dir() -> Path:
-    """Directory for cleaned/normalized intermediate artifacts."""
-    return _data_subdirectory(PROCESSED_DIRNAME)
-
-
-def exports_dir() -> Path:
-    """Directory for final artifacts ready to upload to Hugging Face."""
-    return _data_subdirectory(EXPORTS_DIRNAME)
-
-
-def _data_subdirectory(name: str) -> Path:
-    """Create and return one directory directly under the data root.
-
-    ``data_root`` has already created the parent, so this needs no recursive
-    creation of its own.
-    """
-    path = data_root() / name
-    path.mkdir(exist_ok=True)
-    return path
-
-
-def glotlid_model_cache_dir() -> Path:
-    """Return the generated-data directory reserved for the GlotLID model cache."""
-    normalized_root = _configured_data_root().resolve()
-    if not _is_under_seagate_root(normalized_root):
-        raise ValueError(
-            f"GlotLID model cache must be under a Seagate data root: {DEFAULT_DATA_ROOT}"
-        )
-    path = normalized_root / "models" / "glotlid"
+def model_cache_dir(name: str) -> Path:
+    """Return (and create) the cache directory for one model under the data root."""
+    path = resolve_data_root() / "models" / name
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def sat_model_cache_dir() -> Path:
-    """Return the generated-data directory reserved for the SaT model cache."""
-    normalized_root = _configured_data_root().resolve()
-    if not _is_under_seagate_root(normalized_root):
-        raise ValueError(f"SaT model cache must be under a Seagate data root: {DEFAULT_DATA_ROOT}")
-    path = normalized_root / "models" / "sat"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
-def assert_seagate_path(path: Path | str, *, label: str) -> Path:
-    """Require a production path to be inside the Seagate project root.
+def require_under_data_root(path: Path | str, *, label: str) -> Path:
+    """Return ``path`` resolved, refusing one outside the configured data root.
 
     Runs, models and Grid'5000 bundles all live under that one directory, so a
-    path outside it is a mistake rather than an older layout.
+    path outside it is a mistake.
     """
     normalized = Path(path).expanduser().resolve()
-    if not _is_under_seagate_root(normalized):
-        raise ValueError(f"{label} must be under a Seagate data root: {DEFAULT_DATA_ROOT}")
+    root = resolve_data_root()
+    if not normalized.is_relative_to(root):
+        raise ValueError(f"{label} must be under the data root {root} (set {DATA_ROOT_ENV})")
     return normalized
 
 
-def _configured_data_root() -> Path:
-    configured = os.environ.get("OSM_POLY_DATA_DIR", "").strip()
-    return Path(configured).expanduser() if configured else DEFAULT_DATA_ROOT
-
-
-def _is_under_seagate_root(path: Path) -> bool:
-    return any(path.is_relative_to(root) for root in _seagate_roots())
-
-
-def _seagate_roots() -> tuple[Path, ...]:
-    return (DEFAULT_DATA_ROOT.resolve(),)
+__all__ = [
+    "DATA_ROOT_ENV",
+    "DEFAULT_DATA_DIRNAME",
+    "model_cache_dir",
+    "require_under_data_root",
+    "resolve_data_root",
+]

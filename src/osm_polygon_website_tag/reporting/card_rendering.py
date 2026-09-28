@@ -18,7 +18,7 @@ from osm_polygon_website_tag.reporting.geographic.layout import (
     POLYGON_DENSITY_ASSET_REL_PATH,
 )
 from osm_polygon_website_tag.reporting.geometry_stats import GEOMETRY_STATS_FILENAME, GeometryStats
-from osm_polygon_website_tag.runtime.config import DEFAULT_GITHUB_REPO, TRACKIO_DASHBOARD_URL
+from osm_polygon_website_tag.runtime.config import DEFAULT_GITHUB_REPO, TRACKIO_SPACE_URL
 
 CARD_TOP_LANGUAGE_LIMIT = 10
 
@@ -295,7 +295,7 @@ def _render_methodology_section(stats: CardStats) -> list[str]:
             "`unsafe_url`, before and after redirects."
         ),
         (
-            f"- [Live metrics]({TRACKIO_DASHBOARD_URL}) \u00b7 "
+            f"- [Live metrics]({TRACKIO_SPACE_URL}) \u00b7 "
             f"[source code]({DEFAULT_GITHUB_REPO.removesuffix('.git')})"
         ),
         "",

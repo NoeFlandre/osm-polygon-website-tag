@@ -82,8 +82,8 @@ uv run --locked osm-polygon-website-tag detect-languages \
   --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
 ```
 
-The standalone command loads one pinned GlotLID V3 model from the Seagate
-cache, processes public shards in sorted order, and changes the run from
+The standalone command loads one pinned GlotLID V3 model from the data-root
+cache (`<data root>/models/glotlid`), processes public shards in sorted order, and changes the run from
 `enriching` to `enriched` after all shard promotions succeed. If the run was
 already analyzed or card-built, rerun `analyze-results`, `build-card`,
 `verify-results`, and `finalize-run` afterward. The model is never loaded when
@@ -109,8 +109,8 @@ uv run --locked osm-polygon-website-tag grid5000-sync \
   --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
 ```
 
-`grid5000-prepare` and `grid5000-sync` reject paths outside the Seagate data
-root. `grid5000-run` accepts only a staged bundle and never calls Hugging Face
+`grid5000-prepare` and `grid5000-sync` reject paths outside the data root
+(`OSM_POLY_DATA_DIR`, default `./data`). `grid5000-run` accepts only a staged bundle and never calls Hugging Face
 or the website-fetching code. The reserved-node shell wrapper invokes a
 dependency-light module entry point so it does not import extraction-only
 native libraries. It defaults to 256-row checkpoint batches. The shell

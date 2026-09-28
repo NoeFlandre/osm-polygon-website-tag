@@ -95,7 +95,7 @@ unsuccessful text receives null language fields.
 checks between shard detection and the CLI, before either opens run artifacts.
 
 `glotlid` owns the pinned FastText/GlotLID adapter, model hash, and explicit
-Seagate cache boundary. `language_detection_checkpoint` declares the language
+data-root cache boundary. `language_detection_checkpoint` declares the language
 stage's `CheckpointStore` and joins the pinned model identity to the source
 hash in the stored contract, so labels are only reused while both are
 unchanged; the checkpoint mechanics themselves live in `checkpoint_storage`
@@ -111,7 +111,7 @@ work.
 
 `grid5000` owns the portable bundle and result-receipt boundary. Preparation
 copies one unfinished shard, its validated checkpoint prefix, and the pinned
-model into a new Seagate bundle. The reserved-node runner reads only those
+model into a new bundle under the data root. The reserved-node runner reads only those
 files and stays offline; synchronization validates the receipt and atomically
 installs either the checkpoint prefix or the completed v1.4 shard back into
 the canonical run.

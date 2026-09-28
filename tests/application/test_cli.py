@@ -169,7 +169,7 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
     result = SimpleNamespace(payload=lambda: {"completed": True, "shard_sha256": "a" * 64})
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
         cli,
         "prepare_language_bundle",
@@ -435,8 +435,8 @@ def test_cli_detect_languages_loads_one_model_and_updates_run(
         predict=lambda texts: [LanguagePrediction("eng_Latn", 0.9) for _text in texts],
     )
     loaded: list[Path] = []
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
-    monkeypatch.setattr(cli, "glotlid_model_cache_dir", lambda: cache_dir)
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "model_cache_dir", {"glotlid": cache_dir}.__getitem__)
     monkeypatch.setattr(cli, "load_glotlid_detector", lambda path: loaded.append(path) or detector)
 
     assert main(["detect-languages", "--run-dir", str(run_dir)]) == 0
@@ -466,8 +466,8 @@ def test_cli_detect_languages_forwards_batch_and_time_budget(
     detector = SimpleNamespace(identity=ModelIdentity("repo", "file", "revision", "a" * 64))
     observed: dict[str, object] = {}
 
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
-    monkeypatch.setattr(cli, "glotlid_model_cache_dir", lambda: tmp_path / "model-cache")
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "model_cache_dir", {"glotlid": tmp_path / "model-cache"}.__getitem__)
     monkeypatch.setattr(cli, "load_glotlid_detector", lambda _path: detector)
     monkeypatch.setattr(cli, "shard_needs_language_detection", lambda _path: True)
 
@@ -528,7 +528,7 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
     transition_status(state, "verified")
     transition_status(state, STATUS_COMPLETE)
     upsert_run_metadata(state, {"snapshot_status": "done"})
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
         cli,
         "load_glotlid_detector",
@@ -709,7 +709,7 @@ def test_cli_segment_sentences_loads_the_pinned_model_and_updates_run(
         split=lambda texts: [[text] for text in texts],
     )
 
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
         cli,
         "load_sat_splitter_from_path",
@@ -774,7 +774,7 @@ def test_cli_segment_sentences_reports_nothing_to_do(
 ) -> None:
     """A fully segmented run must not load the model at all."""
     run_dir = _setup_run(tmp_path)
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(cli, "shard_needs_sentence_segmentation", lambda _path: False)
     monkeypatch.setattr(
         cli,
@@ -816,7 +816,7 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
     result = SimpleNamespace(payload=lambda: {"completed": True, "shards": []})
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    monkeypatch.setattr(cli, "assert_seagate_path", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
         cli,
         "prepare_sentence_bundle",

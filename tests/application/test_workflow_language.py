@@ -484,3 +484,34 @@ def test_run_all_resumes_after_ctrl_c(
     assert result.complete
     assert result.skipped_count == 1
     assert result.extracted_count == 1
+
+
+def test_opt_in_detection_loads_glotlid_from_the_data_root_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Works with any OSM_POLY_DATA_DIR, not only the maintainer's disk (#81)."""
+    root = tmp_path / "x"
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(root))
+    loaded: list[Path] = []
+    monkeypatch.setattr(
+        workflow, "load_glotlid_detector", lambda cache: loaded.append(cache) or "d"
+    )
+
+    detector = workflow._prepare_language_detector(
+        detect_languages=True, language_detector=None, run_dir=root / "runs" / "r"
+    )
+
+    assert detector == "d"
+    assert loaded == [root.resolve() / "models" / "glotlid"]
+
+
+def test_opt_in_detection_refuses_a_run_outside_the_data_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", str(tmp_path / "x"))
+    monkeypatch.setattr(workflow, "load_glotlid_detector", lambda cache: pytest.fail("loaded"))
+
+    with pytest.raises(ValueError, match="run directory must be under the data root"):
+        workflow._prepare_language_detector(
+            detect_languages=True, language_detector=None, run_dir=tmp_path / "elsewhere"
+        )
