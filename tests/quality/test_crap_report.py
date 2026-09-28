@@ -12,22 +12,20 @@ TARGET = Path(__file__).parents[2] / "src" / "osm_polygon_website_tag" / "domain
 
 
 def _coverage_file(tmp_path: Path, percent: float) -> Path:
+    """Coverage for every function of ``TARGET``, all at ``percent``."""
+    from radon.complexity import cc_visit
+
+    entries = {
+        f"{block.name}@{block.lineno}": {
+            "start_line": block.lineno,
+            "summary": {"percent_covered": percent},
+        }
+        for block in cc_visit(TARGET.read_text(encoding="utf-8"))
+        if block.__class__.__name__ != "Class"
+    }
     path = tmp_path / "coverage.json"
     path.write_text(
-        json.dumps(
-            {
-                "files": {
-                    "src/osm_polygon_website_tag/domain/tags.py": {
-                        "functions": {
-                            "normalize_value": {
-                                "summary": {"percent_covered": percent},
-                                "start_line": 42,
-                            }
-                        }
-                    }
-                }
-            }
-        ),
+        json.dumps({"files": {str(TARGET): {"functions": entries}}}),
         encoding="utf-8",
     )
     return path
@@ -102,7 +100,19 @@ def test_crap_report_expands_a_directory_in_deterministic_order(tmp_path: Path) 
     (source_dir / "zeta.py").write_text("def zeta():\n    return 1\n", encoding="utf-8")
     (source_dir / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
     coverage = tmp_path / "coverage.json"
-    coverage.write_text('{"files": {}}', encoding="utf-8")
+    coverage.write_text(
+        json.dumps(
+            {
+                "files": {
+                    str(source_dir / name): {
+                        "functions": {name: {"start_line": 1, "summary": {"percent_covered": 100}}}
+                    }
+                    for name in ("zeta.py", "alpha.py")
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = _run_report_for(
         source_dir,
@@ -126,7 +136,21 @@ def test_crap_report_counts_class_methods_once_not_as_classes(tmp_path: Path) ->
         "class ProgressReporter:\n    def __call__(self) -> None:\n        return None\n",
         encoding="utf-8",
     )
-    coverage = _coverage_file(tmp_path, 100.0)
+    coverage = tmp_path / "coverage.json"
+    coverage.write_text(
+        json.dumps(
+            {
+                "files": {
+                    str(source): {
+                        "functions": {
+                            "__call__": {"start_line": 2, "summary": {"percent_covered": 100}}
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     result = _run_report_for(
         source,
         "--coverage-json",
@@ -153,3 +177,104 @@ def test_production_function_complexity_is_shallow() -> None:
                 failures.append(f"{path}:{block.lineno} {block.name}={block.complexity}")
 
     assert failures == []
+
+
+_DECORATED_SOURCE = """import functools
+
+
+@functools.cache
+def cached(x):
+    def inner(y):
+        if y:
+            return 1
+        return 2
+    return inner(x)
+
+
+class Box:
+    @property
+    def value(self):
+        return 1
+
+    @staticmethod
+    def make(a):
+        return a
+"""
+
+
+def _module(tmp_path: Path) -> Path:
+    path = tmp_path / "mod.py"
+    path.write_text(_DECORATED_SOURCE, encoding="utf-8")
+    return path
+
+
+def _coverage_for(path: Path, functions: dict[str, tuple[int, float]], tmp_path: Path) -> Path:
+    report = tmp_path / "cov.json"
+    entries = {
+        name: {"start_line": line, "summary": {"percent_covered": percent}}
+        for name, (line, percent) in functions.items()
+    }
+    report.write_text(json.dumps({"files": {str(path): {"functions": entries}}}), encoding="utf-8")
+    return report
+
+
+_ALL_COVERED = {
+    "cached": (5, 100.0),
+    "cached.inner": (6, 100.0),
+    "Box.value": (15, 100.0),
+    "Box.make": (19, 100.0),
+}
+
+
+def test_decorated_methods_and_nested_closures_are_each_scored_once(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = _coverage_for(module, _ALL_COVERED, tmp_path)
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 0
+    listed = [line.split()[0] for line in result.stdout.splitlines()[2:]]
+    assert sorted(listed) == sorted(f"{module}:{line}" for line in (5, 6, 15, 19))
+
+
+def test_an_uncovered_closure_is_scored_and_fails_the_gate(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = _coverage_for(module, {**_ALL_COVERED, "cached.inner": (6, 0.0)}, tmp_path)
+
+    result = _run_report_for(module, "--coverage-json", str(report), "--max-crap", "5")
+
+    assert result.returncode == 1
+    assert f"{module}:6" in result.stdout
+
+
+def test_a_function_without_a_coverage_entry_is_an_error_not_zero_percent(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    functions = {name: entry for name, entry in _ALL_COVERED.items() if name != "Box.make"}
+    report = _coverage_for(module, functions, tmp_path)
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 2
+    assert f"{module}:19 make has no coverage entry" in result.stderr
+
+
+def test_a_file_missing_from_the_coverage_report_is_an_error(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = tmp_path / "cov.json"
+    report.write_text(json.dumps({"files": {}}), encoding="utf-8")
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 2
+    assert f"{module} is missing from the coverage report" in result.stderr
+
+
+def test_coverage_without_per_function_data_is_an_error(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = tmp_path / "cov.json"
+    report.write_text(json.dumps({"files": {str(module): {"summary": {}}}}), encoding="utf-8")
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 2
+    assert "coverage 7.5 or newer" in result.stderr
