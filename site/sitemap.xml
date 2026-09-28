@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/architecture/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/cli/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/data-and-remotes/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/language-detection-design/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/language-detection-plan/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/operations/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+    <url>
+         <loc>https://noeflandre.github.io/osm-polygon-website-tag/setup/</loc>
+         <lastmod>2026-09-28</lastmod>
+    </url>
+</urlset>

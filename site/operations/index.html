@@ -1,0 +1,1023 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A reproducible pipeline for OSM polygons with website tags.">
+      
+      
+      
+        <link rel="canonical" href="https://noeflandre.github.io/osm-polygon-website-tag/operations/">
+      
+      
+        <link rel="prev" href="../cli/">
+      
+      
+        <link rel="next" href="../architecture/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Operations and resume - OSM Polygon Website Tag</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#operations-and-resume" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="OSM Polygon Website Tag" class="md-header__button md-logo" aria-label="OSM Polygon Website Tag" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            OSM Polygon Website Tag
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Operations and resume
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/NoeFlandre/osm-polygon-website-tag" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    NoeFlandre/osm-polygon-website-tag
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="OSM Polygon Website Tag" class="md-nav__button md-logo" aria-label="OSM Polygon Website Tag" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    OSM Polygon Website Tag
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/NoeFlandre/osm-polygon-website-tag" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    NoeFlandre/osm-polygon-website-tag
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations and resume
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations and resume
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#choose-safe-roots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choose safe roots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resume-run-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume run-all
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optional-glotlid-language-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional GlotLID language detection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-language-detection-on-grid5000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run language detection on Grid'5000
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#segment-sentences-on-grid5000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Segment sentences on Grid'5000
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dry-run-versus-apply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry run versus apply
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-local-and-what-is-public" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is local and what is public
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#safe-publication-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Safe publication checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#freeze-the-current-data-without-more-retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freeze the current data without more retries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#publish-the-metrics-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Publish the metrics dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data-and-remotes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data and remotes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#choose-safe-roots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choose safe roots
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resume-run-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume run-all
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#optional-glotlid-language-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optional GlotLID language detection
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#run-language-detection-on-grid5000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Run language detection on Grid'5000
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#segment-sentences-on-grid5000" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Segment sentences on Grid'5000
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dry-run-versus-apply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dry run versus apply
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-is-local-and-what-is-public" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What is local and what is public
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#safe-publication-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Safe publication checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#freeze-the-current-data-without-more-retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Freeze the current data without more retries
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#publish-the-metrics-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Publish the metrics dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="operations-and-resume">Operations and resume</h1>
+<p>This page covers the questions that matter when a run is large, interrupted,
+or ready to publish. Keep code in the repository and point the CLI at a
+separate writable output root.</p>
+<h2 id="choose-safe-roots">Choose safe roots</h2>
+<p><code>--source-root</code> is the directory that contains the production <code>.osm.pbf</code>
+files. It is an input only: the pipeline reads filenames, sizes, and mtimes,
+and refuses an output root that is equal to or inside it. It does not copy,
+rename, hash, or modify those PBFs.</p>
+<p><code>--output-root</code> contains one run directory per <code>--run-id</code>. The default generated
+data root is <code>/Volumes/Seagate M3/projects/osm-polygon-website-tag</code>; set
+<code>OSM_POLY_DATA_DIR</code> when a different local or mounted volume is appropriate.
+Keep this root writable and outside the source tree. The production GlotLID
+cache is <code>/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/</code>;
+language commands reject a run or model cache outside an approved Seagate root.
+The old <code>…-data</code> root remains accepted only to resume or inspect existing runs;
+new artifacts are written to the canonical project root.</p>
+<h2 id="resume-run-all">Resume <code>run-all</code></h2>
+<p>Use the same source root, output root, run ID, and repository ID when resuming:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>osm-polygon-website-tag<span class="w"> </span>run-all<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--source-root<span class="w"> </span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-root<span class="w"> </span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--run-id<span class="w"> </span><span class="s1">&#39;geofabrik-website-v1&#39;</span>
+</code></pre></div>
+<p>The first invocation records the recursively discovered inventory. Each later
+invocation compares every filename, byte size, and nanosecond mtime with that
+inventory; drift fails closed instead of silently mixing inputs. Pressing
+<code>Ctrl-C</code> leaves the run resumable. Repeating the command reuses verified
+extraction bundles, skips terminal text results, and retries unresolved or
+failed URL results.</p>
+<p>After <code>finalize-snapshot</code> writes the completion receipt, the run is frozen:
+<code>status=complete</code> plus <code>snapshot_status=done</code> makes a later <code>run-all</code> invocation
+return immediately. It does not rediscover PBFs, retry failed URLs, rebuild the
+card, or upload anything. Start a separate reviewed run if you ever decide to
+attempt additional enrichment.</p>
+<p>Enrichment writes completed Parquet batches and URL-cache changes durably. An
+interruption therefore resumes at the first unfinished batch rather than
+starting the shard over. Existing schema-v1.2 shards are projected to v1.3
+locally without reopening the PBF or refetching text. The Parquet text-status
+columns are authoritative; a small status summary only helps choose resume
+order.</p>
+<h2 id="optional-glotlid-language-detection">Optional GlotLID language detection</h2>
+<p>The default <code>run-all</code> command remains schema v1.3 and does not load a model.
+Enable the stage explicitly:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>osm-polygon-website-tag<span class="w"> </span>run-all<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--source-root<span class="w"> </span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-root<span class="w"> </span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--run-id<span class="w"> </span><span class="s1">&#39;geofabrik-website-v1&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--detect-languages
+</code></pre></div>
+<p>Or run language detection after an existing run has reached <code>enriched</code>:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>osm-polygon-website-tag<span class="w"> </span>detect-languages<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--run-dir<span class="w"> </span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/geofabrik-website-v1&#39;</span>
+</code></pre></div>
+<p>The stage uses the pinned <a href="https://huggingface.co/cis-lmu/glotlid">GlotLID model</a>
+(<code>model_v3.bin</code> at a fixed Hub revision). It loads one model into one process,
+predicts bounded batches, and writes four nullable v1.4 fields:
+<code>website_language</code>, <code>website_language_probability</code>,
+<code>contact_website_language</code>, and <code>contact_website_language_probability</code>.
+Successful text receives the exact script-aware top-1 label (for example
+<code>eng_Latn</code>) and probability; absent or unsuccessful text remains null.</p>
+<p>Each public shard has source- and model-bound <code>.language.parts</code> checkpoints.
+After every completed batch is atomically written, the next batch can be
+processed. <code>Ctrl-C</code> is safe: the original shard stays valid, the completed
+prefix remains on Seagate, and repeating the command verifies identity and
+continues from the first unfinished batch. A changed shard or model fails
+closed. Once every shard is promoted, the source manifest hashes are updated.</p>
+<p>A later URL retry that turns a failed value into <code>success</code> produces text with a
+null language, so re-run <code>detect-languages</code> (and rebuild analysis and the card)
+after any enrichment retry on a v1.4 run.</p>
+<p>Analysis writes <code>analysis/languages.parquet</code> with exact per-tag label counts,
+and the card publishes the distinct-language count, labeled-text totals, and
+top labels.</p>
+<p>If the standalone stage is run on an analyzed, card-built, or non-frozen
+complete run, it reopens the stage as <code>enriching</code> and finishes at <code>enriched</code>.
+Rebuild analysis, card, verification, and finalization afterward. A snapshot
+with <code>status=complete</code> and <code>snapshot_status=done</code> is immutable and is rejected
+before model loading. Tests use injected fakes and <code>tmp_path</code>; they never
+download GlotLID or write production data.</p>
+<h2 id="run-language-detection-on-grid5000">Run language detection on Grid'5000</h2>
+<p>Everything lives under one project directory on the Seagate volume: the
+checkout in <code>repo/</code> beside <code>runs/</code>, <code>models/</code>, and the Grid'5000 bundle
+directories it produces.</p>
+<p>The repository includes wrappers in <code>scripts/grid5000/</code> for short, resumable
+jobs. They follow the Grid'5000 usage policy: the frontend is used only for
+checkout, transfer, submission, and monitoring; detection runs on one
+reserved GPU node. Each job requests <code>host=1/gpu=1,walltime=0:30</code> and
+gives the detector a 1,500-second budget. The remaining five minutes are
+reserved for job cleanup and transfer. GlotLID's pinned FastText model is
+CPU-bound; the GPU reservation provides the requested isolated workers and
+parallel-job capacity, but does not claim GPU acceleration for inference.</p>
+<p>First download the pinned public model into the Seagate cache and prepare one
+new bundle. Preparation records the repository commit, source row count and
+hash, model revision and hash, and batch/budget settings. It copies exactly
+one unfinished public shard and any validated language checkpoint prefix:</p>
+<div class="highlight"><pre><span></span><code>hf<span class="w"> </span>download<span class="w"> </span>cis-lmu/glotlid<span class="w"> </span>model_v3.bin<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--revision<span class="w"> </span>85cd671<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--cache-dir<span class="w"> </span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid&#39;</span>
+
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_RUN_DIR</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/&lt;run-id&gt;&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_BUNDLE_DIR</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/&lt;bundle-id&gt;&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_MODEL_PATH</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/&lt;snapshot&gt;/model_v3.bin&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_COMMIT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">&quot;</span>
+scripts/grid5000/prepare_language_detection.sh
+</code></pre></div>
+<p>Copy the checkout and bundle to the selected site's frontend with <code>rsync</code>.
+Before the first detection job, bootstrap the locked Linux runtime once by
+pointing the same policy-aware submit wrapper at
+<code>scripts/grid5000/bootstrap_language_runtime.sh</code>. Wait for that job to finish
+and clear its active marker only after confirming its terminal state. The
+bootstrap installs runtime dependencies without the development group; all
+subsequent detection jobs use that environment offline. Then submit one job
+with <code>scripts/grid5000/submit_language_detection.sh</code>; it runs
+<code>usagepolicycheck -t</code> before and after <code>oarsub</code>, records the OAR job ID, and
+refuses to submit while its active marker exists. The wrapper defaults to the
+Nancy GPU queue <code>abaca</code>; override it with <code>GRID5000_QUEUE</code> when using another
+site. Set <code>GRID5000_GPUS=1</code> per job; submit distinct bundles one at a time or
+in a small staged wave, never duplicate or speculative jobs. Monitor with
+<code>oarstat -u</code>.
+The runner uses a dependency-light Python module entry point and 256-row
+checkpoint batches by default. It does not import the extraction-only
+<code>osmium</code> extension on compute nodes. The site-provided <code>expat/2.7.1</code> module
+remains loaded for compatibility with the locked runtime.
+Do not run Python, model inference, compilation, or bulk processing on the
+frontend. The node runner sets <code>HF_HUB_OFFLINE=1</code>, uses only the staged model
+and shard, and never fetches website URLs or Hub weights.</p>
+<p>After completion, copy the bundle back to Seagate and run
+<code>scripts/grid5000/sync_language_detection.sh</code>. Checkpoint-only results leave
+the canonical shard byte-identical and can be resumed by preparing a fresh
+bundle. Completed results are checksum- and schema-validated before atomic
+promotion and manifest update. Retain the Seagate bundle and receipt as
+provenance; clean temporary Grid'5000 copies only after the receipt and
+checksums have been verified. Cancel an unneeded job with <code>oardel &lt;job-id&gt;</code> and
+clear its marker only after confirming that it is no longer running.</p>
+<h2 id="segment-sentences-on-grid5000">Segment sentences on Grid'5000</h2>
+<p>Sentence segmentation runs only on reserved nodes. The stage consumes the
+language-complete v1.4 shards, calls the pinned
+<a href="https://huggingface.co/segment-any-text/sat-3l-sm">SaT</a> segmenter
+(<code>sat-3l-sm</code>, revision <code>137da05</code>) once per website field, and promotes a v1.5
+shard. Rows whose detected language is outside the segmenter's 85 languages
+record <code>unsupported_language</code> instead of sentences; that is about 3% of the
+extracted texts.</p>
+<p>The reserved GPU does the work: the loader moves the pinned encoder onto the
+node's CUDA device in half precision and segments 256 texts per forward batch,
+falling back to CPU only when a node exposes no usable accelerator. The locked
+CUDA runtime supports compute capability 7.5 and newer, so a job must land on a
+Turing-or-later GPU; Nancy's Pascal nodes silently fall back to CPU and segment
+roughly twenty times slower. Constrain the reservation with
+<code>GRID5000_PROPERTIES</code> before submitting:</p>
+<p><div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">GRID5000_PROPERTIES</span><span class="o">=</span><span class="s2">&quot;cluster IN (&#39;gres&#39;,&#39;gruss&#39;,&#39;grouille&#39;,&#39;graffiti&#39;,&#39;grue&#39;,&#39;grat&#39;)&quot;</span>
+</code></pre></div>
+ Unlike the
+CPU-bound GlotLID stage, this one is a genuine GPU workload. The segmenter also
+loads the <code>facebookAI/xlm-roberta-base</code> tokenizer, so that Hub cache must exist
+under <code>~/.cache/huggingface</code> on the site before the first offline job.</p>
+<p>Segments keep their own trailing whitespace but not the line breaks that
+separated them, so concatenating a row's sentences does not reproduce its
+extracted text; the untouched text remains in the <code>*_text</code> columns.</p>
+<p>One bundle carries several shards. Segmentation is fast enough that a whole
+30-minute reservation would otherwise be spent staging a single small country,
+so <code>grid5000-prepare-sentences</code> packs unfinished shards in stable order up to
+<code>--max-rows</code> and the node segments them under one shared budget. Every
+completed batch is checkpointed, so a job that runs out of budget mid-shard is
+copied back, synchronized, and resumed by the next bundle.</p>
+<p>The segmentation backend (<code>wtpsplit</code> and <code>torch</code>) is the optional <code>sentences</code> extra. The default image,
+the Mac checkout, and every extraction-only run stay free of a deep-learning
+runtime; only the reserved node installs it:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">GRID5000_JOB_SCRIPT</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$GRID5000_REPO_DIR</span><span class="s2">/scripts/grid5000/bootstrap_sentence_runtime.sh&quot;</span>
+scripts/grid5000/submit_language_detection.sh
+</code></pre></div>
+<p>Stage the pinned model once under the Seagate model cache, keeping only the
+files the loader reads (<code>config.json</code> and <code>model.safetensors</code>), then prepare a
+bundle:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_RUN_DIR</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/&lt;run-id&gt;&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_BUNDLE_DIR</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000-sentences/&lt;bundle-id&gt;&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_MODEL_DIR</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/sat/sat-3l-sm-min&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_MODEL_REVISION</span><span class="o">=</span><span class="s1">&#39;137da054051ad9f1eac42025f758db4ac9f22535&#39;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_COMMIT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>HEAD<span class="k">)</span><span class="s2">&quot;</span>
+scripts/grid5000/prepare_sentence_segmentation.sh
+</code></pre></div>
+<p>Copy the bundle to the job directory and submit exactly one job, using the
+same policy-aware submission wrapper with the sentence job script:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">GRID5000_JOB_SCRIPT</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$GRID5000_REPO_DIR</span><span class="s2">/scripts/grid5000/run_sentence_segmentation.sh&quot;</span>
+scripts/grid5000/submit_language_detection.sh
+</code></pre></div>
+<p>The model directory is immutable and identical for every bundle, so it is
+staged once on the site and linked into each bundle rather than transferred per
+job; the runner still verifies its digest against the manifest before loading
+it. After the job reaches a terminal state, copy the bundle back and
+synchronize it:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">OSM_POLY_BUNDLE_DIR</span><span class="o">=</span><span class="s1">&#39;/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000-sentences/&lt;bundle-id&gt;&#39;</span>
+scripts/grid5000/sync_sentence_segmentation.sh
+</code></pre></div>
+<p>Synchronization installs each completed v1.5 shard atomically after validating
+its schema, row count, and digest, installs a validated checkpoint for a paused
+shard, updates the source manifest, and records a receipt under
+<code>manifests/grid5000-sentences/</code>. Once every shard carries sentences, rebuild
+analysis, the card, verification, and finalization before publishing.</p>
+<h2 id="dry-run-versus-apply">Dry run versus apply</h2>
+<p>Without <code>--apply</code>, <code>run-all</code> computes and verifies local artifacts but does not
+upload to Hugging Face. <code>publish</code> and <code>publish-plan</code> are also read-only by
+default. This is the review path: inspect the run, card, map, and plan before
+granting publication approval.</p>
+<p>With <code>--apply</code>, credentials are resolved from <code>HF_TOKEN</code>,
+<code>HUGGING_FACE_HUB_TOKEN</code>, or the local Hugging Face credential store. The
+workflow reconciles the local upload checkpoint with remote polygon hashes,
+uploads an enriched shard and refreshed card together, and records the
+acknowledgement before continuing. At the end it uploads only the files bound
+by the completion receipt. A missing credential, changed source inventory, or
+failed verification stops the run before the corresponding upload.</p>
+<h2 id="what-is-local-and-what-is-public">What is local and what is public</h2>
+<p>The run directory is local until apply-mode publication succeeds. It contains
+public polygon shards plus comparison, rejection, analysis, card, map, and
+manifest artifacts. <code>manifests/uploaded_polygons.json</code> is operational resume
+state and is excluded from the completion receipt. Staging and spill files are
+also excluded.</p>
+<p>The public Hugging Face dataset is the subset selected by the verified receipt:
+<code>polygons/*.parquet</code>, receipt-bound analysis and supporting artifacts, the
+generated card, and the map when present. A local run can contain newer or
+incomplete work than the public dataset; do not describe local-only files as
+published until the apply-mode upload has completed and been checked.</p>
+<h2 id="safe-publication-checklist">Safe publication checklist</h2>
+<ol>
+<li>Confirm the source root is unchanged and the run is complete.</li>
+<li>Run <code>verify-results --run-dir '&lt;run-dir&gt;'</code> and review the generated card.</li>
+<li>Run <code>publish-plan --run-dir '&lt;run-dir&gt;'</code> and inspect its artifact list.</li>
+<li>Obtain separate approval, authenticate with <code>hf auth login</code>, and add
+   <code>--apply</code> to <code>publish</code> (or to the reviewed <code>run-all</code> command).</li>
+</ol>
+<p>The publisher re-runs verification immediately before any upload and refuses
+partial or tampered runs. Keep the source mount read-only in Docker and pass a
+token through the environment only; never place credentials in a file copied
+into an image or in a command-line argument.</p>
+<h2 id="freeze-the-current-data-without-more-retries">Freeze the current data without more retries</h2>
+<p>If you want the current extracted/text results to be the final snapshot, do
+not resume <code>run-all</code>: it intentionally retries unresolved URL outcomes. With a
+reviewed <code>snapshot_status: done</code> marker in <code>manifests/run.json</code>, use:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>osm-polygon-website-tag<span class="w"> </span>finalize-snapshot<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--run-dir<span class="w"> </span><span class="s1">&#39;&lt;run-dir&gt;&#39;</span>
+</code></pre></div>
+<p>This command reads the existing shards only. It refuses unfinished <code>pending</code>
+text rows, preserves recorded fetch failures and deterministic URL rejections,
+then builds analysis tables, the card and map, verifies every artifact, and
+writes the completion receipt. It performs no PBF reads, URL requests, or
+enrichment retries.</p>
+<h2 id="publish-the-metrics-dashboard">Publish the metrics dashboard</h2>
+<p>The dataset card links to the public
+<a href="https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics">Trackio Space</a>.
+Its metrics come from the same <code>CardStats</code> projection as the card and are
+published only from a run with <code>status=complete</code>, a valid completion receipt,
+and a fresh successful verification.
+Preview them without a network call:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>osm-polygon-website-tag<span class="w"> </span>publish-trackio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--run-dir<span class="w"> </span><span class="s1">&#39;&lt;complete-run-dir&gt;&#39;</span>
+</code></pre></div>
+<p>After reviewing the output, the explicit remote action is:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>--with<span class="w"> </span>trackio<span class="w"> </span>osm-polygon-website-tag<span class="w"> </span>publish-trackio<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--run-dir<span class="w"> </span><span class="s1">&#39;&lt;complete-run-dir&gt;&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--space-id<span class="w"> </span><span class="s1">&#39;NoeFlandre/osm-polygon-website-tag-metrics&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--apply
+</code></pre></div>
+<p>The optional Trackio client creates or refreshes a public, read-only static
+Space when needed. It logs one receipt-named run and sends only aggregate
+numeric dataset metrics plus a SHA-256 snapshot identifier; no website text or
+credential is sent to the dashboard. This command is separate from <code>run-all</code>,
+so the normal PBF pipeline remains unaffected if the dashboard is unavailable.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "search.highlight"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
