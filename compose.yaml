@@ -1,0 +1,35 @@
+# Run the pipeline without `just`:
+#
+#   OSM_RAW_DIR=/path/to/pbfs UID=$(id -u) GID=$(id -g) \
+#     docker compose run --rm pipeline run-all --source-root /data/raw \
+#       --output-root /data/runs --run-id my-run
+#
+# /data/raw is read-only; runs and model caches are written to the host
+# directories below, which must be writable by the UID/GID given above.
+services:
+  pipeline:
+    build:
+      context: .
+      target: runtime
+    image: osm-polygon-website-tag:local
+    read_only: true
+    user: "${UID:-10001}:${GID:-10001}"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    environment:
+      OSM_POLY_DATA_DIR: /data
+    # HF_TOKEN (publishing only) comes from an optional .env file, never the image.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - type: bind
+        source: ${OSM_RAW_DIR:-./data/raw}
+        target: /data/raw
+        read_only: true
+      - type: bind
+        source: ${OSM_RUNS_DIR:-./data/runs}
+        target: /data/runs
+      - type: bind
+        source: ${OSM_MODELS_DIR:-./data/models}
+        target: /data/models

@@ -56,6 +56,13 @@ FROM base AS runtime
 
 COPY --from=builder --chown=app:app /opt/venv /opt/venv
 
+# The data root every command defaults to: /data/raw holds the read-only PBFs,
+# /data/runs the run output and /data/models the downloaded model caches. Mount
+# volumes over them; runs and models must be writable by the container user.
+ENV OSM_POLY_DATA_DIR=/data
+RUN mkdir -p /data/raw /data/runs /data/models \
+    && chown app:app /data/runs /data/models
+
 USER app
 
 # A container started without arguments is a harmless CLI help invocation.

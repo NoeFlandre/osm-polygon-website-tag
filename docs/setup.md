@@ -68,32 +68,66 @@ just docker-build
 just docker-smoke
 ```
 
-For a local run, mount the immutable input read-only and keep generated files
-on a separate writable volume:
+### Data layout
+
+The runtime image sets `OSM_POLY_DATA_DIR=/data` and declares three mount
+points. Only the raw input is read-only:
+
+| Path | Purpose | Mount |
+| --- | --- | --- |
+| `/data/raw` | PBF sources | read-only |
+| `/data/runs` | run output and checkpoints | writable |
+| `/data/models` | GlotLID and SaT model caches (`/data/models/glotlid`, `/data/models/sat`) | writable |
+
+The image contains no production PBFs, generated runs, `.env` files or tokens.
+The container user must be able to write to the runs and models directories:
+pass `--user "$(id -u):$(id -g)"` (Compose reads `UID` and `GID`) so files on
+the host belong to you.
+
+### With Compose
+
+`compose.yaml` runs the same read-only, non-root container with those mounts.
+Point it at your directories with `OSM_RAW_DIR`, `OSM_RUNS_DIR` and
+`OSM_MODELS_DIR` (defaults: `./data/raw`, `./data/runs`, `./data/models`):
+
+```bash
+mkdir -p data/raw data/runs data/models
+UID="$(id -u)" GID="$(id -g)" OSM_RAW_DIR=/path/to/pbf-root \
+  docker compose run --rm pipeline run-all \
+  --source-root /data/raw --output-root /data/runs \
+  --run-id geofabrik-website-v1 \
+  --repo-id NoeFlandre/osm-polygon-website-tag
+```
+
+Language detection works the same way once `/data/models` is mounted: add
+`--detect-languages` to `run-all`, or run
+`docker compose run --rm pipeline detect-languages --help` for the standalone
+stage.
+
+### Secrets
+
+Publishing needs `HF_TOKEN`; a dry run does not. Never bake it into an image or
+commit it. Either export it and pass it through, or keep it in a git-ignored
+`.env` file, which Compose reads when present (`.env.example` shows the names):
+
+```bash
+export HF_TOKEN=...            # or put HF_TOKEN=... in .env
+docker compose run --rm pipeline run-all --apply \
+  --source-root /data/raw --output-root /data/runs \
+  --run-id geofabrik-website-v1 --repo-id NoeFlandre/osm-polygon-website-tag
+```
+
+With plain `docker run`, pass the token by name (`--env HF_TOKEN`) so it does
+not appear in the command line:
 
 ```bash
 docker run --rm --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --user "$(id -u):$(id -g)" \
-  --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
-  --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/runs",dst=/data/runs \
-  osm-polygon-website-tag:local run-all \
-  --source-root /data/raw \
-  --output-root /data/runs \
-  --run-id geofabrik-website-v1 \
-  --repo-id NoeFlandre/osm-polygon-website-tag
-```
-
-The image does not contain production PBFs, generated runs, `.env` files, or
-tokens. For an explicitly approved upload, pass a token through the
-environment only and add `--apply`:
-
-```bash
-docker run --rm --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --env HF_TOKEN \
   --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
   --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/runs",dst=/data/runs \
+  --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/models",dst=/data/models \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw --output-root /data/runs \
   --run-id geofabrik-website-v1 \

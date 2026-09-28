@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,3 +64,36 @@ def test_the_build_context_keeps_credentials_and_data_out_of_the_image() -> None
     leaked = [path for path in _KEPT_OUT_OF_THE_IMAGE if not _ignored(path, patterns)]
 
     assert leaked == []
+
+
+def test_the_runtime_image_defaults_its_data_root_to_the_mounted_volume() -> None:
+    stage = _last_stage((ROOT / "Dockerfile").read_text(encoding="utf-8"))
+    environment = [word for words in stage if words[0].upper() == "ENV" for word in words[1:]]
+
+    assert "OSM_POLY_DATA_DIR=/data" in environment
+
+
+def _compose_service() -> Any:
+    import yaml
+
+    compose = yaml.safe_load((ROOT / "compose.yaml").read_text(encoding="utf-8"))
+    return compose["services"]["pipeline"]
+
+
+def test_the_compose_service_is_read_only_non_root_and_mounts_raw_input_read_only() -> None:
+    service = _compose_service()
+    volumes = {volume["target"]: volume for volume in service["volumes"]}
+
+    assert service["read_only"] is True
+    assert service["build"]["target"] == "runtime"
+    assert not str(service["user"]).startswith("0")
+    assert volumes["/data/raw"]["read_only"] is True
+    assert "read_only" not in volumes["/data/runs"]
+    assert "/data/models" in volumes
+
+
+def test_the_compose_service_carries_no_secret_and_reads_an_optional_env_file() -> None:
+    service = _compose_service()
+
+    assert service["env_file"] == [{"path": ".env", "required": False}]
+    assert "HF_TOKEN" not in service["environment"]

@@ -119,6 +119,11 @@ jobs:
       - name: Run a real subcommand's help
         run: docker run --rm --read-only osm-polygon-website-tag:ci run-all --help
 
+      - name: Validate the compose file and run through it
+        run: |
+          docker compose config --quiet
+          docker compose run --rm --build pipeline run-all --help
+
       - name: Require a non-root runtime user
         run: |
           uid="$(docker run --rm --entrypoint id osm-polygon-website-tag:ci -u)"
