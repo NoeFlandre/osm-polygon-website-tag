@@ -22,7 +22,7 @@
 # and case-insensitive DuckDB SQL,
 # and dropping encoding="utf-8" on a UTF-8 host (that one is guarded by
 # tests/architecture/test_tooling.py, which mutmut does not run).
-# Recorded mutants: 144
+# Recorded mutants: 141
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -160,9 +160,6 @@ osm_polygon_website_tag.storage.duckdb_engine.x_cells_global_canonical__mutmut_6
 osm_polygon_website_tag.storage.duckdb_engine.x_cells_global_observation__mutmut_6
 osm_polygon_website_tag.web.web_fetch.x__coerce_http_value__mutmut_18
 osm_polygon_website_tag.web.web_fetch.x__coerce_http_value__mutmut_21
-osm_polygon_website_tag.web.web_fetch.x__content_type_error__mutmut_9
-osm_polygon_website_tag.web.web_fetch.x__download_once__mutmut_19
-osm_polygon_website_tag.web.web_fetch.x__download_once__mutmut_20
 osm_polygon_website_tag.web.web_fetch.x__encode_hostname__mutmut_4
 osm_polygon_website_tag.web.web_fetch.x__encode_hostname__mutmut_6
 osm_polygon_website_tag.web.web_fetch.x__follow_redirects__mutmut_4

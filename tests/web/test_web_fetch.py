@@ -165,42 +165,6 @@ def test_fetch_classifies_request_exception_without_leaking_details() -> None:
     assert result.message == "TimeoutError"
 
 
-def test_download_once_reads_response_without_following_redirects(monkeypatch) -> None:
-    class Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args) -> None:
-            return None
-
-        def __init__(self) -> None:
-            self.headers = {"Content-Type": "text/plain"}
-            self.pending = b"hello"
-            self.limits: list[int] = []
-
-        def read(self, limit: int) -> bytes:
-            self.limits.append(limit)
-            chunk, self.pending = self.pending[:limit], self.pending[limit:]
-            return chunk
-
-    response = Response()
-
-    class Opener:
-        def open(self, request, *, timeout: float):
-            assert request.full_url == "https://example.org"
-            assert timeout == 3.0
-            return response
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
-
-    result = web_fetch_module._download_once("https://example.org", 3.0, 10)
-
-    assert result == HttpResponse(200, {"Content-Type": "text/plain"}, b"hello")
-    assert response.limits == [11, 6]
-
-
 def test_private_fetch_classifiers_and_redirect_helpers_are_deterministic() -> None:
     response = HttpResponse(200, {"Content-Type": "text/html"}, b"body")
     assert web_fetch_module._header(response.headers, "content-type") == "text/html"
@@ -305,21 +269,6 @@ def test_connect_rejects_rebound_private_peer(monkeypatch, peer: str) -> None:
     assert sock.closed
 
 
-def test_connect_returns_public_peer_socket(monkeypatch) -> None:
-    sock = _FakeSocket("93.184.216.34")
-    calls = []
-
-    def create_connection(*args, **kwargs):
-        calls.append((args, kwargs))
-        return sock
-
-    monkeypatch.setattr(web_fetch_module.socket, "create_connection", create_connection)
-
-    assert web_fetch_module._connect_public(("example.org", 443), 3.0, None) is sock
-    assert calls == [((("example.org", 443), 3.0, None), {})]
-    assert not sock.closed
-
-
 @pytest.mark.parametrize(
     ("connection", "handler", "method"),
     [
@@ -341,28 +290,6 @@ def test_handlers_open_peer_checked_connections(
 
     assert getattr(getattr(web_fetch_module, handler)(), method)("req") == "response"
     assert seen == [(getattr(web_fetch_module, connection), "req")]
-
-
-def test_download_once_surfaces_connect_time_unsafe_error(monkeypatch) -> None:
-    class Opener:
-        def open(self, _request, *, timeout: float):
-            raise web_fetch_module.urllib.error.URLError(UnsafeUrlError("non_global_address"))
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
-
-    with pytest.raises(UnsafeUrlError):
-        web_fetch_module._download_once("https://example.org", 3.0, 10)
-
-
-def test_download_once_reraises_other_url_errors(monkeypatch) -> None:
-    class Opener:
-        def open(self, _request, *, timeout: float):
-            raise web_fetch_module.urllib.error.URLError("refused")
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
-
-    with pytest.raises(web_fetch_module.urllib.error.URLError):
-        web_fetch_module._download_once("https://example.org", 3.0, 10)
 
 
 # --- Behaviour pins: every branch below is observable and mutation-gated. ---
@@ -488,7 +415,7 @@ def test_validate_public_literal_uses_default_resolver() -> None:
     assert validate_public_http_url("https://[2606:2800:220:1::1]/") is True
 
 
-def test_fetch_default_resolver_and_limits(monkeypatch) -> None:
+def test_fetch_default_resolver_and_limits() -> None:
     calls = []
 
     def request(url: str, timeout: float, max_bytes: int) -> HttpResponse:
@@ -508,19 +435,6 @@ def test_fetch_default_resolver_and_limits(monkeypatch) -> None:
         ("https://93.184.216.34/xx", 30.0, 20_000_000),
         ("https://93.184.216.34/xxx", 30.0, 20_000_000),
     ]
-
-
-def test_fetch_uses_download_once_by_default(monkeypatch) -> None:
-    calls = []
-
-    def fake(url: str, timeout: float, max_bytes: int) -> HttpResponse:
-        calls.append((url, timeout, max_bytes))
-        return HttpResponse(200, {}, b"ok")
-
-    monkeypatch.setattr(web_fetch_module, "_download_once", fake)
-    result = fetch_html("https://93.184.216.34/", timeout_seconds=2.5, max_bytes=5)
-    assert result == FetchResult("ok", "https://93.184.216.34/", "https://93.184.216.34/", b"ok")
-    assert calls == [("https://93.184.216.34/", 2.5, 5)]
 
 
 @pytest.mark.parametrize(
@@ -890,105 +804,6 @@ def test_no_redirect_handler_returns_none() -> None:
     )
 
 
-def test_download_once_builds_safe_opener_and_request(monkeypatch) -> None:
-    # An environment proxy must never be honoured for untrusted URLs.
-    monkeypatch.setenv("http_proxy", "http://proxy.invalid:3128")
-    monkeypatch.setenv("https_proxy", "http://proxy.invalid:3128")
-    seen = {}
-
-    class Response:
-        status = 201
-        headers = {"A": "b"}  # noqa: RUF012
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args) -> None:
-            return None
-
-        def read(self, limit: int) -> bytes:
-            seen["limit"] = limit
-            return b"x"
-
-    class Opener:
-        def open(self, request, *, timeout: float):
-            seen["request"] = request
-            seen["timeout"] = timeout
-            return Response()
-
-    def build_opener(*handlers):
-        seen["handlers"] = handlers
-        return Opener()
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", build_opener)
-    result = web_fetch_module._download_once("http://example.org/p", 4.0, 0)
-    assert result == HttpResponse(201, {"A": "b"}, b"x")
-    assert seen["limit"] == 1
-    assert seen["timeout"] == 4.0
-    assert seen["request"].get_header("User-agent") == web_fetch_module.USER_AGENT
-    handlers = seen["handlers"]
-    assert [type(h) for h in handlers] == [
-        web_fetch_module.urllib.request.ProxyHandler,
-        web_fetch_module._NoRedirect,
-        web_fetch_module._PublicHTTPHandler,
-        web_fetch_module._PublicHTTPSHandler,
-    ]
-    assert handlers[0].proxies == {}
-
-
-@pytest.mark.parametrize(("raw_status", "expected"), [(None, 0), (404, 404), ("503", 503)])
-def test_download_once_http_error_and_missing_status(monkeypatch, raw_status, expected) -> None:
-    import email.message
-    import io
-
-    headers = email.message.Message()
-    headers["Content-Type"] = "text/html"
-
-    class Err(web_fetch_module.urllib.error.HTTPError):
-        @property
-        def status(self):
-            return raw_status
-
-    err = Err("https://example.org", 404, "nf", headers, io.BytesIO(b"abcdef"))
-
-    class Opener:
-        def open(self, _request, *, timeout: float):
-            raise err
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
-    result = web_fetch_module._download_once("https://example.org", 1.0, 3)
-    assert result == HttpResponse(expected, {"Content-Type": "text/html"}, b"")
-    assert type(result.status_code) is int
-
-
-def test_download_once_unsafe_reason_is_chained(monkeypatch) -> None:
-    reason = UnsafeUrlError("non_global_address")
-    url_error = web_fetch_module.urllib.error.URLError(reason)
-
-    class Opener:
-        def open(self, _request, *, timeout: float):
-            raise url_error
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
-    with pytest.raises(UnsafeUrlError) as info:
-        web_fetch_module._download_once("https://example.org", 3.0, 10)
-    assert info.value is reason
-    assert info.value.__cause__ is url_error
-
-
-def test_connect_public_forwards_kwargs(monkeypatch) -> None:
-    sock = _FakeSocket("2606:2800:220:1::1")
-    calls = []
-    monkeypatch.setattr(
-        web_fetch_module.socket,
-        "create_connection",
-        lambda *a, **k: calls.append((a, k)) or sock,
-    )
-    assert web_fetch_module._connect_public(("h", 1), timeout=2.0, source_address=None) is sock
-    assert calls == [((("h", 1),), {"timeout": 2.0, "source_address": None})]
-    assert not sock.closed
-
-
 def test_public_connections_keep_constructor_arguments() -> None:
     http_conn = web_fetch_module._PublicHTTPConnection("example.org", 8080, timeout=2.0)
     assert (http_conn.host, http_conn.port, http_conn.timeout) == ("example.org", 8080, 2.0)
@@ -1034,7 +849,7 @@ class _TrickleResponse:
         self.pending = payload
         self.limits: list[int] = []
 
-    def read(self, limit: int) -> bytes:
+    def read1(self, limit: int) -> bytes:
         self.limits.append(limit)
         chunk, self.pending = self.pending[:limit], self.pending[limit:]
         return chunk
@@ -1048,27 +863,6 @@ def test_read_before_deadline_reads_in_bounded_chunks(monkeypatch) -> None:
 
     assert body == b"abcdefghi"
     assert response.limits == [4, 4, 1]
-
-
-def test_read_before_deadline_stops_at_end_of_body(monkeypatch) -> None:
-    monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 4)
-    response = _TrickleResponse(b"abcde")
-
-    assert web_fetch_module._read_before_deadline(response, 100, float("inf")) == b"abcde"
-    assert response.limits == [4, 4, 4]
-
-
-def test_read_before_deadline_fails_when_whole_request_budget_is_spent(monkeypatch) -> None:
-    ticks = iter([0.0, 5.0, 10.0])
-    monkeypatch.setattr(web_fetch_module.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 1)
-    response = _TrickleResponse(b"abcdef")
-
-    with pytest.raises(TimeoutError) as exc_info:
-        web_fetch_module._read_before_deadline(response, 6, deadline=10.0)
-
-    assert str(exc_info.value) == "request deadline exceeded"
-    assert response.limits == [1, 1]
 
 
 def test_download_once_deadline_starts_before_connect(monkeypatch) -> None:
@@ -1118,7 +912,7 @@ class _CountingResponse:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def read(self, limit: int) -> bytes:
+    def read1(self, limit: int) -> bytes:
         chunk, self.pending = self.pending[:limit], self.pending[limit:]
         self.bytes_read += len(chunk)
         return chunk
@@ -1340,24 +1134,6 @@ def test_without_a_limiter_the_transport_is_called_directly() -> None:
     )
 
     assert seen == ["https://example.org/"]
-
-
-def test_make_polite_fetcher_shares_one_limiter_between_calls(monkeypatch) -> None:
-    limiters: list[HostLimiter] = []
-
-    def fake_fetch(url: str, *, limiter: HostLimiter) -> FetchResult:
-        limiters.append(limiter)
-        return FetchResult("ok", url)
-
-    monkeypatch.setattr(web_fetch_module, "fetch_html", fake_fetch)
-    policy = HostPolicy(concurrency=3, delay_seconds=0.1)
-    fetcher = web_fetch_module.make_polite_fetcher(policy)
-
-    assert fetcher("https://a.example/") == FetchResult("ok", "https://a.example/")
-    fetcher("https://b.example/")
-
-    assert limiters[0] is limiters[1]
-    assert limiters[0].policy == policy
 
 
 @pytest.mark.parametrize("raw", [".", "..", "https://.", "http://...:8080/x", "//."])

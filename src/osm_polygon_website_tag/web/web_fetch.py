@@ -481,13 +481,16 @@ def _read_before_deadline(response: Any, limit: int, deadline: float) -> bytes:
 
     The socket timeout bounds each blocking read, not the request; a server
     trickling one byte per timeout window would otherwise hold a worker for hours.
+    ``read1`` returns after one underlying read; ``read`` would block until the
+    whole chunk arrived, so the deadline would only be checked once a dripping
+    server had finished.
     """
     chunks: list[bytes] = []
     remaining = limit
     while remaining > 0:
         if time.monotonic() >= deadline:
             raise TimeoutError("request deadline exceeded")
-        chunk = response.read(min(READ_CHUNK_BYTES, remaining))
+        chunk = response.read1(min(READ_CHUNK_BYTES, remaining))
         if not chunk:
             break
         chunks.append(chunk)
