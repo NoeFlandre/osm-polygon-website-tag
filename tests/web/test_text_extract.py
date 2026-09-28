@@ -696,3 +696,33 @@ def test_the_label_table_holds_exactly_the_whatwg_labels() -> None:
 
 def test_a_csgb2312_declaration_beats_a_valid_utf8_reading() -> None:
     assert decode_html("专业".encode("gb18030"), "csgb2312") == "专业"
+
+
+def test_a_meta_inside_title_is_text_not_a_declaration() -> None:
+    body = "<title><meta charset=koi8-r></title><p>Привет</p>".encode("cp1251")
+
+    assert "Привет" in decode_html(body, "windows-1251")
+    assert "Привет" in decode_html(
+        b"<title><meta charset=koi8-r></title><meta charset=windows-1251>"
+        + "<p>Привет</p>".encode("cp1251")
+    )
+
+
+def test_extract_main_text_sniffs_the_meta_charset_of_html() -> None:
+    # GBK bytes for 专业 are also valid UTF-8, so only the <meta> gets this right.
+    body = ("专业" * 60).encode("gbk")
+    html = (
+        b'<html><head><meta charset="gbk"></head><body><article><p>'
+        + body
+        + (b"</p></article></body></html>")
+    )
+
+    result = extract_main_text(html, url="https://example.org/", media_type="text/html")
+
+    assert result.text is not None
+    assert "专业专业" in result.text
+
+
+def test_python_only_codec_names_still_get_their_web_superset() -> None:
+    assert text_extract._codec("latin_1") == "cp1252"
+    assert text_extract._codec("euckr") == "cp949"

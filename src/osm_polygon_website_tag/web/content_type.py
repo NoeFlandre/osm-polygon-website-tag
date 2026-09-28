@@ -19,7 +19,7 @@ def charset_parameter(content_type: str) -> str | None:
 
 def media_type(content_type: str) -> str | None:
     """Return the lowercased ``type/subtype`` of a Content-Type value, if any."""
-    essence = content_type.split(";", 1)[0].strip().lower()
+    essence = content_type.partition(";")[0].strip().lower()
     return essence or None
 
 

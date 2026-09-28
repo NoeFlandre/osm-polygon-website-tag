@@ -58,13 +58,11 @@ cp949: cseuckr csksc56011987 euc-kr iso-ir-149 korean ks_c_5601-1987 ks_c_5601-1
 """
 
 
-def _parse(table: str) -> dict[str, str]:
-    labels: dict[str, str] = {}
-    for entry in table.replace("\n ", " ").split("\n"):
-        if entry:
-            codec, names = entry.split(": ")
-            labels.update(dict.fromkeys(names.split(" "), codec))
-    return labels
-
-
-WEB_LABELS = _parse(_TABLE)
+# Built at import, outside any function, so no mutant can hide in it: the
+# spec-list test checks the result label by label.
+WEB_LABELS = {
+    label: codec
+    for entry in _TABLE.replace("\n ", " ").strip().split("\n")
+    for codec, names in [entry.split(": ")]
+    for label in names.split(" ")
+}
