@@ -79,7 +79,7 @@ it after text enrichment, or run it separately on an enriched run:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+  --run-dir "$OSM_POLY_DATA_DIR/runs/<run-id>"
 ```
 
 The standalone command loads one pinned GlotLID V3 model from the data-root
@@ -95,9 +95,9 @@ synchronization explicit:
 
 ```bash
 uv run --locked osm-polygon-website-tag grid5000-prepare \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>' \
-  --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
-  --model-path '/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/<snapshot>/model_v3.bin' \
+  --run-dir "$OSM_POLY_DATA_DIR/runs/<run-id>" \
+  --bundle-dir "$OSM_POLY_DATA_DIR/grid5000/<bundle-id>" \
+  --model-path "$OSM_POLY_DATA_DIR/models/glotlid/<snapshot>/model_v3.bin" \
   --commit "$(git rev-parse HEAD)"
 
 uv run --locked --offline osm-polygon-website-tag grid5000-run \
@@ -105,8 +105,8 @@ uv run --locked --offline osm-polygon-website-tag grid5000-run \
   --time-budget-seconds 1500 --batch-rows 256
 
 uv run --locked osm-polygon-website-tag grid5000-sync \
-  --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+  --bundle-dir "$OSM_POLY_DATA_DIR/grid5000/<bundle-id>" \
+  --run-dir "$OSM_POLY_DATA_DIR/runs/<run-id>"
 ```
 
 `grid5000-prepare` and `grid5000-sync` reject paths outside the data root

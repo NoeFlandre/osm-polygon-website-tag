@@ -6,20 +6,10 @@ it; a complete snapshot additionally requires the final receipt verification.
 
 ## Local paths
 
-Code and tests stay in the Git checkout. The reviewed production PBFs are
-under:
-
-```text
-/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw
-```
-
-Generated data defaults to:
-
-```text
-/Volumes/Seagate M3/projects/osm-polygon-website-tag
-```
-
-Set `OSM_POLY_DATA_DIR` to override that generated-data root. The CLI's
+Code and tests stay in the Git checkout. Production PBFs live in a read-only
+directory of your choice, passed with `--source-root`. Generated data goes
+under the data root, which defaults to `./data`; set `OSM_POLY_DATA_DIR` (in
+the environment or `.env`) to put it elsewhere. The CLI's
 `--output-root` is explicit for each run and must remain outside the source
 root. The previous `…-data` root remains accepted when an existing run is
 addressed explicitly, but new output uses the canonical project root.
@@ -126,7 +116,7 @@ from existing Parquets and performs no remote call.
 
 - Git remains cloneable and reviewable because planet-scale PBFs and generated
   Parquets stay off-repository.
-- The Seagate volume provides the capacity needed for immutable inputs and
+- A dedicated data volume provides the capacity needed for immutable inputs and
   resumable runs.
 - Every extraction is a new run-owned directory, so raw inputs remain stable
   and a failed run can be inspected or resumed without rewriting its source.

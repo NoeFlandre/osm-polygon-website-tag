@@ -75,8 +75,8 @@ on a separate writable volume:
 docker run --rm --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --user "$(id -u):$(id -g)" \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw",dst=/data/raw,readonly \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs",dst=/data/runs \
+  --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
+  --mount type=bind,src="$OSM_POLY_DATA_DIR/runs",dst=/data/runs \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw \
   --output-root /data/runs \
@@ -92,8 +92,8 @@ environment only and add `--apply`:
 docker run --rm --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --env HF_TOKEN \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw",dst=/data/raw,readonly \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs",dst=/data/runs \
+  --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
+  --mount type=bind,src="$OSM_POLY_DATA_DIR/runs",dst=/data/runs \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw --output-root /data/runs \
   --run-id geofabrik-website-v1 \
@@ -224,15 +224,15 @@ Build and deployment → Source`) before the first deployment.
 
 ## Storage defaults
 
-The production source root used by the reviewed workflow is
-`/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw`. Generated runs
-default to `/Volumes/Seagate M3/projects/osm-polygon-website-tag`; set
-`OSM_POLY_DATA_DIR=/some/local/output/path` to override the generated-data root.
+The source root is any read-only directory of `.osm.pbf` files, passed with
+`--source-root`. The generated-data root (runs, model caches, Grid'5000
+bundles) comes from `OSM_POLY_DATA_DIR`, in the environment or `.env`, and
+defaults to `./data`.
 The CLI's explicit `--output-root` still controls the run location and must
 remain outside the source root.
 
-When that Seagate project directory is mounted, `just` automatically keeps its
-UV package cache there as well. An explicitly set `UV_CACHE_DIR` still takes
+On the maintainer's machine, `just` also keeps its UV package cache on the
+project volume when it is mounted. An explicitly set `UV_CACHE_DIR` still takes
 precedence; direct `uv` commands can use the same cache by exporting that
 variable first.
 
@@ -244,7 +244,7 @@ environment or the local Hugging Face store, never from a token option.
 
 Use `scripts/grid5000/` only after the local locked environment and pinned
 model are ready. The workflow keeps the run, model cache, bundle, and receipts
-on Seagate. It transfers one shard and its checkpoint prefix to Grid'5000,
+under the data root. It transfers one shard and its checkpoint prefix to Grid'5000,
 then runs `grid5000-run` on one reserved GPU node with no network access. The
 OAR wrapper requests one GPU for 30 minutes and enforces a 25-minute detection
 budget. The staged bundle is intentionally tiny and
