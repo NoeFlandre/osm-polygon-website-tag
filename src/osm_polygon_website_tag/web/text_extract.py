@@ -174,6 +174,16 @@ def _ascii_lookalike(codec: str | None, prefixes: tuple[str, ...]) -> str | None
     return codec if codec is not None and codec.startswith(prefixes) else None
 
 
+def _authoritative_codec(html: bytes, header: str | None) -> str | None:
+    """A byte-order mark, else a UTF-16/32 HTTP charset.
+
+    Declared UTF-16/32 wins even when malformed: its ASCII text, NULs
+    included, would otherwise pass as UTF-8.
+    """
+    bom = _bom_codec(html)
+    return bom if bom is not None else _ascii_lookalike(header, _WIDE_PREFIXES)
+
+
 def decode_html(html: bytes, charset: str | None = None, *, sniff_meta: bool = True) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
@@ -185,15 +195,10 @@ def decode_html(html: bytes, charset: str | None = None, *, sniff_meta: bool = T
     before ``<meta charset>`` is considered at all. ``sniff_meta=False``
     (plain-text and XHTML responses) skips the HTML meta scan.
     """
-    bom = _bom_codec(html)
-    if bom is not None:  # a byte-order mark is authoritative; only bad bytes are replaced
-        return str(html, bom, "replace")
     header = _codec(charset)
-    wide = _ascii_lookalike(header, _WIDE_PREFIXES)
-    if wide is not None:
-        # Declared UTF-16/32 is authoritative even when malformed: its ASCII
-        # text, NULs included, would otherwise pass as UTF-8.
-        return str(html, wide, "replace")
+    authoritative = _authoritative_codec(html, header)
+    if authoritative is not None:  # only bad bytes are replaced
+        return str(html, authoritative, "replace")
     meta = _meta_charset(html) if sniff_meta else None
     lookalikes = [
         _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
