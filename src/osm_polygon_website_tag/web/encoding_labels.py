@@ -3,12 +3,15 @@
 HTML reads a declared charset through this table, not Python's registry: the
 two disagree (``latin1`` means windows-1252 on the web) and many web labels
 are unknown to Python (``csgb2312``, ``x-x-big5``). UTF-16/32, ISO-2022-JP and
-the "replacement" labels are left to the codec registry.
+the "replacement" labels are left to the codec registry. ``x-user-defined``
+has no Python codec, so this module registers one.
 
 Source: https://encoding.spec.whatwg.org/encodings.json
 """
 
 from __future__ import annotations
+
+import codecs
 
 # One "codec: labels" line per encoding, so the table is a single literal.
 _TABLE = """
@@ -55,6 +58,7 @@ euc_jp: cseucpkdfmtjapanese euc-jp x-euc-jp
 cp932: csshiftjis ms932 ms_kanji shift-jis shift_jis sjis windows-31j x-sjis
 cp949: cseuckr csksc56011987 euc-kr iso-ir-149 korean ks_c_5601-1987 ks_c_5601-1989 ksc5601
  ksc_5601 windows-949
+x-user-defined: x-user-defined
 """
 
 
@@ -66,3 +70,18 @@ WEB_LABELS = {
     for codec, names in [entry.split(": ")]
     for label in names.split(" ")
 }
+
+X_USER_DEFINED = "x-user-defined"
+# WHATWG x-user-defined: ASCII stays, byte 0x80 + n becomes U+F780 + n.
+_X_USER_DEFINED_DECODING = {byte: byte if byte < 0x80 else 0xF700 + byte for byte in range(256)}
+_X_USER_DEFINED_MAP = codecs.charmap_build("".join(map(chr, _X_USER_DEFINED_DECODING.values())))
+_X_USER_DEFINED_CODEC = codecs.CodecInfo(
+    name=X_USER_DEFINED,
+    encode=lambda text, errors="strict": codecs.charmap_encode(text, errors, _X_USER_DEFINED_MAP),
+    decode=lambda data, errors="strict": codecs.charmap_decode(
+        data, errors, _X_USER_DEFINED_DECODING
+    ),
+)
+# Registered at import, outside any function: the lookup name is normalised
+# to lower case with hyphens turned into underscores.
+codecs.register(lambda name: _X_USER_DEFINED_CODEC if name == "x_user_defined" else None)

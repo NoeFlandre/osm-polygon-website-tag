@@ -12,6 +12,8 @@ from osm_polygon_website_tag.web.content_type import charset_parameter, media_ty
     [
         ("text/html; charset=utf-8", "utf-8"),
         ('text/html; charset="koi8-r"', "koi8-r"),
+        ('text/html; charset="g\\bk"', "gbk"),
+        ('text/html; charset="a\\\\b"', "a\\b"),
         ("text/html; charset='windows-874'", "windows-874"),
         ('text/html; note="; charset=koi8-r"; charset=windows-1251', "windows-1251"),
         ("text/html; note='; charset=koi8-r'; charset=windows-1251", "windows-1251"),

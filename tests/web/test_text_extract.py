@@ -676,6 +676,7 @@ _WHATWG_LABELS = (
         "cp949",
         "cseuckr csksc56011987 euc-kr iso-ir-149 korean ks_c_5601-1987 ks_c_5601-1989 ksc5601 ksc_5601 windows-949",
     ),
+    ("x-user-defined", "x-user-defined"),
     ("cp1250", "cp1250 windows-1250 x-cp1250"),
     ("cp1251", "cp1251 windows-1251 x-cp1251"),
     ("cp1253", "cp1253 windows-1253 x-cp1253"),
@@ -732,3 +733,27 @@ def test_extract_main_text_sniffs_the_meta_charset_of_html() -> None:
 def test_python_only_codec_names_still_get_their_web_superset() -> None:
     assert text_extract._codec("latin_1") == "cp1252"
     assert text_extract._codec("euckr") == "cp949"
+
+
+def test_x_user_defined_from_http_maps_the_upper_half_to_the_private_use_area() -> None:
+    assert decode_html(b"<p>a\x80\xff</p>", "x-user-defined") == "<p>a\uf780\uf7ff</p>"
+    assert "a\uf780\uf7ff".encode("x-user-defined") == b"a\x80\xff"
+    assert codecs.lookup("X-User-Defined").name == "x-user-defined"
+
+
+def test_x_user_defined_codec_honours_the_error_handler() -> None:
+    with pytest.raises(UnicodeEncodeError):
+        "é".encode("x-user-defined")
+    assert "é".encode("x-user-defined", "replace") == b"?"
+
+
+def test_other_names_are_not_answered_by_the_x_user_defined_codec() -> None:
+    with pytest.raises(LookupError):
+        codecs.lookup("x-user-defined-extra")
+
+
+def test_a_meta_x_user_defined_declaration_reads_as_windows_1252() -> None:
+    """HTML's rule for <meta>: x-user-defined means windows-1252 there."""
+    html = b"<meta charset=x-user-defined><p>price \x80</p>"
+
+    assert decode_html(html).endswith("price \u20ac</p>")

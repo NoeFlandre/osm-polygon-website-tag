@@ -17,7 +17,7 @@ from trafilatura.utils import detect_encoding
 
 from osm_polygon_website_tag.contracts.text_schema import count_words
 from osm_polygon_website_tag.web.content_type import charset_parameter
-from osm_polygon_website_tag.web.encoding_labels import WEB_LABELS
+from osm_polygon_website_tag.web.encoding_labels import WEB_LABELS, X_USER_DEFINED
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ _extractor_state = threading.local()
 # inside functions only adds mutants no test can tell apart.
 _UTF8 = "utf-8"
 _LATIN1 = "latin-1"
+_WINDOWS_1252 = "cp1252"
 _REPLACEMENT = "\ufffd"
 # Codec name prefixes: UTF-16/32 (only trusted from HTTP; a <meta> naming them
 # is read as UTF-8 by HTML) and 7-bit stateful encodings.
@@ -141,8 +142,11 @@ def _meta_charset(html: bytes) -> str | None:
 
 
 def _meta_codec(label: str) -> str | None:
-    """HTML reads a <meta> naming UTF-16/32 as UTF-8 (the page is already ASCII-readable)."""
+    """Apply HTML's <meta> overrides: UTF-16/32 reads as UTF-8 (the page is
+    already ASCII-readable) and x-user-defined as windows-1252."""
     codec = _codec(label)
+    if codec == X_USER_DEFINED:
+        return _WINDOWS_1252
     return _UTF8 if codec is not None and codec.startswith(_WIDE_PREFIXES) else codec
 
 
