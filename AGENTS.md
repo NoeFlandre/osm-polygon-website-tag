@@ -43,8 +43,9 @@ just pre-push
 
 The underlying gates remain Ruff lint/format, ty, pytest, and `uv build`.
 GitHub Actions runs `just qa-pr` (baseline, Ruff, ty, the instrumented
-pytest suite with coverage, the CRAP gate, and `uv build`) plus the scoped
-mutation matrix; the Docker workflow runs the container smoke test. If a check is intentionally
+pytest suite with coverage, the CRAP gate, `uv build`, and `pip-audit`) plus the
+scoped mutation matrix, the docs build and the container smoke test; `ci-ok` is
+the single check that summarizes them. If a check is intentionally
 skipped, call it out explicitly in the final report.
 
 ## Style

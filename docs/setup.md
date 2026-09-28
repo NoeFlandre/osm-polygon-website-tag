@@ -178,12 +178,13 @@ what is on the Hub.
 
 Two duplications were removed when these tiers were introduced: the
 pull-request gate used to run the whole suite once plainly and again under
-coverage, and the container image was built by both the quality job and the
-Docker workflow. `crap` therefore no longer depends on `coverage` — `qa-pr`
-sequences them so the suite is instrumented exactly once. The Quality and
-Docker workflows also cancel superseded pull-request runs, which previously
+coverage, and the container image was built by both the quality job and a
+separate Docker job. `crap` therefore no longer depends on `coverage` — `qa-pr`
+sequences them so the suite is instrumented exactly once. The Quality
+workflow also cancels superseded pull-request runs, which previously
 left a twenty-five-job mutation matrix running for a commit nobody was
-waiting on.
+waiting on. Require only the `ci-ok` check in branch protection: it waits for
+every other Quality job and accepts a skipped one.
 
 ## Mutation testing
 
