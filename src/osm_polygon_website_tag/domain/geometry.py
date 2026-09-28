@@ -262,10 +262,10 @@ def _projected_centroid(
     proj_string = f"+proj=laea +lat_0={lat0} +lon_0={lon0} +x_0=0 +y_0=0 +ellps=WGS84"
     crs = pyproj.CRS.from_proj4(proj_string)
 
-    def _to_xy(x: float, y: float, z: Any = None) -> tuple[float, float]:
+    def _to_xy(x: float, y: float, _z: Any = None) -> tuple[float, float]:
         return pyproj.Transformer.from_crs("EPSG:4326", crs, always_xy=True).transform(x, y)
 
-    def _to_ll(x: float, y: float, z: Any = None) -> tuple[float, float]:
+    def _to_ll(x: float, y: float, _z: Any = None) -> tuple[float, float]:
         return pyproj.Transformer.from_crs(crs, "EPSG:4326", always_xy=True).transform(x, y)
 
     projected = shapely_transform(_to_xy, shapely_geom)
@@ -371,7 +371,7 @@ def compute_polygon_area_m2(ring: list[list[float]]) -> float:
     geod = pyproj.Geod(ellps="WGS84")
     try:
         return _finite_abs_area(geod, shapely_ring)
-    except Exception:
+    except Exception:  # noqa: BLE001 - silent fallback tracked in #72
         return 0.0
 
 

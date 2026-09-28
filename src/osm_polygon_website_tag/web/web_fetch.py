@@ -270,7 +270,7 @@ def _safe_request(
         return transport(current, timeout_seconds, max_bytes)
     except UnsafeUrlError:
         return FetchResult("unsafe_url", requested, final_url=current, message="unsafe_url")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any transport failure becomes a fetch_error result
         return FetchResult("fetch_error", requested, final_url=current, message=type(exc).__name__)
 
 
@@ -389,12 +389,12 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
-        req: urllib.request.Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
+        req: urllib.request.Request,  # noqa: ARG002 - urllib's override signature
+        fp: Any,  # noqa: ARG002
+        code: int,  # noqa: ARG002
+        msg: str,  # noqa: ARG002
+        headers: Any,  # noqa: ARG002
+        newurl: str,  # noqa: ARG002
     ) -> None:
         return None
 

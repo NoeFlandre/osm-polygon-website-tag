@@ -573,7 +573,7 @@ def _completed_fetch(future: Future[FetchResult]) -> FetchResult | None:
     """Return a completed fetch result, swallowing interrupted-worker errors."""
     try:
         return future.result()
-    except BaseException:
+    except BaseException:  # noqa: BLE001 - an interrupted worker's result is dropped, not raised
         return None
 
 

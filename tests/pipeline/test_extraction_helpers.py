@@ -90,7 +90,7 @@ def _website_payload(raw_geojson: str) -> AreaPayload:
 
 def test_extraction_private_helpers_validate_osm_metadata() -> None:
     assert extraction_module._as_utc(dt.datetime(2024, 1, 1, tzinfo=dt.UTC)).tzinfo is dt.UTC
-    naive = extraction_module._as_utc(dt.datetime(2024, 1, 1))
+    naive = extraction_module._as_utc(dt.datetime(2024, 1, 1))  # noqa: DTZ001 - naive on purpose
     assert naive.tzinfo is dt.UTC
     assert extraction_module._now_iso().endswith("+00:00")
     way: Any = SimpleNamespace(
@@ -139,7 +139,7 @@ def test_area_rejection_record_reuses_area_metadata() -> None:
     area: Any = SimpleNamespace(
         tags=[("website", "https://example.org")],
         version=3,
-        timestamp=dt.datetime(2024, 1, 1),
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
     )
 
     row = extraction_handler_module._area_rejection_record(
@@ -405,7 +405,7 @@ def test_area_callback_reports_untracked_candidate_with_full_identity() -> None:
     handler._drain_area_work = lambda: None
     area: Any = SimpleNamespace(
         version=4,
-        timestamp=dt.datetime(2024, 1, 1),
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
         tags=[("website", "https://example.org"), ("building", "yes")],
         from_way=lambda: True,
         orig_id=lambda: 99,
@@ -436,7 +436,7 @@ def test_way_callback_preserves_rejection_and_candidate_metadata() -> None:
         nodes=[SimpleNamespace(ref=1), SimpleNamespace(ref=2), SimpleNamespace(ref=3)],
         id=10,
         version=4,
-        timestamp=dt.datetime(2024, 1, 1),
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
     )
 
     handler.way(cast(osmium.osm.Way, open_way))
@@ -461,7 +461,7 @@ def test_way_callback_preserves_rejection_and_candidate_metadata() -> None:
         ],
         id=11,
         version=5,
-        timestamp=dt.datetime(2024, 1, 1),
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
     )
     handler.way(cast(osmium.osm.Way, closed_way))
 
@@ -485,13 +485,13 @@ def test_relation_callback_filters_unsupported_and_records_wikidata() -> None:
         tags=[("type", "multipolygon"), ("wikidata", "Q42")],
         id=20,
         version=6,
-        timestamp=dt.datetime(2024, 1, 1),
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
     )
     unsupported: Any = SimpleNamespace(
         tags=[("type", "route"), ("website", "https://example.org")],
         id=21,
         version=7,
-        timestamp=dt.datetime(2024, 1, 1),
+        timestamp=dt.datetime(2024, 1, 1, tzinfo=dt.UTC),
     )
 
     handler.relation(cast(osmium.osm.Relation, relation))

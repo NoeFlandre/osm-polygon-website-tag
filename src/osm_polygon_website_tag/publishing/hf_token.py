@@ -37,7 +37,7 @@ def _stored_token() -> str | None:
         from huggingface_hub import get_token
 
         token = get_token()
-    except Exception:
+    except Exception:  # noqa: BLE001 - silent fallback tracked in #72
         return None
     return token if isinstance(token, str) and token else None
 

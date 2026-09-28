@@ -94,6 +94,18 @@ select = [
     "PTH",  # use pathlib
     "ERA",  # eradicate commented-out code
     "RUF",  # ruff-specific
+    "BLE",  # blind except
+    "PGH",  # blanket noqa / type: ignore
+    "PLW",  # pylint warnings
+    "PLE",  # pylint errors
+    "PERF", # performance anti-patterns
+    "PIE",  # misc anti-patterns
+    "T20",  # print
+    "TRY300", # return inside try
+    "DTZ",  # naive datetimes
+    "ARG",  # unused arguments
+    # TRY004 is left out: the wrong-type checks validate untrusted file and
+    # model contents, where ValueError is the contract the CLI maps to exit 3.
 ]
 ignore = [
     "S101",  # asserts allowed in tests
@@ -101,7 +113,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018"]
+# Test fakes and lambdas mirror real signatures, so unused arguments are intentional.
+"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018", "ARG"]
+# The quality scripts are CLIs that print their reports.
+"scripts/**/*.py" = ["T201"]
 "src/osm_polygon_website_tag/application/cli.py" = ["E501"]
 
 [tool.ruff.format]

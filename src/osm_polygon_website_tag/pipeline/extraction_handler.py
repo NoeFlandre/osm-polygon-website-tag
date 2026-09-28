@@ -129,7 +129,7 @@ def _load_geometry(payload: AreaPayload, derived) -> PolygonGeometry | AreaResul
         return geometry_from_geojson(payload.raw_geojson)
     except GeometryRejection as rejection:
         return _geometry_rejection(payload, derived, rejection.kind, rejection.message)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - any geometry failure becomes a recorded rejection
         return _geometry_rejection(
             payload,
             derived,
@@ -172,10 +172,7 @@ def _is_supported_polygon_relation(relation: osmium.osm.Relation) -> bool:
 
 
 def _tags_dict(obj: osmium.osm.Area | osmium.osm.Way | osmium.osm.Relation) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k, v in obj.tags:
-        out[k] = v
-    return out
+    return dict(obj.tags)
 
 
 def _area_rejection_record(
@@ -410,7 +407,7 @@ class _ExtractionHandler(osmium.SimpleHandler):
         except GeometryRejection as rejection:
             self._drain_area_work()
             self._flush_geometry_rejection(area, rejection.kind, rejection.message)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - any geometry failure becomes a recorded rejection
             self._drain_area_work()
             self._flush_geometry_rejection(
                 area, "geometry_error", f"{type(error).__name__}: {error}"

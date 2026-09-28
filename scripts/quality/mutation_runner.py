@@ -95,7 +95,7 @@ def _mutant_names_from_cli(arguments: Iterable[str]) -> tuple[str, ...]:
             skip_option_value = False
         elif argument == "--max-children":
             skip_option_value = True
-        elif argument.startswith("--max-children=") or argument.startswith("-"):
+        elif argument.startswith(("--max-children=", "-")):
             continue
         else:
             names.append(argument)

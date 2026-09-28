@@ -653,7 +653,7 @@ def test_receipt_data_identity_accepts_a_digest_or_a_legacy_receipt(
 )
 def test_receipt_data_identity_rejects_an_invalid_digest(payload: dict[str, object]) -> None:
     with pytest.raises(KeyError, match=r"r has no data identity"):
-        remote_identity._receipt_data_identity(payload, error_type=KeyError, label="r")  # type: ignore
+        remote_identity._receipt_data_identity(payload, error_type=KeyError, label="r")  # ty: ignore[invalid-argument-type]
 
 
 def test_remote_revision_rejects_an_info_without_a_sha() -> None:

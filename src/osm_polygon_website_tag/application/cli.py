@@ -148,7 +148,7 @@ def _show_version(value: bool) -> None:
 
 @app.callback()
 def _global_options(
-    version: Annotated[
+    version: Annotated[  # noqa: ARG001 - consumed by its eager callback
         bool,
         typer.Option(
             "--version",

@@ -32,9 +32,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             job_id=args.job_id,
         )
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        sys.stderr.write(f"error: {exc}\n")
         return 2
-    print(json.dumps(result.payload(), default=str, indent=2, sort_keys=True))
+    sys.stdout.write(json.dumps(result.payload(), default=str, indent=2, sort_keys=True) + "\n")
     return 0
 
 

@@ -258,7 +258,7 @@ def extract_main_text(
         # An Extractor ``options`` object overrides trafilatura's per-call
         # keyword settings, so the URL and output settings live only there.
         value = trafilatura.extract(decoded, options=_extractor_options(url))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any Trafilatura failure becomes an extract_error result
         return TextExtraction(
             "extract_error",
             None,

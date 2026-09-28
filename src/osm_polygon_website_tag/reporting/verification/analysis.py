@@ -61,7 +61,7 @@ def _verify_analysis_and_card(
     if actual == expected and readable:
         try:
             _verify_analysis_arithmetic(root, errors)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
             errors.append(f"analysis arithmetic verification failed: {exc}")
     if preserve_card_sections:
         _verify_release_card_statistics(root, errors)
@@ -82,17 +82,21 @@ def _verify_analysis_inventory(
 ) -> tuple[set[str], set[str]]:
     actual = {path.name for path in (root / "analysis").glob("*.parquet")}
     expected = set(ANALYSIS_FILES)
-    for name in sorted(expected - actual):
-        errors.append(f"missing analysis artifact: analysis/{name}")
-    for name in sorted(actual - expected):
-        errors.append(f"unexpected analysis artifact: analysis/{name}")
+    errors.extend(
+        f"missing analysis artifact: analysis/{name}" for name in sorted(expected - actual)
+    )
+    errors.extend(
+        f"unexpected analysis artifact: analysis/{name}" for name in sorted(actual - expected)
+    )
     return actual, expected
 
 
 def _verify_card_files(root: Path, errors: list[str]) -> None:
-    for name in ("README.md", "dataset.yaml", GEOMETRY_STATS_FILENAME):
-        if not (root / name).is_file():
-            errors.append(f"missing card artifact: {name}")
+    errors.extend(
+        f"missing card artifact: {name}"
+        for name in ("README.md", "dataset.yaml", GEOMETRY_STATS_FILENAME)
+        if not (root / name).is_file()
+    )
 
 
 def _verify_analysis_readability(
@@ -104,7 +108,7 @@ def _verify_analysis_readability(
     for name in sorted(names):
         try:
             pq.ParquetFile(root / "analysis" / name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
             readable = False
             errors.append(f"unreadable analysis artifact {name}: {exc}")
     return readable
@@ -132,7 +136,7 @@ def _verify_card_statistics(root: Path, errors: list[str]) -> None:
             GEOMETRY_STATS_FILENAME,
             errors,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"card statistic verification failed: {exc}")
 
 
@@ -156,7 +160,7 @@ def _verify_release_card_statistics(root: Path, errors: list[str]) -> None:
         _verify_release_text_yaml(root, stats, errors)
         _verify_release_geographic_section(root, stats, errors)
         _verify_release_density_yaml(root, stats, errors)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"release card statistic verification failed: {exc}")
 
 
@@ -194,7 +198,7 @@ def _verify_map_matches_summary(root: Path, summary: Any, errors: list[str]) -> 
             render_polygon_density(summary, expected_path)
             if map_path.read_bytes() != expected_path.read_bytes():
                 errors.append("map artifact does not match the canonical global summary")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"map artifact verification failed: {exc}")
 
 

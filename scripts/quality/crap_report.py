@@ -131,11 +131,11 @@ def _parser() -> argparse.ArgumentParser:
 def _render(scores: Sequence[FunctionScore]) -> str:
     lines = ["Path:line  Function  Complexity  Coverage  CRAP"]
     lines.append("-" * 58)
-    for score in scores:
-        lines.append(
-            f"{score.path}:{score.line}  {score.name}  {score.complexity:11d}"
-            f"  {score.coverage_percent:7.1f}%  {score.crap:5.2f}"
-        )
+    lines.extend(
+        f"{score.path}:{score.line}  {score.name}  {score.complexity:11d}"
+        f"  {score.coverage_percent:7.1f}%  {score.crap:5.2f}"
+        for score in scores
+    )
     return "\n".join(lines)
 
 

@@ -525,7 +525,7 @@ def test_card_stats_scope_text_and_density_to_the_selected_sources(
     calls = _stub_card_pipeline(monkeypatch, tmp_path)
     summary = object()
 
-    card_stats.compute_card_stats(tmp_path, summary=summary, source_names=["a"])  # type: ignore
+    card_stats.compute_card_stats(tmp_path, summary=summary, source_names=["a"])  # ty: ignore[invalid-argument-type]
 
     [(_args, density)] = _named(calls, "density")
     assert density == {"summary": summary, "source_names": ["a"]}
@@ -547,7 +547,7 @@ def test_card_stats_hand_the_computed_population_to_the_analysis_tables(
 def test_card_stats_skip_a_missing_analysis_directory(tmp_path: Path, monkeypatch) -> None:
     calls = _stub_card_pipeline(monkeypatch, tmp_path / "absent")
 
-    card_stats.compute_card_stats(tmp_path, text_population="given")  # type: ignore
+    card_stats.compute_card_stats(tmp_path, text_population="given")  # ty: ignore[invalid-argument-type]
 
     assert _named(calls, "population") == []
     assert _named(calls, "analysis") == []
@@ -597,7 +597,7 @@ def test_analysis_stats_leave_languages_to_a_given_text_population(
 ) -> None:
     calls = _stub_analysis_tables(monkeypatch)
 
-    card_stats._add_analysis_stats(CardStats(), tmp_path, text_population=object())  # type: ignore
+    card_stats._add_analysis_stats(CardStats(), tmp_path, text_population=object())  # ty: ignore[invalid-argument-type]
 
     assert [name for name, _path in calls] == ["cells", "hosts", "sentences"]
 
@@ -668,9 +668,9 @@ def test_retryable_status_reads_only_the_two_status_columns(monkeypatch) -> None
     _SchemaParquet.reads = []
     monkeypatch.setattr(card_stats, "status_has_retryable_value", lambda _column: False)
     parquet = _SchemaParquet([])
-    parquet.iter_batches = lambda *, columns, batch_size: _SchemaParquet.reads.append(columns) or []  # type: ignore
+    parquet.iter_batches = lambda *, columns, batch_size: _SchemaParquet.reads.append(columns) or []  # ty: ignore[invalid-assignment]
 
-    assert card_stats._has_retryable_text_status(parquet) is False  # type: ignore
+    assert card_stats._has_retryable_text_status(parquet) is False  # ty: ignore[invalid-argument-type]
     assert _SchemaParquet.reads == [["website_text_status", "contact_website_text_status"]]
 
 

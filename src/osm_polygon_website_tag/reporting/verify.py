@@ -97,7 +97,7 @@ def _verify_release_text_inputs(root: Path, status: object, errors: list[str]) -
     """Verify the exact Parquet paths used by release-time text reduction."""
     try:
         paths = text_population_parquets(root)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"release text population inventory verification failed: {exc}")
         return
     _verify_text_paths(paths, status, errors)

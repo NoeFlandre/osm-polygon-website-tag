@@ -1125,9 +1125,9 @@ def test_release_card_and_stats_threads_the_run_through_every_gate(
         repo_id="owner/repo",
         repo_kind="model",
         apply=True,
-        uploader=uploader,  # type: ignore
-        verifier=verifier,  # type: ignore
-        remote_checker=checker,  # type: ignore
+        uploader=uploader,  # ty: ignore[invalid-argument-type]
+        verifier=verifier,  # ty: ignore[invalid-argument-type]
+        remote_checker=checker,  # ty: ignore[invalid-argument-type]
     )
 
     assert result == release_module.CardReleaseReport(
@@ -1193,7 +1193,7 @@ def _external_text_population(
         calls.append(("entries", (root, received), {}))
         if isinstance(actual, Exception):
             raise actual
-        return iter(actual)  # type: ignore
+        return iter(actual)  # ty: ignore[no-matching-overload]
 
     monkeypatch.setattr(release_module, "_read_receipt_payload", read)
     monkeypatch.setattr(release_module, "_text_population_manifest_entries_from_paths", entries)
@@ -1291,10 +1291,10 @@ def _publish_with(tmp_path: Path, checker: object) -> object:
         tmp_path,
         repo_id="owner/repo",
         repo_kind="dataset",
-        files=("file",),  # type: ignore
+        files=("file",),  # ty: ignore[invalid-argument-type]
         uploader=None,
         verifier=None,
-        remote_checker=checker,  # type: ignore
+        remote_checker=checker,  # ty: ignore[invalid-argument-type]
     )
 
 
@@ -1459,7 +1459,7 @@ def test_publish_if_requested_keeps_an_explicit_uploader_unchecked(
         repo_id="o/r",
         repo_kind="dataset",
         files=(),
-        uploader=uploader,  # type: ignore
+        uploader=uploader,  # ty: ignore[invalid-argument-type]
         verifier=None,
         remote_checker=None,
     )

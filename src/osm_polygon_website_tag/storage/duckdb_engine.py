@@ -341,9 +341,9 @@ def cleanup_temp_dir(run_dir: Path) -> bool:
         return False
     try:
         staging.rmdir()
-        return True
     except OSError:
         return False
+    return True
 
 
 __all__ = [

@@ -48,7 +48,7 @@ def _verify_text_shard(shard: Path, pending_forbidden: bool, errors: list[str]) 
         for batch in parquet.iter_batches(columns=columns, batch_size=512):
             for row in batch.to_pylist():
                 _verify_text_row(row, shard.name, pending_forbidden, errors)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"text invariant verification failed for {shard.name}: {exc}")
 
 

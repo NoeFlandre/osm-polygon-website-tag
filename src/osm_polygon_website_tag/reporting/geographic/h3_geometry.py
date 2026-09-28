@@ -67,7 +67,8 @@ def _ring_is_short_or_local(points: Sequence[tuple[float, float]]) -> bool:
 def _unwrap_ring(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
     """Unwrap successive longitudes so a crossing ring is continuous."""
     unwrapped = [points[0]]
-    for longitude, latitude in points[1:]:
+    for raw_longitude, latitude in points[1:]:
+        longitude = raw_longitude
         previous_longitude = unwrapped[-1][0]
         while longitude - previous_longitude > 180.0:
             longitude -= 360.0

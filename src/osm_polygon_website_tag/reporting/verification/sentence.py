@@ -54,14 +54,14 @@ def _verify_sentence_file(path: Path, errors: list[str]) -> None:
     """Read and verify one sentence-bearing shard, reporting corrupt files."""
     try:
         schema = pq.read_schema(path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"unreadable sentence shard {path}: {exc}")
         return
     if not all(name in schema.names for name in SENTENCE_COLUMN_NAMES):
         return
     try:
         _verify_sentence_shard(path, errors)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"sentence invariant verification failed for {path}: {exc}")
 
 

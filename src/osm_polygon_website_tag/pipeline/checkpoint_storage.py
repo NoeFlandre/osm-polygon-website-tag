@@ -153,10 +153,10 @@ class CheckpointStore:
             with pq.ParquetWriter(staged, self.schema, compression="snappy") as writer:
                 assembled_rows, max_batch_rows = _stream_parts(writer, parts, batch_rows=batch_rows)
             self._validate_assembled(staged, assembled_rows, row_count)
-            return max_batch_rows
         except BaseException:
             staged.unlink(missing_ok=True)
             raise
+        return max_batch_rows
 
     def _bind_identity(
         self,

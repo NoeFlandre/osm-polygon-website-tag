@@ -195,7 +195,7 @@ def test_a_contact_only_row_is_segmented_after_an_absent_website() -> None:
         "�",
         "� �\n",
         "\x00\x01",
-        "​‎",
+        "\u200b‎",
         "",
     ],
 )
@@ -210,5 +210,5 @@ def test_gate_still_segments_text_with_any_real_content(text: str) -> None:
 
 
 def test_segmentable_text_keeps_only_content_characters() -> None:
-    assert segmentable_text(" a​b�\n") == "ab"
+    assert segmentable_text(" a\u200bb�\n") == "ab"
     assert segmentable_text("�\x00") == ""

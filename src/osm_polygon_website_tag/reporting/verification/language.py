@@ -37,14 +37,14 @@ def _verify_language_file(path: Path, errors: list[str]) -> None:
     """Read and verify one language-bearing shard, reporting corrupt files."""
     try:
         schema = pq.read_schema(path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"unreadable language shard {path}: {exc}")
         return
     if not all(name in schema.names for name in LANGUAGE_COLUMN_NAMES):
         return
     try:
         _verify_language_shard(path, errors)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"language invariant verification failed for {path}: {exc}")
 
 

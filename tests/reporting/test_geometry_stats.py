@@ -557,7 +557,7 @@ def test_accumulate_batch_spills_every_row_under_its_schema_names() -> None:
         accumulator,
         batch,
         source_pbf="a.osm.pbf",
-        store=store,  # type: ignore
+        store=store,  # ty: ignore[invalid-argument-type]
     )
 
     [rows] = spilled
@@ -626,7 +626,7 @@ def test_shard_accumulation_reads_only_the_geometry_columns(monkeypatch, tmp_pat
 
     monkeypatch.setattr(geometry_stats.pq, "ParquetFile", _Parquet)
 
-    geometry_stats._accumulate_shard(tmp_path / "a.parquet", _Accumulator(), object())  # type: ignore
+    geometry_stats._accumulate_shard(tmp_path / "a.parquet", _Accumulator(), object())  # ty: ignore[invalid-argument-type]
 
     assert reads == [list(geometry_stats.GEOMETRY_STATS_COLUMNS)]
 

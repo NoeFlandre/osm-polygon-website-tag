@@ -56,7 +56,7 @@ def verify_row_invariants(root: Path, errors: list[str]) -> None:
     try:
         for directory, predicate, label in _ROW_CONTRACTS:
             _verify_row_contract(root, con, directory, predicate, label, errors)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"row invariant verification failed: {exc}")
     finally:
         con.close()

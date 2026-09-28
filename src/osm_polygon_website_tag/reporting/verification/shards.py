@@ -105,7 +105,7 @@ def _verify_shard(
         parquet = pq.ParquetFile(path)
         actual_schema = parquet.schema_arrow
         actual_count = int(parquet.metadata.num_rows)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
         errors.append(f"unreadable {contract.kind} shard {path}: {exc}")
         return
     if not _schema_matches_contract(actual_schema, contract):
@@ -166,6 +166,8 @@ def _verify_extra_shards(
     if not shard_dir.is_dir():
         errors.append(f"missing shard directory: {shard_dir}")
         return
-    for path in sorted(shard_dir.glob("*.parquet")):
-        if path.stem not in declared:
-            errors.append(f"extra undeclared {contract.kind} shard: {path}")
+    errors.extend(
+        f"extra undeclared {contract.kind} shard: {path}"
+        for path in sorted(shard_dir.glob("*.parquet"))
+        if path.stem not in declared
+    )
