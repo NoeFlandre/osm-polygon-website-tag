@@ -23,6 +23,9 @@ match it.
 - The data root comes from `OSM_POLY_DATA_DIR` (environment or `.env`) and
   defaults to `./data`; no machine-specific paths remain (#81, #79, #80).
 - The User-Agent carries the full package version.
+- Trafilatura loads on first extraction, not at import: every command starts
+  about 2 s faster (#95).
+- `publish-trackio` without the `trackio` package exits 5 with one clear line.
 
 ## [0.1.0]
 

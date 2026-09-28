@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import codecs
+import subprocess
+import sys
 from typing import Any
 
 import pytest
+import trafilatura
+import trafilatura.settings as trafilatura_settings
+import trafilatura.utils as trafilatura_utils
 
 from osm_polygon_website_tag.web import encoding_labels, text_extract
 from osm_polygon_website_tag.web.text_extract import decode_html, extract_main_text
@@ -44,7 +49,7 @@ def test_trafilatura_version_lookup_is_cached(monkeypatch: pytest.MonkeyPatch) -
     if cached_version is not None:
         cached_version.cache_clear()
     monkeypatch.setattr(text_extract, "version", fake_version)
-    monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: "text")
+    monkeypatch.setattr(trafilatura, "extract", lambda *_args, **_kwargs: "text")
     try:
         first = extract_main_text(b"<html/>", url="https://example.org/one")
         second = extract_main_text(b"<html/>", url="https://example.org/two")
@@ -78,8 +83,8 @@ def test_trafilatura_options_are_reused_per_thread(monkeypatch: pytest.MonkeyPat
         seen_options.append(option)
         return "text"
 
-    monkeypatch.setattr(text_extract, "Extractor", FakeExtractor, raising=False)
-    monkeypatch.setattr(text_extract.trafilatura, "extract", fake_extract)
+    monkeypatch.setattr(trafilatura_settings, "Extractor", FakeExtractor)
+    monkeypatch.setattr(trafilatura, "extract", fake_extract)
     try:
         first = extract_main_text(b"<html/>", url="https://example.org/one")
         second = extract_main_text(b"<html/>", url="https://example.org/two")
@@ -95,7 +100,7 @@ def test_trafilatura_options_are_reused_per_thread(monkeypatch: pytest.MonkeyPat
 
 
 def test_empty_trafilatura_result_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(trafilatura, "extract", lambda *_args, **_kwargs: None)
 
     result = extract_main_text(b"<html/>", url="https://example.org")
 
@@ -109,7 +114,7 @@ def test_extractor_failure_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None
     def fail(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("secret response body")
 
-    monkeypatch.setattr(text_extract.trafilatura, "extract", fail)
+    monkeypatch.setattr(trafilatura, "extract", fail)
 
     result = extract_main_text(b"<html/>", url="https://example.org")
 
@@ -121,7 +126,7 @@ def test_extractor_failure_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_full_text_is_retained_without_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
     full = "word " * 1_000_000
-    monkeypatch.setattr(text_extract.trafilatura, "extract", lambda *_args, **_kwargs: full)
+    monkeypatch.setattr(trafilatura, "extract", lambda *_args, **_kwargs: full)
 
     result = extract_main_text(b"<html/>", url="https://example.org")
 
@@ -185,7 +190,9 @@ def test_unknown_meta_charset_is_ignored() -> None:
 
 
 def test_undecodable_page_falls_back_to_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(text_extract, "detect_encoding", lambda _html: ["no-such-codec", "base64"])
+    monkeypatch.setattr(
+        trafilatura_utils, "detect_encoding", lambda _html: ["no-such-codec", "base64"]
+    )
 
     assert decode_html(b"caf\xe9") == "caf�"
 
@@ -231,13 +238,13 @@ def test_extractor_options_drop_comments_keep_tables_and_sanitise_url(
 ) -> None:
     text_extract._extractor_state.__dict__.clear()
     constructed: list[dict[str, object]] = []
-    real = text_extract.Extractor
+    real = trafilatura_settings.Extractor
 
     def record(**kwargs: Any) -> Any:
         constructed.append(kwargs)
         return real(**kwargs)
 
-    monkeypatch.setattr(text_extract, "Extractor", record)
+    monkeypatch.setattr(trafilatura_settings, "Extractor", record)
     try:
         options = text_extract._extractor_options("https://example.org/\udcff")
     finally:
@@ -444,7 +451,7 @@ def test_extractor_failure_reports_the_library_version(monkeypatch: pytest.Monke
     def fail(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(text_extract.trafilatura, "extract", fail)
+    monkeypatch.setattr(trafilatura, "extract", fail)
 
     result = extract_main_text(b"<html/>", url="https://example.org")
 
@@ -821,26 +828,39 @@ def test_meta_charset_with_a_character_reference_declares_nothing() -> None:
 
 def test_detection_prefers_cp1252_over_its_lookalikes(monkeypatch: pytest.MonkeyPatch) -> None:
     body = b"caf\xe9 \x80 \x93quoted\x94"
-    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["iso8859-15", "cp1252"])
+    monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["iso8859-15", "cp1252"])
 
     assert decode_html(body) == body.decode("cp1252")
 
 
 def test_detection_keeps_its_top_pick_without_cp1252(monkeypatch: pytest.MonkeyPatch) -> None:
     body = b"caf\xe9 \xa4"
-    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["iso8859-15"])
+    monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["iso8859-15"])
 
     assert decode_html(body) == body.decode("iso8859-15")
 
 
 def test_detection_keeps_a_non_lookalike_top_pick(monkeypatch: pytest.MonkeyPatch) -> None:
     body = "Привет мир".encode("cp1251")
-    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["cp1251", "cp1252"])
+    monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["cp1251", "cp1252"])
 
     assert decode_html(body) == "Привет мир"
 
 
 def test_detection_skips_non_text_codec_guesses(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["base64", "cp1251"])
+    monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["base64", "cp1251"])
 
     assert decode_html("Привет мир".encode("cp1251")) == "Привет мир"
+
+
+def test_importing_the_cli_does_not_load_trafilatura() -> None:
+    """Trafilatura costs about a second of start-up that only enrichment needs."""
+    code = (
+        "import sys, osm_polygon_website_tag.application.cli; print('trafilatura' in sys.modules)"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+
+    assert result.stdout.strip() == "False"

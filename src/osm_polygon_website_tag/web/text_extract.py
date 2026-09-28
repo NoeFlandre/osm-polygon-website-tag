@@ -10,15 +10,18 @@ from dataclasses import dataclass
 from functools import lru_cache
 from html.parser import HTMLParser
 from importlib.metadata import version
-from typing import Literal
-
-import trafilatura
-from trafilatura.settings import Extractor
-from trafilatura.utils import detect_encoding
+from typing import TYPE_CHECKING, Literal
 
 from osm_polygon_website_tag.contracts.text_schema import count_words
 from osm_polygon_website_tag.web.content_type import charset_parameter
 from osm_polygon_website_tag.web.encoding_labels import WEB_LABELS, X_USER_DEFINED
+
+if TYPE_CHECKING:
+    from trafilatura.settings import Extractor
+
+# Trafilatura is imported inside the functions that use it, not here: it pulls
+# in htmldate and dateparser, about a second of start-up that every command
+# would otherwise pay, although only the enrich stage extracts text.
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,8 @@ def _extractor_options(url: str) -> Extractor:
     """Reuse per-thread Trafilatura setup while updating the current URL."""
     options = getattr(_extractor_state, "options", None)
     if options is None:
+        from trafilatura.settings import Extractor
+
         options = Extractor(output_format="txt", comments=False, tables=True)
         _extractor_state.options = options
     options.url = url
@@ -257,6 +262,8 @@ def _decode_by_meta(html: bytes, meta: str | None) -> str:
 
 def _detected_decoding(html: bytes) -> str | None:
     """First detected codec that decodes, with cp1252 preferred over its lookalikes."""
+    from trafilatura.utils import detect_encoding
+
     candidates = [codec for codec in map(_codec, detect_encoding(html)) if codec is not None]
     return _first_decoding(html, _cp1252_first(candidates))
 
@@ -296,6 +303,8 @@ def extract_main_text(
     html: bytes, *, url: str, charset: str | None = None, media_type: str | None = None
 ) -> TextExtraction:
     """Extract full main text from already downloaded HTML (or plain text)."""
+    import trafilatura
+
     library_version = _trafilatura_version()
     decoded = decode_html(html, charset, media_type=media_type)
     try:
