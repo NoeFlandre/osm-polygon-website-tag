@@ -78,7 +78,7 @@ Language detection is opt-in and can be included in the same resumable run:
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
   --source-root /path/to/read-only/pbf-root \
-  --output-root "$OSM_POLY_DATA_DIR/runs" \
+  --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" \
   --run-id website-v1 \
   --detect-languages
 ```
@@ -87,7 +87,7 @@ For an already enriched run, use the standalone stage instead:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1"
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"
 ```
 
 The pinned [GlotLID model](https://huggingface.co/cis-lmu/glotlid) is downloaded

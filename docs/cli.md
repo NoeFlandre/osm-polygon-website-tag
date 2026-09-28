@@ -12,7 +12,7 @@ They go before the command, for example `osm-polygon-website-tag -q run-all ...`
 | Option | Effect |
 | --- | --- |
 | `--version` | Print the package version and exit 0. |
-| `-v`, `--verbose` | Log on stderr: `-v` shows INFO, `-vv` DEBUG (such as the resolved data root). |
+| `-v`, `--verbose` | Log on stderr: `-v` shows INFO, `-vv` DEBUG (such as whether a custom or default data root is in use). |
 | `-q`, `--quiet` | Only errors on stderr, and no progress output; stdout keeps the JSON result. |
 | `--debug` | Show full tracebacks instead of one-line errors (also `OSM_PWT_DEBUG=1`). |
 
@@ -27,6 +27,7 @@ They go before the command, for example `osm-polygon-website-tag -q run-all ...`
 | `2` | Usage error: unknown command or option, missing value. |
 | `3` | Invalid input or state: a bad value, a missing or unreadable file, a corrupt manifest. |
 | `4` | Remote failure: a Hugging Face Hub HTTP or authentication error. |
+| `5` | A required optional package is missing (`publish-trackio` without `trackio`). |
 | `130` | Interrupted with Ctrl-C. |
 
 Errors print one `error: ...` line on stderr, never a traceback. Pass
@@ -107,7 +108,7 @@ it after text enrichment, or run it separately on an enriched run:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir "$OSM_POLY_DATA_DIR/runs/<run-id>"
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
 ```
 
 The standalone command loads one pinned GlotLID V3 model from the data-root
@@ -123,9 +124,9 @@ synchronization explicit:
 
 ```bash
 uv run --locked osm-polygon-website-tag grid5000-prepare \
-  --run-dir "$OSM_POLY_DATA_DIR/runs/<run-id>" \
-  --bundle-dir "$OSM_POLY_DATA_DIR/grid5000/<bundle-id>" \
-  --model-path "$OSM_POLY_DATA_DIR/models/glotlid/<snapshot>/model_v3.bin" \
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>" \
+  --bundle-dir "${OSM_POLY_DATA_DIR:-./data}/grid5000/<bundle-id>" \
+  --model-path "${OSM_POLY_DATA_DIR:-./data}/models/glotlid/<snapshot>/model_v3.bin" \
   --commit "$(git rev-parse HEAD)"
 
 uv run --locked --offline osm-polygon-website-tag grid5000-run \
@@ -133,8 +134,8 @@ uv run --locked --offline osm-polygon-website-tag grid5000-run \
   --time-budget-seconds 1500 --batch-rows 256
 
 uv run --locked osm-polygon-website-tag grid5000-sync \
-  --bundle-dir "$OSM_POLY_DATA_DIR/grid5000/<bundle-id>" \
-  --run-dir "$OSM_POLY_DATA_DIR/runs/<run-id>"
+  --bundle-dir "${OSM_POLY_DATA_DIR:-./data}/grid5000/<bundle-id>" \
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
 ```
 
 `grid5000-prepare` and `grid5000-sync` reject paths outside the data root

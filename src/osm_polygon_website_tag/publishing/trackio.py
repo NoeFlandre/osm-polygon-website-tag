@@ -121,12 +121,16 @@ def _validate_trackio_destination(space_id: str, project: str) -> None:
         raise ValueError("Trackio project must not be empty")
 
 
+class TrackioUnavailableError(RuntimeError):
+    """The optional ``trackio`` package is not installed."""
+
+
 def _load_trackio() -> Any:
     """Import the optional Trackio SDK with an actionable error."""
     try:
         return importlib.import_module("trackio")
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
+        raise TrackioUnavailableError(
             "Trackio publishing requires the optional 'trackio' package; "
             "run with `uv run --with trackio ...`"
         ) from exc

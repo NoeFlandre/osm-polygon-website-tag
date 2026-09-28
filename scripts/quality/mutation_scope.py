@@ -247,7 +247,7 @@ def module_function_filters(module: str, *, root: Path | None = None) -> list[st
     whole-module filter covers.
     """
     base = root if root is not None else Path.cwd()
-    relative = module.removeprefix(f"{PACKAGE_NAME}.").split(".")
+    relative = [] if module == PACKAGE_NAME else module.removeprefix(f"{PACKAGE_NAME}.").split(".")
     candidate = base / PACKAGE_ROOT.joinpath(*relative)
     source = candidate / "__init__.py" if candidate.is_dir() else candidate.with_suffix(".py")
     try:

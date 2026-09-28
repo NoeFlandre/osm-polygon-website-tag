@@ -76,7 +76,7 @@ docker run --rm --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --user "$(id -u):$(id -g)" \
   --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
-  --mount type=bind,src="$OSM_POLY_DATA_DIR/runs",dst=/data/runs \
+  --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/runs",dst=/data/runs \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw \
   --output-root /data/runs \
@@ -93,7 +93,7 @@ docker run --rm --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --env HF_TOKEN \
   --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
-  --mount type=bind,src="$OSM_POLY_DATA_DIR/runs",dst=/data/runs \
+  --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/runs",dst=/data/runs \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw --output-root /data/runs \
   --run-id geofabrik-website-v1 \

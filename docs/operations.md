@@ -24,7 +24,7 @@ Use the same source root, output root, run ID, and repository ID when resuming:
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
   --source-root /path/to/pbf-root \
-  --output-root "$OSM_POLY_DATA_DIR/runs" \
+  --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" \
   --run-id 'geofabrik-website-v1'
 ```
 
@@ -56,7 +56,7 @@ Enable the stage explicitly:
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
   --source-root /path/to/pbf-root \
-  --output-root "$OSM_POLY_DATA_DIR/runs" \
+  --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" \
   --run-id 'geofabrik-website-v1' \
   --detect-languages
 ```
@@ -65,7 +65,7 @@ Or run language detection after an existing run has reached `enriched`:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir "$OSM_POLY_DATA_DIR/runs/geofabrik-website-v1"
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/geofabrik-website-v1"
 ```
 
 The stage uses the pinned [GlotLID model](https://huggingface.co/cis-lmu/glotlid)
@@ -120,11 +120,11 @@ one unfinished public shard and any validated language checkpoint prefix:
 ```bash
 hf download cis-lmu/glotlid model_v3.bin \
   --revision 85cd671 \
-  --cache-dir "$OSM_POLY_DATA_DIR/models/glotlid"
+  --cache-dir "${OSM_POLY_DATA_DIR:-./data}/models/glotlid"
 
-export OSM_POLY_RUN_DIR="$OSM_POLY_DATA_DIR/runs/<run-id>"
-export OSM_POLY_BUNDLE_DIR="$OSM_POLY_DATA_DIR/grid5000/<bundle-id>"
-export OSM_POLY_MODEL_PATH="$OSM_POLY_DATA_DIR/models/glotlid/<snapshot>/model_v3.bin"
+export OSM_POLY_RUN_DIR="${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
+export OSM_POLY_BUNDLE_DIR="${OSM_POLY_DATA_DIR:-./data}/grid5000/<bundle-id>"
+export OSM_POLY_MODEL_PATH="${OSM_POLY_DATA_DIR:-./data}/models/glotlid/<snapshot>/model_v3.bin"
 export OSM_POLY_COMMIT="$(git rev-parse HEAD)"
 scripts/grid5000/prepare_language_detection.sh
 ```
@@ -211,9 +211,9 @@ files the loader reads (`config.json` and `model.safetensors`), then prepare a
 bundle:
 
 ```bash
-export OSM_POLY_RUN_DIR="$OSM_POLY_DATA_DIR/runs/<run-id>"
-export OSM_POLY_BUNDLE_DIR="$OSM_POLY_DATA_DIR/grid5000-sentences/<bundle-id>"
-export OSM_POLY_MODEL_DIR="$OSM_POLY_DATA_DIR/models/sat/sat-3l-sm-min"
+export OSM_POLY_RUN_DIR="${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
+export OSM_POLY_BUNDLE_DIR="${OSM_POLY_DATA_DIR:-./data}/grid5000-sentences/<bundle-id>"
+export OSM_POLY_MODEL_DIR="${OSM_POLY_DATA_DIR:-./data}/models/sat/sat-3l-sm-min"
 export OSM_POLY_MODEL_REVISION='137da054051ad9f1eac42025f758db4ac9f22535'
 export OSM_POLY_COMMIT="$(git rev-parse HEAD)"
 scripts/grid5000/prepare_sentence_segmentation.sh
@@ -234,7 +234,7 @@ it. After the job reaches a terminal state, copy the bundle back and
 synchronize it:
 
 ```bash
-export OSM_POLY_BUNDLE_DIR="$OSM_POLY_DATA_DIR/grid5000-sentences/<bundle-id>"
+export OSM_POLY_BUNDLE_DIR="${OSM_POLY_DATA_DIR:-./data}/grid5000-sentences/<bundle-id>"
 scripts/grid5000/sync_sentence_segmentation.sh
 ```
 

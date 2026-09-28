@@ -1298,12 +1298,12 @@ def _stderr_for(
         (
             ["-vv"],
             "INFO osm_polygon_website_tag: osm-polygon-website-tag {version}\n"
-            "DEBUG osm_polygon_website_tag: data root /data-root\n",
+            "DEBUG osm_polygon_website_tag: data root: custom\n",
         ),
         (
             ["-v", "-v", "-v"],
             "INFO osm_polygon_website_tag: osm-polygon-website-tag {version}\n"
-            "DEBUG osm_polygon_website_tag: data root /data-root\n",
+            "DEBUG osm_polygon_website_tag: data root: custom\n",
         ),
     ],
 )
@@ -1444,3 +1444,39 @@ def test_main_workflow_commands_show_an_example(command: str) -> None:
     click_command = typer.main.get_command(app).commands[command]  # ty: ignore[unresolved-attribute]
 
     assert click_command.epilog.startswith("Example: osm-polygon-website-tag ")
+
+
+def test_debug_log_never_shows_the_data_root_value(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert "/data-root" not in _stderr_for(["-vv"], monkeypatch, capsys)
+
+
+def test_debug_log_says_when_the_default_data_root_is_used(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "compute_card_stats", lambda _run_dir: SimpleNamespace(ok=True))
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", "  ")
+
+    assert cli.main(["-vv", "card-stats", "--run-dir", "/run"]) == 0
+
+    assert "data root: default\n" in capsys.readouterr().err
+
+
+def test_publish_trackio_without_the_package_is_a_clean_classified_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from osm_polygon_website_tag.publishing import trackio
+
+    def missing(_name: str) -> object:
+        raise ModuleNotFoundError("trackio")
+
+    monkeypatch.setattr(cli, "build_trackio_snapshot", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(trackio.importlib, "import_module", missing)
+
+    code = cli.main(["publish-trackio", "--run-dir", str(tmp_path), "--apply"])
+
+    assert code == cli.EXIT_MISSING_DEPENDENCY == 5
+    assert "error: Trackio publishing requires the optional 'trackio' package" in (
+        capsys.readouterr().err
+    )

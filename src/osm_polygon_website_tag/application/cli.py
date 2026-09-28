@@ -63,6 +63,7 @@ from osm_polygon_website_tag.publishing.publish import (
 )
 from osm_polygon_website_tag.publishing.release import release_card_and_stats
 from osm_polygon_website_tag.publishing.trackio import (
+    TrackioUnavailableError,
     build_trackio_snapshot,
     publish_trackio_snapshot,
 )
@@ -81,9 +82,9 @@ from osm_polygon_website_tag.runtime.config import (
     DEFAULT_TRACKIO_SPACE,
 )
 from osm_polygon_website_tag.runtime.paths import (
+    data_root_source,
     model_cache_dir,
     require_under_data_root,
-    resolve_data_root,
 )
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
@@ -119,10 +120,12 @@ _error_console = Console(stderr=True, markup=False, highlight=False)
 # finalize-*), and 2 is a usage error from Click.
 EXIT_INVALID_INPUT = 3
 EXIT_REMOTE = 4
+EXIT_MISSING_DEPENDENCY = 5
 EXIT_INTERRUPTED = 130
 # Most specific first: HfHubHTTPError is also an OSError.
 _EXIT_CODES: tuple[tuple[type[Exception], int], ...] = (
     (HfHubHTTPError, EXIT_REMOTE),
+    (TrackioUnavailableError, EXIT_MISSING_DEPENDENCY),
     (ValueError, EXIT_INVALID_INPUT),
     (OSError, EXIT_INVALID_INPUT),
 )
@@ -180,7 +183,7 @@ def _global_options(
     _quiet["enabled"] = quiet
     _configure_logging(_log_level(verbose, quiet=quiet))
     _LOGGER.info("%s %s", _DISTRIBUTION, package_version(_DISTRIBUTION))
-    _LOGGER.debug("data root %s", resolve_data_root())
+    _LOGGER.debug("data root: %s", data_root_source())
 
 
 def _log_level(verbose: int, *, quiet: bool) -> int:

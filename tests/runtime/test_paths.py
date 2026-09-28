@@ -100,3 +100,14 @@ def test_a_path_outside_the_root_is_rejected(
 def test_the_dead_layout_helpers_are_gone() -> None:
     for name in ("raw_dir", "processed_dir", "exports_dir", "data_root", "DEFAULT_DATA_ROOT"):
         assert not hasattr(paths, name)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("/somewhere", "custom"), ("", "default"), ("  ", "default")]
+)
+def test_data_root_source_names_the_kind_never_the_value(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: str
+) -> None:
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", value)
+
+    assert paths.data_root_source() == expected

@@ -455,3 +455,10 @@ def test_a_hunk_of_only_blank_or_hash_lines_scopes_the_whole_module() -> None:
     diff = "+++ b/src/pkg/mod.py\n@@ -7,0 +8,2 @@\n+\n+# inside a triple-quoted string\n"
 
     assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {0}}
+
+
+def test_the_package_root_resolves_to_its_init_and_gets_no_shard_without_functions() -> None:
+    root = mutation_scope.PACKAGE_NAME
+
+    assert mutation_scope.module_function_filters(root, root=_ROOT) == []
+    assert mutation_scope.shards({root: [f"{root}.*"]}, root=_ROOT) == []

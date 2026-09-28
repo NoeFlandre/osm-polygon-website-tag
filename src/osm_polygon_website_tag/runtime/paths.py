@@ -23,6 +23,11 @@ def resolve_data_root() -> Path:
     return root.resolve()
 
 
+def data_root_source() -> str:
+    """Say whether the root is ``custom`` or the ``default``, never its value."""
+    return "custom" if Settings().osm_poly_data_dir.strip() else "default"
+
+
 def model_cache_dir(name: str) -> Path:
     """Return (and create) the cache directory for one model under the data root."""
     path = resolve_data_root() / "models" / name
@@ -46,6 +51,7 @@ def require_under_data_root(path: Path | str, *, label: str) -> Path:
 __all__ = [
     "DATA_ROOT_ENV",
     "DEFAULT_DATA_DIRNAME",
+    "data_root_source",
     "model_cache_dir",
     "require_under_data_root",
     "resolve_data_root",

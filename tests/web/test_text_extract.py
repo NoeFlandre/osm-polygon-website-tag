@@ -185,7 +185,7 @@ def test_unknown_meta_charset_is_ignored() -> None:
 
 
 def test_undecodable_page_falls_back_to_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(text_extract, "detect_encoding", lambda _html: ["no-such-codec", "ascii"])
+    monkeypatch.setattr(text_extract, "detect_encoding", lambda _html: ["no-such-codec", "base64"])
 
     assert decode_html(b"caf\xe9") == "caf�"
 
@@ -568,7 +568,7 @@ def test_plain_text_responses_do_not_sniff_meta() -> None:
 
     result = extract_main_text(body, url="https://example.org", media_type="text/plain")
 
-    assert text_extract.decode_html(body, sniff_meta=False) == body.decode()
+    assert text_extract.decode_html(body, media_type="text/plain") == body.decode()
     assert "涓" not in (result.text or "")  # GB18030 misreading of UTF-8 专
 
 
@@ -773,25 +773,74 @@ def _gbk_meta_page() -> bytes:
     ("media_type", "sniffed"),
     [(None, True), ("text/html", True), ("application/xhtml+xml", False), ("text/plain", False)],
 )
-def test_only_html_responses_get_the_meta_prescan(
-    monkeypatch: pytest.MonkeyPatch, media_type: str | None, sniffed: bool
-) -> None:
-    seen: list[bool] = []
-    real = text_extract.decode_html
+def test_only_html_responses_get_the_meta_prescan(media_type: str | None, sniffed: bool) -> None:
+    decoded = decode_html(_gbk_meta_page(), media_type=media_type)
 
-    def spy(html: bytes, charset: str | None = None, *, sniff_meta: bool = True) -> str:
-        seen.append(sniff_meta)
-        return real(html, charset, sniff_meta=sniff_meta)
-
-    monkeypatch.setattr(text_extract, "decode_html", spy)
-
-    text_extract.extract_main_text(_gbk_meta_page(), url="https://e.org/", media_type=media_type)
-
-    assert seen == [sniffed]
+    assert ("专业" in decoded) is not sniffed
 
 
 def test_without_the_prescan_a_legacy_meta_does_not_override_utf8() -> None:
     page = _gbk_meta_page()
 
-    assert "专业" in decode_html(page, None, sniff_meta=False)
-    assert "专业" not in decode_html(page, None, sniff_meta=True)
+    assert "专业" in decode_html(page, None, media_type="text/plain")
+    assert "专业" not in decode_html(page, None, media_type="text/html")
+
+
+@pytest.mark.parametrize("label", ["base64", "zlib", "rot13", "hex", "undefined"])
+def test_non_text_python_codecs_are_not_charsets(label: str) -> None:
+    assert decode_html("<p>café</p>".encode(), label) == "<p>café</p>"
+    assert decode_html(f'<meta charset="{label}"><p>café</p>'.encode()).endswith("café</p>")
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_xhtml_honours_the_xml_encoding_declaration(quote: str) -> None:
+    text = "<p>专业</p>" * 5
+    body = f"<?xml version={quote}1.0{quote} encoding={quote}GBK{quote}?>{text}".encode("gbk")
+
+    assert decode_html(body, media_type="application/xhtml+xml").endswith(text)
+
+
+def test_an_xml_declaration_is_ignored_outside_xhtml() -> None:
+    body = '<?xml version="1.0" encoding="gbk"?><p>专业</p>'.encode()
+
+    assert decode_html(body, media_type="text/plain") == body.decode()
+    assert decode_html(body, media_type="text/html") == body.decode()
+
+
+def test_an_xhtml_page_without_a_declaration_is_utf8() -> None:
+    assert decode_html("<p>专业</p>".encode(), media_type="application/xhtml+xml") == "<p>专业</p>"
+
+
+def test_meta_charset_with_a_character_reference_declares_nothing() -> None:
+    text = "专业" * 10
+    html = f'<meta charset="gb23&#49;2"><p>{text}</p>'.encode("gb18030")
+
+    assert "专业" not in decode_html(html)
+    assert "专业" in decode_html(html.replace(b"&#49;", b"1"))
+
+
+def test_detection_prefers_cp1252_over_its_lookalikes(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = b"caf\xe9 \x80 \x93quoted\x94"
+    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["iso8859-15", "cp1252"])
+
+    assert decode_html(body) == body.decode("cp1252")
+
+
+def test_detection_keeps_its_top_pick_without_cp1252(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = b"caf\xe9 \xa4"
+    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["iso8859-15"])
+
+    assert decode_html(body) == body.decode("iso8859-15")
+
+
+def test_detection_keeps_a_non_lookalike_top_pick(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = "Привет мир".encode("cp1251")
+    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["cp1251", "cp1252"])
+
+    assert decode_html(body) == "Привет мир"
+
+
+def test_detection_skips_non_text_codec_guesses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(text_extract, "detect_encoding", lambda _b: ["base64", "cp1251"])
+
+    assert decode_html("Привет мир".encode("cp1251")) == "Привет мир"

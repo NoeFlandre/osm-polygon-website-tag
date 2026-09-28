@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import re
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -84,11 +85,19 @@ def _extractor_options(url: str) -> Extractor:
 # text, and XHTML is XML, which a <meta> does not declare. An unknown type is
 # treated as HTML.
 _META_SNIFFED_TYPES = (None, "text/html")
+# XHTML declares its encoding in the XML declaration instead.
+_XML_TYPES = ("application/xhtml+xml",)
+_XML_DECLARATION = re.compile(r"""<\?xml\s[^>]*?encoding\s*=\s*(["'])(?P<label>[^"']+)\1""")
 # HTML only honours encoding declarations within the first 1024 bytes.
 _PRESCAN_BYTES = 1024
 # html.parser already treats script/style as raw text; these hold text, not
 # markup, too, so a <meta> inside them is ignored.
 _TEXT_ONLY_ELEMENTS = frozenset({"title", "textarea", "noscript", "xmp"})
+# Single-byte codecs a detector cannot tell from cp1252 on Western text: when
+# one of them tops the ranking and cp1252 also decodes, the web reads cp1252.
+_CP1252_LOOKALIKES = frozenset(
+    {"iso8859-2", "iso8859-4", "iso8859-10", "iso8859-13", "iso8859-14", "iso8859-15", "cp1250"}
+)
 # Byte-order marks win over any declaration, as in the WHATWG sniffing algorithm.
 _BOMS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -124,11 +133,19 @@ class _MetaCharsetParser(HTMLParser):
             self._text_only = None
 
     def _record(self, attrs: list[tuple[str, str | None]]) -> None:
+        # The prescan does not expand character references, but html.parser does:
+        # ``gb23&#49;2`` would read as ``gb2312``. Such a tag declares nothing.
+        if "&" in str(self.get_starttag_text()):
+            return
         # dict(reversed(...)) keeps the first of repeated attributes, as HTML does.
         attributes = dict(reversed([(name, value or "") for name, value in attrs]))
-        declared = attributes.get("charset") or _http_equiv_charset(attributes)
+        declared = _declared_charset(attributes)
         if declared:
             self.declared.append(declared)
+
+
+def _declared_charset(attributes: dict[str, str]) -> str | None:
+    return attributes.get("charset") or _http_equiv_charset(attributes)
 
 
 def _http_equiv_charset(attributes: dict[str, str]) -> str | None:
@@ -143,6 +160,19 @@ def _meta_charset(html: bytes) -> str | None:
     parser = _MetaCharsetParser()
     parser.feed(html[:_PRESCAN_BYTES].decode(_LATIN1))
     return next(filter(None, map(_meta_codec, parser.declared)), None)
+
+
+def _xml_charset(html: bytes) -> str | None:
+    """Return the codec named by an XML declaration at the start of ``html``."""
+    match = _XML_DECLARATION.match(html[:_PRESCAN_BYTES].decode(_LATIN1).lstrip())
+    return _meta_codec(match["label"]) if match else None
+
+
+def _declared_codec(html: bytes, media_type: str | None) -> str | None:
+    """The in-document declaration that applies to this media type, if any."""
+    if media_type in _META_SNIFFED_TYPES:
+        return _meta_charset(html)
+    return _xml_charset(html) if media_type in _XML_TYPES else None
 
 
 def _meta_codec(label: str) -> str | None:
@@ -160,7 +190,8 @@ def _codec(name: str | None) -> str | None:
     label = name.strip().lower()
     try:
         codec = codecs.lookup(WEB_LABELS.get(label, label)).name
-    except LookupError:
+        "".encode(codec)  # bytes-to-bytes codecs (base64, zlib) are not text encodings
+    except (LookupError, UnicodeError):
         return None
     return _WEB_ALIASES.get(codec, codec)
 
@@ -184,7 +215,7 @@ def _authoritative_codec(html: bytes, header: str | None) -> str | None:
     return bom if bom is not None else _ascii_lookalike(header, _WIDE_PREFIXES)
 
 
-def decode_html(html: bytes, charset: str | None = None, *, sniff_meta: bool = True) -> str:
+def decode_html(html: bytes, charset: str | None = None, *, media_type: str | None = None) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
     Order: a BOM decides outright, then a UTF-16/32 HTTP charset (bad bytes
@@ -192,14 +223,15 @@ def decode_html(html: bytes, charset: str | None = None, *, sniff_meta: bool = T
     UTF-8 (7-bit ISO-2022/UTF-7/HZ and multi-byte CJK from HTTP or meta),
     UTF-8, and the HTTP charset. An
     HTTP charset that still fails keeps its codec with bad bytes replaced,
-    before ``<meta charset>`` is considered at all. ``sniff_meta=False``
-    (plain-text and XHTML responses) skips the HTML meta scan.
+    before ``<meta charset>`` is considered at all. ``media_type`` picks the
+    in-document declaration: an HTML ``<meta>``, an XHTML ``<?xml encoding?>``,
+    or none for plain text.
     """
     header = _codec(charset)
     authoritative = _authoritative_codec(html, header)
     if authoritative is not None:  # only bad bytes are replaced
         return str(html, authoritative, "replace")
-    meta = _meta_charset(html) if sniff_meta else None
+    meta = _declared_codec(html, media_type)
     lookalikes = [
         _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
         _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
@@ -220,7 +252,19 @@ def _decode_by_meta(html: bytes, meta: str | None) -> str:
     lenient = _lenient_codec(html, meta)
     if lenient is not None:
         return str(html, lenient, "replace")
-    return _first_decoding(html, detect_encoding(html)) or str(html, _UTF8, "replace")
+    return _detected_decoding(html) or str(html, _UTF8, "replace")
+
+
+def _detected_decoding(html: bytes) -> str | None:
+    """First detected codec that decodes, with cp1252 preferred over its lookalikes."""
+    candidates = [codec for codec in map(_codec, detect_encoding(html)) if codec is not None]
+    return _first_decoding(html, _cp1252_first(candidates))
+
+
+def _cp1252_first(candidates: list[str]) -> list[str]:
+    if _CP1252_LOOKALIKES.issuperset(candidates[:1]) and _WINDOWS_1252 in candidates:
+        return [_WINDOWS_1252, *candidates]
+    return candidates
 
 
 def _first_decoding(html: bytes, encodings: Iterable[str | None]) -> str | None:
@@ -253,7 +297,7 @@ def extract_main_text(
 ) -> TextExtraction:
     """Extract full main text from already downloaded HTML (or plain text)."""
     library_version = _trafilatura_version()
-    decoded = decode_html(html, charset, sniff_meta=media_type in _META_SNIFFED_TYPES)
+    decoded = decode_html(html, charset, media_type=media_type)
     try:
         # An Extractor ``options`` object overrides trafilatura's per-call
         # keyword settings, so the URL and output settings live only there.
