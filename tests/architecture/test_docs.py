@@ -35,3 +35,13 @@ def test_package_readme_names_every_module(package: str) -> None:
     missing = sorted(module for module in modules if f"`{module}`" not in readme)
 
     assert missing == []
+
+
+def test_every_navigation_target_exists() -> None:
+    import yaml
+
+    nav = yaml.safe_load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"))["nav"]
+    targets = [target for entry in nav for target in entry.values()]
+
+    assert targets
+    assert [target for target in targets if not (ROOT / "docs" / target).is_file()] == []

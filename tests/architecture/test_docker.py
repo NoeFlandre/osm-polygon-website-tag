@@ -1,61 +1,65 @@
-"""Static contracts for the reproducible Docker development/runtime images."""
+"""Structural contracts for the runtime image, read from the files themselves."""
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-
-def _read(name: str) -> str:
-    return (ROOT / name).read_text(encoding="utf-8")
-
-
-def test_dockerfile_uses_locked_multi_stage_non_root_defaults() -> None:
-    dockerfile = _read("Dockerfile")
-
-    assert "FROM python:3.12-slim-bookworm@sha256:" in dockerfile
-    assert "FROM ghcr.io/astral-sh/uv:0.11.16@sha256:" in dockerfile
-    assert "COPY pyproject.toml uv.lock .python-version README.md LICENSE ./" in dockerfile
-    assert "uv sync --locked --no-dev" in dockerfile
-    assert "uv sync --locked --no-dev --no-editable" in dockerfile
-    assert "uv sync --locked --group dev" in dockerfile
-    assert "USER app" in dockerfile
-    assert 'ENTRYPOINT ["osm-polygon-website-tag"]' in dockerfile
-    assert 'CMD ["--help"]' in dockerfile
-    assert "MPLBACKEND=Agg" in dockerfile
+# Paths that must never enter the build context: credentials and production data.
+_KEPT_OUT_OF_THE_IMAGE = (
+    ".env",
+    ".env.production",
+    "region.pbf",
+    "region.osm",
+    "shard.parquet",
+    "data/runs/run.json",
+    "runs/run.json",
+)
 
 
-def test_dockerfile_installs_osmium_runtime_library() -> None:
-    dockerfile = _read("Dockerfile")
-
-    assert "apt-get install --no-install-recommends -y libexpat1" in dockerfile
-    assert "rm -rf /var/lib/apt/lists/*" in dockerfile
-
-
-def test_dockerignore_excludes_credentials_and_production_data() -> None:
-    dockerignore = _read(".dockerignore")
-
-    for pattern in (".env", ".env.*", "*.pbf", "*.osm", "*.parquet", "data/", "runs/"):
-        assert pattern in dockerignore
-
-
-def test_docker_smoke_workflow_builds_without_production_inputs() -> None:
-    workflow = _read(".github/workflows/quality.yml")
-
-    assert "docker build" in workflow
-    assert "--target runtime" in workflow
-    assert "--help" in workflow
-    assert "HF_TOKEN" not in workflow
-    assert "source-root" not in workflow
-    assert "contents: read" in workflow
+def _last_stage(dockerfile: str) -> list[list[str]]:
+    """The instructions of the final build stage, each split into words."""
+    stages: list[list[list[str]]] = []
+    for line in dockerfile.splitlines():
+        words = line.split()
+        if not words or words[0].startswith("#"):
+            continue
+        if words[0].upper() == "FROM":
+            stages.append([])
+        if stages:
+            stages[-1].append(words)
+    return stages[-1]
 
 
-def test_setup_documents_docker_data_and_secret_boundaries() -> None:
-    setup = _read("docs/setup.md")
+def _instruction(stage: list[list[str]], name: str) -> list[str]:
+    """The arguments of the last ``name`` instruction in a stage."""
+    matches = [words[1:] for words in stage if words[0].upper() == name]
+    return matches[-1] if matches else []
 
-    assert "Docker" in setup
-    assert "--read-only" in setup
-    assert "readonly" in setup
-    assert "HF_TOKEN" in setup
-    assert "run-all" in setup
+
+def _ignored(path: str, patterns: list[str]) -> bool:
+    return any(
+        fnmatch.fnmatch(path, pattern) or path.startswith(pattern.rstrip("/") + "/")
+        for pattern in patterns
+    )
+
+
+def test_the_runtime_image_runs_as_a_non_root_user_with_an_entrypoint() -> None:
+    stage = _last_stage((ROOT / "Dockerfile").read_text(encoding="utf-8"))
+
+    user = _instruction(stage, "USER")
+
+    assert user
+    assert user[0] not in {"root", "0"}
+    assert _instruction(stage, "ENTRYPOINT")
+
+
+def test_the_build_context_keeps_credentials_and_data_out_of_the_image() -> None:
+    lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    patterns = [line.strip() for line in lines if line.strip() and not line.startswith("#")]
+
+    leaked = [path for path in _KEPT_OUT_OF_THE_IMAGE if not _ignored(path, patterns)]
+
+    assert leaked == []

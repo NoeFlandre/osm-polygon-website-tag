@@ -116,6 +116,14 @@ jobs:
           docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m
           osm-polygon-website-tag:ci --help
 
+      - name: Run a real subcommand's help
+        run: docker run --rm --read-only osm-polygon-website-tag:ci run-all --help
+
+      - name: Require a non-root runtime user
+        run: |
+          uid="$(docker run --rm --entrypoint id osm-polygon-website-tag:ci -u)"
+          test "$uid" != "0"
+
   # The mutation matrix runs on pull requests only: a merged pull request
   # already passed it, and the nightly sweep covers main.
   mutation:
