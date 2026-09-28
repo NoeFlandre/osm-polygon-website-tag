@@ -15,7 +15,10 @@ resolved nothing and refused every publish.
 
 from __future__ import annotations
 
+import logging
 import os
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def resolve_hf_token() -> str | None:
@@ -32,12 +35,17 @@ def _environment_token() -> str | None:
 
 
 def _stored_token() -> str | None:
-    """Read the optional huggingface_hub local credential store."""
+    """Read the optional huggingface_hub local credential store.
+
+    A missing library or an unreadable store means no stored token; the
+    cause is logged at DEBUG (``-vv``). Anything else is a bug and raises.
+    """
     try:
         from huggingface_hub import get_token
 
         token = get_token()
-    except Exception:  # noqa: BLE001 - silent fallback tracked in #72
+    except (ImportError, OSError, ValueError) as error:
+        _LOGGER.debug("no stored Hugging Face token: %s: %s", type(error).__name__, error)
         return None
     return token if isinstance(token, str) and token else None
 

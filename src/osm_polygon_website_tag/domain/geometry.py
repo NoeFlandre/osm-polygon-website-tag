@@ -44,6 +44,7 @@ Geometry pipeline
 from __future__ import annotations
 
 import json
+import logging
 import math
 from bisect import bisect_right
 from dataclasses import dataclass
@@ -53,6 +54,7 @@ import osmium
 import osmium.geom
 import osmium.osm
 import pyproj
+import pyproj.exceptions
 from shapely.geometry import LinearRing, MultiPolygon, Polygon
 from shapely.geometry.polygon import orient
 from shapely.ops import transform as shapely_transform
@@ -88,6 +90,9 @@ class PolygonGeometry:
     area_m2: float
     area_km2: float
     area_bucket: str
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _round_coord(value: float) -> float:
@@ -362,7 +367,9 @@ def compute_polygon_area_m2(ring: list[list[float]]) -> float:
 
     Uses ``pyproj.Geod.geometry_area_perimeter`` on a Shapely
     ``LinearRing``. Rings with fewer than three distinct points return
-    ``0.0``. Non-finite results are coerced to ``0.0``.
+    ``0.0``. Non-finite results are coerced to ``0.0``, and so is a ring
+    pyproj cannot measure (``GeodError`` or ``ValueError``), with a warning.
+    Any other error propagates instead of becoming a silent zero.
     """
     pts = _open_ring_points(ring)
     if len(pts) < 3:
@@ -371,7 +378,8 @@ def compute_polygon_area_m2(ring: list[list[float]]) -> float:
     geod = pyproj.Geod(ellps="WGS84")
     try:
         return _finite_abs_area(geod, shapely_ring)
-    except Exception:  # noqa: BLE001 - silent fallback tracked in #72
+    except (pyproj.exceptions.GeodError, ValueError) as error:
+        _LOGGER.warning("geodesic area failed for a ring; counted as 0.0: %s", error)
         return 0.0
 
 
