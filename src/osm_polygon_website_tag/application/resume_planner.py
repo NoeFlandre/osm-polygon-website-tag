@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -86,7 +86,7 @@ def summarize_enrichment_status(
     }
 
 
-def _status_batches(source: Path | pa.Table):
+def _status_batches(source: Path | pa.Table) -> Iterable[pa.RecordBatch] | None:
     """Return bounded status batches for a table or Parquet shard."""
     if isinstance(source, pa.Table):
         return source.to_batches()

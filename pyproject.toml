@@ -107,6 +107,16 @@ select = [
     "TRY300", # return inside try
     "DTZ",  # naive datetimes
     "ARG",  # unused arguments
+    "C90",  # mccabe complexity
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "FBT001", # boolean positional argument
+    "FBT002", # boolean default positional argument
+    "ANN001", # missing argument annotation
+    "ANN201", # missing public return annotation
+    "ANN202", # missing private return annotation
+    "ANN204", # missing special-method return annotation
     # TRY004 is left out: the wrong-type checks validate untrusted file and
     # model contents, where ValueError is the contract the CLI maps to exit 3.
 ]
@@ -115,12 +125,45 @@ ignore = [
     "E501",  # line length handled by formatter; some long dict literals are clearer on one line
 ]
 
+[tool.ruff.lint.pylint]
+# Typer commands take many options, so cli.py is exempt below. The rest of the
+# package is held to this bound; the listed modules predate it (TODO(#76)).
+max-args = 6
+
 [tool.ruff.lint.per-file-ignores]
 # Test fakes and lambdas mirror real signatures, so unused arguments are intentional.
-"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018", "ARG"]
+"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018", "ARG", "FBT", "ANN", "PLR0913"]
 # The quality scripts are CLIs that print their reports.
 "scripts/**/*.py" = ["T201"]
-"src/osm_polygon_website_tag/application/cli.py" = ["E501"]
+"src/osm_polygon_website_tag/application/cli.py" = ["E501", "PLR0913", "FBT001", "FBT002"]
+# Signatures that predate the argument-count and boolean-flag rules. New modules
+# are held to them; shrink this list as each function is reshaped (TODO(#76)).
+"src/osm_polygon_website_tag/application/source_processing.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/application/workflow.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/contracts/polygon_schema.py" = ["FBT001"]
+"src/osm_polygon_website_tag/pipeline/detect_languages.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/pipeline/enrich.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/extraction_handler.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/extraction_records.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/grid5000.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/grid5000_sentences.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/partition_aggregate.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/pipeline/sentence_run.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/publishing/card_artifacts.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/publishing/incremental.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/publishing/release.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/card_metadata.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/aggregation.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/h3_geometry.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/models.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/polygon_density.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/language.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/receipt.py" = ["FBT001", "FBT002", "PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/sentence.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/text.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/reporting/verify.py" = ["FBT001"]
+"src/osm_polygon_website_tag/runtime/run_state.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/web/web_fetch.py" = ["PLR0913"]
 
 [tool.ruff.format]
 quote-style = "double"

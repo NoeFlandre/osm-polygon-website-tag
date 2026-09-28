@@ -24,7 +24,7 @@ def _model(sha256: str = "a" * 64) -> ModelIdentity:
     return ModelIdentity("cis-lmu/glotlid", "model_v3.bin", "85cd671", sha256)
 
 
-def _row(index: int) -> dict[str, object]:
+def _row(index: int) -> dict[str, object]:  # noqa: C901, PLR0912 - too long or branchy; TODO(#76) split with the fixture work
     values: dict[str, object] = {}
     for field in POLYGON_PUBLIC_SCHEMA_V1_4:
         if field.name == "polygon_id":

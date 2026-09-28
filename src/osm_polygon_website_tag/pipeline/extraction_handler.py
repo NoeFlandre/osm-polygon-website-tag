@@ -47,7 +47,7 @@ from osm_polygon_website_tag.pipeline.area_work import (
 from osm_polygon_website_tag.pipeline.area_work import (
     validate_area_settings as _validate_area_settings,
 )
-from osm_polygon_website_tag.pipeline.record_builders import derive_tags
+from osm_polygon_website_tag.pipeline.record_builders import DerivedTags, derive_tags
 from osm_polygon_website_tag.storage.batch_sink import BatchParquetSink
 from osm_polygon_website_tag.storage.candidate_ledger import CandidateLedger
 
@@ -85,7 +85,7 @@ def _process_area_payload(payload: AreaPayload) -> AreaResult:
 
 def _build_public_result(
     payload: AreaPayload,
-    derived,
+    derived: DerivedTags,
 ) -> dict[str, object] | AreaResult | None:
     """Build a public row, or a rejection when website geometry is unusable."""
     if not derived.has_any_website:
@@ -122,7 +122,7 @@ def _build_public_result(
         return _geometry_rejection(payload, derived, "public_invariant_violation", str(inv))
 
 
-def _load_geometry(payload: AreaPayload, derived) -> PolygonGeometry | AreaResult:
+def _load_geometry(payload: AreaPayload, derived: DerivedTags) -> PolygonGeometry | AreaResult:
     """Parse payload geometry and convert all failures to rejection rows."""
     assert payload.raw_geojson is not None
     try:
@@ -138,7 +138,9 @@ def _load_geometry(payload: AreaPayload, derived) -> PolygonGeometry | AreaResul
         )
 
 
-def _geometry_rejection(payload: AreaPayload, derived, kind: str, message: str) -> AreaResult:
+def _geometry_rejection(
+    payload: AreaPayload, derived: DerivedTags, kind: str, message: str
+) -> AreaResult:
     """Build one rejection result with the payload's candidate metadata."""
     return AreaResult(
         rejection_row=_rejection_record(

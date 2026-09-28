@@ -19,7 +19,7 @@ class _EncodingProbe(str):
         return super().encode(encoding, errors)
 
 
-def _patch_existing_refresh_dependencies(
+def _patch_existing_refresh_dependencies(  # noqa: C901 - too long or branchy; TODO(#76) split with the fixture work
     monkeypatch: pytest.MonkeyPatch,
     *,
     text_population: object,

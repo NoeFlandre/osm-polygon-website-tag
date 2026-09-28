@@ -161,7 +161,7 @@ def test_source_processing_decisions_and_checkpoint_helpers(
     assert decision.needs_enrichment
 
 
-def test_source_processing_phase_helpers_are_bounded(
+def test_source_processing_phase_helpers_are_bounded(  # noqa: PLR0915 - too long or branchy; TODO(#76) split with the fixture work
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

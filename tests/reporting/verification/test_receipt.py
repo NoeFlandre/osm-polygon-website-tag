@@ -13,7 +13,7 @@ from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_
 from osm_polygon_website_tag.reporting.verification import receipt
 
 
-def test_receipt_helpers_validate_paths_files_and_digests(tmp_path: Path) -> None:
+def test_receipt_helpers_validate_paths_files_and_digests(tmp_path: Path) -> None:  # noqa: PLR0915 - too long or branchy; TODO(#76) split with the fixture work
     assert receipt._unsafe_receipt_path("/absolute")
     assert receipt._unsafe_receipt_path("../escape")
     assert not receipt._unsafe_receipt_path("polygons/a.parquet")

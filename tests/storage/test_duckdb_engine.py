@@ -32,7 +32,7 @@ from osm_polygon_website_tag.storage.duckdb_engine import (
 )
 
 
-def _row(index: int, *, language: bool) -> dict[str, object]:
+def _row(index: int, *, language: bool) -> dict[str, object]:  # noqa: C901, PLR0912 - too long or branchy; TODO(#76) split with the fixture work
     values: dict[str, object] = {}
     for field in POLYGON_PUBLIC_SCHEMA_V1_4:
         if field.name == "polygon_id":
