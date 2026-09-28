@@ -196,7 +196,10 @@ def _codec(name: str | None) -> str | None:
     try:
         codec = codecs.lookup(WEB_LABELS.get(label, label)).name
         "".encode(codec)  # bytes-to-bytes codecs (base64, zlib) are not text encodings
-    except (LookupError, UnicodeError):
+    except (
+        LookupError,
+        ValueError,
+    ):  # ValueError: a NUL byte in the label; UnicodeError: undefined
         return None
     return _WEB_ALIASES.get(codec, codec)
 

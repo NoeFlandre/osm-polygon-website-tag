@@ -20,7 +20,7 @@ no Hugging Face contact.
 | --- | --- | --- |
 | 1 | `just focused` | Only the tests the current diff can plausibly break |
 | 2 | `just qa-push` | Ruff, `ty`, then the focused tests (the pre-push hook) |
-| 3 | `just qa-pr` | Lock check, Ruff, `ty`, the full suite with coverage (≥ 75%), the CRAP gate (every function < 6) and `uv build` |
+| 3 | `just qa-pr` | Lock check, Ruff, `ty`, the full suite with coverage (≥ 75%), the CRAP gate (every function < 6), `uv build` and `pip-audit` |
 | 4 | `just qa-merge` | `qa-pr` plus the container smoke test |
 
 Mutation testing runs beside `qa-pr` in CI, scoped to the functions a change
@@ -30,6 +30,11 @@ must be killed unless it is already listed in
 never add new names to that file, only remove the ones your tests kill.
 
 Also run `uv run --locked mkdocs build --strict` when you change `docs/`.
+
+Property tests (`tests/**/test_*properties.py`, Hypothesis) pick their budget
+from `HYPOTHESIS_PROFILE`: `dev` (the default, 50 examples), `ci` (200,
+derandomized), `mutation` (25) and `nightly` (2000). Commit a counterexample
+they find as an `@example`.
 
 ## Rules of the code
 

@@ -23,6 +23,28 @@ permissions:
   contents: read
 
 jobs:
+  # Property tests get a large example budget here, where nobody is waiting.
+  properties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HYPOTHESIS_PROFILE: nightly
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Run the property tests
+        run: uv run --locked pytest -q -n auto $(find tests -name 'test_*properties.py')
+
   area:
     runs-on: ubuntu-latest
     timeout-minutes: 330

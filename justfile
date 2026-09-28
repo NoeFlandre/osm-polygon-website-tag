@@ -108,8 +108,10 @@ coverage:
 crap:
     uv run --locked python scripts/quality/crap_report.py --coverage-json "{{ COVERAGE_JSON }}" --path src/osm_polygon_website_tag --max-crap 6
 
+# Every mutant reruns the tests that cover it, so the mutation recipes give
+# property tests a short, derandomized budget (see tests/conftest.py).
 mutation: mutation-clean
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}"
+    HYPOTHESIS_PROFILE=mutation uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}"
     just mutation-gate
 
 # Results persist in the mutant workspace between invocations, so a run must
@@ -141,7 +143,7 @@ mutation-scope base="origin/main":
     # -- regenerating fourteen thousand mutants costs minutes -- and the gate is
     # told the scope so stale verdicts from other modules are ignored.
     # shellcheck disable=SC2086
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters
+    HYPOTHESIS_PROFILE=mutation uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters
     scopes=()
     while read -r filter; do scopes+=(--scope "$filter"); done <<< "$filters"
     just mutation-gate "${scopes[@]}"
@@ -155,7 +157,7 @@ mutation-module filters:
     set -euo pipefail
     just mutation-clean
     read -r -a shard <<< "{{ filters }}"
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"
+    HYPOTHESIS_PROFILE=mutation uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"
     scopes=()
     for filter in "${shard[@]}"; do scopes+=(--scope "$filter"); done
     just mutation-gate "${scopes[@]}"

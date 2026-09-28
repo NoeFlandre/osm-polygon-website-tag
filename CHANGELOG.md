@@ -34,6 +34,9 @@ match it.
 - Per-host politeness: `--host-concurrency` (default 2) and `--host-delay-seconds`
   (default 0.2) cap and space requests to one website, and a short `Retry-After`
   on 429/503 is honoured with one retry (#85).
+- A charset label containing a NUL byte no longer aborts extraction, and a host
+  made only of dots is rejected as `missing_hostname`; both found by the new
+  property tests (#89).
 - `publish-trackio` without the `trackio` package exits 5 with one clear line.
 
 ## [0.1.0]

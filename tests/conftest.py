@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import osmium
 import osmium.osm
 import pytest
+from hypothesis import settings
 
 from osm_polygon_website_tag.application import source_processing as source_processing_module
 from osm_polygon_website_tag.publishing import incremental as incremental_module
 from osm_polygon_website_tag.publishing import publish as publish_module
+
+# Property-test budgets, chosen with HYPOTHESIS_PROFILE. CI is derandomized so a
+# run never flakes; the nightly profile digs for new counterexamples; mutation
+# runs repeat the suite once per mutant, so they get a short one.
+settings.register_profile("dev", max_examples=50, deadline=None)
+settings.register_profile("ci", max_examples=200, deadline=None, derandomize=True)
+settings.register_profile("mutation", max_examples=25, deadline=None, derandomize=True)
+settings.register_profile("nightly", max_examples=2000, deadline=None)
+settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 _UPLOAD_ATTEMPT = (
     "a test tried to reach Hugging Face; publication is an explicit, "

@@ -1358,3 +1358,9 @@ def test_make_polite_fetcher_shares_one_limiter_between_calls(monkeypatch) -> No
 
     assert limiters[0] is limiters[1]
     assert limiters[0].policy == policy
+
+
+@pytest.mark.parametrize("raw", [".", "..", "https://.", "http://...:8080/x", "//."])
+def test_a_host_made_only_of_dots_is_missing_not_empty(raw: str) -> None:
+    with pytest.raises(ValueError, match=r"^missing_hostname$"):
+        web_fetch_module.normalize_http_url(raw)

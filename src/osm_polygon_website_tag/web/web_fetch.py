@@ -102,6 +102,8 @@ def _normalise_http_hostname(parsed: urllib.parse.SplitResult) -> str:
     if hostname is None:
         raise ValueError("missing_hostname")
     hostname = hostname.rstrip(".").lower()
+    if not hostname:
+        raise ValueError("missing_hostname")
     if hostname == "localhost" or hostname.endswith(".localhost"):
         raise ValueError("localhost_not_allowed")
     return _encode_hostname(hostname)

@@ -55,3 +55,4 @@ data/
 # uv
 uv.lock.local
 site/
+.hypothesis/

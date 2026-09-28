@@ -74,6 +74,7 @@ dev = [
     "mutmut>=3,<4",
     "radon>=6,<7",
     "pytest-xdist>=3,<4",
+    "hypothesis>=6,<7",
 ]
 
 [tool.ruff]
