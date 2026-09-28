@@ -94,3 +94,13 @@ def test_interactive_progress_starts_a_new_bar_when_source_index_resets(monkeypa
     assert len(_FakeTqdm.instances) == 2
     assert _FakeTqdm.instances[0].closed is True
     assert _FakeTqdm.instances[1].description == "Enriching a.osm.pbf"
+
+
+def test_quiet_progress_writes_nothing() -> None:
+    stream = StringIO()
+    reporter = ProgressReporter(stream, interactive=False, quiet=True)
+
+    reporter("[1/2] a.osm.pbf")
+    reporter("phase message")
+
+    assert stream.getvalue() == ""

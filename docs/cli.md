@@ -5,6 +5,19 @@ The installed command is `osm-polygon-website-tag`. Run
 Typer. `run-all` is the normal entry point; the phase commands are useful for
 development, recovery, and inspection of an existing run.
 
+## Global options
+
+They go before the command, for example `osm-polygon-website-tag -q run-all ...`:
+
+| Option | Effect |
+| --- | --- |
+| `--version` | Print the package version and exit 0. |
+| `-v`, `--verbose` | Log on stderr: `-v` shows INFO, `-vv` DEBUG (such as the resolved data root). |
+| `-q`, `--quiet` | Only errors on stderr, and no progress output; stdout keeps the JSON result. |
+| `--debug` | Show full tracebacks instead of one-line errors (also `OSM_PWT_DEBUG=1`). |
+
+`-v` and `-q` cannot be combined. Logs never go to stdout.
+
 ## Exit codes and errors
 
 | Code | Meaning |

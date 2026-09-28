@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -660,6 +661,9 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
     calls: list[dict[str, object]] = []
 
     class FakeProgress:
+        def __init__(self, *, quiet: bool) -> None:
+            assert quiet is False
+
         def close(self, *, completed: bool) -> None:
             events.append(completed)
 
@@ -1265,3 +1269,97 @@ def test_the_exit_code_table_is_documented() -> None:
     for code in {code for _type, code in cli._EXIT_CODES} | {0, 1, 2, cli.EXIT_INTERRUPTED}:
         assert f"| `{code}` |" in doc
     assert cli.DEBUG_ENV in doc
+
+
+def test_version_prints_the_package_version(capsys: pytest.CaptureFixture[str]) -> None:
+    from importlib.metadata import version
+
+    assert cli.main(["--version"]) == 0
+    assert capsys.readouterr().out == f"{version('osm-polygon-website-tag')}\n"
+
+
+def _stderr_for(
+    flags: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> str:
+    monkeypatch.setenv("OSM_POLY_DATA_DIR", "/data-root")
+    monkeypatch.setattr(cli, "compute_card_stats", lambda _run_dir: SimpleNamespace(ok=True))
+    assert cli.main([*flags, "card-stats", "--run-dir", "/run"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"ok": True}
+    return captured.err
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [
+        ([], ""),
+        (["-q"], ""),
+        (["-v"], "INFO osm_polygon_website_tag: osm-polygon-website-tag {version}\n"),
+        (
+            ["-vv"],
+            "INFO osm_polygon_website_tag: osm-polygon-website-tag {version}\n"
+            "DEBUG osm_polygon_website_tag: data root /data-root\n",
+        ),
+        (
+            ["-v", "-v", "-v"],
+            "INFO osm_polygon_website_tag: osm-polygon-website-tag {version}\n"
+            "DEBUG osm_polygon_website_tag: data root /data-root\n",
+        ),
+    ],
+)
+def test_verbosity_flags_control_the_stderr_log(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    flags: list[str],
+    expected: str,
+) -> None:
+    from importlib.metadata import version
+
+    err = _stderr_for(flags, monkeypatch, capsys)
+
+    assert err == expected.format(version=version("osm-polygon-website-tag"))
+
+
+def test_quiet_logs_only_errors() -> None:
+    assert cli._log_level(0, quiet=True) == logging.ERROR
+    assert cli._log_level(0, quiet=False) == logging.WARNING
+
+
+def test_verbose_and_quiet_cannot_be_combined(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["-v", "-q", "card-stats", "--run-dir", "/run"]) == 2
+    assert "--verbose and --quiet cannot be combined" in capsys.readouterr().err
+
+
+def test_global_options_last_one_invocation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _stderr_for(["-q", "-vv"][:1], monkeypatch, capsys)
+
+    assert cli._quiet == {"enabled": False}
+    assert cli._LOGGER.handlers == []
+    assert cli._LOGGER.level == logging.NOTSET
+
+
+def test_run_all_silences_progress_when_quiet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: list[bool] = []
+
+    class Reporter:
+        def __init__(self, *, quiet: bool) -> None:
+            seen.append(quiet)
+
+        def close(self, *, completed: bool) -> None:
+            pass
+
+    def fail_run(**_kwargs: object) -> None:
+        raise ValueError("stop")
+
+    monkeypatch.setattr(cli, "ProgressReporter", Reporter)
+    monkeypatch.setattr(cli, "run_all", fail_run)
+    argv = ["run-all", "--source-root", str(tmp_path), "--output-root", str(tmp_path / "o")]
+    argv += ["--run-id", "r"]
+
+    assert cli.main(["-q", *argv]) == 3
+    assert cli.main(argv) == 3
+    assert seen == [True, False]

@@ -19,13 +19,17 @@ class ProgressReporter:
         stream: TextIO | None = None,
         *,
         interactive: bool | None = None,
+        quiet: bool = False,
     ) -> None:
+        self._quiet = quiet
         self._stream = stream or sys.stderr
         self._interactive = self._stream.isatty() if interactive is None else interactive
         self._bar: tqdm[object] | None = None
         self._last_current: int | None = None
 
     def __call__(self, message: str) -> None:
+        if self._quiet:
+            return
         match = _COUNTED_MESSAGE.fullmatch(message)
         if not self._interactive:
             self._write_plain(message)

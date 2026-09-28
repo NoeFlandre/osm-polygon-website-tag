@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 from dataclasses import dataclass
+from importlib.metadata import version as package_version
 from pathlib import Path
 from time import monotonic
 from typing import Annotated, Any, cast
@@ -76,7 +79,11 @@ from osm_polygon_website_tag.runtime.config import (
     DEFAULT_TRACKIO_PROJECT,
     DEFAULT_TRACKIO_SPACE,
 )
-from osm_polygon_website_tag.runtime.paths import model_cache_dir, require_under_data_root
+from osm_polygon_website_tag.runtime.paths import (
+    model_cache_dir,
+    require_under_data_root,
+    resolve_data_root,
+)
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -126,16 +133,74 @@ _CLICK_EXCEPTION = cast(
     next(kind for kind in typer.BadParameter.__mro__ if kind.__name__ == "ClickException"),
 )
 _debug = {"enabled": False}
+_quiet = {"enabled": False}
+_DISTRIBUTION = "osm-polygon-website-tag"
+_LOGGER = logging.getLogger("osm_polygon_website_tag")
+# Index = number of -v flags; -q overrides with ERROR.
+_VERBOSITY_LEVELS = (logging.WARNING, logging.INFO, logging.DEBUG)
+
+
+def _show_version(value: bool) -> None:
+    if value:
+        typer.echo(package_version(_DISTRIBUTION))
+        raise typer.Exit
 
 
 @app.callback()
 def _global_options(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_show_version,
+            is_eager=True,
+            help="Print the package version and exit.",
+        ),
+    ] = False,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "-v", "--verbose", count=True, help="More log detail on stderr; -vv shows DEBUG."
+        ),
+    ] = 0,
+    quiet: Annotated[
+        bool,
+        typer.Option("-q", "--quiet", help="Only errors on stderr, and no progress output."),
+    ] = False,
     debug: Annotated[
         bool,
         typer.Option("--debug", help=f"Show full tracebacks (also: {DEBUG_ENV}=1)."),
     ] = False,
 ) -> None:
+    """Analyze and publish OSM polygons carrying website tags."""
+    if verbose and quiet:
+        raise typer.BadParameter("--verbose and --quiet cannot be combined")
     _debug["enabled"] = debug
+    _quiet["enabled"] = quiet
+    _configure_logging(_log_level(verbose, quiet=quiet))
+    _LOGGER.info("%s %s", _DISTRIBUTION, package_version(_DISTRIBUTION))
+    _LOGGER.debug("data root %s", resolve_data_root())
+
+
+def _log_level(verbose: int, *, quiet: bool) -> int:
+    if quiet:
+        return logging.ERROR
+    return _VERBOSITY_LEVELS[min(verbose, len(_VERBOSITY_LEVELS) - 1)]
+
+
+def _configure_logging(level: int) -> None:
+    """Log the package to the current stderr, so stdout stays pure JSON."""
+    _reset_logging()
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    _LOGGER.addHandler(handler)
+    _LOGGER.setLevel(level)
+
+
+def _reset_logging() -> None:
+    for handler in list(_LOGGER.handlers):
+        _LOGGER.removeHandler(handler)
+    _LOGGER.setLevel(logging.NOTSET)
 
 
 RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
@@ -478,7 +543,7 @@ def run_all_command(
     """Run or resume the complete PBF inventory."""
     if ensure_repo and not apply:
         raise ValueError("--ensure-repo requires --apply")
-    progress = ProgressReporter()
+    progress = ProgressReporter(quiet=_quiet["enabled"])
     try:
         result = run_all(
             source_root=source_root,
@@ -930,7 +995,10 @@ def main(argv: list[str] | None = None) -> int:
         _error_console.print(f"error: {exc}")
         return exit_code_for(exc)
     finally:
+        # Global options apply to one invocation only.
         _debug["enabled"] = False
+        _quiet["enabled"] = False
+        _reset_logging()
 
 
 def _run_app(argv: list[str] | None) -> int:
