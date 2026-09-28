@@ -11,7 +11,7 @@ from osm_polygon_website_tag.application.progress import ProgressReporter
 
 class _FakeTqdm:
     instances: ClassVar[list[_FakeTqdm]] = []
-    written: ClassVar[list[str]] = []
+    written: ClassVar[list[tuple[str, object]]] = []
 
     def __init__(self, *, total, file, unit, dynamic_ncols) -> None:
         self.total = total
@@ -19,6 +19,7 @@ class _FakeTqdm:
         self.unit = unit
         self.dynamic_ncols = dynamic_ncols
         self.n = 0
+        self.updates: list[int] = []
         self.description = ""
         self.closed = False
         self.instances.append(self)
@@ -28,6 +29,7 @@ class _FakeTqdm:
 
     def update(self, amount: int) -> None:
         self.n += amount
+        self.updates.append(amount)
 
     def refresh(self) -> None:
         pass
@@ -37,7 +39,7 @@ class _FakeTqdm:
 
     @classmethod
     def write(cls, message: str, *, file) -> None:
-        cls.written.append(message)
+        cls.written.append((message, file))
 
 
 def _install_fake_tqdm(monkeypatch) -> None:
@@ -59,17 +61,19 @@ def test_noninteractive_progress_preserves_plain_log_lines() -> None:
 
 def test_interactive_progress_uses_tqdm_and_keeps_phase_messages(monkeypatch) -> None:
     _install_fake_tqdm(monkeypatch)
-    reporter = ProgressReporter(StringIO(), interactive=True)
+    stream = StringIO()
+    reporter = ProgressReporter(stream, interactive=True)
 
     reporter("[2/3] Extracting source.osm.pbf")
     reporter("Building aggregate analysis")
 
     bar = _FakeTqdm.instances[0]
+    assert (bar.file, bar.unit, bar.dynamic_ncols) == (stream, "pbf", True)
     assert bar.total == 3
     assert bar.n == 3
     assert bar.description == "Extracting source.osm.pbf"
     assert bar.closed is True
-    assert _FakeTqdm.written == ["Building aggregate analysis"]
+    assert _FakeTqdm.written == [("Building aggregate analysis", stream)]
 
 
 def test_interrupted_progress_closes_without_marking_complete(monkeypatch) -> None:
@@ -104,3 +108,67 @@ def test_quiet_progress_writes_nothing() -> None:
     reporter("phase message")
 
     assert stream.getvalue() == ""
+
+
+class _FlushCounter(StringIO):
+    flushes = 0
+
+    def flush(self) -> None:
+        self.flushes += 1
+        super().flush()
+
+
+def test_plain_lines_are_flushed_as_they_are_written() -> None:
+    stream = _FlushCounter()
+    reporter = ProgressReporter(stream, interactive=False)
+
+    reporter("one")
+    reporter("two")
+
+    assert stream.flushes == 2
+
+
+def test_a_repeated_index_updates_the_same_bar(monkeypatch) -> None:
+    _install_fake_tqdm(monkeypatch)
+    reporter = ProgressReporter(StringIO(), interactive=True)
+
+    reporter("[2/3] Extracting a.osm.pbf")
+    reporter("[2/3] Enriching a.osm.pbf")
+
+    assert len(_FakeTqdm.instances) == 1
+    assert _FakeTqdm.instances[0].description == "Enriching a.osm.pbf"
+
+
+def test_the_bar_only_advances_by_positive_amounts(monkeypatch) -> None:
+    _install_fake_tqdm(monkeypatch)
+    reporter = ProgressReporter(StringIO(), interactive=True)
+
+    reporter("[1/3] a")
+    reporter("[3/3] c")
+    reporter("[4/3] d")
+    reporter.close(completed=True)
+
+    bar = _FakeTqdm.instances[0]
+    assert bar.updates == [2, 1]
+    assert bar.n == bar.total == 3
+
+
+def test_closing_a_complete_run_fills_the_bar(monkeypatch) -> None:
+    _install_fake_tqdm(monkeypatch)
+    reporter = ProgressReporter(StringIO(), interactive=True)
+    reporter("[1/3] a")
+
+    reporter.close(completed=True)
+
+    assert _FakeTqdm.instances[0].n == 3
+
+
+def test_a_finished_run_can_start_a_new_bar(monkeypatch) -> None:
+    _install_fake_tqdm(monkeypatch)
+    reporter = ProgressReporter(StringIO(), interactive=True)
+    reporter("[2/3] a")
+    reporter.close(completed=True)
+
+    reporter("[1/2] b")
+
+    assert [bar.total for bar in _FakeTqdm.instances] == [3, 2]
