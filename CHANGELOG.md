@@ -25,6 +25,9 @@ match it.
 - The User-Agent carries the full package version.
 - Trafilatura loads on first extraction, not at import: every command starts
   about 2 s faster (#95).
+- Fetching refuses a redirect, an error page, an unsupported media type or a
+  declared `Content-Length` over the limit from the headers alone, without
+  downloading the body; media types are matched exactly (#84).
 - `publish-trackio` without the `trackio` package exits 5 with one clear line.
 
 ## [0.1.0]

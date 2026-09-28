@@ -204,13 +204,11 @@ def test_private_fetch_classifiers_and_redirect_helpers_are_deterministic() -> N
     response = HttpResponse(200, {"Content-Type": "text/html"}, b"body")
     assert web_fetch_module._header(response.headers, "content-type") == "text/html"
     assert web_fetch_module._header(response.headers, "missing") is None
-    assert web_fetch_module._status_error(response, "https://example.org", "requested", 10) is None
-    assert web_fetch_module._size_error(response, "https://example.org", "requested", 3)
-    assert web_fetch_module._content_type_error(
-        HttpResponse(200, {"Content-Type": "image/png"}, b"x"),
-        "https://example.org",
-        "requested",
-        10,
+    assert web_fetch_module._response_error(response, 10) is None
+    assert web_fetch_module._response_error(response, 3) == "response_too_large"
+    assert (
+        web_fetch_module._response_error(HttpResponse(200, {"Content-Type": "image/png"}, b"x"), 10)
+        == "unsupported_content_type"
     )
     next_url, terminal = web_fetch_module._redirect_step(
         HttpResponse(302, {"location": "/next"}, b""),
@@ -735,14 +733,12 @@ def test_redirect_step_results_exact() -> None:
 
 @pytest.mark.parametrize("status", [100, 199, 300, 304, 399, 400, 404, 500])
 def test_status_error_non_2xx(status: int) -> None:
-    assert web_fetch_module._status_error(
-        HttpResponse(status, {}, b""), "cur", "req", 0
-    ) == FetchResult("fetch_error", "req", final_url="cur", message=f"http_{status}")
+    assert web_fetch_module._response_error(HttpResponse(status, {}, b""), 0) == f"http_{status}"
 
 
 @pytest.mark.parametrize("status", [200, 204, 299])
 def test_status_ok_2xx(status: int) -> None:
-    assert web_fetch_module._status_error(HttpResponse(status, {}, b""), "c", "r", 0) is None
+    assert web_fetch_module._response_error(HttpResponse(status, {}, b""), 0) is None
     assert fetch_html(
         "https://example.org",
         request_once=lambda *_a: HttpResponse(status, {}, b"x"),
@@ -766,11 +762,9 @@ def test_fetch_http_error_exact(status: int) -> None:
 
 
 def test_size_limit_boundary() -> None:
-    size = web_fetch_module._size_error
-    assert size(HttpResponse(200, {}, b"abc"), "c", "r", 3) is None
-    assert size(HttpResponse(200, {}, b"abcd"), "c", "r", 3) == FetchResult(
-        "fetch_error", "r", final_url="c", message="response_too_large"
-    )
+    size = web_fetch_module._response_error
+    assert size(HttpResponse(200, {}, b"abc"), 3) is None
+    assert size(HttpResponse(200, {}, b"abcd"), 3) == "response_too_large"
     assert fetch_html(
         "https://example.org",
         request_once=lambda *_a: HttpResponse(200, {"content-type": "image/png"}, b"abcd"),
@@ -804,7 +798,7 @@ def test_size_limit_boundary() -> None:
 )
 def test_content_type_allowed(content_type: str) -> None:
     response = HttpResponse(200, {"Content-Type": content_type}, b"x")
-    assert web_fetch_module._content_type_error(response, "c", "r", 0) is None
+    assert web_fetch_module._response_error(response, 10) is None
     assert fetch_html(
         "https://example.org", request_once=lambda *_a: response, resolver=_public_resolver
     ) == FetchResult(
@@ -822,8 +816,7 @@ def test_content_type_allowed(content_type: str) -> None:
 )
 def test_content_type_rejected(content_type: str) -> None:
     response = HttpResponse(200, {"CONTENT-TYPE": content_type}, b"x")
-    expected = FetchResult("fetch_error", "r", final_url="c", message="unsupported_content_type")
-    assert web_fetch_module._content_type_error(response, "c", "r", 0) == expected
+    assert web_fetch_module._response_error(response, 10) == "unsupported_content_type"
     assert fetch_html(
         "https://example.org", request_once=lambda *_a: response, resolver=_public_resolver
     ) == FetchResult(
@@ -963,7 +956,7 @@ def test_download_once_http_error_and_missing_status(monkeypatch, raw_status, ex
 
     monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
     result = web_fetch_module._download_once("https://example.org", 1.0, 3)
-    assert result == HttpResponse(expected, {"Content-Type": "text/html"}, b"abcd")
+    assert result == HttpResponse(expected, {"Content-Type": "text/html"}, b"")
     assert type(result.status_code) is int
 
 
@@ -1107,3 +1100,105 @@ def test_download_once_deadline_starts_before_connect(monkeypatch) -> None:
     web_fetch_module._download_once("https://example.org", 3.0, 10)
 
     assert seen == [(11, 103.0)]
+
+
+class _CountingResponse:
+    """A urllib response that counts the body bytes read from it."""
+
+    def __init__(self, status: int, headers: dict[str, str], body: bytes) -> None:
+        self.status = status
+        self.headers = headers
+        self.pending = body
+        self.bytes_read = 0
+
+    def __enter__(self) -> _CountingResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self, limit: int) -> bytes:
+        chunk, self.pending = self.pending[:limit], self.pending[limit:]
+        self.bytes_read += len(chunk)
+        return chunk
+
+
+def _download(monkeypatch: pytest.MonkeyPatch, response: _CountingResponse, max_bytes: int):
+    class Opener:
+        def open(self, _request: object, *, timeout: float) -> _CountingResponse:
+            return response
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
+    return web_fetch_module._download_once("https://example.org", 3.0, max_bytes)
+
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [
+        (404, {"Content-Type": "text/html"}),
+        (500, {}),
+        (302, {"Location": "https://example.org/next"}),
+        (200, {"Content-Type": "image/png"}),
+        (200, {"Content-Type": "application/pdf; charset=binary"}),
+        (200, {"Content-Type": "text/html", "Content-Length": "50000000"}),
+    ],
+)
+def test_a_page_refused_by_its_headers_reads_no_body(
+    monkeypatch: pytest.MonkeyPatch, status: int, headers: dict[str, str]
+) -> None:
+    response = _CountingResponse(status, headers, b"x" * 1000)
+
+    result = _download(monkeypatch, response, 100)
+
+    assert response.bytes_read == 0
+    assert (result.status_code, result.body) == (status, b"")
+    assert result.headers == headers
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"Content-Type": "text/html; charset=utf-8", "Content-Length": "500"}],
+)
+def test_a_usable_page_is_still_read_in_full(
+    monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
+) -> None:
+    response = _CountingResponse(200, headers, b"x" * 500)
+
+    assert _download(monkeypatch, response, 1000).body == b"x" * 500
+    assert response.bytes_read == 500
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"Content-Length": "101"}, "response_too_large"),
+        ({"content-length": " 101 "}, "response_too_large"),
+        ({"Content-Length": "100"}, None),
+        ({"Content-Length": "-5"}, None),
+        ({"Content-Length": "abc"}, None),
+        ({"Content-Length": ""}, None),
+        ({}, None),
+    ],
+)
+def test_declared_length_over_the_limit_is_refused(
+    headers: dict[str, str], expected: str | None
+) -> None:
+    assert web_fetch_module._response_error(HttpResponse(200, headers, b""), 100) == expected
+
+
+@pytest.mark.parametrize("content_type", ["text/htmlx", "xtext/html", "text/html-fragment"])
+def test_the_media_type_must_match_exactly(content_type: str) -> None:
+    response = HttpResponse(200, {"Content-Type": content_type}, b"x")
+
+    assert web_fetch_module._response_error(response, 10) == "unsupported_content_type"
+
+
+def test_status_outranks_size_and_size_outranks_type() -> None:
+    error = web_fetch_module._response_error
+    headers = {"Content-Type": "image/png", "Content-Length": "500"}
+
+    assert error(HttpResponse(404, headers, b""), 10) == "http_404"
+    assert error(HttpResponse(200, headers, b""), 10) == "response_too_large"
+    assert error(HttpResponse(200, {"Content-Type": "image/png"}, b""), 10) == (
+        "unsupported_content_type"
+    )

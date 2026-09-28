@@ -306,10 +306,9 @@ def _terminal_response(
     max_bytes: int,
 ) -> FetchResult:
     """Classify a non-redirect response and enforce body/content limits."""
-    for checker in (_status_error, _size_error, _content_type_error):
-        error = checker(response, current, requested, max_bytes)
-        if error is not None:
-            return error
+    message = _response_error(response, max_bytes)
+    if message is not None:
+        return FetchResult("fetch_error", requested, final_url=current, message=message)
     return FetchResult(
         "ok",
         requested,
@@ -320,35 +319,41 @@ def _terminal_response(
     )
 
 
-def _status_error(
-    response: HttpResponse,
-    current: str,
-    requested: str,
-    _max_bytes: int,
-) -> FetchResult | None:
-    """Return an error for non-2xx responses."""
+def _response_error(response: HttpResponse, max_bytes: int) -> str | None:
+    """Name why a non-redirect response is unusable, checking status, size, then type.
+
+    Everything but the body length is decided from the headers alone, so the
+    transport can refuse a page before downloading it.
+    """
     if not 200 <= response.status_code < 300:
-        return FetchResult(
-            "fetch_error", requested, final_url=current, message=f"http_{response.status_code}"
-        )
+        return f"http_{response.status_code}"
+    if _too_large(response, max_bytes):
+        return "response_too_large"
+    if not _media_type_allowed(response.headers):
+        return "unsupported_content_type"
     return None
 
 
-def _size_error(
-    response: HttpResponse,
-    current: str,
-    requested: str,
-    max_bytes: int,
-) -> FetchResult | None:
-    """Return an error when the response body exceeds the configured limit."""
-    if len(response.body) > max_bytes:
-        return FetchResult(
-            "fetch_error", requested, final_url=current, message="response_too_large"
-        )
-    return None
+def _too_large(response: HttpResponse, max_bytes: int) -> bool:
+    """Whether the body, or the length the server announced, exceeds the limit."""
+    declared = _declared_length(response.headers)
+    return len(response.body) > max_bytes or (declared is not None and declared > max_bytes)
+
+
+def _declared_length(headers: Mapping[str, str]) -> int | None:
+    """Return the Content-Length header as an integer, ignoring malformed values."""
+    value = _header(headers, "content-length")
+    return int(value) if value is not None and value.strip().isdecimal() else None
+
+
+def _media_type_allowed(headers: Mapping[str, str]) -> bool:
+    """A missing Content-Type is allowed; a present one must be a document type."""
+    declared = _header_media_type(headers)
+    return not declared or declared in _DOCUMENT_TYPES
 
 
 _CONTENT_TYPE = "content-type"
+_DOCUMENT_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
 
 
 def _header_charset(headers: Mapping[str, str]) -> str | None:
@@ -359,23 +364,6 @@ def _header_charset(headers: Mapping[str, str]) -> str | None:
 def _header_media_type(headers: Mapping[str, str]) -> str | None:
     value = _header(headers, _CONTENT_TYPE)
     return None if value is None else media_type(value)
-
-
-def _content_type_error(
-    response: HttpResponse,
-    current: str,
-    requested: str,
-    _max_bytes: int,
-) -> FetchResult | None:
-    """Return an error for non-document content types."""
-    content_type = (_header(response.headers, "content-type") or "").lower()
-    if content_type and not any(
-        allowed in content_type for allowed in ("text/html", "application/xhtml+xml", "text/plain")
-    ):
-        return FetchResult(
-            "fetch_error", requested, final_url=current, message="unsupported_content_type"
-        )
-    return None
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
@@ -475,11 +463,24 @@ def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResp
             raise exc.reason from exc
         raise
     with response:
+        head = _response_head(response)
+        # A redirect, an error page, a video or an oversized file is refused
+        # from its headers; downloading it first wastes up to max_bytes each.
+        if not _worth_reading(head, max_bytes):
+            return head
         body = _read_before_deadline(response, max_bytes + 1, deadline)
-        status = response.status
-        if status is None:
-            status = 0
-        return HttpResponse(int(status), dict(response.headers.items()), body)
+        return HttpResponse(head.status_code, dict(head.headers), body)
+
+
+def _response_head(response: Any) -> HttpResponse:
+    """The status and headers of a urllib response, with an empty body."""
+    status = response.status
+    return HttpResponse(0 if status is None else int(status), dict(response.headers.items()), b"")
+
+
+def _worth_reading(head: HttpResponse, max_bytes: int) -> bool:
+    """Only a 2xx response whose headers pass every check has a body we keep."""
+    return 200 <= head.status_code < 300 and _response_error(head, max_bytes) is None
 
 
 __all__ = [
