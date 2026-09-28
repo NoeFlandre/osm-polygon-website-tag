@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import osmium
@@ -13,6 +14,8 @@ from hypothesis import settings
 from osm_polygon_website_tag.application import source_processing as source_processing_module
 from osm_polygon_website_tag.publishing import incremental as incremental_module
 from osm_polygon_website_tag.publishing import publish as publish_module
+from osm_polygon_website_tag.web import web_fetch
+from tests.fixtures.loopback import LoopbackServer, serve
 
 # Property-test budgets, chosen with HYPOTHESIS_PROFILE. CI is derandomized so a
 # run never flakes; the nightly profile digs for new counterexamples; mutation
@@ -88,3 +91,20 @@ def make_pbf(tmp_path: Path):
         return src_dir
 
     return _make
+
+
+@pytest.fixture
+def loopback(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackServer]:
+    """A live server on 127.0.0.1 that the fetch layer treats as a public host.
+
+    The loopback allowance lives in this fixture only: ``_is_public_address`` is
+    widened to loopback addresses, so the production check stays untouched.
+    """
+    original = web_fetch._is_public_address
+    monkeypatch.setattr(
+        web_fetch,
+        "_is_public_address",
+        lambda address: address.is_loopback or original(address),
+    )
+    with serve() as server:
+        yield server
