@@ -196,6 +196,27 @@ def _xml_charset(html: bytes) -> str | None:
     return _meta_codec(match["label"]) if match else None
 
 
+def _xml_byte_pattern_codec(html: bytes) -> str | None:
+    """Detect BOM-less UTF-16/32 from XML's leading markup byte pattern."""
+    if html.startswith(b"\x00\x00\x00<"):
+        return "utf-32-be"
+    if html.startswith(b"<\x00\x00\x00"):
+        return "utf-32-le"
+    if html.startswith(b"\x00<"):
+        return "utf-16-be"
+    if html.startswith(b"<\x00"):
+        return "utf-16-le"
+    return None
+
+
+def _decode_xml_byte_pattern(html: bytes, media_type: str | None) -> str | None:
+    """Decode BOM-less UTF-16/32 XML when its opening markup identifies the byte order."""
+    if media_type not in _XML_TYPES:
+        return None
+    codec = _xml_byte_pattern_codec(html)
+    return str(html, codec, "replace") if codec is not None else None
+
+
 def _declared_codec(html: bytes, media_type: str | None) -> str | None:
     """The in-document declaration that applies to this media type, if any."""
     if media_type in _META_SNIFFED_TYPES:
@@ -259,6 +280,9 @@ def decode_html(html: bytes, charset: str | None = None, *, media_type: str | No
     authoritative = _authoritative_codec(html, header)
     if authoritative is not None:  # only bad bytes are replaced
         return str(html, authoritative, "replace")
+    xml_byte_pattern = _decode_xml_byte_pattern(html, media_type)
+    if xml_byte_pattern is not None:
+        return xml_byte_pattern
     meta = _declared_codec(html, media_type)
     lookalikes = [
         _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),

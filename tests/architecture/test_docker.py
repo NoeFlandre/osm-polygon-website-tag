@@ -73,6 +73,13 @@ def test_the_runtime_image_defaults_its_data_root_to_the_mounted_volume() -> Non
     assert "OSM_POLY_DATA_DIR=/data" in environment
 
 
+def test_the_runtime_image_prepares_a_writable_grid5000_bundle_directory() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "mkdir -p /data/raw /data/runs /data/models /data/grid5000" in dockerfile
+    assert "chown app:app /data/runs /data/models /data/grid5000" in dockerfile
+
+
 def _compose_service() -> Any:
     import yaml
 
@@ -90,6 +97,14 @@ def test_the_compose_service_is_read_only_non_root_and_mounts_raw_input_read_onl
     assert volumes["/data/raw"]["read_only"] is True
     assert "read_only" not in volumes["/data/runs"]
     assert "/data/models" in volumes
+
+
+def test_the_compose_service_mounts_a_writable_grid5000_bundle_directory() -> None:
+    service = _compose_service()
+    volumes = {volume["target"]: volume for volume in service["volumes"]}
+
+    assert volumes["/data/grid5000"]["source"] == "${OSM_GRID5000_DIR:-./data/grid5000}"
+    assert "read_only" not in volumes["/data/grid5000"]
 
 
 def test_the_compose_service_carries_no_secret_and_reads_an_optional_env_file() -> None:

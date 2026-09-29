@@ -232,7 +232,7 @@ def _json(payload: Any, *, sort_keys: bool = False) -> None:
 
 @app.command(
     "init",
-    epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "$OSM_POLY_DATA_DIR/runs" --run-id website-v1',
+    epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
 )
 def init_command(
     output_root: Annotated[
@@ -273,7 +273,7 @@ def init_command(
 
 @app.command(
     "extract",
-    epilog='Example: osm-polygon-website-tag extract region.osm.pbf --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1"',
+    epilog='Example: osm-polygon-website-tag extract region.osm.pbf --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
 )
 def extract_command(
     pbf_path: Annotated[Path, typer.Argument(help="Source .osm.pbf file.")],
@@ -422,7 +422,7 @@ def publish_plan_command(
 
 @app.command(
     "publish",
-    epilog='Example: osm-polygon-website-tag publish --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1" --apply',
+    epilog='Example: osm-polygon-website-tag publish --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1" --apply',
 )
 def publish_command(
     run_dir: RunDir,
@@ -440,7 +440,7 @@ def publish_command(
 
 @app.command(
     "release-stats",
-    epilog='Example: osm-polygon-website-tag release-stats --run-dir "$OSM_POLY_DATA_DIR/runs/website-v1"',
+    epilog='Example: osm-polygon-website-tag release-stats --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
 )
 def release_stats_command(
     run_dir: RunDir,
@@ -546,7 +546,7 @@ def publish_trackio_command(
 
 @app.command(
     "run-all",
-    epilog='Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root "$OSM_POLY_DATA_DIR/runs" --run-id website-v1',
+    epilog='Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
 )
 def run_all_command(
     source_root: Annotated[

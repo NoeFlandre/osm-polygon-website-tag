@@ -165,6 +165,17 @@ def test_typer_help_lists_every_public_command() -> None:
         assert command in result.stdout
 
 
+def test_cli_run_examples_use_the_portable_data_root_fallback() -> None:
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    for command in ("init", "extract", "publish", "release-stats", "run-all"):
+        result = runner.invoke(app, [command, "--help"])
+
+        assert result.exit_code == 0
+        assert "${OSM_POLY_DATA_DIR:-./data}/runs" in result.stdout
+
+
 def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -183,6 +183,14 @@ def test_utf8_page_decodes_as_before() -> None:
     assert decode_html(html) == html.decode("utf-8", errors="replace")
 
 
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_xhtml_xml_byte_pattern_decodes_bomless_utf16(encoding: str) -> None:
+    document = '<?xml version="1.0" encoding="UTF-16"?><html><body>Привет</body></html>'
+    html = document.encode(encoding)
+
+    assert decode_html(html, media_type="application/xhtml+xml") == document
+
+
 def test_unknown_meta_charset_is_ignored() -> None:
     html = _page("Café crème. " * 30, '<meta charset="no-such-codec">').encode("cp1252")
 

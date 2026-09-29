@@ -4,8 +4,8 @@
 #     docker compose run --rm pipeline run-all --source-root /data/raw \
 #       --output-root /data/runs --run-id my-run
 #
-# /data/raw is read-only; runs and model caches are written to the host
-# directories below, which must be writable by the UID/GID given above.
+# /data/raw is read-only; runs, model caches, and Grid'5000 bundles are written
+# to the host directories below, which must be writable by the UID/GID above.
 services:
   pipeline:
     build:
@@ -33,3 +33,6 @@ services:
       - type: bind
         source: ${OSM_MODELS_DIR:-./data/models}
         target: /data/models
+      - type: bind
+        source: ${OSM_GRID5000_DIR:-./data/grid5000}
+        target: /data/grid5000

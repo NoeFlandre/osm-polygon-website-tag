@@ -57,11 +57,12 @@ FROM base AS runtime
 COPY --from=builder --chown=app:app /opt/venv /opt/venv
 
 # The data root every command defaults to: /data/raw holds the read-only PBFs,
-# /data/runs the run output and /data/models the downloaded model caches. Mount
-# volumes over them; runs and models must be writable by the container user.
+# /data/runs the run output, /data/models the downloaded model caches, and
+# /data/grid5000 the offline bundles. Mount volumes over them; all must be
+# writable by the container user.
 ENV OSM_POLY_DATA_DIR=/data
-RUN mkdir -p /data/raw /data/runs /data/models \
-    && chown app:app /data/runs /data/models
+RUN mkdir -p /data/raw /data/runs /data/models /data/grid5000 \
+    && chown app:app /data/runs /data/models /data/grid5000
 
 USER app
 
