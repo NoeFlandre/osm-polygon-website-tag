@@ -40,7 +40,6 @@ def _row(
     website_class: str = "absolute_url",
     website_hostname: str | None = "example.com",
     wikidata: str | None = "Q42",
-    wikidata_class: str | None = "canonical_qid",
     osm_primary_tag: str = "building",
     area_bucket: str = "10-100m2",
 ) -> dict[str, object]:
@@ -62,10 +61,6 @@ def _row(
         osm_primary_tag=osm_primary_tag,
         area_m2=0.0,
         area_bucket=area_bucket,
-        extraction_version="v1.0",
-        extracted_at=pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
-        wikidata=wikidata,
-        wikidata_class=wikidata_class,
     )
 
 
@@ -103,7 +98,6 @@ def test_aggregate_shard_wikidata_only_when_website_empty() -> None:
                 source_pbf="monaco-latest.osm.pbf",
                 website="",
                 wikidata="Q1",
-                wikidata_class="canonical_qid",
             ),
         ]
     )
@@ -192,16 +186,12 @@ def test_aggregate_shard_per_wikidata_class_counts() -> None:
                 source_pbf="x.osm.pbf",
                 region="monaco",
                 wikidata="Q1",
-                wikidata_class="canonical_qid",
             ),
-            _row(
-                polygon_id="p2", source_pbf="x.osm.pbf", wikidata="bad", wikidata_class="malformed"
-            ),
+            _row(polygon_id="p2", source_pbf="x.osm.pbf", wikidata="bad"),
             _row(
                 polygon_id="p3",
                 source_pbf="x.osm.pbf",
                 wikidata="Q2",
-                wikidata_class="canonical_qid",
             ),
         ]
     )
