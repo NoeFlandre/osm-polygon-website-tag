@@ -220,21 +220,34 @@ def _polite(transport: RequestOnce, limiter: HostLimiter) -> RequestOnce:
 
     def request(url: str, timeout_seconds: float, max_bytes: int) -> HttpResponse:
         host = host_of(url)
-        response = _throttled(transport, limiter, host, (url, timeout_seconds, max_bytes))
-        wait = _retry_wait(response, limiter.policy.max_retry_after_seconds)
+        response, wait = _throttled(
+            transport,
+            limiter,
+            host,
+            (url, timeout_seconds, max_bytes),
+            retry_after_cap=limiter.policy.max_retry_after_seconds,
+        )
         if wait is None:
             return response
-        limiter.back_off(host, wait)
-        return _throttled(transport, limiter, host, (url, timeout_seconds, max_bytes))
+        return _throttled(transport, limiter, host, (url, timeout_seconds, max_bytes))[0]
 
     return request
 
 
 def _throttled(
-    transport: RequestOnce, limiter: HostLimiter, host: str, args: tuple[str, float, int]
-) -> HttpResponse:
+    transport: RequestOnce,
+    limiter: HostLimiter,
+    host: str,
+    args: tuple[str, float, int],
+    *,
+    retry_after_cap: float | None = None,
+) -> tuple[HttpResponse, float | None]:
     with limiter.slot(host):
-        return transport(*args)
+        response = transport(*args)
+        wait = _retry_wait(response, retry_after_cap) if retry_after_cap is not None else None
+        if wait is not None:
+            limiter.back_off(host, wait)
+        return response, wait
 
 
 def _retry_wait(response: HttpResponse, cap: float) -> float | None:

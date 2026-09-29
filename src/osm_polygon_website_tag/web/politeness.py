@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 import urllib.parse
@@ -29,6 +30,8 @@ class HostPolicy:
     def __post_init__(self) -> None:
         if self.concurrency < 1:
             raise ValueError("host concurrency must be at least 1")
+        if not all(map(math.isfinite, (self.delay_seconds, self.max_retry_after_seconds))):
+            raise ValueError("host delays must be finite")
         if self.delay_seconds < 0 or self.max_retry_after_seconds < 0:
             raise ValueError("host delays must not be negative")
 

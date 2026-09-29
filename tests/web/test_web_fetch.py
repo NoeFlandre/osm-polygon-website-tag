@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import socket
 import urllib.error
+from collections.abc import Iterator
+from contextlib import contextmanager
 from email.message import Message
 from typing import TypedDict, Unpack
 
@@ -1104,6 +1106,58 @@ def test_a_short_retry_after_is_waited_out_then_retried_once(status: int) -> Non
     assert result.status == "ok"
     assert result.body == b"<p>ok</p>"
     assert calls == ["https://example.org/a"] * 2
+    assert clock.sleeps == [2.0]
+
+
+def test_retry_after_is_recorded_before_releasing_the_host_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _FakeClock()
+    limiter = HostLimiter(
+        HostPolicy(concurrency=1, delay_seconds=0), clock=clock, sleep=clock.sleep
+    )
+    original_slot = limiter.slot
+    original_back_off = limiter.back_off
+    slot_held = False
+    back_off_states: list[bool] = []
+    responses = [
+        HttpResponse(429, {"Retry-After": "2"}, b""),
+        HttpResponse(200, {"Content-Type": "text/html"}, b"ok"),
+    ]
+    calls = 0
+
+    @contextmanager
+    def tracked_slot(host: str) -> Iterator[None]:
+        nonlocal slot_held
+        with original_slot(host):
+            slot_held = True
+            try:
+                yield
+            finally:
+                slot_held = False
+
+    def tracked_back_off(host: str, seconds: float) -> None:
+        back_off_states.append(slot_held)
+        original_back_off(host, seconds)
+
+    def transport(_url: str, _timeout: float, _max_bytes: int) -> HttpResponse:
+        nonlocal calls
+        response = responses[calls]
+        calls += 1
+        return response
+
+    monkeypatch.setattr(limiter, "slot", tracked_slot)
+    monkeypatch.setattr(limiter, "back_off", tracked_back_off)
+
+    result = fetch_html(
+        "https://example.org/a",
+        request_once=transport,
+        resolver=_public_resolver,
+        limiter=limiter,
+    )
+
+    assert result.status == "ok"
+    assert back_off_states == [True]
     assert clock.sleeps == [2.0]
 
 

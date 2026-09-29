@@ -51,7 +51,11 @@ def test_defaults_are_conservative() -> None:
         {"concurrency": 0},
         {"concurrency": -1},
         {"delay_seconds": -0.1},
+        {"delay_seconds": float("nan")},
+        {"delay_seconds": float("inf")},
         {"max_retry_after_seconds": -1},
+        {"max_retry_after_seconds": float("nan")},
+        {"max_retry_after_seconds": float("inf")},
     ],
 )
 def test_invalid_policies_are_rejected(kwargs: dict[str, Any]) -> None:
