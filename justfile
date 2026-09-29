@@ -53,6 +53,18 @@ test:
 unit:
     uv run --locked pytest -n auto tests --ignore=tests/acceptance --ignore=tests/architecture
 
+# Time the per-page hot paths (benchmarks/ is not part of the normal test run).
+bench:
+    uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q
+
+# Save a baseline, then fail if a later run is >25% slower on the mean.
+bench-save name="base":
+    uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q --benchmark-save={{name}}
+
+bench-compare name="base":
+    uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q \
+        --benchmark-compare={{name}} --benchmark-compare-fail=mean:25%
+
 acceptance:
     uv run --locked pytest -n auto tests/acceptance
 
