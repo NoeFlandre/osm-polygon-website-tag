@@ -21,8 +21,10 @@
 # batch sizes, column projections, strict zip over arrays of one batch,
 # and case-insensitive DuckDB SQL,
 # and dropping encoding="utf-8" on a UTF-8 host (that one is guarded by
-# tests/architecture/test_tooling.py, which mutmut does not run).
-# Recorded mutants: 136
+# tests/architecture/test_tooling.py, which mutmut does not run). In
+# h3_geometry, the three boundary-comparison mutants are equivalent because
+# their changed branches apply a zero-turn longitude correction at the boundary.
+# Recorded mutants: 139
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -63,6 +65,9 @@ osm_polygon_website_tag.reporting.geographic.basemap.x__draw_polygon__mutmut_29
 osm_polygon_website_tag.reporting.geographic.basemap.x__draw_polygon__mutmut_9
 osm_polygon_website_tag.reporting.geographic.basemap.x_draw_landmasses__mutmut_5
 osm_polygon_website_tag.reporting.geographic.basemap.x_draw_landmasses__mutmut_7
+osm_polygon_website_tag.reporting.geographic.h3_geometry.x__within_half_a_world__mutmut_13
+osm_polygon_website_tag.reporting.geographic.h3_geometry.x__within_half_a_world__mutmut_14
+osm_polygon_website_tag.reporting.geographic.h3_geometry.x__within_half_a_world__mutmut_3
 osm_polygon_website_tag.reporting.geographic.inputs.x__iter_batch_rows__mutmut_10
 osm_polygon_website_tag.reporting.geographic.inputs.x__iter_batch_rows__mutmut_13
 osm_polygon_website_tag.reporting.geographic.inputs.x__iter_batch_rows__mutmut_16
