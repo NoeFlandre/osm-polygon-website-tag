@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import socket
+import urllib.error
+from email.message import Message
+from typing import TypedDict, Unpack
 
 import pytest
 
@@ -583,7 +587,7 @@ def test_redirect_limit_exceeded_exact() -> None:
     assert urls == ["https://example.org", "https://example.org/r1"]
 
 
-@pytest.mark.parametrize("status", [300, 301, 399])
+@pytest.mark.parametrize("status", [300, 301, 302, 303, 307, 308, 399])
 def test_redirect_statuses_follow_location(status: int) -> None:
     seen = []
 
@@ -591,10 +595,16 @@ def test_redirect_statuses_follow_location(status: int) -> None:
         seen.append(url)
         if len(seen) == 1:
             return HttpResponse(status, {"location": "/n"}, b"")
-        return HttpResponse(200, {}, b"b")
+        return HttpResponse(200, {"Content-Type": "text/html"}, b"b")
 
     result = fetch_html("https://example.org", request_once=request, resolver=_public_resolver)
-    assert result == FetchResult("ok", "https://example.org", "https://example.org/n", b"b")
+    assert result == FetchResult(
+        "ok",
+        "https://example.org",
+        "https://example.org/n",
+        b"b",
+        media_type="text/html",
+    )
 
 
 def test_redirect_without_location_exact() -> None:
@@ -648,12 +658,15 @@ def test_status_error_non_2xx(status: int) -> None:
 
 @pytest.mark.parametrize("status", [200, 204, 299])
 def test_status_ok_2xx(status: int) -> None:
-    assert web_fetch_module._response_error(HttpResponse(status, {}, b""), 0) is None
+    headers = {"Content-Type": "text/html"}
+    assert web_fetch_module._response_error(HttpResponse(status, headers, b""), 0) is None
     assert fetch_html(
         "https://example.org",
-        request_once=lambda *_a: HttpResponse(status, {}, b"x"),
+        request_once=lambda *_a: HttpResponse(status, headers, b"x"),
         resolver=_public_resolver,
-    ) == FetchResult("ok", "https://example.org", "https://example.org", b"x")
+    ) == FetchResult(
+        "ok", "https://example.org", "https://example.org", b"x", media_type="text/html"
+    )
 
 
 @pytest.mark.parametrize("status", [199, 404, 500])
@@ -673,8 +686,9 @@ def test_fetch_http_error_exact(status: int) -> None:
 
 def test_size_limit_boundary() -> None:
     size = web_fetch_module._response_error
-    assert size(HttpResponse(200, {}, b"abc"), 3) is None
-    assert size(HttpResponse(200, {}, b"abcd"), 3) == "response_too_large"
+    headers = {"Content-Type": "text/html"}
+    assert size(HttpResponse(200, headers, b"abc"), 3) is None
+    assert size(HttpResponse(200, headers, b"abcd"), 3) == "response_too_large"
     assert fetch_html(
         "https://example.org",
         request_once=lambda *_a: HttpResponse(200, {"content-type": "image/png"}, b"abcd"),
@@ -688,10 +702,12 @@ def test_size_limit_boundary() -> None:
     )
     assert fetch_html(
         "https://example.org",
-        request_once=lambda *_a: HttpResponse(200, {}, b"abc"),
+        request_once=lambda *_a: HttpResponse(200, headers, b"abc"),
         resolver=_public_resolver,
         max_bytes=3,
-    ) == FetchResult("ok", "https://example.org", "https://example.org", b"abc")
+    ) == FetchResult(
+        "ok", "https://example.org", "https://example.org", b"abc", media_type="text/html"
+    )
 
 
 @pytest.mark.parametrize(
@@ -703,7 +719,6 @@ def test_size_limit_boundary() -> None:
         "Application/XHTML+XML; charset=utf-8",
         "text/plain",
         "text/plain; charset=latin-1",
-        "",
     ],
 )
 def test_content_type_allowed(content_type: str) -> None:
@@ -718,6 +733,16 @@ def test_content_type_allowed(content_type: str) -> None:
         b"x",
         charset=web_fetch_module._header_charset(response.headers),
         media_type=web_fetch_module._header_media_type(response.headers),
+    )
+
+
+def test_a_missing_or_empty_content_type_is_rejected() -> None:
+    assert web_fetch_module._response_error(HttpResponse(200, {}, b"x"), 10) == (
+        "unsupported_content_type"
+    )
+    assert (
+        web_fetch_module._response_error(HttpResponse(200, {"Content-Type": ""}, b"x"), 10)
+        == "unsupported_content_type"
     )
 
 
@@ -747,8 +772,8 @@ def test_header_is_case_insensitive_and_returns_first_match() -> None:
 
 def test_terminal_response_exact() -> None:
     assert web_fetch_module._terminal_response(
-        HttpResponse(200, {}, b"z"), "cur", "req", 1
-    ) == FetchResult("ok", "req", final_url="cur", body=b"z")
+        HttpResponse(200, {"Content-Type": "text/html"}, b"z"), "cur", "req", 1
+    ) == FetchResult("ok", "req", final_url="cur", body=b"z", media_type="text/html")
 
 
 def test_safe_request_passes_arguments_and_classifies() -> None:
@@ -881,7 +906,9 @@ class _CountingResponse:
         return chunk
 
 
-def _download(monkeypatch: pytest.MonkeyPatch, response: _CountingResponse, max_bytes: int):
+def _download(
+    monkeypatch: pytest.MonkeyPatch, response: _CountingResponse, max_bytes: int
+) -> HttpResponse:
     class Opener:
         def open(self, _request: object, *, timeout: float) -> _CountingResponse:
             return response
@@ -890,12 +917,77 @@ def _download(monkeypatch: pytest.MonkeyPatch, response: _CountingResponse, max_
     return web_fetch_module._download_once("https://example.org", 3.0, max_bytes)
 
 
+def test_download_once_keeps_an_http_error_header_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CountingBody(io.BytesIO):
+        def __init__(self, value: bytes) -> None:
+            super().__init__(value)
+            self.bytes_read = 0
+
+        def read1(self, size: int | None = -1) -> bytes:
+            data = super().read1(size)
+            self.bytes_read += len(data)
+            return data
+
+    body = CountingBody(b"not found")
+    headers = Message()
+    headers["Content-Type"] = "text/html"
+    response = urllib.error.HTTPError("https://example.org", 404, "Not Found", headers, body)
+
+    class Opener:
+        def open(self, _request: object, *, timeout: float) -> urllib.error.HTTPError:
+            raise response
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
+
+    result = web_fetch_module._download_once("https://example.org", 3.0, 100)
+
+    assert (result.status_code, result.body) == (404, b"")
+    assert body.bytes_read == 0
+
+
+def test_download_once_rethrows_a_non_url_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = urllib.error.URLError("connection failed")
+
+    class Opener:
+        def open(self, _request: object, *, timeout: float) -> object:
+            raise error
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
+
+    with pytest.raises(urllib.error.URLError) as caught:
+        web_fetch_module._download_once("https://example.org", 3.0, 100)
+
+    assert caught.value is error
+
+
+def test_download_once_rethrows_an_unsafe_url_from_url_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reason = UnsafeUrlError("unsafe peer")
+
+    class Opener:
+        def open(self, _request: object, *, timeout: float) -> object:
+            raise urllib.error.URLError(reason)
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_a: Opener())
+
+    with pytest.raises(UnsafeUrlError) as caught:
+        web_fetch_module._download_once("https://example.org", 3.0, 100)
+
+    assert caught.value is reason
+
+
 @pytest.mark.parametrize(
     ("status", "headers"),
     [
         (404, {"Content-Type": "text/html"}),
         (500, {}),
         (302, {"Location": "https://example.org/next"}),
+        (200, {}),
         (200, {"Content-Type": "image/png"}),
         (200, {"Content-Type": "application/pdf; charset=binary"}),
         (200, {"Content-Type": "text/html", "Content-Length": "50000000"}),
@@ -915,7 +1007,7 @@ def test_a_page_refused_by_its_headers_reads_no_body(
 
 @pytest.mark.parametrize(
     "headers",
-    [{}, {"Content-Type": "text/html; charset=utf-8", "Content-Length": "500"}],
+    [{"Content-Type": "text/html; charset=utf-8", "Content-Length": "500"}],
 )
 def test_a_usable_page_is_still_read_in_full(
     monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
@@ -929,13 +1021,13 @@ def test_a_usable_page_is_still_read_in_full(
 @pytest.mark.parametrize(
     ("headers", "expected"),
     [
-        ({"Content-Length": "101"}, "response_too_large"),
-        ({"content-length": " 101 "}, "response_too_large"),
-        ({"Content-Length": "100"}, None),
-        ({"Content-Length": "-5"}, None),
-        ({"Content-Length": "abc"}, None),
-        ({"Content-Length": ""}, None),
-        ({}, None),
+        ({"Content-Type": "text/html", "Content-Length": "101"}, "response_too_large"),
+        ({"Content-Type": "text/html", "content-length": " 101 "}, "response_too_large"),
+        ({"Content-Type": "text/html", "Content-Length": "100"}, None),
+        ({"Content-Type": "text/html", "Content-Length": "-5"}, None),
+        ({"Content-Type": "text/html", "Content-Length": "abc"}, None),
+        ({"Content-Type": "text/html", "Content-Length": ""}, None),
+        ({"Content-Type": "text/html"}, None),
     ],
 )
 def test_declared_length_over_the_limit_is_refused(
@@ -975,7 +1067,17 @@ class _FakeClock:
         self.now += seconds
 
 
-def _polite_fetch(responses: list[HttpResponse], url: str = "https://example.org/a", **policy):
+class _HostPolicyOptions(TypedDict, total=False):
+    concurrency: int
+    delay_seconds: float
+    max_retry_after_seconds: float
+
+
+def _polite_fetch(
+    responses: list[HttpResponse],
+    url: str = "https://example.org/a",
+    **policy: Unpack[_HostPolicyOptions],
+) -> tuple[FetchResult, list[str], _FakeClock]:
     clock = _FakeClock()
     limiter = HostLimiter(HostPolicy(**policy), clock=clock, sleep=clock.sleep)
     calls: list[str] = []
@@ -1002,7 +1104,7 @@ def test_a_short_retry_after_is_waited_out_then_retried_once(status: int) -> Non
     assert result.status == "ok"
     assert result.body == b"<p>ok</p>"
     assert calls == ["https://example.org/a"] * 2
-    assert clock.sleeps == [0.0, 2.0]
+    assert clock.sleeps == [2.0]
 
 
 def test_only_one_retry_is_made() -> None:
@@ -1033,13 +1135,16 @@ def test_other_failures_are_not_retried(response: HttpResponse) -> None:
 
 def test_a_retry_after_at_the_cap_is_still_honoured() -> None:
     _result, calls, clock = _polite_fetch(
-        [HttpResponse(429, {"Retry-After": "30"}, b""), HttpResponse(200, {}, b"x")],
+        [
+            HttpResponse(429, {"Retry-After": "30"}, b""),
+            HttpResponse(200, {"Content-Type": "text/html"}, b"x"),
+        ],
         concurrency=1,
         delay_seconds=0.0,
     )
 
     assert len(calls) == 2
-    assert clock.sleeps == [0.0, 30.0]
+    assert clock.sleeps == [30.0]
 
 
 def test_the_retry_after_cap_is_configurable() -> None:
@@ -1062,12 +1167,12 @@ def test_a_polite_fetch_spaces_two_requests_to_one_host() -> None:
     for path in ("a", "b"):
         fetch_html(
             f"https://example.org/{path}",
-            request_once=lambda *_a: HttpResponse(200, {}, b"x"),
+            request_once=lambda *_a: HttpResponse(200, {"Content-Type": "text/html"}, b"x"),
             resolver=_public_resolver,
             limiter=limiter,
         )
 
-    assert clock.sleeps == [0.0, 1.5]
+    assert clock.sleeps == [1.5]
 
 
 def test_the_limiter_is_keyed_by_the_requested_host() -> None:
@@ -1079,12 +1184,12 @@ def test_the_limiter_is_keyed_by_the_requested_host() -> None:
     for host in ("a.example", "b.example"):
         fetch_html(
             f"https://{host}/",
-            request_once=lambda *_a: HttpResponse(200, {}, b"x"),
+            request_once=lambda *_a: HttpResponse(200, {"Content-Type": "text/html"}, b"x"),
             resolver=_public_resolver,
             limiter=limiter,
         )
 
-    assert clock.sleeps == [0.0, 0.0]
+    assert clock.sleeps == []
 
 
 def test_without_a_limiter_the_transport_is_called_directly() -> None:
@@ -1092,7 +1197,9 @@ def test_without_a_limiter_the_transport_is_called_directly() -> None:
 
     fetch_html(
         "https://example.org/",
-        request_once=lambda url, *_a: seen.append(url) or HttpResponse(200, {}, b"x"),
+        request_once=lambda url, *_a: (
+            seen.append(url) or HttpResponse(200, {"Content-Type": "text/html"}, b"x")
+        ),
         resolver=_public_resolver,
     )
 
@@ -1190,7 +1297,7 @@ def test_download_once_builds_a_direct_opener_and_a_named_request(
     class Opener:
         def open(self, request: object, *, timeout: float) -> _Head:
             seen["request"], seen["timeout"] = request, timeout
-            return _Head(200)
+            return _Head(200, {"Content-Type": "text/html"})
 
     def build_opener(*handlers: object) -> Opener:
         seen["handlers"] = handlers
@@ -1228,11 +1335,21 @@ def test_a_response_without_a_status_is_reported_as_status_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status", "worth"),
-    [(199, False), (200, True), (299, True), (300, False), (301, False), (404, False)],
+    ("status", "headers", "worth"),
+    [
+        (199, {}, False),
+        (200, {"Content-Type": "text/html"}, True),
+        (200, {}, False),
+        (299, {"Content-Type": "text/html"}, True),
+        (300, {"Content-Type": "text/html"}, False),
+        (301, {"Content-Type": "text/html"}, False),
+        (404, {"Content-Type": "text/html"}, False),
+    ],
 )
-def test_only_a_2xx_response_is_worth_reading(status: int, worth: bool) -> None:
-    head = HttpResponse(status, {"Content-Type": "text/html"}, b"")
+def test_only_a_usable_2xx_response_is_worth_reading(
+    status: int, headers: dict[str, str], worth: bool
+) -> None:
+    head = HttpResponse(status, headers, b"")
 
     assert web_fetch_module._worth_reading(head, 100) is worth
 

@@ -44,7 +44,7 @@ def require_under_data_root(path: Path | str, *, label: str) -> Path:
     normalized = Path(path).expanduser().resolve()
     root = resolve_data_root()
     if not normalized.is_relative_to(root):
-        raise ValueError(f"{label} must be under the data root {root} (set {DATA_ROOT_ENV})")
+        raise ValueError(f"{label} must be under the configured data root (set {DATA_ROOT_ENV})")
     return normalized
 
 

@@ -12,6 +12,7 @@ from hypothesis import strategies as st
 from osm_polygon_website_tag.web import web_fetch
 from osm_polygon_website_tag.web.text_extract import decode_html, extract_main_text
 from osm_polygon_website_tag.web.web_fetch import (
+    Resolver,
     UnsafeUrlError,
     normalize_http_url,
     validate_public_http_url,
@@ -117,8 +118,11 @@ def test_no_non_public_address_is_treated_as_public(address: ipaddress._BaseAddr
     assert web_fetch._is_public_address(address) is False
 
 
-def _resolver(*addresses: str):
-    return lambda _host, port: [(2, 1, 6, "", (address, port)) for address in addresses]
+def _resolver(*addresses: str) -> Resolver:
+    def resolve(_host: str, port: int) -> list[tuple[object, ...]]:
+        return [(2, 1, 6, "", (address, port)) for address in addresses]
+
+    return resolve
 
 
 @given(_NON_PUBLIC, st.lists(st.sampled_from(["93.184.216.34", "1.1.1.1"]), max_size=2), st.data())

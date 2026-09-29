@@ -511,7 +511,7 @@ def test_opt_in_detection_refuses_a_run_outside_the_data_root(
     monkeypatch.setenv("OSM_POLY_DATA_DIR", str(tmp_path / "x"))
     monkeypatch.setattr(workflow, "load_glotlid_detector", lambda cache: pytest.fail("loaded"))
 
-    with pytest.raises(ValueError, match="run directory must be under the data root"):
+    with pytest.raises(ValueError, match="run directory must be under the configured data root"):
         workflow._prepare_language_detector(
             detect_languages=True, language_detector=None, run_dir=tmp_path / "elsewhere"
         )

@@ -180,6 +180,26 @@ def test_baseline_generation_is_sorted_deduplicated_and_documented(tmp_path: Pat
     assert mutation_gate.read_baseline(baseline) == {"a.x_f__mutmut_1", "b.x_f__mutmut_2"}
 
 
+def test_fail_on_growth_keeps_the_original_baseline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts.quality import mutation_baseline
+
+    results = tmp_path / "results.txt"
+    results.write_text("    module.x_new__mutmut_1: survived\n", encoding="utf-8")
+    baseline = tmp_path / "baseline.txt"
+    original = "# Recorded mutants: 0\n\n"
+    baseline.write_text(original, encoding="utf-8")
+
+    code = mutation_baseline.main(
+        ["--results", str(results), "--baseline", str(baseline), "--fail-on-growth"]
+    )
+
+    assert code == 1
+    assert "1 survivor(s) outside" in capsys.readouterr().err
+    assert baseline.read_text(encoding="utf-8") == original
+
+
 def test_baseline_generation_defaults_to_the_repository_file() -> None:
     from scripts.quality import mutation_baseline
 

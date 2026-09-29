@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypedDict
 
@@ -66,6 +66,7 @@ class SourceProcessingContext:
     host_policy: HostPolicy | None
     detect_languages: bool
     language_detector: LanguageDetector | None
+    fetcher: Callable[[str], FetchResult] | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,8 @@ def process_sources(
     allow_extraction: bool,
 ) -> SourcePhaseCounts:
     """Process sources in the caller-provided order and aggregate phase counts."""
+    if context.host_policy is not None and context.fetcher is None:
+        context = replace(context, fetcher=make_polite_fetcher(context.host_policy))
     counts = SourcePhaseCounts()
     for index, source in enumerate(ordered_sources, start=1):
         result = _process_source(
@@ -381,7 +384,9 @@ def _enrich_shard(shard: Path, context: SourceProcessingContext) -> EnrichmentRe
     }
     if context.fetch_workers is not None:
         kwargs["fetch_workers"] = context.fetch_workers
-    if context.host_policy is not None:
+    if context.fetcher is not None:
+        kwargs["fetcher"] = context.fetcher
+    elif context.host_policy is not None:
         kwargs["fetcher"] = make_polite_fetcher(context.host_policy)
     return enrich_polygon_shard(shard, **kwargs)
 

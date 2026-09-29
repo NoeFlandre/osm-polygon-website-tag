@@ -26,6 +26,7 @@ def test_a_ring_pyproj_cannot_measure_counts_as_zero_with_a_warning(
         area = compute_polygon_area_m2([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]])
 
     assert area == 0.0
+    assert [record.name for record in caplog.records] == [geometry_module.__name__]
     assert caplog.messages == [f"geodesic area failed for a ring; counted as 0.0: {error}"]
 
 

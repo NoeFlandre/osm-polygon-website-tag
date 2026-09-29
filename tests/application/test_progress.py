@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from io import StringIO
-from typing import ClassVar
+from typing import ClassVar, TextIO
+
+import pytest
 
 from osm_polygon_website_tag.application import progress as progress_module
 from osm_polygon_website_tag.application.progress import ProgressReporter
@@ -11,9 +13,9 @@ from osm_polygon_website_tag.application.progress import ProgressReporter
 
 class _FakeTqdm:
     instances: ClassVar[list[_FakeTqdm]] = []
-    written: ClassVar[list[tuple[str, object]]] = []
+    written: ClassVar[list[tuple[str, TextIO]]] = []
 
-    def __init__(self, *, total, file, unit, dynamic_ncols) -> None:
+    def __init__(self, *, total: int | None, file: TextIO, unit: str, dynamic_ncols: bool) -> None:
         self.total = total
         self.file = file
         self.unit = unit
@@ -38,11 +40,11 @@ class _FakeTqdm:
         self.closed = True
 
     @classmethod
-    def write(cls, message: str, *, file) -> None:
+    def write(cls, message: str, *, file: TextIO) -> None:
         cls.written.append((message, file))
 
 
-def _install_fake_tqdm(monkeypatch) -> None:
+def _install_fake_tqdm(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeTqdm.instances = []
     _FakeTqdm.written = []
     monkeypatch.setattr(progress_module, "tqdm", _FakeTqdm)
@@ -59,7 +61,9 @@ def test_noninteractive_progress_preserves_plain_log_lines() -> None:
     assert stream.getvalue() == ("[2/3] Extracting source.osm.pbf\nBuilding aggregate analysis\n")
 
 
-def test_interactive_progress_uses_tqdm_and_keeps_phase_messages(monkeypatch) -> None:
+def test_interactive_progress_uses_tqdm_and_keeps_phase_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _install_fake_tqdm(monkeypatch)
     stream = StringIO()
     reporter = ProgressReporter(stream, interactive=True)
@@ -76,7 +80,9 @@ def test_interactive_progress_uses_tqdm_and_keeps_phase_messages(monkeypatch) ->
     assert _FakeTqdm.written == [("Building aggregate analysis", stream)]
 
 
-def test_interrupted_progress_closes_without_marking_complete(monkeypatch) -> None:
+def test_interrupted_progress_closes_without_marking_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
     reporter("[2/3] Extracting source.osm.pbf")
@@ -88,7 +94,9 @@ def test_interrupted_progress_closes_without_marking_complete(monkeypatch) -> No
     assert bar.closed is True
 
 
-def test_interactive_progress_starts_a_new_bar_when_source_index_resets(monkeypatch) -> None:
+def test_interactive_progress_starts_a_new_bar_when_source_index_resets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
     reporter("[3/3] Extracting c.osm.pbf")
@@ -129,7 +137,7 @@ def test_plain_lines_are_flushed_as_they_are_written() -> None:
     assert stream.flushes == 2
 
 
-def test_a_repeated_index_updates_the_same_bar(monkeypatch) -> None:
+def test_a_repeated_index_updates_the_same_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
 
@@ -140,7 +148,7 @@ def test_a_repeated_index_updates_the_same_bar(monkeypatch) -> None:
     assert _FakeTqdm.instances[0].description == "Enriching a.osm.pbf"
 
 
-def test_the_bar_only_advances_by_positive_amounts(monkeypatch) -> None:
+def test_the_bar_only_advances_by_positive_amounts(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
 
@@ -154,7 +162,7 @@ def test_the_bar_only_advances_by_positive_amounts(monkeypatch) -> None:
     assert bar.n == bar.total == 3
 
 
-def test_closing_a_complete_run_fills_the_bar(monkeypatch) -> None:
+def test_closing_a_complete_run_fills_the_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
     reporter("[1/3] a")
@@ -164,7 +172,7 @@ def test_closing_a_complete_run_fills_the_bar(monkeypatch) -> None:
     assert _FakeTqdm.instances[0].n == 3
 
 
-def test_a_finished_run_can_start_a_new_bar(monkeypatch) -> None:
+def test_a_finished_run_can_start_a_new_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
     reporter("[2/3] a")

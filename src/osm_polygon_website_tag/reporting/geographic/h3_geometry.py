@@ -68,14 +68,19 @@ def _unwrap_ring(points: Sequence[tuple[float, float]]) -> list[tuple[float, flo
     """Unwrap successive longitudes so a crossing ring is continuous."""
     unwrapped = [points[0]]
     for raw_longitude, latitude in points[1:]:
-        longitude = raw_longitude
-        previous_longitude = unwrapped[-1][0]
-        while longitude - previous_longitude > 180.0:
-            longitude -= 360.0
-        while longitude - previous_longitude < -180.0:
-            longitude += 360.0
+        longitude = _within_half_a_world(raw_longitude, unwrapped[-1][0])
         unwrapped.append((longitude, latitude))
     return unwrapped
+
+
+def _within_half_a_world(longitude: float, previous_longitude: float) -> float:
+    """Shift a longitude by whole turns until it is within 180 degrees of the previous."""
+    gap = longitude - previous_longitude
+    if gap > 180.0:
+        return longitude - 360.0 * math.ceil((gap - 180.0) / 360.0)
+    if gap < -180.0:
+        return longitude + 360.0 * math.ceil((-gap - 180.0) / 360.0)
+    return longitude
 
 
 def _slab_range(points: Sequence[tuple[float, float]]) -> range:

@@ -100,6 +100,7 @@ _PRESCAN_BYTES = 1024
 # html.parser already treats script/style as raw text; these hold text, not
 # markup, too, so a <meta> inside them is ignored.
 _TEXT_ONLY_ELEMENTS = frozenset({"title", "textarea", "noscript", "xmp"})
+_RAW_META_ATTRIBUTE = re.compile(r"""\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?""")
 # Single-byte codecs a detector cannot tell from cp1252 on Western text: when
 # one of them tops the ranking and cp1252 also decodes, the web reads cp1252.
 _CP1252_LOOKALIKES = frozenset(
@@ -140,15 +141,35 @@ class _MetaCharsetParser(HTMLParser):
             self._text_only = None
 
     def _record(self, attrs: list[tuple[str, str | None]]) -> None:
-        # The prescan does not expand character references, but html.parser does:
-        # ``gb23&#49;2`` would read as ``gb2312``. Such a tag declares nothing.
-        if "&" in str(self.get_starttag_text()):
-            return
-        # dict(reversed(...)) keeps the first of repeated attributes, as HTML does.
-        attributes = dict(reversed([(name, value or "") for name, value in attrs]))
-        declared = _declared_charset(attributes)
+        declared = _raw_declared_meta_charset(self.get_starttag_text() or "", attrs)
         if declared:
             self.declared.append(declared)
+
+
+def _raw_declared_meta_charset(start_tag: str, attrs: list[tuple[str, str | None]]) -> str | None:
+    """Read a meta charset without expanding character references."""
+    raw_attributes = _raw_meta_attributes(start_tag)
+    if _meta_charset_contains_reference(raw_attributes):
+        return None
+    # dict(reversed(...)) keeps the first of repeated attributes, as HTML does.
+    attributes = dict(reversed([(name, value or "") for name, value in attrs]))
+    return _declared_charset(attributes)
+
+
+def _meta_charset_contains_reference(attributes: dict[str, str]) -> bool:
+    raw_charset = attributes.get("charset", "")
+    raw_content_charset = charset_parameter(attributes.get("content", "")) or ""
+    return "&" in raw_charset or "&" in raw_content_charset
+
+
+def _raw_meta_attributes(start_tag: str) -> dict[str, str]:
+    """Return first raw attribute values without expanding character references."""
+    attributes: dict[str, str] = {}
+    for match in _RAW_META_ATTRIBUTE.finditer(start_tag):
+        name, double_quoted, single_quoted, unquoted = match.groups()
+        value = double_quoted or single_quoted or unquoted or ""
+        attributes.setdefault(name.lower(), value)
+    return attributes
 
 
 def _declared_charset(attributes: dict[str, str]) -> str | None:
@@ -198,10 +219,7 @@ def _codec(name: str | None) -> str | None:
     try:
         codec = codecs.lookup(WEB_LABELS.get(label, label)).name
         _PROBE_TEXT.encode(codec)  # bytes-to-bytes codecs (base64, zlib) are not text encodings
-    except (
-        LookupError,
-        ValueError,
-    ):  # ValueError: a NUL byte in the label; UnicodeError: undefined
+    except (LookupError, TypeError, ValueError):  # transform codec or invalid label/Unicode
         return None
     return _WEB_ALIASES.get(codec, codec)
 

@@ -1194,6 +1194,7 @@ def _raising_app(error: BaseException) -> Any:
             ),
             4,
         ),
+        (httpx.ConnectError("DNS lookup failed"), 4),
     ],
 )
 def test_each_error_class_exits_with_its_documented_code(

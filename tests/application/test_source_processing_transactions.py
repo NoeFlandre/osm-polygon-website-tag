@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -9,6 +10,7 @@ from osm_polygon_website_tag.application.source_processing import SourceProcessi
 from osm_polygon_website_tag.publishing.incremental import CheckpointV2
 from osm_polygon_website_tag.runtime.run_state import RunState, SourceFingerprint
 from osm_polygon_website_tag.web.politeness import HostPolicy
+from osm_polygon_website_tag.web.web_fetch import FetchResult
 
 
 def test_process_sources_returns_counts_in_order(monkeypatch, tmp_path: Path) -> None:
@@ -76,6 +78,61 @@ def test_process_sources_returns_counts_in_order(monkeypatch, tmp_path: Path) ->
     assert result.extracted == 1
     assert result.reused == 1
     assert result.uploaded == 2
+
+
+def test_process_sources_reuses_one_polite_fetcher_for_all_shards(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    first = tmp_path / "first.osm.pbf"
+    second = tmp_path / "second.osm.pbf"
+    contexts: list[SourceProcessingContext] = []
+    creations: list[HostPolicy] = []
+
+    def fetcher(_url: str) -> FetchResult:
+        return FetchResult("fetch_error", "https://example.org", message="test")
+
+    def build_fetcher(policy: HostPolicy) -> Callable[[str], FetchResult]:
+        creations.append(policy)
+        return fetcher
+
+    def process_source(**kwargs: object) -> SimpleNamespace:
+        context = kwargs["context"]
+        assert isinstance(context, SourceProcessingContext)
+        contexts.append(context)
+        return SimpleNamespace(extracted=False, reused=False, uploaded=False)
+
+    context = SourceProcessingContext(
+        run_dir=tmp_path,
+        state=RunState(run_dir=tmp_path, run_id="test"),
+        repo_id="owner/dataset",
+        apply=False,
+        progress=None,
+        invocation_id="test",
+        upload_checkpoint=CheckpointV2(schema_version="v2", global_bundle={}, sources={}),
+        area_workers=None,
+        max_in_flight_areas=None,
+        fetch_workers=None,
+        host_policy=HostPolicy(concurrency=1, delay_seconds=10.0),
+        detect_languages=False,
+        language_detector=None,
+    )
+    monkeypatch.setattr(source_processing, "make_polite_fetcher", build_fetcher)
+    monkeypatch.setattr(source_processing, "_process_source", process_source)
+
+    source_processing.process_sources(
+        sources=[first, second],
+        ordered_sources=[first, second],
+        fingerprints_by_name={
+            "first.osm.pbf": SourceFingerprint("first.osm.pbf", 0, 0),
+            "second.osm.pbf": SourceFingerprint("second.osm.pbf", 0, 0),
+        },
+        context=context,
+        allow_extraction=False,
+    )
+
+    assert creations == [context.host_policy]
+    assert len(contexts) == 2
+    assert contexts[0].fetcher is contexts[1].fetcher is fetcher
 
 
 def test_source_processing_decisions_and_checkpoint_helpers(
@@ -175,6 +232,7 @@ def test_source_processing_phase_helpers_are_bounded(  # noqa: PLR0915 - too lon
     context.area_workers = 2
     context.max_in_flight_areas = 3
     context.fetch_workers = 4
+    context.fetcher = None
     context.host_policy = None
     context.detect_languages = False
     context.language_detector = None
@@ -517,6 +575,7 @@ def test_a_host_policy_gives_enrichment_a_polite_fetcher(
     context.run_dir = tmp_path
     context.invocation_id = "run"
     context.fetch_workers = None
+    context.fetcher = None
     context.host_policy = policy
     fetchers: list[object] = []
     monkeypatch.setattr(source_processing, "make_polite_fetcher", lambda given: (given, "fetcher"))

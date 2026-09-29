@@ -11,6 +11,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Annotated, Any, cast
 
+import httpx
 import typer
 from huggingface_hub.errors import HfHubHTTPError
 from rich.console import Console
@@ -129,6 +130,7 @@ EXIT_INTERRUPTED = 130
 # Most specific first: HfHubHTTPError is also an OSError.
 _EXIT_CODES: tuple[tuple[type[Exception], int], ...] = (
     (HfHubHTTPError, EXIT_REMOTE),
+    (httpx.HTTPError, EXIT_REMOTE),
     (TrackioUnavailableError, EXIT_MISSING_DEPENDENCY),
     (ValueError, EXIT_INVALID_INPUT),
     (OSError, EXIT_INVALID_INPUT),

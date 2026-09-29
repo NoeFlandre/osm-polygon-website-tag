@@ -197,11 +197,28 @@ def test_undecodable_page_falls_back_to_replacement(monkeypatch: pytest.MonkeyPa
     assert decode_html(b"caf\xe9") == "caf�"
 
 
+def test_non_text_codecs_are_not_used_for_untrusted_charset_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert text_extract._codec("base64_codec") is None
+    monkeypatch.setattr(
+        trafilatura_utils, "detect_encoding", lambda _html: ["base64", "no-such-codec"]
+    )
+    assert decode_html(b"\xff", "base64_codec") == "�"
+
+
 @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le"])
 def test_declared_wide_unicode_charset_beats_utf8_fast_path(encoding: str) -> None:
     html = _page("plain ascii words " * 30).encode(encoding)
 
     assert decode_html(html, encoding) == _page("plain ascii words " * 30)
+
+
+@pytest.mark.parametrize("label", ["unicode", "csunicode", "ucs-2", "iso-10646-ucs-2"])
+def test_legacy_utf16_web_labels_decode_bomless_little_endian_pages(label: str) -> None:
+    page = _page("plain ascii words " * 30)
+
+    assert decode_html(page.encode("utf-16-le"), label) == page
 
 
 @pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
@@ -224,6 +241,28 @@ def test_unrelated_meta_content_mentioning_charset_is_ignored() -> None:
     html = _page("Москва большой красивый город. " * 30, head).encode("koi8-r")
 
     assert "Москва" in decode_html(html)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        b'<meta charset="gb23&#49;2">',
+        b'<meta http-equiv="Content-Type" content="text/html; charset=gb&#49;2">',
+    ],
+)
+def test_character_references_inside_the_charset_label_are_not_expanded(tag: bytes) -> None:
+    assert text_extract._meta_charset(tag) is None
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        b'<meta data-note="a&b" charset="gb2312">',
+        b'<meta http-equiv="Content-Type" content="text/html; note=a&b; charset=gb2312">',
+    ],
+)
+def test_ampersands_outside_the_charset_label_do_not_hide_the_declaration(tag: bytes) -> None:
+    assert text_extract._meta_charset(tag) == "gb18030"
 
 
 def test_meta_without_charset_declaration_yields_none() -> None:
@@ -508,6 +547,8 @@ def test_meta_text_inside_other_tags_is_ignored(prefix: bytes) -> None:
         b"<meta data_charset=koi8-r>",
         b"<meta xml:charset=koi8-r>",
         b"<textarea><meta charset=koi8-r></textarea>",
+        b"<noscript><meta charset=koi8-r></noscript>",
+        b"<xmp><meta charset=koi8-r></xmp>",
     ],
 )
 def test_prescan_follows_html_tokenisation(prefix: bytes) -> None:
@@ -622,8 +663,8 @@ def test_a_meta_charset_that_decodes_wins_over_a_mostly_utf8_body() -> None:
     assert decode_html(html) == html.decode("cp1252")
 
 
-# WHATWG Encoding Standard labels (encodings.json), minus UTF-16/32,
-# ISO-2022-JP and "replacement", with the Python codec HTML should use.
+# WHATWG Encoding Standard labels (encodings.json), including legacy UTF-16
+# labels, minus UTF-32, ISO-2022-JP and "replacement".
 _WHATWG_LABELS = (
     ("utf-8", "unicode-1-1-utf-8 unicode11utf8 unicode20utf8 utf-8 utf8 x-unicode20utf8"),
     ("cp866", "866 cp866 csibm866 ibm866"),
@@ -683,6 +724,8 @@ _WHATWG_LABELS = (
         "cp949",
         "cseuckr csksc56011987 euc-kr iso-ir-149 korean ks_c_5601-1987 ks_c_5601-1989 ksc5601 ksc_5601 windows-949",
     ),
+    ("utf-16-le", "csunicode iso-10646-ucs-2 ucs-2 unicode unicodefeff utf-16 utf-16le"),
+    ("utf-16-be", "unicodefffe utf-16be"),
     ("x-user-defined", "x-user-defined"),
     ("cp1250", "cp1250 windows-1250 x-cp1250"),
     ("cp1251", "cp1251 windows-1251 x-cp1251"),
@@ -799,10 +842,12 @@ def test_non_text_python_codecs_are_not_charsets(label: str) -> None:
     assert decode_html(f'<meta charset="{label}"><p>café</p>'.encode()).endswith("café</p>")
 
 
-@pytest.mark.parametrize("quote", ["'", '"'])
-def test_xhtml_honours_the_xml_encoding_declaration(quote: str) -> None:
+@pytest.mark.parametrize(
+    ("label", "codec", "quote"), [("GBK", "gbk", "'"), ("gb2312", "gb18030", '"')]
+)
+def test_xhtml_honours_the_xml_encoding_declaration(label: str, codec: str, quote: str) -> None:
     text = "<p>专业</p>" * 5
-    body = f"<?xml version={quote}1.0{quote} encoding={quote}GBK{quote}?>{text}".encode("gbk")
+    body = f"<?xml version={quote}1.0{quote} encoding={quote}{label}{quote}?>{text}".encode(codec)
 
     assert decode_html(body, media_type="application/xhtml+xml").endswith(text)
 
@@ -829,6 +874,15 @@ def test_meta_charset_with_a_character_reference_declares_nothing() -> None:
 def test_detection_prefers_cp1252_over_its_lookalikes(monkeypatch: pytest.MonkeyPatch) -> None:
     body = b"caf\xe9 \x80 \x93quoted\x94"
     monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["iso8859-15", "cp1252"])
+
+    assert decode_html(body) == body.decode("cp1252")
+
+
+def test_detection_prefers_cp1252_when_cp1250_is_ranked_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = "Café crème à Paris près de la rivière".encode("cp1252") * 6
+    monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["cp1250", "cp1252"])
 
     assert decode_html(body) == body.decode("cp1252")
 

@@ -398,9 +398,9 @@ def _declared_length(headers: Mapping[str, str]) -> int | None:
 
 
 def _media_type_allowed(headers: Mapping[str, str]) -> bool:
-    """A missing Content-Type is allowed; a present one must be a document type."""
+    """Require a declared Content-Type that is an accepted document type."""
     declared = _header_media_type(headers)
-    return not declared or declared in _DOCUMENT_TYPES
+    return declared in _DOCUMENT_TYPES
 
 
 _CONTENT_TYPE = "content-type"
@@ -542,7 +542,7 @@ def _response_head(response: Any) -> HttpResponse:
 
 def _worth_reading(head: HttpResponse, max_bytes: int) -> bool:
     """Only a 2xx response whose headers pass every check has a body we keep."""
-    return 200 <= head.status_code < 300 and _response_error(head, max_bytes) is None
+    return _response_error(head, max_bytes) is None
 
 
 __all__ = [

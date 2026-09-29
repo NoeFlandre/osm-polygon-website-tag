@@ -2,9 +2,10 @@
 
 HTML reads a declared charset through this table, not Python's registry: the
 two disagree (``latin1`` means windows-1252 on the web) and many web labels
-are unknown to Python (``csgb2312``, ``x-x-big5``). UTF-16/32, ISO-2022-JP and
-the "replacement" labels are left to the codec registry. ``x-user-defined``
-has no Python codec, so this module registers one.
+are unknown to Python (``csgb2312``, ``x-x-big5``). UTF-32, ISO-2022-JP and
+the "replacement" labels are left to the codec registry. Legacy UTF-16 web
+labels map to UTF-16LE as the web standard requires. ``x-user-defined`` has no
+Python codec, so this module registers one.
 
 Source: https://encoding.spec.whatwg.org/encodings.json
 """
@@ -54,6 +55,8 @@ cp1258: cp1258 windows-1258 x-cp1258
 mac-cyrillic: x-mac-cyrillic x-mac-ukrainian
 gb18030: chinese csgb2312 csiso58gb231280 gb2312 gb_2312 gb_2312-80 gbk iso-ir-58 x-gbk gb18030
 big5hkscs: big5 big5-hkscs cn-big5 csbig5 x-x-big5
+utf-16-le: csunicode iso-10646-ucs-2 ucs-2 unicode unicodefeff utf-16 utf-16le
+utf-16-be: unicodefffe utf-16be
 euc_jp: cseucpkdfmtjapanese euc-jp x-euc-jp
 cp932: csshiftjis ms932 ms_kanji shift-jis shift_jis sjis windows-31j x-sjis
 cp949: cseuckr csksc56011987 euc-kr iso-ir-149 korean ks_c_5601-1987 ks_c_5601-1989 ksc5601

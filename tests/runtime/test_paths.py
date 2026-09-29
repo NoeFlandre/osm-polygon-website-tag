@@ -92,9 +92,9 @@ def test_a_path_outside_the_root_is_rejected(
         require_under_data_root(tmp_path / "rootless" / "run", label="run directory")
 
     assert str(caught.value) == (
-        f"run directory must be under the data root {tmp_path.resolve() / 'root'} "
-        "(set OSM_POLY_DATA_DIR)"
+        "run directory must be under the configured data root (set OSM_POLY_DATA_DIR)"
     )
+    assert str(tmp_path.resolve() / "root") not in str(caught.value)
 
 
 def test_the_dead_layout_helpers_are_gone() -> None:

@@ -61,16 +61,20 @@ class HostLimiter:
         with self._lock:
             slots = self._slots.setdefault(host, threading.Semaphore(self.policy.concurrency))
         with slots:
-            self._sleep(self._reserve_start(host))
+            self._wait_for_start(host)
             yield
 
-    def _reserve_start(self, host: str) -> float:
-        """Claim the next start time for a host; return how long to wait for it."""
-        with self._lock:
-            now = self._clock()
-            start = max(now, self._next_start.get(host, now))
-            self._next_start[host] = start + self.policy.delay_seconds
-            return start - now
+    def _wait_for_start(self, host: str) -> None:
+        """Wait until the current host deadline, rechecking after every sleep."""
+        while True:
+            with self._lock:
+                now = self._clock()
+                start = max(now, self._next_start.get(host, now))
+                wait = start - now
+                if wait == 0.0:
+                    self._next_start[host] = now + self.policy.delay_seconds
+                    return
+            self._sleep(wait)
 
     def back_off(self, host: str, seconds: float) -> None:
         """Hold every request to the host for ``seconds`` from now."""

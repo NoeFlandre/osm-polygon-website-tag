@@ -81,7 +81,7 @@ def test_requests_to_one_host_are_spaced_by_the_delay() -> None:
             starts.append(clock.now)
 
     assert starts == [100.0, 102.0, 104.0]
-    assert clock.sleeps == [0.0, 2.0, 2.0]
+    assert clock.sleeps == [2.0, 2.0]
 
 
 def test_different_hosts_do_not_wait_for_each_other() -> None:
@@ -92,7 +92,7 @@ def test_different_hosts_do_not_wait_for_each_other() -> None:
         with limiter.slot(host):
             pass
 
-    assert clock.sleeps == [0.0, 0.0, 0.0]
+    assert clock.sleeps == []
 
 
 def test_a_request_after_the_delay_has_passed_does_not_wait() -> None:
@@ -105,7 +105,7 @@ def test_a_request_after_the_delay_has_passed_does_not_wait() -> None:
     with limiter.slot("a.example"):
         pass
 
-    assert clock.sleeps == [0.0, 0.0]
+    assert clock.sleeps == []
 
 
 def test_back_off_holds_the_host_and_never_shortens_a_longer_hold() -> None:
@@ -119,7 +119,7 @@ def test_back_off_holds_the_host_and_never_shortens_a_longer_hold() -> None:
     with limiter.slot("b.example"):
         pass
 
-    assert clock.sleeps == [7.0, 0.0]
+    assert clock.sleeps == [7.0]
 
 
 def test_back_off_on_an_unseen_host_sets_the_hold() -> None:
@@ -131,6 +131,32 @@ def test_back_off_on_an_unseen_host_sets_the_hold() -> None:
         pass
 
     assert clock.sleeps == [4.0]
+
+
+def test_back_off_extends_a_wait_already_in_progress() -> None:
+    clock = _Clock()
+    limiter = _limiter(clock, concurrency=2, delay_seconds=10.0)
+    starts: list[float] = []
+
+    with limiter.slot("a.example"):
+        starts.append(clock.now)
+
+    real_sleep = clock.sleep
+    extend_once = True
+
+    def sleep_with_back_off(seconds: float) -> None:
+        nonlocal extend_once
+        if extend_once:
+            extend_once = False
+            limiter.back_off("a.example", 20.0)
+        real_sleep(seconds)
+
+    limiter._sleep = sleep_with_back_off
+    with limiter.slot("a.example"):
+        starts.append(clock.now)
+
+    assert starts == [100.0, 120.0]
+    assert clock.sleeps == [10.0, 10.0]
 
 
 def test_a_host_never_has_more_requests_in_flight_than_its_limit() -> None:

@@ -54,15 +54,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     lines = args.results.read_text(encoding="utf-8").splitlines()
     names = unverified_mutants(lines)
     target = args.output or args.baseline
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render(names), encoding="utf-8")
-    print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
     grown = sorted(set(names) - read_baseline(args.baseline))
     if args.fail_on_growth and grown:
         print(f"the sweep found {len(grown)} survivor(s) outside {args.baseline}:", file=sys.stderr)
         for name in grown:
             print(f"  {name}", file=sys.stderr)
+        if args.output is not None and args.output.resolve() != args.baseline.resolve():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render(names), encoding="utf-8")
+            print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
         return 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render(names), encoding="utf-8")
+    print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
     return 0
 
 
