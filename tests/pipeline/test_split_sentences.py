@@ -30,6 +30,7 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
     segment_sentence_shard,
     shard_needs_sentence_segmentation,
 )
+from osm_polygon_website_tag.reporting.verification.rows import verify_row_invariants
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 
 
@@ -74,6 +75,23 @@ def test_v1_4_shard_is_promoted_to_v1_5_with_sentences(tmp_path: Path) -> None:
     assert rows[0]["website_sentence_status"] == SENTENCE_SUCCESS
     assert rows[0]["contact_website_sentence_status"] == SENTENCE_ABSENT
     assert rows[0]["schema_version"] == "v1.5"
+
+
+def test_language_fixture_satisfies_public_row_invariants(tmp_path: Path) -> None:
+    row = language_polygon_row(0)
+    assert row["has_contact_website"] is False
+    assert row["contact_website_class"] is None
+    assert row["contact_website_hostname"] is None
+    _write(
+        tmp_path / "polygons" / "region.parquet",
+        [row],
+        schema=POLYGON_PUBLIC_SCHEMA_V1_4,
+    )
+    errors: list[str] = []
+
+    verify_row_invariants(tmp_path, errors)
+
+    assert errors == []
 
 
 def test_a_language_the_model_does_not_cover_is_recorded(tmp_path: Path) -> None:

@@ -224,6 +224,9 @@ def language_polygon_row(
     return polygon_row(
         "v1.4",
         contact_website=None,
+        has_contact_website=False,
+        contact_website_class=None,
+        contact_website_hostname=None,
         polygon_id=f"source:way/{index}",
         website_text=text,
         website_word_count=len(text.split()),
