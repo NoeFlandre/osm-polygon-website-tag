@@ -18,6 +18,7 @@ from osm_polygon_website_tag.reporting.text_population import (
     text_population_manifest_entries,
 )
 from osm_polygon_website_tag.reporting.verification.language import verify_language_paths
+from osm_polygon_website_tag.reporting.verification.rows import verify_row_invariants
 from osm_polygon_website_tag.reporting.verification.text import verify_text_paths
 
 
@@ -30,6 +31,35 @@ def _write_run(root: Path, rows: list[dict[str, object]], *, split: bool) -> Non
         pq.write_table(pa.Table.from_pylist(rows[midpoint:]), polygons / "a.parquet")
     else:
         pq.write_table(pa.Table.from_pylist(rows), polygons / "a.parquet")
+
+
+@pytest.mark.parametrize(
+    ("website_text", "contact_text"),
+    [("main text", None), (None, "contact text")],
+)
+def test_population_fixture_keeps_absent_url_metadata_coherent(
+    tmp_path: Path, website_text: str | None, contact_text: str | None
+) -> None:
+    row = text_population_polygon_row(
+        osm_id=1,
+        lat=48.0,
+        lon=2.0,
+        source_pbf="region.osm.pbf",
+        polygon_id="region:way/1",
+        osm_version=1,
+        website_text=website_text,
+        website_status="success" if website_text is not None else "absent",
+        website_words=len(website_text.split()) if website_text is not None else None,
+        contact_text=contact_text,
+        contact_status="success" if contact_text is not None else "absent",
+        contact_words=len(contact_text.split()) if contact_text is not None else None,
+    )
+    _write_run(tmp_path, [row], split=False)
+    errors: list[str] = []
+
+    verify_row_invariants(tmp_path, errors)
+
+    assert errors == []
 
 
 def test_population_uses_one_deterministic_winner_per_qualifying_identity(
