@@ -276,19 +276,14 @@ def test_connect_rejects_rebound_private_peer(monkeypatch, peer: str) -> None:
         ("_PublicHTTPSConnection", "_PublicHTTPSHandler", "https_open"),
     ],
 )
-def test_handlers_open_peer_checked_connections(
-    monkeypatch, connection: str, handler: str, method: str
-) -> None:
+def test_handlers_open_peer_checked_connections(connection: str, handler: str, method: str) -> None:
     conn = getattr(web_fetch_module, connection)("example.org")
     assert conn._create_connection is web_fetch_module._connect_public
-    seen = []
-    monkeypatch.setattr(
-        getattr(web_fetch_module, handler),
-        "do_open",
-        lambda _self, cls, req: seen.append((cls, req)) or "response",
-    )
+    seen: list[tuple[object, object]] = []
+    opener = getattr(web_fetch_module, handler)()
+    opener.do_open = lambda cls, req: seen.append((cls, req)) or "response"
 
-    assert getattr(getattr(web_fetch_module, handler)(), method)("req") == "response"
+    assert getattr(opener, method)("req") == "response"
     assert seen == [(getattr(web_fetch_module, connection), "req")]
 
 
@@ -865,38 +860,6 @@ def test_read_before_deadline_reads_in_bounded_chunks(monkeypatch) -> None:
     assert response.limits == [4, 4, 1]
 
 
-def test_download_once_deadline_starts_before_connect(monkeypatch) -> None:
-    seen = []
-
-    class Response:
-        status = 200
-
-        def __init__(self) -> None:
-            self.headers: dict[str, str] = {}
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args) -> None:
-            return None
-
-    class Opener:
-        def open(self, _request, *, timeout: float):
-            return Response()
-
-    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", lambda *_args: Opener())
-    monkeypatch.setattr(web_fetch_module.time, "monotonic", lambda: 100.0)
-    monkeypatch.setattr(
-        web_fetch_module,
-        "_read_before_deadline",
-        lambda _response, limit, deadline: seen.append((limit, deadline)) or b"",
-    )
-
-    web_fetch_module._download_once("https://example.org", 3.0, 10)
-
-    assert seen == [(11, 103.0)]
-
-
 class _CountingResponse:
     """A urllib response that counts the body bytes read from it."""
 
@@ -1140,3 +1103,142 @@ def test_without_a_limiter_the_transport_is_called_directly() -> None:
 def test_a_host_made_only_of_dots_is_missing_not_empty(raw: str) -> None:
     with pytest.raises(ValueError, match=r"^missing_hostname$"):
         web_fetch_module.normalize_http_url(raw)
+
+
+def test_connect_public_forwards_positional_and_keyword_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    sock = _FakeSocket("93.184.216.34")
+    monkeypatch.setattr(
+        web_fetch_module.socket,
+        "create_connection",
+        lambda *args, **kwargs: seen.append((args, kwargs)) or sock,
+    )
+
+    assert web_fetch_module._connect_public(("h", 443), 3.0, ("0.0.0.0", 0)) is sock  # noqa: S104
+    assert web_fetch_module._connect_public(("h", 443), timeout=2.0) is sock
+
+    assert seen == [
+        ((("h", 443), 3.0, ("0.0.0.0", 0)), {}),  # noqa: S104
+        ((("h", 443),), {"timeout": 2.0}),
+    ]
+    assert not sock.closed
+
+
+class _Ticks:
+    """A clock that returns each of its values once, then the last one for ever."""
+
+    def __init__(self, *values: float) -> None:
+        self.values = list(values)
+
+    def __call__(self) -> float:
+        return self.values.pop(0) if len(self.values) > 1 else self.values[0]
+
+
+class _Trickle:
+    """A response that hands back one byte per read, however much is asked for."""
+
+    def __init__(self, body: bytes) -> None:
+        self.pending = body
+
+    def read1(self, limit: int) -> bytes:
+        chunk, self.pending = self.pending[:1], self.pending[1:]
+        return chunk
+
+
+def test_the_deadline_is_reached_when_the_clock_equals_it() -> None:
+    with pytest.raises(TimeoutError, match=r"^request deadline exceeded$"):
+        web_fetch_module._read_before_deadline(_Trickle(b"abc"), 10, 5.0, clock=_Ticks(5.0))
+
+
+def test_a_read_just_inside_the_deadline_completes() -> None:
+    body = web_fetch_module._read_before_deadline(
+        _Trickle(b"abc"), 10, 5.0, clock=_Ticks(4.999, 4.999)
+    )
+
+    assert body == b"abc"
+
+
+def test_the_deadline_is_checked_between_every_read() -> None:
+    with pytest.raises(TimeoutError):
+        web_fetch_module._read_before_deadline(
+            _Trickle(b"abcdef"), 6, 5.0, clock=_Ticks(1.0, 2.0, 5.0)
+        )
+
+
+class _Head:
+    def __init__(self, status: int | None, headers: dict[str, str] | None = None) -> None:
+        self.status = status
+        self.headers = headers or {}
+
+    def __enter__(self) -> _Head:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read1(self, limit: int) -> bytes:
+        return b""
+
+
+def test_download_once_builds_a_direct_opener_and_a_named_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Opener:
+        def open(self, request: object, *, timeout: float) -> _Head:
+            seen["request"], seen["timeout"] = request, timeout
+            return _Head(200)
+
+    def build_opener(*handlers: object) -> Opener:
+        seen["handlers"] = handlers
+        return Opener()
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", build_opener)
+    monkeypatch.setattr(web_fetch_module.time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        web_fetch_module,
+        "_read_before_deadline",
+        lambda _response, limit, deadline: seen.update(limit=limit, deadline=deadline) or b"",
+    )
+
+    web_fetch_module._download_once("http://example.org/p", 4.0, 10)
+
+    handlers = seen["handlers"]
+    assert [type(h) for h in handlers] == [  # ty: ignore[not-iterable]
+        web_fetch_module.urllib.request.ProxyHandler,
+        web_fetch_module._NoRedirect,
+        web_fetch_module._PublicHTTPHandler,
+        web_fetch_module._PublicHTTPSHandler,
+    ]
+    assert handlers[0].proxies == {}  # ty: ignore[not-subscriptable]
+    assert seen["timeout"] == 4.0
+    assert (seen["limit"], seen["deadline"]) == (11, 104.0)  # deadline counts from before connect
+    request = seen["request"]
+    assert request.get_header("User-agent") == web_fetch_module.USER_AGENT  # ty: ignore[unresolved-attribute]
+    assert request.full_url == "http://example.org/p"  # ty: ignore[unresolved-attribute]
+
+
+def test_a_response_without_a_status_is_reported_as_status_zero() -> None:
+    head = web_fetch_module._response_head(_Head(None, {"A": "b"}))
+
+    assert head == HttpResponse(0, {"A": "b"}, b"")
+
+
+@pytest.mark.parametrize(
+    ("status", "worth"),
+    [(199, False), (200, True), (299, True), (300, False), (301, False), (404, False)],
+)
+def test_only_a_2xx_response_is_worth_reading(status: int, worth: bool) -> None:
+    head = HttpResponse(status, {"Content-Type": "text/html"}, b"")
+
+    assert web_fetch_module._worth_reading(head, 100) is worth
+
+
+def test_header_names_are_matched_whatever_their_case() -> None:
+    upper = {"RETRY-AFTER": "3", "CONTENT-LENGTH": "12"}
+
+    assert web_fetch_module._declared_length(upper) == 12
+    assert web_fetch_module._retry_wait(HttpResponse(429, upper, b""), 30.0) == 3.0

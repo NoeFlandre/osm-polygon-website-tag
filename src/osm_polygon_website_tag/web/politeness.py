@@ -81,7 +81,9 @@ class HostLimiter:
 
 def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> float | None:
     """Parse a ``Retry-After`` value (delta-seconds or HTTP-date), or ``None``."""
-    text = (value or "").strip()
+    if value is None:
+        return None
+    text = value.strip()
     if text.isdecimal():
         return float(text)
     moment = _http_date(text)

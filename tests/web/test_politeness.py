@@ -214,3 +214,8 @@ def test_retry_after_dates_are_measured_from_the_current_time() -> None:
 
     assert wait is not None
     assert wait > 10**6
+
+
+def test_a_missing_retry_after_is_none_not_an_empty_date() -> None:
+    assert retry_after_seconds(None) is None
+    assert retry_after_seconds("") is None

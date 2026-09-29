@@ -33,6 +33,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     RunState,
     SourceFingerprint,
 )
+from osm_polygon_website_tag.web.politeness import HostPolicy
 from osm_polygon_website_tag.web.text_extract import TextExtraction
 from osm_polygon_website_tag.web.web_fetch import FetchResult
 
@@ -391,6 +392,7 @@ def test_run_all_forwards_each_orchestration_boundary_exactly(  # noqa: PLR0915 
         area_workers=3,
         max_in_flight_areas=4,
         fetch_workers=5,
+        host_policy=HostPolicy(concurrency=3, delay_seconds=0.5),
         detect_languages=True,
         language_detector=detector,
     )
@@ -442,6 +444,7 @@ def test_run_all_forwards_each_orchestration_boundary_exactly(  # noqa: PLR0915 
     assert context.area_workers == 3
     assert context.max_in_flight_areas == 4
     assert context.fetch_workers == 5
+    assert context.host_policy == HostPolicy(concurrency=3, delay_seconds=0.5)
     assert context.detect_languages is True
     assert context.language_detector is detector
     assert calls["complete"] == ("finished", context)

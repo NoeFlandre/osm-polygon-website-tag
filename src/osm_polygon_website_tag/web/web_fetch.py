@@ -241,7 +241,7 @@ def _retry_wait(response: HttpResponse, cap: float) -> float | None:
     """Seconds to pause before retrying, when the server asked for a short one."""
     if response.status_code not in RETRY_STATUSES:
         return None
-    wait = retry_after_seconds(_header(response.headers, "retry-after"))
+    wait = retry_after_seconds(_header(response.headers, _RETRY_AFTER))
     return wait if wait is not None and wait <= cap else None
 
 
@@ -393,7 +393,7 @@ def _too_large(response: HttpResponse, max_bytes: int) -> bool:
 
 def _declared_length(headers: Mapping[str, str]) -> int | None:
     """Return the Content-Length header as an integer, ignoring malformed values."""
-    value = _header(headers, "content-length")
+    value = _header(headers, _CONTENT_LENGTH)
     return int(value) if value is not None and value.strip().isdecimal() else None
 
 
@@ -404,6 +404,12 @@ def _media_type_allowed(headers: Mapping[str, str]) -> bool:
 
 
 _CONTENT_TYPE = "content-type"
+# Header names are literals here, not inline, because ``_header`` matches them
+# case-insensitively and urllib normalises the case of request headers: a
+# differently-cased spelling inline is a mutant no test could tell apart.
+_CONTENT_LENGTH = "content-length"
+_RETRY_AFTER = "retry-after"
+_USER_AGENT_HEADER = "User-Agent"
 _DOCUMENT_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
 
 
@@ -476,7 +482,9 @@ class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_PublicHTTPSConnection, req)
 
 
-def _read_before_deadline(response: Any, limit: int, deadline: float) -> bytes:
+def _read_before_deadline(
+    response: Any, limit: int, deadline: float, clock: Callable[[], float] = time.monotonic
+) -> bytes:
     """Read at most ``limit`` bytes, failing once the whole-request deadline passes.
 
     The socket timeout bounds each blocking read, not the request; a server
@@ -488,7 +496,7 @@ def _read_before_deadline(response: Any, limit: int, deadline: float) -> bytes:
     chunks: list[bytes] = []
     remaining = limit
     while remaining > 0:
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             raise TimeoutError("request deadline exceeded")
         chunk = response.read1(min(READ_CHUNK_BYTES, remaining))
         if not chunk:
@@ -507,7 +515,7 @@ def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResp
         _PublicHTTPSHandler(),
     )
     # The caller has normalized and validated HTTP(S) immediately before this call.
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
+    request = urllib.request.Request(url, headers={_USER_AGENT_HEADER: USER_AGENT})  # noqa: S310
     try:
         response = opener.open(request, timeout=timeout_seconds)
     except urllib.error.HTTPError as exc:
