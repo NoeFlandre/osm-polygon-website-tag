@@ -26,6 +26,8 @@ def _public_resolver(*_: object, **__: object) -> list[tuple[int, int, int, str,
 @pytest.mark.parametrize("paragraphs", [10, 300])
 def test_extract_main_text(benchmark: BenchmarkFixture, paragraphs: int) -> None:
     html = _page(paragraphs)
+    # The first call pays the lazy trafilatura import; time only steady state.
+    extract_main_text(html, url="https://example.org/")
 
     result = benchmark(extract_main_text, html, url="https://example.org/")
 
