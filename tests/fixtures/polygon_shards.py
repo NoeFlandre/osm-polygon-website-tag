@@ -211,6 +211,33 @@ def polygon_row(
             "contact_website_sentence_status": "success" if has_contact_website else "absent",
         }
         row.update({name: value for name, value in stage_defaults.items() if name in row})
+
+    cleared_urls = False
+    for url_field, flag_field, class_field, hostname_field in (
+        ("website", "has_website", "website_class", "website_hostname"),
+        (
+            "contact_website",
+            "has_contact_website",
+            "contact_website_class",
+            "contact_website_hostname",
+        ),
+    ):
+        if url_field in overrides and overrides[url_field] is None:
+            cleared_urls = True
+            row[url_field] = None
+            row[flag_field] = False
+            row[class_field] = None
+            row[hostname_field] = None
+    if cleared_urls:
+        has_website = overrides.get("has_website", row["has_website"])
+        has_contact_website = overrides.get("has_contact_website", row["has_contact_website"])
+        row["has_any_website"] = bool(has_website or has_contact_website)
+    if "preferred_website" in row and ("website" in overrides or "contact_website" in overrides):
+        website = overrides.get("website", row["website"])
+        contact_website = overrides.get("contact_website", row["contact_website"])
+        row["preferred_website"] = website or contact_website
+        row["preferred_website_source"] = "website" if website else "contact:website"
+
     return _apply_overrides(row, overrides)
 
 

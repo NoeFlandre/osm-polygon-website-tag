@@ -7,7 +7,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import text_population_polygon_row
+from tests.fixtures.polygon_shards import polygon_row, text_population_polygon_row
 
 from osm_polygon_website_tag.reporting import text_population
 from osm_polygon_website_tag.reporting.artifact_inventory import data_manifest_sha256
@@ -60,6 +60,43 @@ def test_population_fixture_keeps_absent_url_metadata_coherent(
     verify_row_invariants(tmp_path, errors)
 
     assert errors == []
+
+
+@pytest.mark.parametrize(
+    ("url_field", "absent_fields"),
+    [
+        (
+            "website",
+            ("has_website", "website_class", "website_hostname"),
+        ),
+        (
+            "contact_website",
+            ("has_contact_website", "contact_website_class", "contact_website_hostname"),
+        ),
+    ],
+)
+def test_polygon_row_fixture_keeps_cleared_url_metadata_coherent(
+    tmp_path: Path, url_field: str, absent_fields: tuple[str, ...]
+) -> None:
+    row = polygon_row("v1.4", **{url_field: None})
+    _write_run(tmp_path, [row], split=False)
+    errors: list[str] = []
+
+    verify_row_invariants(tmp_path, errors)
+
+    assert errors == []
+    assert row[url_field] is None
+    assert row[absent_fields[0]] is False
+    assert row[absent_fields[1]] is None
+    assert row[absent_fields[2]] is None
+    assert row["has_any_website"] is True
+
+
+def test_polygon_row_fixture_updates_preferred_website_after_url_is_cleared() -> None:
+    row = polygon_row("v1.1", website=None)
+
+    assert row["preferred_website"] == "https://contact.example.org"
+    assert row["preferred_website_source"] == "contact:website"
 
 
 def test_population_uses_one_deterministic_winner_per_qualifying_identity(
