@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import polygon_row
+from tests.fixtures.polygon_shards import text_population_polygon_row
 
 from osm_polygon_website_tag.reporting import text_population
 from osm_polygon_website_tag.reporting.artifact_inventory import data_manifest_sha256
@@ -20,44 +19,6 @@ from osm_polygon_website_tag.reporting.text_population import (
 )
 from osm_polygon_website_tag.reporting.verification.language import verify_language_paths
 from osm_polygon_website_tag.reporting.verification.text import verify_text_paths
-
-
-def _row(
-    *,
-    osm_id: int,
-    lat: float,
-    lon: float,
-    source_pbf: str,
-    polygon_id: str,
-    osm_version: int,
-    website_text: str | None,
-    website_status: str | None,
-    website_words: int | None,
-    contact_text: str | None,
-    contact_status: str | None,
-    contact_words: int | None,
-) -> dict[str, object]:
-    return polygon_row(
-        "v1.4",
-        osm_type="way",
-        osm_id=osm_id,
-        osm_version=osm_version,
-        osm_timestamp=datetime(2026, 1, 1, tzinfo=UTC),
-        source_pbf=source_pbf,
-        polygon_id=polygon_id,
-        lat=lat,
-        lon=lon,
-        website="https://example.org" if website_text else None,
-        contact_website="https://contact.example.org" if contact_text else None,
-        website_text=website_text,
-        website_text_status=website_status,
-        website_word_count=website_words,
-        contact_website_text=contact_text,
-        contact_website_text_status=contact_status,
-        contact_website_word_count=contact_words,
-        website_language="eng" if website_text else None,
-        contact_website_language="fra" if contact_text else None,
-    )
 
 
 def _write_run(root: Path, rows: list[dict[str, object]], *, split: bool) -> None:
@@ -75,7 +36,7 @@ def test_population_uses_one_deterministic_winner_per_qualifying_identity(
     tmp_path: Path,
 ) -> None:
     rows = [
-        _row(
+        text_population_polygon_row(
             osm_id=42,
             lat=40.0,
             lon=2.0,
@@ -89,7 +50,7 @@ def test_population_uses_one_deterministic_winner_per_qualifying_identity(
             contact_status="absent",
             contact_words=None,
         ),
-        _row(
+        text_population_polygon_row(
             osm_id=42,
             lat=48.85,
             lon=2.35,
@@ -103,7 +64,7 @@ def test_population_uses_one_deterministic_winner_per_qualifying_identity(
             contact_status="absent",
             contact_words=None,
         ),
-        _row(
+        text_population_polygon_row(
             osm_id=43,
             lat=40.7,
             lon=-74.0,
@@ -117,7 +78,7 @@ def test_population_uses_one_deterministic_winner_per_qualifying_identity(
             contact_status="success",
             contact_words=3,
         ),
-        _row(
+        text_population_polygon_row(
             osm_id=44,
             lat=35.0,
             lon=139.0,
@@ -164,7 +125,7 @@ def test_population_is_independent_of_file_and_row_order(tmp_path: Path) -> None
     first = tmp_path / "first"
     second = tmp_path / "second"
     rows = [
-        _row(
+        text_population_polygon_row(
             osm_id=42,
             lat=48.85,
             lon=2.35,
@@ -178,7 +139,7 @@ def test_population_is_independent_of_file_and_row_order(tmp_path: Path) -> None
             contact_status="absent",
             contact_words=None,
         ),
-        _row(
+        text_population_polygon_row(
             osm_id=42,
             lat=40.7,
             lon=-74.0,
@@ -202,7 +163,7 @@ def test_population_is_independent_of_file_and_row_order(tmp_path: Path) -> None
 
 
 def test_population_breaks_payload_ties_without_using_row_order(tmp_path: Path) -> None:
-    first = _row(
+    first = text_population_polygon_row(
         osm_id=42,
         lat=48.85,
         lon=2.35,
@@ -235,7 +196,7 @@ def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> 
     _write_run(
         regional,
         [
-            _row(
+            text_population_polygon_row(
                 osm_id=7,
                 lat=48.0,
                 lon=2.0,
@@ -260,7 +221,7 @@ def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> 
     _write_run(
         canonical,
         [
-            _row(
+            text_population_polygon_row(
                 osm_id=8,
                 lat=1.0,
                 lon=1.0,
@@ -302,7 +263,7 @@ def test_population_uses_regional_copies_for_a_canonical_run(tmp_path: Path) -> 
 
 def test_release_text_validation_rejects_invalid_word_counts(tmp_path: Path) -> None:
     path = tmp_path / "source.parquet"
-    row = _row(
+    row = text_population_polygon_row(
         osm_id=7,
         lat=48.0,
         lon=2.0,
@@ -347,7 +308,7 @@ def test_release_language_validation_rejects_incomplete_language_pairs(tmp_path:
 
 
 def test_population_counts_null_status_as_a_failure_identity(tmp_path: Path) -> None:
-    row = _row(
+    row = text_population_polygon_row(
         osm_id=9,
         lat=48.0,
         lon=2.0,
@@ -370,7 +331,7 @@ def test_population_counts_null_status_as_a_failure_identity(tmp_path: Path) -> 
 
 
 def test_population_ignores_unicode_whitespace_only_text(tmp_path: Path) -> None:
-    row = _row(
+    row = text_population_polygon_row(
         osm_id=10,
         lat=48.0,
         lon=2.0,
@@ -394,7 +355,7 @@ def test_population_ignores_unicode_whitespace_only_text(tmp_path: Path) -> None
 
 def test_population_status_buckets_use_failure_precedence(tmp_path: Path) -> None:
     rows = [
-        _row(
+        text_population_polygon_row(
             osm_id=11,
             lat=48.0,
             lon=2.0,
@@ -408,7 +369,7 @@ def test_population_status_buckets_use_failure_precedence(tmp_path: Path) -> Non
             contact_status="absent",
             contact_words=None,
         ),
-        _row(
+        text_population_polygon_row(
             osm_id=11,
             lat=48.0,
             lon=2.0,
@@ -446,8 +407,8 @@ def test_population_breaks_a_prefix_tie_on_extracted_text(tmp_path: Path) -> Non
         "contact_words": None,
     }
     rows = [
-        _row(website_text="zulu", website_words=9, **shared),
-        _row(website_text="alpha", website_words=4, **shared),
+        text_population_polygon_row(website_text="zulu", website_words=9, **shared),
+        text_population_polygon_row(website_text="alpha", website_words=4, **shared),
     ]
     _write_run(tmp_path, rows, split=False)
 
@@ -485,8 +446,8 @@ def test_a_prefix_tie_restores_the_text_bearing_population(
     _write_run(
         tmp_path,
         [
-            _row(website_text="zulu", website_words=9, **shared),
-            _row(website_text="alpha", website_words=4, **shared),
+            text_population_polygon_row(website_text="zulu", website_words=9, **shared),
+            text_population_polygon_row(website_text="alpha", website_words=4, **shared),
         ],
         split=False,
     )

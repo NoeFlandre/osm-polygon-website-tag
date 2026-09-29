@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import polygon_row
+from tests.fixtures.polygon_shards import language_polygon_row
 
 import osm_polygon_website_tag.pipeline.split_sentences as split_sentences
 from osm_polygon_website_tag.contracts.polygon_schema import (
@@ -46,17 +46,6 @@ class _FakeSplitter:
         return [text.split("|") for text in texts]
 
 
-def _row(index: int, *, language: str | None = "eng_Latn", text: str = "One|Two") -> dict:
-    return polygon_row(
-        "v1.4",
-        polygon_id=f"source:way/{index}",
-        website_text=text,
-        website_text_status="success",
-        website_language=language,
-        website_language_probability=0.99,
-    )
-
-
 def _write(shard: Path, rows: list[dict], schema: pa.Schema = POLYGON_PUBLIC_SCHEMA_V1_4) -> Path:
     shard.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows, schema=schema), shard)
@@ -64,7 +53,7 @@ def _write(shard: Path, rows: list[dict], schema: pa.Schema = POLYGON_PUBLIC_SCH
 
 
 def test_v1_4_shard_is_promoted_to_v1_5_with_sentences(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
 
     result = segment_sentence_shard(shard, splitter=_FakeSplitter(), batch_rows=2)
 
@@ -88,7 +77,7 @@ def test_v1_4_shard_is_promoted_to_v1_5_with_sentences(tmp_path: Path) -> None:
 
 
 def test_a_language_the_model_does_not_cover_is_recorded(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0, language="zza_Latn")])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0, language="zza_Latn")])
 
     segment_sentence_shard(shard, splitter=_FakeSplitter(), batch_rows=1)
 
@@ -98,7 +87,7 @@ def test_a_language_the_model_does_not_cover_is_recorded(tmp_path: Path) -> None
 
 
 def test_a_completed_v1_5_shard_is_left_untouched(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0)])
     segment_sentence_shard(shard, splitter=_FakeSplitter(), batch_rows=1)
     before = shard.read_bytes()
     splitter = _FakeSplitter()
@@ -119,7 +108,7 @@ def test_a_completed_v1_5_shard_is_left_untouched(tmp_path: Path) -> None:
 
 
 def test_shard_needs_segmentation_reflects_the_schema(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0)])
     assert shard_needs_sentence_segmentation(shard) is True
 
     segment_sentence_shard(shard, splitter=_FakeSplitter(), batch_rows=1)
@@ -127,7 +116,7 @@ def test_shard_needs_segmentation_reflects_the_schema(tmp_path: Path) -> None:
 
 
 def test_a_shard_without_language_columns_is_rejected(tmp_path: Path) -> None:
-    row = {name: value for name, value in _row(0).items() if "language" not in name}
+    row = {name: value for name, value in language_polygon_row(0).items() if "language" not in name}
     row["schema_version"] = "v1.3"
     shard = _write(tmp_path / "region.parquet", [row], schema=POLYGON_PUBLIC_SCHEMA)
 
@@ -139,7 +128,7 @@ def test_a_shard_without_language_columns_is_rejected(tmp_path: Path) -> None:
 
 
 def test_a_deadline_pauses_without_touching_the_source_shard(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
     before = shard.read_bytes()
 
     # The budget is relative to the start, so the clock must actually advance.
@@ -165,7 +154,7 @@ def test_a_deadline_pauses_without_touching_the_source_shard(tmp_path: Path) -> 
 
 
 def test_a_paused_run_resumes_from_its_durable_prefix(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
     # Deadline, then one batch inside the budget, then the budget is spent.
     clock = iter([0.0, 0.0, 99.0])
 
@@ -194,14 +183,14 @@ def test_a_paused_run_resumes_from_its_durable_prefix(tmp_path: Path) -> None:
 
 
 def test_batch_rows_must_be_positive(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0)])
 
     with pytest.raises(ValueError, match=rf"^{re.escape('batch_rows must be positive')}$"):
         segment_sentence_shard(shard, splitter=_FakeSplitter(), batch_rows=0)
 
 
 def test_a_non_positive_time_budget_is_rejected(tmp_path: Path) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0)])
 
     for budget in (0.0, -1.0):
         with pytest.raises(
@@ -226,7 +215,7 @@ def test_a_failure_removes_the_staged_file_and_keeps_the_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An interrupted run must leave the source shard and its durable prefix intact."""
-    shard = _write(tmp_path / "region.parquet", [_row(0)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0)])
     before = shard.read_bytes()
 
     def explode(*_args: object, **_kwargs: object) -> int:
@@ -245,7 +234,7 @@ def test_a_failure_removes_the_staged_file_and_keeps_the_checkpoint(
 def test_a_row_count_that_changed_under_the_run_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
     monkeypatch.setattr(
         split_sentences, "_skip_checkpointed_rows", lambda originals, skip: ([], skip)
     )
@@ -256,7 +245,7 @@ def test_a_row_count_that_changed_under_the_run_is_rejected(
 
 def test_the_schema_error_names_the_offending_shard(tmp_path: Path) -> None:
     """The shard name is what makes the failure actionable in a multi-shard run."""
-    row = {name: value for name, value in _row(0).items() if "language" not in name}
+    row = {name: value for name, value in language_polygon_row(0).items() if "language" not in name}
     row["schema_version"] = "v1.3"
     shard = _write(tmp_path / "odd-name.parquet", [row], schema=POLYGON_PUBLIC_SCHEMA)
 
@@ -269,7 +258,7 @@ def test_the_schema_error_names_the_offending_shard(tmp_path: Path) -> None:
 
 def test_a_clock_exactly_on_the_deadline_stops(tmp_path: Path) -> None:
     """The budget is spent at the deadline, not one tick after it."""
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
     ticks = iter([0.0, 10.0])
 
     result = segment_sentence_shard(
@@ -286,7 +275,10 @@ def test_a_clock_exactly_on_the_deadline_stops(tmp_path: Path) -> None:
 
 def test_part_indices_advance_so_three_batches_produce_three_parts(tmp_path: Path) -> None:
     """A stalled or rewound index would collide with an existing part."""
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1), _row(2)])
+    shard = _write(
+        tmp_path / "region.parquet",
+        [language_polygon_row(0), language_polygon_row(1), language_polygon_row(2)],
+    )
 
     result = segment_sentence_shard(shard, splitter=_FakeSplitter(), batch_rows=1)
 
@@ -296,7 +288,7 @@ def test_part_indices_advance_so_three_batches_produce_three_parts(tmp_path: Pat
 
 def test_a_paused_checkpoint_records_the_real_source_hash(tmp_path: Path) -> None:
     """Resuming depends on the stored hash actually identifying the source."""
-    shard = _write(tmp_path / "region.parquet", [_row(0), _row(1)])
+    shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
     expected = hash_shard(shard)
     ticks = iter([0.0, 0.0, 99.0])
 

@@ -12,7 +12,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import polygon_row
+from tests.fixtures.polygon_shards import language_polygon_row
 
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
@@ -53,17 +53,6 @@ class _FakeSplitter:
         return [text.split("|") for text in texts]
 
 
-def _row(index: int, *, language: str = "eng_Latn") -> dict[str, object]:
-    return polygon_row(
-        "v1.4",
-        polygon_id=f"source:way/{index}",
-        website_text="One|Two",
-        website_text_status="success",
-        website_language=language,
-        website_language_probability=0.99,
-    )
-
-
 def _write_shard(path: Path, rows: list[dict[str, object]]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows, schema=POLYGON_PUBLIC_SCHEMA_V1_4), path)
@@ -80,7 +69,8 @@ def _write_language_run(tmp_path: Path, *, shards: dict[str, int], run_id: str =
         source = tmp_path / f"{stem}.osm.pbf"
         source.write_bytes(stem.encode())
         shard = _write_shard(
-            run_dir / "polygons" / f"{stem}.parquet", [_row(index) for index in range(row_count)]
+            run_dir / "polygons" / f"{stem}.parquet",
+            [language_polygon_row(index) for index in range(row_count)],
         )
         record_processed_source(
             state,
@@ -273,7 +263,7 @@ def test_run_rejects_a_splitter_that_is_not_the_staged_model(tmp_path: Path) -> 
 
 def test_run_rejects_a_staged_shard_that_changed(tmp_path: Path) -> None:
     _, bundle_dir, _ = _prepare(tmp_path, shards={"alpha": 1})
-    _write_shard(bundle_dir / "alpha.parquet", [_row(0), _row(1)])
+    _write_shard(bundle_dir / "alpha.parquet", [language_polygon_row(0), language_polygon_row(1)])
 
     with pytest.raises(ValueError, match="staged shard"):
         _run(bundle_dir)
@@ -371,7 +361,9 @@ def test_sync_refuses_a_frozen_snapshot(tmp_path: Path) -> None:
 def test_sync_refuses_a_canonical_shard_that_changed_since_preparation(tmp_path: Path) -> None:
     run_dir, bundle_dir, _ = _prepare(tmp_path, shards={"alpha": 1})
     _run(bundle_dir)
-    _write_shard(run_dir / "polygons" / "alpha.parquet", [_row(0), _row(1)])
+    _write_shard(
+        run_dir / "polygons" / "alpha.parquet", [language_polygon_row(0), language_polygon_row(1)]
+    )
 
     with pytest.raises(ValueError, match="canonical shard changed"):
         grid5000_sentences.sync_sentence_bundle(bundle_dir, run_dir)
@@ -387,7 +379,7 @@ def _paused_bundle(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_sync_refuses_a_paused_bundle_whose_staged_shard_changed(tmp_path: Path) -> None:
     run_dir, bundle_dir = _paused_bundle(tmp_path)
-    _write_shard(bundle_dir / "alpha.parquet", [_row(0)])
+    _write_shard(bundle_dir / "alpha.parquet", [language_polygon_row(0)])
 
     with pytest.raises(ValueError, match="paused bundle source changed"):
         grid5000_sentences.sync_sentence_bundle(bundle_dir, run_dir)
@@ -415,7 +407,7 @@ def test_sync_refuses_a_paused_checkpoint_that_disagrees_with_the_receipt(
 
 def test_sync_refuses_a_paused_bundle_whose_canonical_shard_changed(tmp_path: Path) -> None:
     run_dir, bundle_dir = _paused_bundle(tmp_path)
-    _write_shard(run_dir / "polygons" / "alpha.parquet", [_row(0)])
+    _write_shard(run_dir / "polygons" / "alpha.parquet", [language_polygon_row(0)])
 
     with pytest.raises(ValueError, match="canonical shard changed"):
         grid5000_sentences.sync_sentence_bundle(bundle_dir, run_dir)
@@ -566,8 +558,8 @@ def test_outcome_projects_a_segmentation_result(tmp_path: Path) -> None:
 def test_checkpoint_rows_counts_every_durable_part(tmp_path: Path) -> None:
     directory = tmp_path / "parts"
     directory.mkdir()
-    _write_shard(directory / "0000.parquet", [_row(0), _row(1)])
-    _write_shard(directory / "0001.parquet", [_row(2)])
+    _write_shard(directory / "0000.parquet", [language_polygon_row(0), language_polygon_row(1)])
+    _write_shard(directory / "0001.parquet", [language_polygon_row(2)])
 
     assert grid5000_sentences._checkpoint_rows(directory) == 3
     assert grid5000_sentences._checkpoint_rows(tmp_path / "empty") == 0
@@ -587,7 +579,7 @@ def test_validate_completed_shard_checks_rows_schema_and_digest(tmp_path: Path) 
         )
     with pytest.raises(ValueError, match="hash does not match"):
         grid5000_sentences._validate_completed_shard(shard, replace(outcome, shard_sha256="d" * 64))
-    unsegmented = _write_shard(tmp_path / "v14.parquet", [_row(0)])
+    unsegmented = _write_shard(tmp_path / "v14.parquet", [language_polygon_row(0)])
     with pytest.raises(ValueError, match="schema mismatch"):
         grid5000_sentences._validate_completed_shard(
             unsegmented,

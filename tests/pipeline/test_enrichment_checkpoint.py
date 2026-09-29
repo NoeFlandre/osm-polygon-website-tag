@@ -19,10 +19,6 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.pipeline.enrichment_checkpoint import enrichment_checkpoint_store
 
 
-def _row(index: int) -> dict[str, object]:
-    return polygon_row("v1.3", polygon_id=f"source:way/{index}")
-
-
 def test_enrichment_checkpoint_module_exposes_focused_boundary() -> None:
     """Checkpoint identity is isolated from URL-enrichment orchestration."""
     module = importlib.import_module("osm_polygon_website_tag.pipeline.enrichment_checkpoint")
@@ -79,13 +75,17 @@ def test_stage_errors_name_the_enrichment_stage(tmp_path: Path) -> None:
     shard = tmp_path / "region.parquet"
     store = enrichment_checkpoint_store()
     loaded = store.load(shard, source_row_count=1, source_shard_sha256="a" * 64)
-    store.write_part(loaded.directory, 0, [_row(1)], batch_rows=1)
+    store.write_part(
+        loaded.directory, 0, [polygon_row("v1.3", polygon_id="source:way/1")], batch_rows=1
+    )
 
     with pytest.raises(
         ValueError,
         match=re.escape("enrichment checkpoint part already exists: part-00000000.parquet"),
     ):
-        store.write_part(loaded.directory, 0, [_row(2)], batch_rows=1)
+        store.write_part(
+            loaded.directory, 0, [polygon_row("v1.3", polygon_id="source:way/2")], batch_rows=1
+        )
     with pytest.raises(ValueError, match="enrichment row count changed while assembling"):
         store.assemble(
             store.parts(loaded.directory),

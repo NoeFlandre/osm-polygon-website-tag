@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -184,26 +185,153 @@ def polygon_row(
         row.setdefault(field.name, _default_for_field(field))
     row["schema_version"] = schema_version
 
-    stage_defaults = {
-        "website_language": "eng_Latn",
-        "website_language_probability": 0.99,
-        "contact_website_language": None,
-        "contact_website_language_probability": None,
-        "website_sentences": ["example text."],
-        "website_sentence_count": 1,
-        "website_sentence_status": "segmented",
-        "contact_website_sentences": None,
-        "contact_website_sentence_count": None,
-        "contact_website_sentence_status": "absent",
-    }
-    if schema_version == "v1.5":
-        stage_defaults.update(
-            website_text="example text.",
-            website_text_status="success",
-            website_sentence_status="success",
+    if schema_version in {"v1.4", "v1.5"}:
+        has_website = overrides.get("website", row.get("website")) is not None
+        has_contact_website = (
+            overrides.get("contact_website", row.get("contact_website")) is not None
         )
-    row.update({name: value for name, value in stage_defaults.items() if name in row})
+        website_text = "example text." if has_website else None
+        contact_text = "contact example text." if has_contact_website else None
+        stage_defaults = {
+            "website_text": website_text,
+            "website_word_count": 2 if has_website else None,
+            "website_text_status": "success" if has_website else "absent",
+            "contact_website_text": contact_text,
+            "contact_website_word_count": 3 if has_contact_website else None,
+            "contact_website_text_status": "success" if has_contact_website else "absent",
+            "website_language": "eng_Latn" if has_website else None,
+            "website_language_probability": 0.99 if has_website else None,
+            "contact_website_language": "eng_Latn" if has_contact_website else None,
+            "contact_website_language_probability": 0.99 if has_contact_website else None,
+            "website_sentences": ["example text."] if has_website else None,
+            "website_sentence_count": 1 if has_website else None,
+            "website_sentence_status": "success" if has_website else "absent",
+            "contact_website_sentences": ["contact example text."] if has_contact_website else None,
+            "contact_website_sentence_count": 1 if has_contact_website else None,
+            "contact_website_sentence_status": "success" if has_contact_website else "absent",
+        }
+        row.update({name: value for name, value in stage_defaults.items() if name in row})
     return _apply_overrides(row, overrides)
+
+
+def language_polygon_row(
+    index: int,
+    *,
+    language: str | None = "eng_Latn",
+    text: str = "One|Two",
+) -> dict[str, object]:
+    """Return one v1.4 row consumed by language and sentence pipeline tests."""
+    return polygon_row(
+        "v1.4",
+        contact_website=None,
+        polygon_id=f"source:way/{index}",
+        website_text=text,
+        website_word_count=len(text.split()),
+        website_text_status="success",
+        website_language=language,
+        website_language_probability=0.99 if language is not None else None,
+    )
+
+
+def partition_aggregate_row(
+    *,
+    polygon_id: str,
+    source_pbf: str,
+    region: str = "monaco",
+    osm_type: str = "way",
+    website: str = "https://example.com",
+    website_class: str = "absolute_url",
+    website_hostname: str | None = "example.com",
+    wikidata: str | None = "Q42",
+    osm_primary_tag: str = "building",
+    area_bucket: str = "10-100m2",
+) -> dict[str, object]:
+    """Return a v1.3 row with the dimensions used by aggregation tests."""
+    return polygon_row(
+        "v1.3",
+        polygon_id=polygon_id,
+        region=region,
+        source_pbf=source_pbf,
+        osm_type=osm_type,
+        osm_id=100,
+        osm_version=1,
+        website=website,
+        website_class=website_class,
+        website_hostname=website_hostname,
+        name=None,
+        tags=json.dumps({"wikidata": wikidata} if wikidata else {}),
+        tag_keys="[]",
+        tag_count=0,
+        osm_primary_tag=osm_primary_tag,
+        area_m2=0.0,
+        area_bucket=area_bucket,
+    )
+
+
+def deduplicate_polygon_row(
+    *,
+    source_pbf: str,
+    osm_id: int,
+    osm_version: int,
+    website: str,
+    timestamp_day: int,
+    contact: str | None = None,
+) -> dict[str, object]:
+    """Return one v1.3 row with deterministic identity and revision fields."""
+    stem = source_pbf.removesuffix(".osm.pbf")
+    return polygon_row_v1_3(
+        polygon_id=f"{stem}:way/{osm_id}",
+        website=website,
+        contact=contact,
+        source_pbf=source_pbf,
+        osm_id=osm_id,
+        osm_version=osm_version,
+        osm_timestamp=dt.datetime(2026, 1, timestamp_day, tzinfo=dt.UTC),
+        website_text=f"text from {website}",
+        website_word_count=3,
+        website_text_status="success",
+    )
+
+
+def text_population_polygon_row(
+    *,
+    osm_id: int,
+    lat: float,
+    lon: float,
+    source_pbf: str,
+    polygon_id: str,
+    osm_version: int,
+    website_text: str | None,
+    website_status: str | None,
+    website_words: int | None,
+    contact_text: str | None,
+    contact_status: str | None,
+    contact_words: int | None,
+) -> dict[str, object]:
+    """Return a v1.4 row for global website-text population tests."""
+    return polygon_row(
+        "v1.4",
+        osm_type="way",
+        osm_id=osm_id,
+        osm_version=osm_version,
+        osm_timestamp=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+        source_pbf=source_pbf,
+        polygon_id=polygon_id,
+        lat=lat,
+        lon=lon,
+        website="https://example.org" if website_text else None,
+        contact_website="https://contact.example.org" if contact_text else None,
+        website_text=website_text,
+        website_text_status=website_status,
+        website_word_count=website_words,
+        contact_website_text=contact_text,
+        contact_website_text_status=contact_status,
+        contact_website_word_count=contact_words,
+        website_language="eng" if website_text else None,
+        contact_website_language="fra" if contact_text else None,
+        website_language_probability=0.99 if website_text else None,
+        contact_website_language_probability=0.99 if contact_text else None,
+    )
 
 
 def _default_for_field(field: pa.Field) -> object:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 from pathlib import Path
 from typing import cast
@@ -11,7 +10,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import polygon_row_v1_3
+from tests.fixtures.polygon_shards import deduplicate_polygon_row
 
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
@@ -28,31 +27,6 @@ from osm_polygon_website_tag.pipeline.deduplicate import (
 SOURCE_NAMES = ("alpha-latest.osm.pbf", "beta-latest.osm.pbf")
 
 
-def _row(
-    *,
-    source_pbf: str,
-    osm_id: int,
-    osm_version: int,
-    website: str,
-    timestamp_day: int,
-    contact: str | None = None,
-) -> dict[str, object]:
-    stem = source_pbf.removesuffix(".osm.pbf")
-    row = polygon_row_v1_3(
-        polygon_id=f"{stem}:way/{osm_id}",
-        website=website,
-        contact=contact,
-        source_pbf=source_pbf,
-        osm_id=osm_id,
-        osm_version=osm_version,
-        osm_timestamp=dt.datetime(2026, 1, timestamp_day, tzinfo=dt.UTC),
-        website_text=f"text from {website}",
-        website_word_count=3,
-        website_text_status="success",
-    )
-    return {field.name: row[field.name] for field in POLYGON_PUBLIC_SCHEMA}
-
-
 def _write_shard(
     path: Path,
     rows: list[dict[str, object]],
@@ -67,14 +41,14 @@ def test_deduplicate_public_shards_keeps_latest_row_and_empty_source_shards(
     tmp_path: Path,
 ) -> None:
     source_dir = tmp_path / "polygons"
-    old = _row(
+    old = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=7,
         osm_version=1,
         website="https://old.example",
         timestamp_day=1,
     )
-    new = _row(
+    new = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[1],
         osm_id=7,
         osm_version=2,
@@ -111,14 +85,14 @@ def test_deduplicate_public_shards_keeps_latest_row_and_empty_source_shards(
 def test_deduplicate_public_shards_uses_source_name_for_exact_ties(tmp_path: Path) -> None:
     source_dir = tmp_path / "polygons"
     rows = [
-        _row(
+        deduplicate_polygon_row(
             source_pbf=SOURCE_NAMES[1],
             osm_id=9,
             osm_version=3,
             website="https://beta.example",
             timestamp_day=3,
         ),
-        _row(
+        deduplicate_polygon_row(
             source_pbf=SOURCE_NAMES[0],
             osm_id=9,
             osm_version=3,
@@ -146,7 +120,7 @@ def test_deduplicate_public_shards_uses_source_name_for_exact_ties(tmp_path: Pat
 
 def test_deduplicate_public_shards_preserves_v1_4_language_fields(tmp_path: Path) -> None:
     source_dir = tmp_path / "polygons"
-    row = _row(
+    row = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=11,
         osm_version=1,
@@ -179,14 +153,14 @@ def test_deduplicate_summary_counts_contact_conflicts_and_expected_sources(
 ) -> None:
     source_dir = tmp_path / "polygons"
     rows = [
-        _row(
+        deduplicate_polygon_row(
             source_pbf=SOURCE_NAMES[0],
             osm_id=15,
             osm_version=2,
             website="https://same.example",
             timestamp_day=2,
         ),
-        _row(
+        deduplicate_polygon_row(
             source_pbf=SOURCE_NAMES[1],
             osm_id=15,
             osm_version=1,
@@ -221,7 +195,7 @@ def test_deduplicate_summary_counts_contact_conflicts_and_expected_sources(
 
 def test_deduplicate_infers_source_names_when_inventory_is_omitted(tmp_path: Path) -> None:
     source_dir = tmp_path / "polygons"
-    row = _row(
+    row = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=21,
         osm_version=1,
@@ -240,7 +214,7 @@ def test_deduplicate_infers_source_names_when_inventory_is_omitted(tmp_path: Pat
 def test_deduplicate_escapes_quotes_and_creates_nested_output_parent(tmp_path: Path) -> None:
     source_dir = tmp_path / "source's polygons"
     output_dir = tmp_path / "new parent" / "another level" / "canonical's"
-    row = _row(
+    row = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=22,
         osm_version=1,
@@ -260,7 +234,7 @@ def test_deduplicate_stages_in_output_parent_for_atomic_promotion(
 ) -> None:
     source_dir = tmp_path / "polygons"
     output_dir = tmp_path / "nested" / "canonical"
-    row = _row(
+    row = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=25,
         osm_version=1,
@@ -290,7 +264,7 @@ def test_deduplicate_rejects_unlisted_source_and_closes_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_dir = tmp_path / "polygons"
-    row = _row(
+    row = deduplicate_polygon_row(
         source_pbf="unlisted-latest.osm.pbf",
         osm_id=23,
         osm_version=1,
@@ -337,7 +311,7 @@ def test_deduplicate_cleanup_error_does_not_mask_write_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_dir = tmp_path / "polygons"
-    row = _row(
+    row = deduplicate_polygon_row(
         source_pbf=SOURCE_NAMES[0],
         osm_id=24,
         osm_version=1,
@@ -368,14 +342,14 @@ def test_materialise_partitions_sorts_two_rows_and_writes_snappy(tmp_path: Path)
     staging_dir = tmp_path / "staging"
     partition_dir = staging_dir / "partitions"
     rows = [
-        _row(
+        deduplicate_polygon_row(
             source_pbf=source_name,
             osm_id=2,
             osm_version=1,
             website="https://two.example",
             timestamp_day=1,
         ),
-        _row(
+        deduplicate_polygon_row(
             source_pbf=source_name,
             osm_id=1,
             osm_version=1,
@@ -406,7 +380,7 @@ def test_materialise_partitions_promotes_null_only_column_parts(tmp_path: Path) 
         POLYGON_PUBLIC_SCHEMA.get_field_index("website"),
         pa.field("website", pa.null(), nullable=True),
     )
-    null_website_row = _row(
+    null_website_row = deduplicate_polygon_row(
         source_pbf=source_name,
         osm_id=26,
         osm_version=1,
@@ -414,7 +388,7 @@ def test_materialise_partitions_promotes_null_only_column_parts(tmp_path: Path) 
         timestamp_day=1,
     )
     null_website_row["website"] = None
-    text_website_row = _row(
+    text_website_row = deduplicate_polygon_row(
         source_pbf=source_name,
         osm_id=27,
         osm_version=1,

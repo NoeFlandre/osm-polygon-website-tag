@@ -9,7 +9,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.polygon_shards import polygon_row
+from tests.fixtures.polygon_shards import language_polygon_row, polygon_row
 
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
@@ -33,35 +33,28 @@ from osm_polygon_website_tag.storage.duckdb_engine import (
 )
 
 
-def _row(index: int, *, language: bool) -> dict[str, object]:
-    overrides = {
-        "polygon_id": f"source:way/{index}",
-        "website_text": "text",
-        "website_word_count": 1,
-        "website_text_status": "success",
-    }
-    if language:
-        return polygon_row(
-            "v1.4",
-            **overrides,
-            website_language="eng_Latn",
-            website_language_probability=0.9,
-        )
-    return polygon_row(
-        "v1.3",
-        **overrides,
-    )
-
-
 def test_register_public_parquets_reads_mixed_current_schemas(tmp_path: Path) -> None:
     polygons = tmp_path / "polygons"
     polygons.mkdir()
     pq.write_table(
-        pa.Table.from_pylist([_row(0, language=False)], schema=POLYGON_PUBLIC_SCHEMA),
+        pa.Table.from_pylist(
+            [
+                polygon_row(
+                    "v1.3",
+                    polygon_id="source:way/0",
+                    website_text="text",
+                    website_word_count=1,
+                    website_text_status="success",
+                )
+            ],
+            schema=POLYGON_PUBLIC_SCHEMA,
+        ),
         polygons / "a.parquet",
     )
     pq.write_table(
-        pa.Table.from_pylist([_row(1, language=True)], schema=POLYGON_PUBLIC_SCHEMA_V1_4),
+        pa.Table.from_pylist(
+            [language_polygon_row(1, text="text")], schema=POLYGON_PUBLIC_SCHEMA_V1_4
+        ),
         polygons / "b.parquet",
     )
     connection = fresh_connection(tmp_path)
