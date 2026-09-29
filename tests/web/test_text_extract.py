@@ -215,6 +215,16 @@ def test_non_text_codecs_are_not_used_for_untrusted_charset_labels(
     assert decode_html(b"\xff", "base64_codec") == "�"
 
 
+@pytest.mark.parametrize("label", ["idna", "punycode"])
+def test_codecs_without_replacement_decoding_are_ignored(
+    label: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _html: ["no-such-codec"])
+
+    assert text_extract._codec(label) is None
+    assert decode_html(b"\xff", label) == "�"
+
+
 @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-32-le"])
 def test_declared_wide_unicode_charset_beats_utf8_fast_path(encoding: str) -> None:
     html = _page("plain ascii words " * 30).encode(encoding)
@@ -858,6 +868,13 @@ def test_xhtml_honours_the_xml_encoding_declaration(label: str, codec: str, quot
     body = f"<?xml version={quote}1.0{quote} encoding={quote}{label}{quote}?>{text}".encode(codec)
 
     assert decode_html(body, media_type="application/xhtml+xml").endswith(text)
+
+
+def test_xhtml_xml_declaration_uses_xml_codec_semantics() -> None:
+    declaration = b'<?xml version="1.0" encoding="iso-8859-1"?>'
+    body = declaration + b"<html><body>\x80</body></html>"
+
+    assert decode_html(body, media_type="application/xhtml+xml") == body.decode("iso-8859-1")
 
 
 def test_an_xml_declaration_is_ignored_outside_xhtml() -> None:

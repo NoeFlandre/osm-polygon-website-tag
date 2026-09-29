@@ -193,7 +193,7 @@ def _meta_charset(html: bytes) -> str | None:
 def _xml_charset(html: bytes) -> str | None:
     """Return the codec named by an XML declaration at the start of ``html``."""
     match = _XML_DECLARATION.match(html[:_PRESCAN_BYTES].decode(_LATIN1).lstrip())
-    return _meta_codec(match["label"]) if match else None
+    return _text_codec(match["label"]) if match else None
 
 
 def _xml_byte_pattern_codec(html: bytes) -> str | None:
@@ -237,12 +237,21 @@ def _codec(name: str | None) -> str | None:
     if name is None:
         return None
     label = name.strip().lower()
+    codec = _text_codec(WEB_LABELS.get(label, label))
+    return _WEB_ALIASES.get(codec, codec) if codec is not None else None
+
+
+def _text_codec(name: str) -> str | None:
+    """Return a Python text codec that supports replacement decoding."""
     try:
-        codec = codecs.lookup(WEB_LABELS.get(label, label)).name
+        codec = codecs.lookup(name).name
         _PROBE_TEXT.encode(codec)  # bytes-to-bytes codecs (base64, zlib) are not text encodings
+        decoded = codecs.decode(b"\xff", codec, "replace")
+        if not isinstance(decoded, str):  # transform codecs may return bytes or other objects
+            return None
     except (LookupError, TypeError, ValueError):  # transform codec or invalid label/Unicode
         return None
-    return _WEB_ALIASES.get(codec, codec)
+    return codec
 
 
 def _bom_codec(html: bytes) -> str | None:
@@ -264,6 +273,33 @@ def _authoritative_codec(html: bytes, header: str | None) -> str | None:
     return bom if bom is not None else _ascii_lookalike(header, _WIDE_PREFIXES)
 
 
+def _xml_declared_decoding(
+    html: bytes, media_type: str | None, header: str | None, declared: str | None
+) -> str | None:
+    """Decode an XML declaration with its Python codec when no HTTP charset exists."""
+    if media_type not in _XML_TYPES or header is not None or declared is None:
+        return None
+    return str(html, declared, "replace")
+
+
+def _decode_with_declarations(html: bytes, header: str | None, media_type: str | None) -> str:
+    """Decode the in-document charset and apply the normal HTML fallbacks."""
+    meta = _declared_codec(html, media_type)
+    xml_decoding = _xml_declared_decoding(html, media_type, header, meta)
+    if xml_decoding is not None:
+        return xml_decoding
+    lookalikes = [
+        _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
+        _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
+    ]
+    decoded = _first_decoding(html, [*lookalikes, _UTF8, header])
+    if decoded is not None:
+        return decoded
+    if header is not None:  # the HTTP charset outranks meta
+        return str(html, header, "replace")
+    return _decode_by_meta(html, meta)
+
+
 def decode_html(html: bytes, charset: str | None = None, *, media_type: str | None = None) -> str:
     """Decode HTML bytes, preferring declared and UTF-8 codecs over detection.
 
@@ -283,17 +319,7 @@ def decode_html(html: bytes, charset: str | None = None, *, media_type: str | No
     xml_byte_pattern = _decode_xml_byte_pattern(html, media_type)
     if xml_byte_pattern is not None:
         return xml_byte_pattern
-    meta = _declared_codec(html, media_type)
-    lookalikes = [
-        _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
-        _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
-    ]
-    decoded = _first_decoding(html, [*lookalikes, _UTF8, header])
-    if decoded is not None:
-        return decoded
-    if header is not None:  # the HTTP charset outranks meta
-        return str(html, header, "replace")
-    return _decode_by_meta(html, meta)
+    return _decode_with_declarations(html, header, media_type)
 
 
 def _decode_by_meta(html: bytes, meta: str | None) -> str:
