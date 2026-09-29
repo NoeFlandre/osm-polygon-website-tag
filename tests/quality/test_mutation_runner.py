@@ -374,3 +374,35 @@ def test_scoped_mutation_config_rejects_unqualified_filters() -> None:
 
     with pytest.raises(ValueError, match="fully qualified package filter"):
         mutation_runner._configure_source_scope(["reporting.card.*"], config=config)
+
+
+def test_empty_generated_shard_uses_a_distinct_exit_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import mutmut.__main__ as mutmut_main
+
+    monkeypatch.setattr(
+        mutation_runner.sys,
+        "argv",
+        [
+            "mutation_runner.py",
+            "run",
+            "--max-children",
+            "4",
+            "osm_polygon_website_tag.application.cli.x_refresh_card_command__mutmut_*",
+        ],
+    )
+    monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda _names: ())
+
+    def fail_on_empty_selection() -> None:
+        raise AssertionError("Filtered for specific mutants, but nothing matches")
+
+    monkeypatch.setattr(mutmut_main, "cli", fail_on_empty_selection)
+
+    with pytest.raises(SystemExit) as error:
+        mutation_runner.main()
+
+    assert capsys.readouterr().out == (
+        "No mutants match this generated shard; skipping the empty selection.\n"
+    )
+    assert error.value.code == 86
