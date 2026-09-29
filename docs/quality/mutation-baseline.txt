@@ -22,7 +22,9 @@
 # and case-insensitive DuckDB SQL,
 # and dropping encoding="utf-8" on a UTF-8 host (that one is guarded by
 # tests/architecture/test_tooling.py, which mutmut does not run).
-# Recorded mutants: 163
+# In pipeline.extraction, omitting the status argument selects its existing
+# default, and encoding aliases/defaults write the same ASCII-escaped JSON.
+# Recorded mutants: 167
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -60,6 +62,10 @@ osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut
 osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_27
 osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_29
 osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_59
+osm_polygon_website_tag.pipeline.extraction.x__record_extraction_state__mutmut_24
+osm_polygon_website_tag.pipeline.extraction.x__write_extraction_failure__mutmut_28
+osm_polygon_website_tag.pipeline.extraction.x__write_extraction_failure__mutmut_30
+osm_polygon_website_tag.pipeline.extraction.x__write_extraction_failure__mutmut_37
 osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_3
 osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_5
 osm_polygon_website_tag.publishing.remote_identity.x__read_receipt_payload__mutmut_3

@@ -82,6 +82,7 @@ def test_extract_pbf_reports_full_result_and_run_state(
     assert entry["started_at"] == result.started_at
     assert entry["finished_at"] == result.finished_at
     assert entry["rejection_count"] == result.rejection_count
+    assert entry["status"] == "extracted"
 
 
 def test_extract_pbf_removes_a_ledger_that_close_already_removed(
