@@ -142,6 +142,14 @@ def test_validate_pbf_path_messages_name_the_offending_path(tmp_path: Path) -> N
     assert missing_error.value.args == (missing,)
 
 
+def test_validate_pbf_path_rejects_non_osm_pbf_files(tmp_path: Path) -> None:
+    wrong_extension = tmp_path / "region.pbf"
+    wrong_extension.write_bytes(b"pbf")
+
+    with pytest.raises(ValueError, match=r"not a \.osm\.pbf file"):
+        extraction_module._validate_pbf_path(wrong_extension)
+
+
 def test_extract_and_promote_rejects_unequal_shard_lists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -264,14 +264,17 @@ def test_deduplicate_rejects_unlisted_source_and_closes_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_dir = tmp_path / "polygons"
-    row = deduplicate_polygon_row(
-        source_pbf="unlisted-latest.osm.pbf",
-        osm_id=23,
-        osm_version=1,
-        website="https://unlisted.example",
-        timestamp_day=1,
-    )
-    _write_shard(source_dir / "unlisted-latest.parquet", [row])
+    rows = [
+        deduplicate_polygon_row(
+            source_pbf=source_name,
+            osm_id=23 + index,
+            osm_version=1,
+            website=f"https://{source_name}",
+            timestamp_day=1,
+        )
+        for index, source_name in enumerate(("zeta-unlisted.osm.pbf", "alpha-unlisted.osm.pbf"))
+    ]
+    _write_shard(source_dir / "unlisted.parquet", rows)
 
     connection = duckdb.connect()
 
@@ -286,6 +289,7 @@ def test_deduplicate_rejects_unlisted_source_and_closes_connection(
         def close(self) -> None:
             self.closed = True
             self.inner.close()
+            raise RuntimeError("connection close failed")
 
     tracked = TrackingConnection(connection)
     monkeypatch.setattr(
@@ -302,9 +306,51 @@ def test_deduplicate_rejects_unlisted_source_and_closes_connection(
         )
 
     assert str(error.value) == (
-        "source shards contain unlisted source PBFs: unlisted-latest.osm.pbf"
+        "source shards contain unlisted source PBFs: alpha-unlisted.osm.pbf, zeta-unlisted.osm.pbf"
     )
     assert tracked.closed
+
+
+def test_deduplicate_escapes_apostrophes_in_temp_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = tmp_path / "polygons"
+    row = deduplicate_polygon_row(
+        source_pbf=SOURCE_NAMES[0],
+        osm_id=24,
+        osm_version=1,
+        website="https://alpha.example",
+        timestamp_day=1,
+    )
+    _write_shard(source_dir / "alpha-latest.parquet", [row])
+
+    original_connect = duckdb.connect
+    queries: list[str] = []
+
+    class QueryRecordingConnection:
+        def __init__(self, inner: duckdb.DuckDBPyConnection) -> None:
+            self.inner = inner
+
+        def execute(self, query: str) -> duckdb.DuckDBPyConnection:
+            queries.append(query)
+            return self.inner.execute(query)
+
+        def close(self) -> None:
+            self.inner.close()
+
+    monkeypatch.setattr(
+        deduplicate_module.duckdb,
+        "connect",
+        lambda: cast(duckdb.DuckDBPyConnection, QueryRecordingConnection(original_connect())),
+    )
+    output_dir = tmp_path / "O'Brien" / "canonical"
+
+    deduplicate_public_shards(source_dir, output_dir)
+
+    temp_queries = [query for query in queries if query.startswith("SET temp_directory=")]
+    assert len(temp_queries) == 1
+    assert "O''Brien" in temp_queries[0]
+    assert "XX''XX" not in temp_queries[0]
 
 
 def test_deduplicate_cleanup_error_does_not_mask_write_error(
