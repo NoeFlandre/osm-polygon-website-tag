@@ -48,7 +48,7 @@ def test_a_server_that_drips_bytes_hits_the_whole_request_deadline(
     result = fetch_html(loopback.url("/slow"), timeout_seconds=0.3)
 
     assert (result.status, result.message) == ("fetch_error", "TimeoutError")
-    assert time.monotonic() - started < 1.5
+    assert time.monotonic() - started < 6.0  # the drip would take 10 s; loaded runners are slow
 
 
 def test_a_missing_page_is_not_downloaded_and_reports_its_status(

@@ -202,7 +202,7 @@ def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
     for name, start, end in _iter_functions(tree):
         span = range(start, end + 1)
         covered.update(span)
-        if any(line in span for line in lines):
+        if name is not None and any(line in span for line in lines):
             names.add(name)
     if any(line not in covered for line in lines):
         return None
@@ -220,15 +220,46 @@ def _import_lines(tree: ast.Module) -> Iterator[int]:
             yield from range(node.lineno, (node.end_lineno or node.lineno) + 1)
 
 
-def _iter_functions(tree: ast.AST, class_name: str | None = None) -> Iterator[tuple[str, int, int]]:
-    """Yield the mutant prefix and line span of every function definition."""
+def _iter_functions(
+    tree: ast.AST, class_name: str | None = None
+) -> Iterator[tuple[str | None, int, int]]:
+    """Yield the mutant prefix and line span of every function definition.
+
+    A function mutmut never mutates (see ``_is_unmutated``) is yielded with a
+    ``None`` prefix so its lines still count as covered by a function; nothing
+    inside it or its class is yielded separately.
+    """
     for node in ast.iter_child_nodes(tree):
-        if isinstance(node, ast.ClassDef):
+        if not isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        start = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
+        end = node.end_lineno or node.lineno
+        if _is_unmutated(node):
+            yield None, start, end
+        elif isinstance(node, ast.ClassDef):
             yield from _iter_functions(node, node.name)
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        else:
             prefix = f"x\u01c1{class_name}\u01c1{node.name}" if class_name else f"x_{node.name}"
-            yield prefix, node.lineno, node.end_lineno or node.lineno
+            yield prefix, start, end
             yield from _iter_functions(node, class_name)
+
+
+def _is_unmutated(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether mutmut skips ``node``: it mutates neither decorated classes nor
+    decorated functions, except a lone ``staticmethod`` or ``classmethod``.
+
+    Typer commands and dataclass methods are therefore never mutants, and a
+    shard listing only them would make mutmut stop with "nothing matches".
+    """
+    decorators = node.decorator_list
+    if isinstance(node, ast.ClassDef):
+        return bool(decorators)
+    lone = decorators[0] if len(decorators) == 1 else None
+    transparent = isinstance(lone, ast.Name) and lone.id in _TRANSPARENT_DECORATORS
+    return bool(decorators) and not transparent
+
+
+_TRANSPARENT_DECORATORS = frozenset({"staticmethod", "classmethod"})
 
 
 # One shard per this many functions. A module is the unit of *selection* but a
@@ -254,7 +285,7 @@ def module_function_filters(module: str, *, root: Path | None = None) -> list[st
         tree = ast.parse(source.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeError):
         return None
-    return [f"{module}.{name}__mutmut_*" for name, _start, _end in _iter_functions(tree)]
+    return [f"{module}.{name}__mutmut_*" for name, _start, _end in _iter_functions(tree) if name]
 
 
 def shards(

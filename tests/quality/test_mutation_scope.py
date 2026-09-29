@@ -462,3 +462,113 @@ def test_the_package_root_resolves_to_its_init_and_gets_no_shard_without_functio
 
     assert mutation_scope.module_function_filters(root, root=_ROOT) == []
     assert mutation_scope.shards({root: [f"{root}.*"]}, root=_ROOT) == []
+
+
+_DECORATED = """import functools
+
+import typer
+
+app = typer.Typer()
+
+
+@app.command("go")
+def go_command() -> int:
+    return 1
+
+
+@functools.cache
+def cached(x: int) -> int:
+    def inner() -> int:
+        return x
+    return inner()
+
+
+@functools.lru_cache
+@functools.wraps(cached)
+def stacked() -> int:
+    return 2
+
+
+def plain() -> int:
+    return 3
+
+
+@dataclass
+class Box:
+    def method(self) -> int:
+        return 4
+
+
+class Tools:
+    @staticmethod
+    def static() -> int:
+        return 5
+
+    @classmethod
+    def build(cls) -> int:
+        return 6
+
+    @property
+    def prop(self) -> int:
+        return 7
+
+    def normal(self) -> int:
+        return 8
+"""
+
+
+def _write_decorated(tmp_path: Path) -> str:
+    source = tmp_path / mutation_scope.PACKAGE_ROOT / "decorated.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(_DECORATED, encoding="utf-8")
+    return f"{mutation_scope.PACKAGE_NAME}.decorated"
+
+
+def test_functions_mutmut_never_mutates_get_no_filter(tmp_path: Path) -> None:
+    module = _write_decorated(tmp_path)
+
+    filters = mutation_scope.module_function_filters(module, root=tmp_path)
+
+    prefix = f"{module}."
+    assert filters == [
+        f"{prefix}x_plain__mutmut_*",
+        f"{prefix}xǁToolsǁstatic__mutmut_*",
+        f"{prefix}xǁToolsǁbuild__mutmut_*",
+        f"{prefix}xǁToolsǁnormal__mutmut_*",
+    ]
+
+
+def test_a_change_inside_a_decorated_function_does_not_scope_the_module(tmp_path: Path) -> None:
+    module = _write_decorated(tmp_path)
+    path = f"{mutation_scope.PACKAGE_ROOT}/decorated.py"
+    lines = _DECORATED.splitlines()
+    inside_command = lines.index("    return 1") + 1
+    on_decorator = lines.index('@app.command("go")') + 1
+    inside_class = lines.index("    def method(self) -> int:") + 1
+
+    scoped = mutation_scope.function_filters(
+        {path: {inside_command, on_decorator, inside_class}}, root=tmp_path
+    )
+
+    assert module not in scoped
+
+
+def test_a_change_beside_a_decorated_function_still_scopes_only_that_function(
+    tmp_path: Path,
+) -> None:
+    module = _write_decorated(tmp_path)
+    path = f"{mutation_scope.PACKAGE_ROOT}/decorated.py"
+    plain_body = _DECORATED.splitlines().index("    return 3") + 1
+
+    scoped = mutation_scope.function_filters({path: {plain_body}}, root=tmp_path)
+
+    assert scoped == {module: [f"{module}.x_plain__mutmut_*"]}
+
+
+def test_a_shard_of_only_decorated_functions_is_not_emitted(tmp_path: Path) -> None:
+    source = tmp_path / mutation_scope.PACKAGE_ROOT / "commands.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('@app.command("a")\ndef a() -> int:\n    return 1\n', encoding="utf-8")
+    module = f"{mutation_scope.PACKAGE_NAME}.commands"
+
+    assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == []
