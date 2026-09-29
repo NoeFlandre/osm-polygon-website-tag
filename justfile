@@ -63,7 +63,7 @@ bench-save name="base":
 
 bench-compare name="base":
     uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q \
-        --benchmark-compare={{name}} --benchmark-compare-fail=mean:25%
+        --benchmark-compare --benchmark-compare-fail=mean:25%
 
 acceptance:
     uv run --locked pytest -n auto tests/acceptance

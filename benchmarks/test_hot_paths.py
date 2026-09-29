@@ -27,7 +27,7 @@ def _public_resolver(*_: object, **__: object) -> list[tuple[int, int, int, str,
 def test_extract_main_text(benchmark: BenchmarkFixture, paragraphs: int) -> None:
     html = _page(paragraphs)
 
-    result = benchmark(extract_main_text, html, url="https://example.org/", charset="utf-8")
+    result = benchmark(extract_main_text, html, url="https://example.org/")
 
     assert result.status == "success"
 
