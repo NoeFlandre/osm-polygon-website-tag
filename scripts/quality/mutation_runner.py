@@ -34,6 +34,7 @@ _MPLCONFIGDIR: Final = (
     Path(tempfile.gettempdir()) / f"osm-polygon-website-tag-mutmut-mplconfig-{os.getpid()}"
 )
 _TEST_SELECTION_ENV: Final = "MUTATION_TEST_PATHS"
+_EMPTY_SHARD_EXIT_CODE: Final = 86
 
 
 def _source_path_for_mutant_name(mutant_name: str) -> Path:
@@ -387,7 +388,7 @@ def main() -> None:
     except AssertionError as exc:
         if mutant_names and _is_empty_filter_error(exc):
             print("No mutants match this generated shard; skipping the empty selection.")
-            return
+            raise SystemExit(_EMPTY_SHARD_EXIT_CODE) from exc
         raise
 
 

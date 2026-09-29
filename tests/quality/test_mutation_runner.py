@@ -315,7 +315,7 @@ def test_mutation_workspace_copies_current_tests() -> None:
     assert "tests" in project["tool"]["mutmut"]["also_copy"]
 
 
-def test_generated_shard_with_no_mutants_is_a_successful_noop(monkeypatch, capsys) -> None:
+def test_generated_shard_with_no_mutants_uses_a_distinct_exit_status(monkeypatch, capsys) -> None:
     import mutmut.__main__ as mutmut_main
 
     monkeypatch.setattr(
@@ -336,11 +336,13 @@ def test_generated_shard_with_no_mutants_is_a_successful_noop(monkeypatch, capsy
 
     monkeypatch.setattr(mutmut_main, "cli", fail_on_empty_selection)
 
-    mutation_runner.main()
+    with pytest.raises(SystemExit) as error:
+        mutation_runner.main()
 
     assert capsys.readouterr().out == (
         "No mutants match this generated shard; skipping the empty selection.\n"
     )
+    assert error.value.code == 86
 
 
 def test_mutation_runner_only_suppresses_mutmut_empty_selection_error() -> None:
