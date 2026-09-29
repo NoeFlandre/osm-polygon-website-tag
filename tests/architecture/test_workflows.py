@@ -48,6 +48,16 @@ def test_the_aggregate_check_accepts_only_success_and_skipped() -> None:
     assert "exit 1" in script
 
 
+def test_advisory_benchmarks_do_not_block_the_aggregate_check() -> None:
+    job = _load("quality.yml")["jobs"]["ci-ok"]
+    results = job["steps"][0]["env"]["RESULTS"]
+
+    assert "benchmarks" in job["needs"]
+    assert "needs.benchmarks.result" not in results
+    for required_job in ("scope", "quality", "docs", "docker", "mutation"):
+        assert f"needs.{required_job}.result" in results
+
+
 def test_the_docs_build_gates_pull_requests() -> None:
     workflow = _load("quality.yml")
     steps = workflow["jobs"]["docs"]["steps"]

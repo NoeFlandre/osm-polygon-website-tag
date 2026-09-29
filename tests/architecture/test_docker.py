@@ -99,6 +99,16 @@ def test_the_compose_service_is_read_only_non_root_and_mounts_raw_input_read_onl
     assert "/data/models" in volumes
 
 
+def test_compose_uses_bash_safe_host_uid_and_gid_variables() -> None:
+    service = _compose_service()
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    setup = (ROOT / "docs" / "setup.md").read_text(encoding="utf-8")
+
+    assert service["user"] == "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    assert 'HOST_UID="$(id -u)" HOST_GID="$(id -g)"' in compose
+    assert 'HOST_UID="$(id -u)" HOST_GID="$(id -g)"' in setup
+
+
 def test_the_compose_service_mounts_a_writable_grid5000_bundle_directory() -> None:
     service = _compose_service()
     volumes = {volume["target"]: volume for volume in service["volumes"]}

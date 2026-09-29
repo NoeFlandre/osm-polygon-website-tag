@@ -80,9 +80,9 @@ points. Only the raw input is read-only:
 | `/data/models` | GlotLID and SaT model caches (`/data/models/glotlid`, `/data/models/sat`) | writable |
 
 The image contains no production PBFs, generated runs, `.env` files or tokens.
-The container user must be able to write to the runs and models directories:
-pass `--user "$(id -u):$(id -g)"` (Compose reads `UID` and `GID`) so files on
-the host belong to you.
+The container user must be able to write to the runs and models directories.
+For `docker run`, pass `--user "$(id -u):$(id -g)"`; Compose reads
+`HOST_UID` and `HOST_GID` so files on the host belong to you.
 
 ### With Compose
 
@@ -92,7 +92,7 @@ Point it at your directories with `OSM_RAW_DIR`, `OSM_RUNS_DIR` and
 
 ```bash
 mkdir -p data/raw data/runs data/models
-UID="$(id -u)" GID="$(id -g)" OSM_RAW_DIR=/path/to/pbf-root \
+HOST_UID="$(id -u)" HOST_GID="$(id -g)" OSM_RAW_DIR=/path/to/pbf-root \
   docker compose run --rm pipeline run-all \
   --source-root /data/raw --output-root /data/runs \
   --run-id geofabrik-website-v1 \

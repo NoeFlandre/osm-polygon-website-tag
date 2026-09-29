@@ -223,7 +223,9 @@ jobs:
     steps:
       - name: Require every gate to have passed or been skipped
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RESULTS: >-
+            ${{ needs.scope.result }} ${{ needs.quality.result }} ${{ needs.docs.result }}
+            ${{ needs.docker.result }} ${{ needs.mutation.result }}
         run: |
           for result in $RESULTS; do
             case "$result" in

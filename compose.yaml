@@ -1,11 +1,11 @@
 # Run the pipeline without `just`:
 #
-#   OSM_RAW_DIR=/path/to/pbfs UID=$(id -u) GID=$(id -g) \
+#   OSM_RAW_DIR=/path/to/pbfs HOST_UID="$(id -u)" HOST_GID="$(id -g)" \
 #     docker compose run --rm pipeline run-all --source-root /data/raw \
 #       --output-root /data/runs --run-id my-run
 #
 # /data/raw is read-only; runs, model caches, and Grid'5000 bundles are written
-# to the host directories below, which must be writable by the UID/GID above.
+# to the host directories below, which must be writable by the host UID/GID above.
 services:
   pipeline:
     build:
@@ -13,7 +13,7 @@ services:
       target: runtime
     image: osm-polygon-website-tag:local
     read_only: true
-    user: "${UID:-10001}:${GID:-10001}"
+    user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
     environment:
