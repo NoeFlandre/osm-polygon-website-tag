@@ -114,7 +114,7 @@ Settings are read from the environment or a `.env` file (see
 | Variable | Meaning | Default |
 | --- | --- | --- |
 | `OSM_POLY_DATA_DIR` | Data root for runs, model caches and Grid'5000 bundles | `./data` |
-| `HF_DATASET_REPO` | Hugging Face dataset that receives published artifacts | `NoeFlandre/osm-polygon-website-tag` |
+| `HF_DATASET_REPO` | Default target for `publish`, `publish-plan`, `run-all` and Trackio metadata; `release-stats` remains canonical-only | `NoeFlandre/osm-polygon-website-tag` |
 | `HF_TOKEN` | Hugging Face token for publishing (or use `hf auth login`) | none |
 
 ## Outputs

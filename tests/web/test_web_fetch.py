@@ -1170,6 +1170,24 @@ def test_only_one_retry_is_made() -> None:
     assert len(calls) == 2
 
 
+def test_retry_after_from_final_response_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    waits: list[float] = []
+    original_back_off = HostLimiter.back_off
+
+    def record_back_off(limiter: HostLimiter, host: str, seconds: float) -> None:
+        waits.append(seconds)
+        original_back_off(limiter, host, seconds)
+
+    monkeypatch.setattr(HostLimiter, "back_off", record_back_off)
+    busy = HttpResponse(429, {"Retry-After": "2"}, b"")
+
+    result, calls, _clock = _polite_fetch([busy, busy], concurrency=1, delay_seconds=0.0)
+
+    assert (result.status, result.message) == ("fetch_error", "http_429")
+    assert len(calls) == 2
+    assert waits == [2.0, 2.0]
+
+
 @pytest.mark.parametrize(
     "response",
     [

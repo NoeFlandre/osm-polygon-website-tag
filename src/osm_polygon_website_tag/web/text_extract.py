@@ -241,6 +241,13 @@ def _codec(name: str | None) -> str | None:
     return _WEB_ALIASES.get(codec, codec) if codec is not None else None
 
 
+def _http_charset_codec(name: str | None, media_type: str | None) -> str | None:
+    """Use WHATWG aliases for HTML and the declared codec for other MIME types."""
+    if media_type in _META_SNIFFED_TYPES or name is None:
+        return _codec(name)
+    return _text_codec(name.strip())
+
+
 def _text_codec(name: str) -> str | None:
     """Return a Python text codec that supports replacement decoding."""
     try:
@@ -310,9 +317,10 @@ def decode_html(html: bytes, charset: str | None = None, *, media_type: str | No
     HTTP charset that still fails keeps its codec with bad bytes replaced,
     before ``<meta charset>`` is considered at all. ``media_type`` picks the
     in-document declaration: an HTML ``<meta>``, an XHTML ``<?xml encoding?>``,
-    or none for plain text.
+    or none for plain text. HTML uses WHATWG charset aliases; other MIME types
+    use the codec named by their HTTP charset.
     """
-    header = _codec(charset)
+    header = _http_charset_codec(charset, media_type)
     authoritative = _authoritative_codec(html, header)
     if authoritative is not None:  # only bad bytes are replaced
         return str(html, authoritative, "replace")

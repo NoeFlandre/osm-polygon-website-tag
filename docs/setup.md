@@ -70,7 +70,7 @@ just docker-smoke
 
 ### Data layout
 
-The runtime image sets `OSM_POLY_DATA_DIR=/data` and declares three mount
+The runtime image sets `OSM_POLY_DATA_DIR=/data` and declares four mount
 points. Only the raw input is read-only:
 
 | Path | Purpose | Mount |
@@ -78,6 +78,7 @@ points. Only the raw input is read-only:
 | `/data/raw` | PBF sources | read-only |
 | `/data/runs` | run output and checkpoints | writable |
 | `/data/models` | GlotLID and SaT model caches (`/data/models/glotlid`, `/data/models/sat`) | writable |
+| `/data/grid5000` | Grid'5000 bundles | writable |
 
 The image contains no production PBFs, generated runs, `.env` files or tokens.
 The container user must be able to write to the runs and models directories.
@@ -87,11 +88,12 @@ For `docker run`, pass `--user "$(id -u):$(id -g)"`; Compose reads
 ### With Compose
 
 `compose.yaml` runs the same read-only, non-root container with those mounts.
-Point it at your directories with `OSM_RAW_DIR`, `OSM_RUNS_DIR` and
-`OSM_MODELS_DIR` (defaults: `./data/raw`, `./data/runs`, `./data/models`):
+Point it at your directories with `OSM_RAW_DIR`, `OSM_RUNS_DIR`,
+`OSM_MODELS_DIR` and `OSM_GRID5000_DIR` (defaults: `./data/raw`,
+`./data/runs`, `./data/models` and `./data/grid5000`):
 
 ```bash
-mkdir -p data/raw data/runs data/models
+mkdir -p data/raw data/runs data/models data/grid5000
 HOST_UID="$(id -u)" HOST_GID="$(id -g)" OSM_RAW_DIR=/path/to/pbf-root \
   docker compose run --rm pipeline run-all \
   --source-root /data/raw --output-root /data/runs \

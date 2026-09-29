@@ -229,7 +229,13 @@ def _polite(transport: RequestOnce, limiter: HostLimiter) -> RequestOnce:
         )
         if wait is None:
             return response
-        return _throttled(transport, limiter, host, (url, timeout_seconds, max_bytes))[0]
+        return _throttled(
+            transport,
+            limiter,
+            host,
+            (url, timeout_seconds, max_bytes),
+            retry_after_cap=limiter.policy.max_retry_after_seconds,
+        )[0]
 
     return request
 

@@ -590,6 +590,18 @@ def test_cli_publish_plan_runs(tmp_path: Path) -> None:
     assert rc == 0
 
 
+def test_cli_publish_plan_uses_hf_dataset_repo_from_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("HF_DATASET_REPO", "someone/else")
+    run_dir = _setup_run(tmp_path)
+
+    rc = main(["publish-plan", "--run-dir", str(run_dir)])
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["repo_id"] == "someone/else"
+
+
 def test_cli_create_repo_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without a credential the command must refuse before touching the Hub."""
     monkeypatch.delenv("HF_TOKEN", raising=False)

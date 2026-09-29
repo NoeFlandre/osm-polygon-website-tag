@@ -80,6 +80,7 @@ from osm_polygon_website_tag.runtime.config import (
     DEFAULT_HF_DATASET,
     DEFAULT_TRACKIO_PROJECT,
     DEFAULT_TRACKIO_SPACE,
+    Settings,
 )
 from osm_polygon_website_tag.runtime.paths import (
     data_root_source,
@@ -214,7 +215,17 @@ def _reset_logging() -> None:
 
 
 RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
-RepoId = Annotated[str, typer.Option("--repo-id", help="Hugging Face dataset repository.")]
+RepoId = Annotated[
+    str | None,
+    typer.Option(
+        "--repo-id", help="Hugging Face dataset repository (defaults to HF_DATASET_REPO)."
+    ),
+]
+
+
+def _configured_hf_dataset_repo(repo_id: str | None) -> str:
+    """Resolve an explicit CLI override or the current environment/.env setting."""
+    return repo_id if repo_id is not None else Settings().hf_dataset_repo
 
 
 @dataclass(frozen=True)
@@ -406,10 +417,10 @@ def finalize_snapshot_command(run_dir: RunDir) -> int:
 @app.command("publish-plan")
 def publish_plan_command(
     run_dir: RunDir,
-    repo_id: RepoId = DEFAULT_HF_DATASET,
+    repo_id: RepoId = None,
 ) -> int:
     """List the publication plan."""
-    plan = build_publish_plan(run_dir, repo_id=repo_id)
+    plan = build_publish_plan(run_dir, repo_id=_configured_hf_dataset_repo(repo_id))
     _json(
         {
             "repo_id": plan.repo_id,
@@ -426,14 +437,14 @@ def publish_plan_command(
 )
 def publish_command(
     run_dir: RunDir,
-    repo_id: RepoId = DEFAULT_HF_DATASET,
+    repo_id: RepoId = None,
     apply: Annotated[
         bool,
         typer.Option("--apply", help="Actually upload (default: dry-run)."),
     ] = False,
 ) -> int:
     """Publish or dry-run a complete dataset."""
-    plan = publish_to_hf(run_dir, repo_id=repo_id, dry_run=not apply)
+    plan = publish_to_hf(run_dir, repo_id=_configured_hf_dataset_repo(repo_id), dry_run=not apply)
     _json({"dry_run": not apply, "artifact_count": len(plan.artifact_paths)})
     return 0
 
@@ -448,7 +459,9 @@ def release_stats_command(
         str,
         typer.Option("--confirm-repo", help="Exact dataset repository confirmation."),
     ],
-    repo_id: RepoId = DEFAULT_HF_DATASET,
+    repo_id: Annotated[
+        str, typer.Option("--repo-id", help="Canonical release dataset repository.")
+    ] = DEFAULT_HF_DATASET,
     apply: Annotated[
         bool,
         typer.Option("--apply", help="Publish and verify (default: dry-run)."),
@@ -516,16 +529,21 @@ def publish_trackio_command(
         typer.Option("--project", help="Trackio project name."),
     ] = DEFAULT_TRACKIO_PROJECT,
     dataset_repo: Annotated[
-        str,
-        typer.Option("--dataset-repo", help="Dataset repository represented by the metrics."),
-    ] = DEFAULT_HF_DATASET,
+        str | None,
+        typer.Option(
+            "--dataset-repo",
+            help="Dataset repository represented by the metrics (defaults to HF_DATASET_REPO).",
+        ),
+    ] = None,
     apply: Annotated[
         bool,
         typer.Option("--apply", help="Actually create/update the public Trackio Space."),
     ] = False,
 ) -> int:
     """Preview or publish metrics for one finalized dataset snapshot."""
-    snapshot = build_trackio_snapshot(run_dir, dataset_repo=dataset_repo)
+    snapshot = build_trackio_snapshot(
+        run_dir, dataset_repo=_configured_hf_dataset_repo(dataset_repo)
+    )
     remote = (
         publish_trackio_snapshot(snapshot, space_id=space_id, project=project) if apply else None
     )
@@ -558,7 +576,7 @@ def run_all_command(
     run_id: Annotated[
         str, typer.Option("--run-id", help="Run directory name under --output-root.")
     ],
-    repo_id: RepoId = DEFAULT_HF_DATASET,
+    repo_id: RepoId = None,
     apply: Annotated[
         bool,
         typer.Option("--apply", help="Upload after each PBF and at completion."),
@@ -615,7 +633,7 @@ def run_all_command(
             source_root=source_root,
             output_root=output_root,
             run_id=run_id,
-            repo_id=repo_id,
+            repo_id=_configured_hf_dataset_repo(repo_id),
             apply=apply,
             ensure_repo=ensure_repo,
             progress=progress,

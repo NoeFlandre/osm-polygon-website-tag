@@ -877,6 +877,13 @@ def test_xhtml_xml_declaration_uses_xml_codec_semantics() -> None:
     assert decode_html(body, media_type="application/xhtml+xml") == body.decode("iso-8859-1")
 
 
+@pytest.mark.parametrize("media_type", ["text/plain", "application/xhtml+xml"])
+def test_http_latin1_charset_keeps_mime_codec_semantics(media_type: str) -> None:
+    body = b"<p>\x80</p>"
+
+    assert decode_html(body, "iso-8859-1", media_type=media_type) == body.decode("iso-8859-1")
+
+
 def test_an_xml_declaration_is_ignored_outside_xhtml() -> None:
     body = '<?xml version="1.0" encoding="gbk"?><p>专业</p>'.encode()
 
