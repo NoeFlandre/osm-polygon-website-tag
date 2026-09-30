@@ -9,9 +9,11 @@ A one-off Python AST scan covered `src/osm_polygon_website_tag/**/*.py`,
 source locations, consistently renamed identifiers, parameters, nested
 definition names, and keyword labels within each body, then grouped identical
 normalized trees containing at least 24 AST nodes. It counted 1,370
-production and 2,868 test function bodies; 1,076 and 2,071, respectively, met
+production and 2,901 test function bodies; 1,076 and 2,090, respectively, met
 the size cutoff. Among those, it found three repeated production-body groups
-(seven bodies) and 13 repeated test-body groups (26 bodies). These counts
+(seven bodies) and five repeated test-body groups (10 bodies). This scan
+normalizes local identifiers, parameters, nested definition names, and keyword
+labels; it preserves attribute names and schema constants. These counts
 describe exact structural matches above that size cutoff; they do not
 establish that the repository has no duplication. The scan does not detect
 fuzzy similarity, repeated module-level setup, or smaller helpers. Each match
@@ -37,7 +39,8 @@ was reviewed in context before changing code.
   synthetic sources and detector helpers. Extraction tests share their XML,
   PBF-builder, and website-payload setup. Publishing tests now share finalized
   run setup and completion-receipt instrumentation.
-- Workflow recovery tests share extraction tracing. CRAP-report tests now use
+- Workflow recovery tests share extraction tracing. Remote identity tests use
+  a shared read-only Hub API double. CRAP-report tests now use
   one path-parameterized subprocess helper. A duplicated paused-receipt test
   and duplicate empty-shard adapter test were removed after verifying that
   their bodies and inputs were identical to retained coverage.
@@ -55,15 +58,16 @@ The three remaining repeated production groups are small and policy-specific:
   result through their local connection API. Their overlapping two-line
   helpers do not justify a shared database abstraction.
 
-The remaining test matches are scenario-specific cases and setup around
-different contracts: schema-version writers, distinct detector outputs,
-retry/interruption paths, independent remote-client responses, release and
-remote-identity failures, and alternative terminal-state transitions. Shard
-writers in the language and text-verification tests use different Arrow
-schemas; detector fakes also return different predictions. The remaining
-matches keep each fixture or assertion tied to the schema or behavior it
-protects. Larger copied workflow, extraction, and receipt setup was moved to
-shared helpers, and exact duplicate tests were removed.
+The five remaining test matches each preserve a separate contract: workflow and
+language-detection fakes return different predictions; polygon migration
+writers target v1.1 and v1.2 schemas; enrichment tests record the first fetch
+and resumed fetch independently; checkpoint tests assert different polygon
+and sentence schemas; and language versus text-verification shard writers use
+different Arrow schemas. These helpers are small schema- or scenario-specific
+fixtures, so extracting them would add indirection without consolidating
+substantial behavior. Larger copied workflow, extraction, remote-client, and
+receipt setup was moved to shared helpers, and exact duplicate tests were
+removed.
 
 ## Cross-repository candidates and ownership
 

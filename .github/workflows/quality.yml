@@ -83,11 +83,10 @@ jobs:
       - name: Run the tiered gate
         run: just qa-pr
 
-  # Advisory: continue-on-error keeps a noisy shared runner from failing ci-ok.
-  # Times the base and the head on the same runner.
+  # The job reports its own regression failures but is not part of ci-ok.
+  # It times the base and the head on the same runner.
   benchmarks:
     if: github.event_name == 'pull_request'
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

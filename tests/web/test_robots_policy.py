@@ -31,6 +31,51 @@ def test_disallowed_page_is_not_requested(memory_http: MemoryHTTPFixture) -> Non
     assert memory_http.requests == ["/robots.txt"]
 
 
+def test_user_agent_specific_robots_rule_blocks_redirect_target(
+    memory_http: MemoryHTTPFixture,
+) -> None:
+    memory_http.route(
+        "/robots.txt",
+        b"User-agent: osm-polygon-website-tag\nDisallow: /private\nUser-agent: *\nAllow: /\n",
+        Content_Type="text/plain",
+    )
+    requested_url = memory_http.url("/start")
+    final_url = memory_http.url("/private")
+    memory_http.route("/start", b"", status=302, Location=final_url)
+    memory_http.route("/private", b"private", Content_Type="text/html")
+
+    result = fetch_html(requested_url)
+
+    assert result == FetchResult(
+        "robots_disallowed",
+        requested_url,
+        final_url=final_url,
+        message="robots_disallowed",
+    )
+    assert memory_http.requests == ["/robots.txt", "/start"]
+
+
+def test_robots_error_preserves_requested_and_policy_urls() -> None:
+    requested_url = "https://start.example/page"
+    current_url = "https://redirect.example/private"
+    robots_url = "https://redirect.example/robots.txt"
+    policy = web_fetch._RobotsPolicy(
+        None,
+        error_status="fetch_error",
+        final_url=robots_url,
+        message="robots_unavailable",
+    )
+
+    result = web_fetch._robots_policy_error(policy, current_url, requested_url)
+
+    assert result == FetchResult(
+        "fetch_error",
+        requested_url,
+        final_url=robots_url,
+        message="robots_unavailable",
+    )
+
+
 def test_policy_is_cached_per_origin_and_allowed_pages_are_fetched(
     memory_http: MemoryHTTPFixture,
 ) -> None:
@@ -65,7 +110,20 @@ def test_unavailable_robots_file_fails_closed(memory_http: MemoryHTTPFixture) ->
     result = fetch_html(memory_http.url("/page"))
 
     assert (result.status, result.message) == ("fetch_error", "robots_unavailable")
+    assert result.requested_url == memory_http.url("/page")
+    assert result.final_url == memory_http.url("/robots.txt")
     assert memory_http.requests == ["/robots.txt"]
+
+
+def test_gone_robots_file_allows_the_page(memory_http: MemoryHTTPFixture) -> None:
+    memory_http.route("/robots.txt", b"", status=410, Content_Type="text/plain")
+    memory_http.route("/page", b"page", Content_Type="text/html")
+
+    result = fetch_html(memory_http.url("/page"))
+
+    assert result.status == "ok"
+    assert result.body == b"page"
+    assert memory_http.requests == ["/robots.txt", "/page"]
 
 
 def test_oversized_robots_file_fails_closed(memory_http: MemoryHTTPFixture) -> None:
@@ -92,6 +150,23 @@ def test_parse_error_allows_the_page(
 
     assert result.status == "ok"
     assert memory_http.requests == ["/robots.txt", "/page"]
+
+
+def test_invalid_utf8_does_not_hide_valid_disallow_rule(
+    memory_http: MemoryHTTPFixture,
+) -> None:
+    memory_http.route(
+        "/robots.txt",
+        b"\xff\nUser-agent: *\nDisallow: /private\n",
+        Content_Type="text/plain",
+    )
+    memory_http.route("/private", b"private", Content_Type="text/html")
+
+    result = fetch_html(memory_http.url("/private"))
+
+    assert result.status == "robots_disallowed"
+    assert result.final_url == memory_http.url("/private")
+    assert memory_http.requests == ["/robots.txt"]
 
 
 def test_robots_redirect_to_private_address_is_blocked(

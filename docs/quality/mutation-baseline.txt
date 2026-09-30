@@ -26,7 +26,7 @@
 # their changed branches apply a zero-turn longitude correction at the boundary.
 # In pipeline.extraction, omitting the status argument selects its existing
 # default, and encoding aliases/defaults write the same ASCII-escaped JSON.
-# Recorded mutants: 170
+# Recorded mutants: 162
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -72,8 +72,6 @@ osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_3
 osm_polygon_website_tag.publishing.publish.x__receipt_publish_plan__mutmut_5
 osm_polygon_website_tag.publishing.remote_identity.x__read_receipt_payload__mutmut_3
 osm_polygon_website_tag.publishing.remote_identity.x__read_receipt_payload__mutmut_5
-osm_polygon_website_tag.publishing.remote_identity.x__receipt_data_identity__mutmut_13
-osm_polygon_website_tag.publishing.remote_identity.x__receipt_data_identity__mutmut_14
 osm_polygon_website_tag.publishing.remote_identity.x__remote_data_manifest_sha256__mutmut_44
 osm_polygon_website_tag.publishing.remote_identity.x__remote_parquet_data_identity__mutmut_29
 osm_polygon_website_tag.publishing.remote_identity.x__remote_parquet_entry_identity__mutmut_12
@@ -186,9 +184,11 @@ osm_polygon_website_tag.storage.duckdb_engine.x__make_connection__mutmut_30
 osm_polygon_website_tag.storage.duckdb_engine.x__make_connection__mutmut_31
 osm_polygon_website_tag.storage.duckdb_engine.x_cells_global_canonical__mutmut_6
 osm_polygon_website_tag.storage.duckdb_engine.x_cells_global_observation__mutmut_6
+# The remaining web_fetch survivors are equivalent: split limits preserve the
+# first URL segment, codec aliases are case-insensitive, parsed hostnames are
+# lowercased before rstrip, and HTTP header lookup case-folds field names.
 osm_polygon_website_tag.web.web_fetch.x__coerce_http_value__mutmut_18
 osm_polygon_website_tag.web.web_fetch.x__coerce_http_value__mutmut_21
-osm_polygon_website_tag.web.web_fetch.x__content_type_error__mutmut_9
 osm_polygon_website_tag.web.web_fetch.x__encode_hostname__mutmut_4
 osm_polygon_website_tag.web.web_fetch.x__encode_hostname__mutmut_6
 osm_polygon_website_tag.web.web_fetch.x__normalise_http_hostname__mutmut_11

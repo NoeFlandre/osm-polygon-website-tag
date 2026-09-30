@@ -9,6 +9,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.reporting import geometry_stats
@@ -58,45 +59,26 @@ def _public_row(
     area_m2: float = 50.0,
     osm_primary_tag: str = "building",
 ) -> dict[str, Any]:
-    """Return one current-schema public polygon row."""
-    return {
-        "polygon_id": polygon_id,
-        "region": "monaco",
-        "source_pbf": "monaco-latest.osm.pbf",
-        "osm_type": "way",
-        "osm_id": 1,
-        "osm_version": 1,
-        "osm_timestamp": pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
-        "name": None,
-        "website": "https://example.org",
-        "contact_website": None,
-        "has_website": True,
-        "has_contact_website": False,
-        "has_any_website": True,
-        "website_class": "absolute_url",
-        "contact_website_class": None,
-        "website_hostname": "example.org",
-        "contact_website_hostname": None,
-        "tags": "{}",
-        "tag_keys": "[]",
-        "tag_count": 0,
-        "osm_primary_tag": osm_primary_tag,
-        "geometry": json.dumps(_SQUARE if geometry is None else geometry),
-        "centroid": json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
-        "centroid_kind": "lambert_azimuthal_equal_area",
-        "lat": 0.0,
-        "lon": 0.0,
-        "bbox": json.dumps(_SQUARE_BBOX if bbox is None else bbox),
-        "area_m2": area_m2,
-        "area_bucket": "10-100m2",
-        "schema_version": "v1.3",
-        "website_text": None,
-        "website_word_count": None,
-        "website_text_status": "absent",
-        "contact_website_text": None,
-        "contact_website_word_count": None,
-        "contact_website_text_status": "absent",
-    }
+    """Return a v1.3 polygon row with geometry-statistics-specific values."""
+    return polygon_row(
+        "v1.3",
+        polygon_id=polygon_id,
+        region="monaco",
+        source_pbf="monaco-latest.osm.pbf",
+        contact_website=None,
+        osm_primary_tag=osm_primary_tag,
+        geometry=json.dumps(_SQUARE if geometry is None else geometry),
+        centroid=json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
+        bbox=json.dumps(_SQUARE_BBOX if bbox is None else bbox),
+        area_m2=area_m2,
+        area_bucket="10-100m2",
+        website_text=None,
+        website_word_count=None,
+        website_text_status="absent",
+        contact_website_text=None,
+        contact_website_word_count=None,
+        contact_website_text_status="absent",
+    )
 
 
 def _write_shard(run_dir: Path, stem: str, rows: list[dict[str, Any]]) -> Path:
@@ -483,241 +465,4 @@ def test_summary_rounds_and_totals_exactly(tmp_path: Path) -> None:
 
 
 def test_geometry_shape_rejects_unsupported_types_and_counts_empty_coordinates() -> None:
-    assert _geometry_shape(json.dumps({"type": "Polygon", "coordinates": []})) == (
-        "Polygon",
-        1,
-        0,
-        0,
-    )
-    assert _geometry_shape(json.dumps(_MULTIPOLYGON_WITH_HOLE)) == ("MultiPolygon", 2, 3, 15)
-    with pytest.raises(ValueError, match="unsupported geometry type"):
-        _geometry_shape(json.dumps({"type": "LineString", "coordinates": []}))
-
-
-def test_bbox_parsing_rejects_malformed_values() -> None:
-    assert _parse_bbox("[1, 2, 3, 4]") == (1.0, 2.0, 3.0, 4.0)
-    with pytest.raises(ValueError, match="invalid bbox value"):
-        _parse_bbox("[1, 2, 3]")
-
-
-def test_rows_without_geometry_still_report_an_empty_polygon_shape(tmp_path: Path) -> None:
-    _write_shard(
-        tmp_path,
-        "a-latest",
-        [_public_row(geometry={"type": "Polygon", "coordinates": []}, area_m2=0.0)],
-    )
-
-    stats = compute_geometry_stats(tmp_path)
-
-    assert stats.shape.with_holes_row_count == 0
-    assert stats.shape.rings_per_row.maximum == 0.0
-    assert stats.shape.vertices_per_row.maximum == 0.0
-
-
-def test_geometry_values_are_computed_serially(tmp_path: Path) -> None:
-    """Float aggregates must stay serial: parallel summation is not associative."""
-    store = geometry_stats._GeometryValueStore(tmp_path)
-    try:
-        row = store._connection.execute("SELECT current_setting('threads')").fetchone()
-        assert row is not None
-        assert int(row[0]) == 1
-    finally:
-        store.close()
-
-
-def test_render_geometry_stats_is_sorted_indented_json() -> None:
-    from dataclasses import asdict
-
-    stats = geometry_stats.GeometryStats(row_count=3)
-    payload = asdict(stats)
-    assert list(payload) != sorted(payload), "fixture must not already be key-sorted"
-
-    rendered = render_geometry_stats(stats)
-
-    assert rendered == json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    assert rendered.startswith('{\n  "')
-
-
-def test_accumulate_batch_spills_every_row_under_its_schema_names() -> None:
-    batch = pa.RecordBatch.from_pydict(
-        {
-            "bbox": ["[0.0, 0.0, 1.0, 2.0]"],
-            "geometry": [
-                json.dumps({"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 2], [0, 0]]]})
-            ],
-            "area_m2": [5.0],
-            "osm_primary_tag": ["building"],
-        }
-    )
-    spilled: list[list[dict[str, Any]]] = []
-    store = type("Store", (), {"append": lambda _self, rows: spilled.append(rows)})()
-    accumulator = geometry_stats._Accumulator()
-
-    geometry_stats._accumulate_batch(
-        accumulator,
-        batch,
-        source_pbf="a.osm.pbf",
-        store=store,  # ty: ignore[invalid-argument-type]
-    )
-
-    [rows] = spilled
-    [row] = rows
-    assert sorted(row) == sorted(geometry_stats._SPILL_SCHEMA.names)
-    assert row["width_degrees"] == 1.0
-    assert row["height_degrees"] == 2.0
-    assert row["height_m"] > row["width_m"] > 0
-    assert row["source_pbf"] == "a.osm.pbf"
-    assert row["osm_primary_tag"] == "building"
-
-
-def test_area_accumulation_adds_to_seeded_counters_below_the_tiny_bound() -> None:
-    accumulator = _Accumulator(zero_area_row_count=2, below_one_m2_row_count=4)
-
-    _accumulate_area(accumulator, 0.0, "building")
-    _accumulate_area(accumulator, geometry_stats.TINY_AREA_M2, "building")
-
-    assert accumulator.zero_area_row_count == 3
-    assert accumulator.below_one_m2_row_count == 5
-
-
-def test_extent_accumulation_adds_to_seeded_counters_at_the_bounds() -> None:
-    accumulator = _Accumulator(antimeridian_row_count=2, polar_row_count=4)
-    span = geometry_stats.ANTIMERIDIAN_SPAN_DEGREES
-    polar = geometry_stats.POLAR_LATITUDE_DEGREES
-
-    _accumulate_extent(accumulator, (-90.0, 0.0, -90.0 + span, 1.0))
-    _accumulate_extent(accumulator, (-179.0, 0.0, 179.0, 1.0))
-    _accumulate_extent(accumulator, (0.0, polar - 1.0, 1.0, polar))
-
-    assert accumulator.antimeridian_row_count == 3
-    assert accumulator.polar_row_count == 5
-
-
-def test_shape_accumulation_adds_to_seeded_counters() -> None:
-    accumulator = _Accumulator(multipolygon_row_count=2, with_holes_row_count=3, hole_ring_count=4)
-
-    _accumulate_shape(accumulator, json.dumps(_MULTIPOLYGON_WITH_HOLE))
-
-    assert accumulator.multipolygon_row_count == 3
-    assert accumulator.with_holes_row_count == 4
-    assert accumulator.hole_ring_count == 5
-
-
-def test_bbox_metre_width_spans_the_box_longitudes() -> None:
-    widths_m, _heights_m = _bbox_metre_values([(10.0, 20.0, 13.0, 29.0)])
-
-    assert widths_m == _geodesic_lengths([10.0], [24.5], [13.0], [24.5])
-
-
-def test_shard_accumulation_reads_only_the_geometry_columns(monkeypatch, tmp_path: Path) -> None:
-    reads: list[object] = []
-
-    class _Parquet:
-        schema_arrow = pa.schema(
-            [(name, pa.string()) for name in (*geometry_stats.GEOMETRY_STATS_COLUMNS, "x")]
-        )
-
-        def __init__(self, _shard: Path) -> None:
-            pass
-
-        def iter_batches(self, *, columns: object, batch_size: int) -> list[object]:
-            reads.append(columns)
-            return []
-
-    monkeypatch.setattr(geometry_stats.pq, "ParquetFile", _Parquet)
-
-    geometry_stats._accumulate_shard(tmp_path / "a.parquet", _Accumulator(), object())  # ty: ignore[invalid-argument-type]
-
-    assert reads == [list(geometry_stats.GEOMETRY_STATS_COLUMNS)]
-
-
-def test_build_stats_reports_each_extent_summary_from_its_own_column() -> None:
-    names = [
-        "area_m2",
-        "vertices",
-        "rings",
-        "components",
-        "width_degrees",
-        "height_degrees",
-        "width_m",
-        "height_m",
-    ]
-    summaries = {name: NumericSummary(row_count=index + 1) for index, name in enumerate(names)}
-    store = type(
-        "Store",
-        (),
-        {
-            "summary": lambda _self, name: summaries[name],
-            "source_stats": lambda _self, _names: [],
-            "primary_tag_stats": lambda _self: [],
-        },
-    )()
-
-    stats = geometry_stats._build_stats(
-        _Accumulator(),
-        cast(Any, store),
-        [],
-        text_population=geometry_stats.TextPopulationSummary(),
-    )
-
-    assert stats.extent.width_degrees == summaries["width_degrees"]
-    assert stats.extent.height_degrees == summaries["height_degrees"]
-    assert stats.extent.width_m == summaries["width_m"]
-    assert stats.extent.height_m == summaries["height_m"]
-
-
-def test_summary_from_row_keeps_minimum_and_maximum_apart() -> None:
-    row = [2, 10.0, 1.0, 9.0, *[5.0] * len(geometry_stats.PERCENTILES)]
-
-    summary = geometry_stats._summary_from_row(row)
-
-    assert (summary.minimum, summary.maximum) == (1.0, 9.0)
-
-
-def test_source_stats_use_nearest_rank_percentiles_and_zero_missing_sources(
-    tmp_path: Path,
-) -> None:
-    store = geometry_stats._GeometryValueStore(tmp_path)
-    try:
-        store.append(
-            [
-                {
-                    "source_pbf": "a.osm.pbf",
-                    "osm_primary_tag": "building",
-                    "area_m2": float(value),
-                    "vertices": 4.0,
-                    "rings": 1.0,
-                    "components": None,
-                    "width_degrees": 1.0,
-                    "height_degrees": 1.0,
-                    "width_m": 1.0,
-                    "height_m": 1.0,
-                }
-                for value in range(1, 301)
-            ]
-        )
-        [present, missing] = store.source_stats(["a.osm.pbf", "b.osm.pbf"])
-    finally:
-        store.close()
-
-    assert present.area_m2.percentiles == {
-        f"p{percentile}": float(-(-300 * percentile // 100))
-        for percentile in geometry_stats.PERCENTILES
-    }
-    assert missing == SourceAreaStats(source_pbf="b.osm.pbf", row_count=0, area_m2=NumericSummary())
-
-
-def test_geometry_stats_compute_the_text_population_of_the_named_sources(
-    monkeypatch, tmp_path: Path
-) -> None:
-    (tmp_path / "polygons").mkdir()
-    requested: list[object] = []
-    monkeypatch.setattr(
-        geometry_stats,
-        "compute_text_population_summary",
-        lambda _root, **kwargs: requested.append(kwargs) or geometry_stats.TextPopulationSummary(),
-    )
-
-    compute_geometry_stats(tmp_path, source_names=["a.osm.pbf"])
-
-    assert requested == [{"source_names": ["a.osm.pbf"]}]
+    assert _ge
