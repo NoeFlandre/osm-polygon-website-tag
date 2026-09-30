@@ -11,6 +11,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import v1_2_polygon_row as _row
 
 from osm_polygon_website_tag.application import cli
 from osm_polygon_website_tag.application.cli import app, main
@@ -40,53 +41,6 @@ from osm_polygon_website_tag.runtime.run_state import (
 
 def _ts():
     return pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py()
-
-
-def _row():
-    return {
-        "polygon_id": "p1",
-        "region": "monaco",
-        "source_pbf": "monaco-latest.osm.pbf",
-        "osm_type": "way",
-        "osm_id": 100,
-        "osm_version": 1,
-        "osm_timestamp": _ts(),
-        "website": "https://example.com",
-        "contact_website": None,
-        "has_website": True,
-        "has_contact_website": False,
-        "has_any_website": True,
-        "preferred_website": "https://example.com",
-        "preferred_website_source": "website",
-        "website_class": "absolute_url",
-        "contact_website_class": None,
-        "website_hostname": "example.com",
-        "contact_website_hostname": None,
-        "wikidata": "Q42",
-        "wikidata_qid": "Q42",
-        "wikidata_class": "canonical_qid",
-        "name": None,
-        "tags": "{}",
-        "tag_keys": "[]",
-        "tag_count": 0,
-        "osm_primary_tag": "building",
-        "geometry": json.dumps({"type": "Polygon", "coordinates": []}),
-        "centroid": json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
-        "lat": 0.0,
-        "lon": 0.0,
-        "bbox": "[0.0,0.0,0.0,0.0]",
-        "area_m2": 50.0,
-        "area_km2": 5e-5,
-        "area_bucket": "10-100m2",
-        "centroid_kind": "lambert_azimuthal_equal_area",
-        "schema_version": "v1.2",
-        "website_text": "example text",
-        "website_word_count": 2,
-        "website_text_status": "success",
-        "contact_website_text": None,
-        "contact_website_word_count": None,
-        "contact_website_text_status": "absent",
-    }
 
 
 def _setup_run(tmp_path: Path) -> Path:

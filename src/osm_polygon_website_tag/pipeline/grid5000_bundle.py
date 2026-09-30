@@ -26,6 +26,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ENRICHING,
     STATUS_EXTRACTED,
     RunState,
+    atomic_write_json,
     transition_status,
 )
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -34,7 +35,12 @@ BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_MANIFEST_NAME = "bundle.json"
 RESULT_NAME = "result.json"
 DEFAULT_GRID_JOB_SECONDS = 1_800
+# The Grid'5000 job defaults. scripts/grid5000/_env.sh (grid5000_run_setup)
+# repeats the time budget and batch rows as shell literals; an architecture test
+# keeps them equal to these constants.
 DEFAULT_GRID_TIME_BUDGET_SECONDS = 1_500
+DEFAULT_GRID_LANGUAGE_BATCH_ROWS = 256
+DEFAULT_GRID_SENTENCE_BATCH_ROWS = 256
 
 _SHA256_LENGTH = 64
 _SAFE_FILENAME_SUFFIX = ".parquet"
@@ -291,15 +297,53 @@ def receipt_digest(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
+def is_unfinished_source_shard(
+    state: RunState,
+    path: Path,
+    *,
+    label: str,
+    needs_work: Callable[[Path], bool],
+) -> bool:
+    """Validate run membership and return whether one shard still needs a stage."""
+    source_name = f"{path.stem}.osm.pbf"
+    if source_name not in state.sources:
+        raise ValueError(f"{label} shard is not in the source manifest: {path.name}")
+    return needs_work(path)
+
+
+def write_sync_history(
+    history_dir: Path,
+    stem: str,
+    bundle_payload: Mapping[str, object],
+    result_payload: Mapping[str, object],
+    *,
+    completed: bool,
+) -> None:
+    """Record a receipt-bound synchronization event without source text."""
+    history_dir.mkdir(parents=True, exist_ok=True)
+    digest = receipt_digest(result_payload)
+    atomic_write_json(
+        history_dir / f"{stem}-{digest}.json",
+        {
+            "action": "completed" if completed else "paused",
+            "bundle": bundle_payload,
+            "result": result_payload,
+        },
+    )
+
+
 __all__ = [
     "BUNDLE_MANIFEST_NAME",
     "BUNDLE_SCHEMA_VERSION",
     "DEFAULT_GRID_JOB_SECONDS",
+    "DEFAULT_GRID_LANGUAGE_BATCH_ROWS",
+    "DEFAULT_GRID_SENTENCE_BATCH_ROWS",
     "DEFAULT_GRID_TIME_BUDGET_SECONDS",
     "RESULT_NAME",
     "backup_directory",
     "create_bundle_directory",
     "install_validated_shard",
+    "is_unfinished_source_shard",
     "model_from_payload",
     "model_payload",
     "nonnegative_int",
@@ -324,4 +368,5 @@ __all__ = [
     "validate_job_id",
     "validate_positive_grid_time",
     "validate_stage_sync_state",
+    "write_sync_history",
 ]

@@ -7,6 +7,7 @@ edit_uri: edit/main/docs/
 
 exclude_docs: |
   .DS_Store
+  # docs/superpowers/ is a gitignored, local-only agent scratch directory.
   superpowers/
 
 theme:
@@ -32,3 +33,6 @@ nav:
   - Operations and resume: operations.md
   - Architecture: architecture.md
   - Data and remotes: data-and-remotes.md
+  - Archive:
+      - Language detection design: history/language-detection-design.md
+      - Language detection plan: history/language-detection-plan.md

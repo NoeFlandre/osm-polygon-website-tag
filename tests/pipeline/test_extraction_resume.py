@@ -293,9 +293,17 @@ def test_extract_records_failure_for_extractor_crash(make_pbf, tmp_path: Path) -
             extract_pbf(src, run_dir, run_state=state)
     finally:
         _ExtractionHandler.area = original  # type: ignore[assignment]
-    failure = json.loads((run_dir / "failures.jsonl").read_text())
+    failure_line = (run_dir / "failures.jsonl").read_text(encoding="utf-8").strip()
+    failure = json.loads(failure_line)
+    assert list(failure) == sorted(failure)
     assert failure["source_pbf"] == "crash-latest.osm.pbf"
+    assert failure["osm_type"] == ""
+    assert failure["osm_id"] == 0
     assert failure["phase"] == "extract"
+    assert failure["kind"] == "RuntimeError"
+    assert failure["message"] == "forced crash"
+    assert isinstance(failure["timestamp"], str)
+    assert dt.datetime.fromisoformat(failure["timestamp"]).tzinfo == dt.UTC
     assert load_run(run_dir).metadata["status"] == "incomplete"
 
 

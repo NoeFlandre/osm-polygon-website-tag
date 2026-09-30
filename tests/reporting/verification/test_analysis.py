@@ -36,7 +36,7 @@ def test_analysis_and_row_verification_helpers_are_deterministic(tmp_path: Path)
         [{"cell": "a"}, {"cell": "b"}], "observation", expected, errors
     )
     assert not analysis._verify_cell_set([{"cell": "a"}], "canonical", expected, errors)
-    assert errors
+    assert errors == ["canonical analysis does not contain exactly eight cells"]
     (tmp_path / "manifests").mkdir()
     (tmp_path / "manifests" / "sources.json").write_text(
         json.dumps([{"observation_row_count": 2}]), encoding="utf-8"
@@ -81,7 +81,16 @@ def test_verification_entrypoints_and_nested_helpers_are_safe_on_incomplete_runs
     text._verify_text_shard(tmp_path / "missing.parquet", True, errors)
     text._verify_success_text("one two", 2, "website", errors)
     text._verify_empty_text("", 0, "website", errors)
-    assert errors
+    for message in (
+        "missing exact expected source inventory",
+        "missing card artifact: README.md",
+        "completion receipt has no artifact list",
+        "receipt has stale card_contract_version: 1",
+        "invalid completion receipt artifact entry",
+        "completion receipt artifact inventory mismatch",
+    ):
+        assert message in errors
+    assert errors[-1].startswith("text invariant verification failed for missing.parquet: ")
 
 
 def test_analysis_entrypoints_forward_the_selected_card_compatibility_mode(
@@ -1062,6 +1071,69 @@ def test_release_geographic_section_compares_the_exact_section(
     analysis._verify_release_geographic_section(tmp_path, object(), errors)
 
     assert errors == expected
+
+
+def test_release_geographic_section_reports_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable_readme(_path: Path) -> bytes:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable_readme)
+    errors: list[str] = []
+
+    analysis._verify_release_geographic_section(tmp_path, object(), errors)
+
+    assert errors == ["README geographic section is unreadable: denied"]
+
+
+def test_release_density_yaml_matches_all_geographic_summary_fields(tmp_path: Path) -> None:
+    stats = SimpleNamespace(
+        polygon_density_h3_resolution=7,
+        polygon_density_row_count=11,
+        occupied_h3_cell_count=5,
+    )
+    path = tmp_path / "dataset.yaml"
+    path.write_text(
+        "polygon_density_h3_resolution: 6\n"
+        "polygon_density_row_count: 12\n"
+        "occupied_h3_cell_count: 4\n",
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+
+    analysis._verify_release_density_yaml(tmp_path, stats, errors)
+
+    assert errors == [
+        "dataset.yaml polygon_density_h3_resolution does not match the unique-text summary",
+        "dataset.yaml polygon_density_row_count does not match the unique-text summary",
+        "dataset.yaml occupied_h3_cell_count does not match the unique-text summary",
+    ]
+
+    path.write_text(
+        "polygon_density_h3_resolution: 7\n"
+        "polygon_density_row_count: 11\n"
+        "occupied_h3_cell_count: 5\n",
+        encoding="utf-8",
+    )
+    errors.clear()
+    analysis._verify_release_density_yaml(tmp_path, stats, errors)
+    assert errors == []
+
+
+def test_release_density_yaml_reports_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable_dataset(_path: Path, *, encoding: str | None = None) -> str:
+        del encoding
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "read_text", unreadable_dataset)
+    errors: list[str] = []
+
+    analysis._verify_release_density_yaml(tmp_path, object(), errors)
+
+    assert errors == ["dataset.yaml geographic fields are unreadable: denied"]
 
 
 def test_readability_of_no_artifacts_is_true(tmp_path: Path) -> None:

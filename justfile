@@ -132,7 +132,16 @@ mutation-scope base="origin/main":
     # -- regenerating fourteen thousand mutants costs minutes -- and the gate is
     # told the scope so stale verdicts from other modules are ignored.
     # shellcheck disable=SC2086
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters
+    if uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters; then
+        :
+    else
+        status=$?
+        if [ "$status" -eq 86 ]; then
+            printf '%s\n' 'Mutation gate passed: the generated shard contains no mutants.'
+            exit 0
+        fi
+        exit "$status"
+    fi
     scopes=()
     while read -r filter; do scopes+=(--scope "$filter"); done <<< "$filters"
     just mutation-gate "${scopes[@]}"
@@ -146,7 +155,16 @@ mutation-module filters:
     set -euo pipefail
     just mutation-clean
     read -r -a shard <<< "{{ filters }}"
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"
+    if uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"; then
+        :
+    else
+        status=$?
+        if [ "$status" -eq 86 ]; then
+            printf '%s\n' 'Mutation gate passed: the generated shard contains no mutants.'
+            exit 0
+        fi
+        exit "$status"
+    fi
     scopes=()
     for filter in "${shard[@]}"; do scopes+=(--scope "$filter"); done
     just mutation-gate "${scopes[@]}"

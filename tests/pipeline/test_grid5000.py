@@ -885,6 +885,25 @@ def test_prepare_can_select_a_named_unfinished_shard(tmp_path: Path) -> None:
     assert bundle.source_shard == "source.parquet"
 
 
+def test_unfinished_language_shard_checks_manifest_and_language_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _write_enriched_run(tmp_path)
+    state = load_run(run_dir)
+    source = run_dir / "polygons" / "source.parquet"
+
+    assert grid5000._is_unfinished_source_shard(state, source)
+    monkeypatch.setattr(grid5000, "shard_needs_language_detection", lambda _path: False)
+    assert not grid5000._is_unfinished_source_shard(state, source)
+
+    state.sources.pop("source.osm.pbf")
+    with pytest.raises(
+        ValueError,
+        match=r"^language shard is not in the source manifest: source\.parquet$",
+    ):
+        grid5000._is_unfinished_source_shard(state, source)
+
+
 def test_prepare_forwards_a_requested_shard_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

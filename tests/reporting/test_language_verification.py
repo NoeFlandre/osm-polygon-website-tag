@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.reporting.verification import language as language_module
+from osm_polygon_website_tag.reporting.verification import shard_scan
 from osm_polygon_website_tag.reporting.verification.language import verify_language_invariants
 
 
@@ -70,13 +71,40 @@ def test_verify_accepts_a_complete_language_pair(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_verify_language_row_reports_both_prefixes_with_exact_locations() -> None:
+    errors: list[str] = []
+
+    language_module._verify_language_row(
+        Path("polygons/source.parquet"),
+        4,
+        ["fetch_error", "stale_Latn", 0.8, "success", None, None],
+        errors,
+    )
+
+    assert errors == [
+        "polygons/source.parquet row 4 website language fields must be null when text is not successful",
+        "polygons/source.parquet row 4 contact_website language label is missing",
+        "polygons/source.parquet row 4 contact_website language probability is invalid",
+    ]
+
+
+def test_verify_language_row_rejects_extra_values() -> None:
+    with pytest.raises(ValueError):
+        language_module._verify_language_row(
+            Path("polygons/source.parquet"),
+            0,
+            ["success", "eng_Latn", 0.9, "absent", None, None, "extra"],
+            [],
+        )
+
+
 def test_verify_language_file_reports_unreadable_and_ignores_legacy_shards(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     unreadable_errors: list[str] = []
     monkeypatch.setattr(
-        language_module.pq,
+        shard_scan.pq,
         "read_schema",
         lambda _path: (_ for _ in ()).throw(OSError("broken")),
     )
@@ -86,7 +114,7 @@ def test_verify_language_file_reports_unreadable_and_ignores_legacy_shards(
     assert unreadable_errors == [f"unreadable language shard {tmp_path / 'broken.parquet'}: broken"]
 
     legacy_errors: list[str] = []
-    monkeypatch.setattr(language_module.pq, "read_schema", lambda _path: pa.schema([]))
+    monkeypatch.setattr(shard_scan.pq, "read_schema", lambda _path: pa.schema([]))
     monkeypatch.setattr(
         language_module,
         "_verify_language_shard",
@@ -107,7 +135,7 @@ def test_verify_language_file_forwards_the_exact_language_shard(
         [pa.field(name, pa.string()) for name in language_module.LANGUAGE_COLUMN_NAMES]
     )
     calls: list[tuple[Path, list[str]]] = []
-    monkeypatch.setattr(language_module.pq, "read_schema", lambda path_value: schema)
+    monkeypatch.setattr(shard_scan.pq, "read_schema", lambda path_value: schema)
     monkeypatch.setattr(
         language_module,
         "_verify_language_shard",
@@ -181,7 +209,7 @@ def test_verify_language_shard_uses_bounded_language_columns(
             yield batch
 
     batches: list[tuple[Path, int, pa.RecordBatch, list[str]]] = []
-    monkeypatch.setattr(language_module.pq, "ParquetFile", lambda path_value: Parquet())
+    monkeypatch.setattr(shard_scan.pq, "ParquetFile", lambda path_value: Parquet())
     monkeypatch.setattr(
         language_module,
         "_verify_language_batch",

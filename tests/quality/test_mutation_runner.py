@@ -315,6 +315,43 @@ def test_mutation_workspace_copies_current_tests() -> None:
     assert "tests" in project["tool"]["mutmut"]["also_copy"]
 
 
+def test_generated_shard_with_no_mutants_uses_a_distinct_exit_status(monkeypatch, capsys) -> None:
+    import mutmut.__main__ as mutmut_main
+
+    monkeypatch.setattr(
+        mutation_runner.sys,
+        "argv",
+        [
+            "mutation_runner.py",
+            "run",
+            "--max-children",
+            "4",
+            "osm_polygon_website_tag.application.cli.x_refresh_card_command__mutmut_*",
+        ],
+    )
+    monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda _names: ())
+
+    def fail_on_empty_selection() -> None:
+        raise AssertionError("Filtered for specific mutants, but nothing matches")
+
+    monkeypatch.setattr(mutmut_main, "cli", fail_on_empty_selection)
+
+    with pytest.raises(SystemExit) as error:
+        mutation_runner.main()
+
+    assert capsys.readouterr().out == (
+        "No mutants match this generated shard; skipping the empty selection.\n"
+    )
+    assert error.value.code == 86
+
+
+def test_mutation_runner_only_suppresses_mutmut_empty_selection_error() -> None:
+    assert mutation_runner._is_empty_filter_error(
+        AssertionError("Filtered for specific mutants, but nothing matches\n\nFilter: ...")
+    )
+    assert not mutation_runner._is_empty_filter_error(AssertionError("unexpected mutmut error"))
+
+
 def test_mutation_root_remains_stable_when_running_inside_mutants(monkeypatch) -> None:
     project_root = mutation_runner._project_root()
     monkeypatch.chdir(project_root / "mutants")

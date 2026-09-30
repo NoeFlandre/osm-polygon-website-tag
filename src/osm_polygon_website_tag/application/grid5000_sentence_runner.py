@@ -8,11 +8,13 @@ lookup: a reserved node loads exactly the weights the bundle carries.
 from __future__ import annotations
 
 import argparse
-import json
-import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from osm_polygon_website_tag.application.grid5000_runner_base import (
+    base_runner_parser,
+    print_receipt,
+)
 from osm_polygon_website_tag.pipeline.grid5000_sentences import (
     load_sentence_bundle,
     run_sentence_bundle,
@@ -22,11 +24,7 @@ from osm_polygon_website_tag.pipeline.sat import load_sat_splitter_from_path
 
 def _parser() -> argparse.ArgumentParser:
     """Build the small argument parser needed on a reserved compute node."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle-dir", type=Path, required=True)
-    parser.add_argument("--time-budget-seconds", type=float)
-    parser.add_argument("--batch-rows", type=int)
-    parser.add_argument("--job-id")
+    parser = base_runner_parser(__doc__)
     parser.add_argument(
         "--device",
         choices=("cuda", "cpu"),
@@ -38,7 +36,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Segment one staged bundle and print its receipt as JSON."""
     args = _parser().parse_args(argv)
-    try:
+
+    def run() -> Mapping[str, object]:
         bundle = load_sentence_bundle(args.bundle_dir)
         splitter = load_sat_splitter_from_path(
             Path(args.bundle_dir) / bundle.model.filename,
@@ -52,11 +51,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_rows=args.batch_rows,
             job_id=args.job_id,
         )
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-    print(json.dumps(result.payload(), default=str, indent=2, sort_keys=True))
-    return 0
+        return result.payload()
+
+    return print_receipt(run)
 
 
 if __name__ == "__main__":  # pragma: no cover
