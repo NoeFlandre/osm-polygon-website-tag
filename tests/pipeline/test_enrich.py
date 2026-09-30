@@ -198,6 +198,51 @@ def test_private_enrichment_url_queue_and_fetch_helpers(tmp_path: Path) -> None:
         cache.close()
 
 
+def test_apply_cached_results_reuses_hits_and_returns_only_misses() -> None:
+    hit_url = "https://example.org/cached"
+    miss_url = "https://example.org/new"
+    website_row: dict[str, object] = {}
+    contact_row: dict[str, object] = {}
+    miss_row: dict[str, object] = {}
+    pending = {
+        hit_url: [(website_row, "website"), (contact_row, "contact_website")],
+        miss_url: [(miss_row, "website")],
+    }
+    cached_value = CachedText(
+        hit_url, "success", "reused words", 2, hit_url, None, 1, "etag", "2.1.0", "prior-run"
+    )
+
+    class Cache:
+        def __init__(self) -> None:
+            self.lookups: list[tuple[set[str], str]] = []
+
+        def get_reusable_many(self, urls: set[str], *, invocation_id: str) -> dict[str, CachedText]:
+            self.lookups.append((urls, invocation_id))
+            return {hit_url: cached_value}
+
+    cache = Cache()
+    unresolved = _apply_cached_results(
+        pending,
+        {hit_url, miss_url},
+        cache=cast(TextCache, cache),
+        invocation_id="current-run",
+    )
+
+    assert cache.lookups == [({hit_url, miss_url}, "current-run")]
+    assert unresolved == {miss_url: [(miss_row, "website")]}
+    assert website_row == {
+        "website_text": "reused words",
+        "website_word_count": 2,
+        "website_text_status": "success",
+    }
+    assert contact_row == {
+        "contact_website_text": "reused words",
+        "contact_website_word_count": 2,
+        "contact_website_text_status": "success",
+    }
+    assert miss_row == {}
+
+
 def test_queue_tag_marks_absent_invalid_and_complete_values_without_fetching() -> None:
     pending: dict[str, list[tuple[dict[str, object], str]]] = {}
     lookup: set[str] = set()
@@ -253,6 +298,30 @@ def test_queue_tag_marks_absent_invalid_and_complete_values_without_fetching() -
     assert complete["website_text"] == "cached text"
     assert lookup == set()
     assert pending == {}
+
+
+def test_queue_tag_deduplicates_normalized_urls_across_text_fields() -> None:
+    website_row: dict[str, object] = {"website": "https://EXAMPLE.org/library"}
+    contact_row: dict[str, object] = {"contact_website": "https://example.org/library"}
+    pending: dict[str, list[tuple[dict[str, object], str]]] = {}
+    lookup: set[str] = set()
+
+    for row, value_column, field_prefix in (
+        (website_row, "website", "website"),
+        (contact_row, "contact_website", "contact_website"),
+    ):
+        _queue_tag(
+            row,
+            value_column=value_column,
+            field_prefix=field_prefix,
+            invocation_id="run",
+            pending=pending,
+            lookup_urls=lookup,
+        )
+
+    normalized = "https://example.org/library"
+    assert lookup == {normalized}
+    assert pending == {normalized: [(website_row, "website"), (contact_row, "contact_website")]}
 
 
 @pytest.mark.parametrize(
@@ -431,6 +500,28 @@ def test_record_one_fetch_preserves_failure_metadata_for_all_references() -> Non
     }
 
 
+def test_record_fetched_applies_one_result_to_all_references() -> None:
+    url = "https://example.org/shared"
+    website_row: dict[str, object] = {}
+    contact_row: dict[str, object] = {}
+    cache = RecordingTextCache()
+
+    _record_fetched(
+        url,
+        FetchResult("ok", url, final_url=url, body=b"shared page text"),
+        [(website_row, "website"), (contact_row, "contact_website")],
+        cache=cast(TextCache, cache),
+        invocation_id="resume-run",
+        extractor=_extract,
+    )
+
+    assert len(cache.records) == 1
+    assert cache.records[0][0].text == "shared page text"
+    assert cache.records[0][1] == "resume-run"
+    assert website_row["website_text"] == "shared page text"
+    assert contact_row["contact_website_text"] == "shared page text"
+
+
 def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
     url = "https://example.org/page"
     successful = FetchResult("ok", url, final_url=url, body=b"page")
@@ -474,6 +565,21 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
     )
     assert extracted == {url: failure}
     assert list(deferred) == [url]
+    assert len(submitted) == 1
+
+    no_body = FetchResult("ok", url, final_url=url, body=None)
+    no_body_result = CachedText(url, "ok", None, None, url, None, 0, "", None, "run")
+    monkeypatch.setattr(enrich_module, "_extract_fetched", lambda *_args, **_kwargs: no_body_result)
+    _dispatch_extraction(
+        url,
+        no_body,
+        invocation_id="run",
+        extractor=_extract,
+        extract_pool=cast(ProcessPoolExecutor, pool),
+        extracted=extracted,
+        deferred_extractions=deferred,
+    )
+    assert extracted[url] == no_body_result
     assert len(submitted) == 1
 
 
@@ -745,16 +851,32 @@ def test_default_process_pool_extractor_entry_point() -> None:
         )
 
 
-def test_default_process_pool_extractor_preserves_fetch_metadata(
+@pytest.mark.parametrize(
+    ("final_url", "charset", "media_type"),
+    [
+        pytest.param(
+            "https://example.org/resolved",
+            "windows-1252",
+            "application/xhtml+xml",
+            id="redirect-metadata",
+        ),
+        pytest.param(None, None, None, id="requested-url-fallback"),
+    ],
+)
+def test_default_process_pool_extractor_uses_fetch_metadata(
+    final_url: str | None,
+    charset: str | None,
+    media_type: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    requested_url = "https://example.org/start"
     fetched = FetchResult(
         "ok",
-        "https://example.org/start",
-        final_url="https://example.org/resolved",
+        requested_url,
+        final_url=final_url,
         body=b"encoded html",
-        charset="windows-1252",
-        media_type="application/xhtml+xml",
+        charset=charset,
+        media_type=media_type,
     )
     observed: dict[str, object] = {}
 
@@ -770,16 +892,16 @@ def test_default_process_pool_extractor_preserves_fetch_metadata(
 
     monkeypatch.setattr(enrich_module, "extract_main_text", extract)
 
-    cached = _extract_default_fetch(fetched.requested_url, fetched, invocation_id="metadata-run")
+    cached = _extract_default_fetch(requested_url, fetched, invocation_id="metadata-run")
 
     assert observed == {
         "body": b"encoded html",
-        "url": "https://example.org/resolved",
-        "charset": "windows-1252",
-        "media_type": "application/xhtml+xml",
+        "url": final_url or requested_url,
+        "charset": charset,
+        "media_type": media_type,
     }
-    assert cached.url == fetched.requested_url
-    assert cached.final_url == "https://example.org/resolved"
+    assert cached.url == requested_url
+    assert cached.final_url == (final_url or requested_url)
     assert cached.status == "success"
     assert cached.text == "Town library"
     assert cached.word_count == 2

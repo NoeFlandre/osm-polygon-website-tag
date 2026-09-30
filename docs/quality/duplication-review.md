@@ -9,11 +9,12 @@ A one-off Python AST scan covered `src/osm_polygon_website_tag/**/*.py`,
 source locations, consistently renamed identifiers, parameters, nested
 definition names, and keyword labels within each body, then grouped identical
 normalized trees containing at least 24 AST nodes. It counted 1,370
-production and 2,921 test function bodies; 1,076 and 2,106, respectively, met
+production and 2,959 test function bodies; 1,076 and 2,130, respectively, met
 the size cutoff. Among those, it found three repeated production-body groups
-(seven bodies) and five repeated test-body groups (10 bodies). This scan
-normalizes local identifiers, parameters, nested definition names, and keyword
-labels; it preserves attribute names and schema constants. These counts
+(seven bodies) and five repeated test-body groups (10 bodies). Nested and
+asynchronous function bodies are counted separately. This scan normalizes
+local identifiers, parameters, nested definition names, and keyword labels; it
+preserves attribute names and schema constants. These counts
 describe exact structural matches above that size cutoff; they do not
 establish that the repository has no duplication. The scan does not detect
 fuzzy similarity, repeated module-level setup, or smaller helpers. Each match
