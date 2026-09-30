@@ -119,6 +119,28 @@ def test_typer_help_lists_every_public_command() -> None:
         assert command in result.stdout
 
 
+def test_cli_help_snapshot_preserves_every_command_option_and_default() -> None:
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    root_result = runner.invoke(app, ["--help"], color=False, terminal_width=100)
+    commands = sorted(command.name for command in app.registered_commands)
+    command_results = {
+        name: runner.invoke(app, [name, "--help"], color=False, terminal_width=100)
+        for name in commands
+    }
+
+    assert root_result.exit_code == 0
+    assert all(result.exit_code == 0 for result in command_results.values())
+    actual = {
+        "root": root_result.output,
+        "commands": {name: result.output for name, result in command_results.items()},
+    }
+    expected_path = Path(__file__).parents[1] / "fixtures" / "cli_help.json"
+
+    assert actual == json.loads(expected_path.read_text(encoding="utf-8"))
+
+
 def test_cli_run_examples_use_the_portable_data_root_fallback() -> None:
     from typer.testing import CliRunner
 
