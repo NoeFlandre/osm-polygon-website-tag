@@ -185,18 +185,18 @@ def test_aggregate_shard_top_hostnames() -> None:
     table = _table(
         [
             partition_aggregate_row(
-                polygon_id="p1", source_pbf="x.osm.pbf", website_hostname="example.com"
+                polygon_id="p1", source_pbf="x.osm.pbf", website_hostname="z.example"
             ),
             partition_aggregate_row(
-                polygon_id="p2", source_pbf="x.osm.pbf", website_hostname="example.com"
+                polygon_id="p2", source_pbf="x.osm.pbf", website_hostname="z.example"
             ),
             partition_aggregate_row(
-                polygon_id="p3", source_pbf="x.osm.pbf", website_hostname="foo.com"
+                polygon_id="p3", source_pbf="x.osm.pbf", website_hostname="a.example"
             ),
         ]
     )
     agg = aggregate_shard(table)
-    assert agg.top_hostnames == [("example.com", 2), ("foo.com", 1)]
+    assert agg.top_hostnames == [("z.example", 2), ("a.example", 1)]
 
 
 def test_aggregate_shard_sorts_hostname_ties_and_keeps_empty_non_null_names() -> None:
@@ -262,11 +262,12 @@ def test_aggregate_shard_per_polygon_id_count() -> None:
             partition_aggregate_row(polygon_id="p1", source_pbf="x.osm.pbf"),
             partition_aggregate_row(polygon_id="p2", source_pbf="x.osm.pbf"),
             partition_aggregate_row(polygon_id="p2", source_pbf="x.osm.pbf"),
+            partition_aggregate_row(polygon_id="p3", source_pbf="x.osm.pbf"),
         ]
     )
     agg = aggregate_shard(table)
-    assert agg.row_count == 5
-    assert agg.unique_polygon_ids == {"p1", "p2"}
+    assert agg.row_count == 6
+    assert agg.unique_polygon_ids == {"p1", "p2", "p3"}
     assert agg.duplicate_within_shard_count == 5
 
 
@@ -311,6 +312,17 @@ def test_aggregate_shard_excludes_null_hostname_from_top_hostnames() -> None:
     )
     agg = aggregate_shard(table)
     assert agg.top_hostnames == [("example.com", 1)]
+
+
+def test_merge_aggregates_sorts_hostnames_by_count_then_name() -> None:
+    first = ShardAggregate(top_hostnames=[("z.example", 1), ("a.example", 1), ("m.example", 2)])
+    second = ShardAggregate(top_hostnames=[("m.example", 1)])
+
+    assert merge_aggregates([first, second]).top_hostnames == [
+        ("m.example", 3),
+        ("a.example", 1),
+        ("z.example", 1),
+    ]
 
 
 def test_count_duplicate_ids_reports_cross_shard_ids_only() -> None:
