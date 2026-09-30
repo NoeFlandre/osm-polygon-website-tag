@@ -7,7 +7,7 @@ import time
 import pytest
 from tests.web.conftest import LoopbackHTTPFixture
 
-from osm_polygon_website_tag.web.web_fetch import fetch_html
+from osm_polygon_website_tag.web.web_fetch import USER_AGENT, fetch_html
 
 
 @pytest.mark.parametrize(
@@ -46,6 +46,45 @@ def test_socket_transport_reads_relative_redirects(loopback_http: LoopbackHTTPFi
         b"ok",
     )
     assert loopback_http.requests == ["/old", "/new"]
+
+
+@pytest.mark.parametrize(
+    ("status", "headers", "expected_message"),
+    [
+        (404, {"Content-Type": "text/html"}, "http_404"),
+        (500, {"Content-Type": "text/html"}, "http_500"),
+        (200, {"Content-Type": "image/png"}, "unsupported_content_type"),
+        (
+            200,
+            {"Content-Type": "text/html", "Content-Length": "500"},
+            "response_too_large",
+        ),
+    ],
+)
+def test_socket_transport_rejects_unusable_responses(
+    loopback_http: LoopbackHTTPFixture,
+    status: int,
+    headers: dict[str, str],
+    expected_message: str,
+) -> None:
+    loopback_http.route("/reject", b"x" * 20, status=status, headers=headers)
+
+    result = fetch_html(loopback_http.url("/reject"), max_bytes=100, resolver=loopback_http.resolve)
+
+    assert (result.status, result.message) == ("fetch_error", expected_message)
+    assert loopback_http.requests == ["/reject"]
+
+
+def test_socket_transport_sends_the_repository_user_agent(
+    loopback_http: LoopbackHTTPFixture,
+) -> None:
+    loopback_http.route("/agent", b"ok", headers={"Content-Type": "text/html"})
+
+    result = fetch_html(loopback_http.url("/agent"), resolver=loopback_http.resolve)
+
+    assert result.status == "ok"
+    assert loopback_http.user_agents == [USER_AGENT]
+    assert loopback_http.connected_addresses == [("127.0.0.1", loopback_http.port)]
 
 
 def test_socket_transport_stops_at_the_redirect_limit(loopback_http: LoopbackHTTPFixture) -> None:

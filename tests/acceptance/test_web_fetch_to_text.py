@@ -1,24 +1,21 @@
-"""Acceptance: fetched website values become extracted text through an in-memory transport.
-
-The web half of the pipeline runs through the real fetch, extraction, cache,
-resume and language stages. Its injected transport returns canned HTTP responses
-so tests never open sockets or make outbound requests.
-"""
+"""Acceptance: loopback-fetched website values flow through extraction to text."""
 
 from __future__ import annotations
 
 import functools
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from tests.fixtures.memory_http import MemoryHTTPFixture
+from tests.fixtures.loopback_http import LoopbackHTTPFixture
 from tests.fixtures.polygon_shards import legacy_polygon_row, write_legacy_polygon_shard
 
 from osm_polygon_website_tag.pipeline.detect_languages import detect_language_shard
 from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
+from osm_polygon_website_tag.web.text_cache import TextCache
 from osm_polygon_website_tag.web.web_fetch import FetchResult, fetch_html
 
 
@@ -52,47 +49,69 @@ def _enrich(shard: Path, directory: Path, **options: object) -> list[dict[str, o
 
 
 def test_given_reachable_pages_when_enriched_then_their_text_is_extracted(
-    tmp_path: Path, memory_http: MemoryHTTPFixture
+    tmp_path: Path, acceptance_http: LoopbackHTTPFixture
 ) -> None:
     """Given UTF-8, Latin-1 (meta charset) and redirected pages, text is decoded correctly."""
-    memory_http.route("/utf8", _article("Zürich").encode(), Content_Type="text/html; charset=utf-8")
-    memory_http.route(
+    acceptance_http.route(
+        "/utf8",
+        _article("Zürich").encode(),
+        headers={"Content-Type": "text/html; charset=utf-8"},
+    )
+    acceptance_http.route(
         "/latin",
         ('<meta charset="iso-8859-1">' + _article("café crème")).encode("latin-1"),
-        Content_Type="text/html",
+        headers={"Content-Type": "text/html"},
     )
-    memory_http.route("/old", b"", status=301, Location="/new")
-    memory_http.route("/new", _article("Redirected page").encode(), Content_Type="text/html")
-    urls = [memory_http.url(path) for path in ("/utf8", "/latin", "/old")]
+    acceptance_http.route("/old", b"", status=301, headers={"Location": "/new"})
+    acceptance_http.route(
+        "/new",
+        _article("Redirected page").encode(),
+        headers={"Content-Type": "text/html"},
+    )
+    urls = [acceptance_http.url(path) for path in ("/utf8", "/latin", "/old")]
 
     rows = _enrich(_shard(tmp_path, urls), tmp_path)
+    with closing(TextCache(tmp_path / "cache" / "website_text.sqlite3")) as cache:
+        redirected = cache.get_reusable(urls[2], invocation_id="acceptance")
 
     assert [row["website_text_status"] for row in rows] == ["success"] * 3
+    assert redirected is not None
+    assert (redirected.status, redirected.final_url) == (
+        "success",
+        acceptance_http.url("/new"),
+    )
     texts = [str(row["website_text"]) for row in rows]
     assert "Zürich" in texts[0]
     assert "café crème" in texts[1]
     assert "Redirected page" in texts[2]
     assert all(int(str(row["website_word_count"])) > 50 for row in rows)
-    assert memory_http.requests.count("/new") == 1
+    assert acceptance_http.requests.count("/new") == 1
 
 
 def test_given_unusable_pages_when_enriched_then_each_is_recorded_without_a_crash(
-    tmp_path: Path, memory_http: MemoryHTTPFixture
+    tmp_path: Path, acceptance_http: LoopbackHTTPFixture
 ) -> None:
     """Given unusable pages and a timeout, each fetch failure is recorded without a crash."""
-    memory_http.route("/pdf", b"%PDF-1.4", Content_Type="application/pdf")
-    memory_http.route("/huge", b"<p>" + b"x" * 5000 + b"</p>", Content_Type="text/html")
-    memory_http.route("/hop", b"", status=302, Location="http://10.0.0.5/secret")
-    memory_http.route("/slow", TimeoutError("read deadline exceeded"), Content_Type="text/plain")
+    acceptance_http.route("/pdf", b"%PDF-1.4", headers={"Content-Type": "application/pdf"})
+    acceptance_http.route(
+        "/huge", b"<p>" + b"x" * 5000 + b"</p>", headers={"Content-Type": "text/html"}
+    )
+    acceptance_http.route("/hop", b"", status=302, headers={"Location": "http://10.0.0.5/secret"})
+    acceptance_http.route(
+        "/slow",
+        b"slow response body",
+        headers={"Content-Type": "text/plain"},
+        drip_interval=0.1,
+    )
     urls = [
-        memory_http.url("/missing"),
-        memory_http.url("/pdf"),
-        memory_http.url("/huge"),
-        memory_http.url("/hop"),
-        memory_http.url("/slow"),
+        acceptance_http.url("/missing"),
+        acceptance_http.url("/pdf"),
+        acceptance_http.url("/huge"),
+        acceptance_http.url("/hop"),
+        acceptance_http.url("/slow"),
         "ftp://example.org/file",
     ]
-    fetcher = functools.partial(fetch_html, max_bytes=1000, timeout_seconds=0.5)
+    fetcher = functools.partial(fetch_html, max_bytes=1000, timeout_seconds=0.3)
 
     rows = _enrich(_shard(tmp_path, urls), tmp_path, fetcher=fetcher)
 
@@ -105,36 +124,42 @@ def test_given_unusable_pages_when_enriched_then_each_is_recorded_without_a_cras
         "invalid_url",
     ]
     assert all(row["website_text"] is None for row in rows)
-    assert "/secret" not in memory_http.requests
+    assert "/secret" not in acceptance_http.requests
 
 
 def test_given_a_populated_cache_when_run_again_then_no_request_is_made(
-    tmp_path: Path, memory_http: MemoryHTTPFixture
+    tmp_path: Path, acceptance_http: LoopbackHTTPFixture
 ) -> None:
     """Given fetched pages, a second shard with the same URLs is served from the cache."""
     urls = []
     for name in ("a", "b", "c"):
-        memory_http.route(f"/{name}", _article(name.upper() * 4).encode(), Content_Type="text/html")
-        urls.append(memory_http.url(f"/{name}"))
+        acceptance_http.route(
+            f"/{name}",
+            _article(name.upper() * 4).encode(),
+            headers={"Content-Type": "text/html"},
+        )
+        urls.append(acceptance_http.url(f"/{name}"))
     first = _enrich(_shard(tmp_path, urls, "first"), tmp_path)
-    requests_after_first = list(memory_http.requests)
+    requests_after_first = list(acceptance_http.requests)
 
     second = _enrich(_shard(tmp_path, urls, "second"), tmp_path)
 
-    assert memory_http.requests == requests_after_first
+    assert acceptance_http.requests == requests_after_first
     assert [row["website_text"] for row in second] == [row["website_text"] for row in first]
 
 
 def test_given_an_interrupted_run_when_resumed_then_only_the_rest_is_fetched(
-    tmp_path: Path, memory_http: MemoryHTTPFixture
+    tmp_path: Path, acceptance_http: LoopbackHTTPFixture
 ) -> None:
     """Given a crash in the second batch, the completed prefix is not fetched again."""
     paths = [f"/p{index}" for index in range(1, 7)]
     for path in paths:
-        memory_http.route(
-            path, _article(path.strip("/").upper() * 3).encode(), Content_Type="text/html"
+        acceptance_http.route(
+            path,
+            _article(path.strip("/").upper() * 3).encode(),
+            headers={"Content-Type": "text/html"},
         )
-    urls = [memory_http.url(path) for path in paths]
+    urls = [acceptance_http.url(path) for path in paths]
     calls = 0
 
     def crashing(url: str) -> FetchResult:
@@ -147,11 +172,11 @@ def test_given_an_interrupted_run_when_resumed_then_only_the_rest_is_fetched(
     shard = _shard(tmp_path / "interrupted", urls)
     with pytest.raises(KeyboardInterrupt):
         _enrich(shard, tmp_path / "interrupted", fetcher=crashing, batch_rows=2, fetch_workers=1)
-    served_before_resume = len(memory_http.requests)
+    served_before_resume = len(acceptance_http.requests)
 
     resumed = _enrich(shard, tmp_path / "interrupted", batch_rows=2, fetch_workers=1)
 
-    resumed_requests = memory_http.requests[served_before_resume:]
+    resumed_requests = acceptance_http.requests[served_before_resume:]
     assert "/p1" not in resumed_requests
     assert "/p2" not in resumed_requests
     assert set(resumed_requests) <= set(paths[2:])
@@ -174,12 +199,16 @@ class _KeywordDetector:
 
 
 def test_given_extracted_english_french_and_german_text_then_languages_are_filled(
-    tmp_path: Path, memory_http: MemoryHTTPFixture
+    tmp_path: Path, acceptance_http: LoopbackHTTPFixture
 ) -> None:
     """Given three pages, detection writes one language and probability per polygon."""
     for name, marker in (("en", "English"), ("fr", "Bonjour"), ("de", "Guten")):
-        memory_http.route(f"/{name}", _article(marker * 3).encode(), Content_Type="text/html")
-    shard = _shard(tmp_path, [memory_http.url(f"/{name}") for name in ("en", "fr", "de")])
+        acceptance_http.route(
+            f"/{name}",
+            _article(marker * 3).encode(),
+            headers={"Content-Type": "text/html"},
+        )
+    shard = _shard(tmp_path, [acceptance_http.url(f"/{name}") for name in ("en", "fr", "de")])
     _enrich(shard, tmp_path)
 
     detect_language_shard(shard, detector=_KeywordDetector())

@@ -6,16 +6,16 @@ Reviewed on 2026-09-30 for production logic and test setup in this repository.
 
 A one-off Python AST scan covered `src/osm_polygon_website_tag/**/*.py`,
 `scripts/**/*.py`, and `tests/**/*.py`. It removed function docstrings and
-source locations, consistently renamed local identifiers, parameters, and
-nested definition names within each body, then grouped identical normalized
-trees containing at least 24 AST nodes. It counted 1,370 production and 2,881
-test function bodies; 1,076 and 2,079, respectively, met the size cutoff.
-Among those, it found three repeated production-body groups (seven bodies)
-and 13 repeated test-body groups (26 bodies). These counts describe exact
-structural matches above that size cutoff; they do not establish that the
-repository has no duplication. The scan does not detect fuzzy similarity,
-repeated module-level setup, or smaller helpers. Each match was reviewed in
-context before changing code.
+source locations, consistently renamed identifiers, parameters, nested
+definition names, and keyword labels within each body, then grouped identical
+normalized trees containing at least 24 AST nodes. It counted 1,370
+production and 2,868 test function bodies; 1,076 and 2,071, respectively, met
+the size cutoff. Among those, it found three repeated production-body groups
+(seven bodies) and 13 repeated test-body groups (26 bodies). These counts
+describe exact structural matches above that size cutoff; they do not
+establish that the repository has no duplication. The scan does not detect
+fuzzy similarity, repeated module-level setup, or smaller helpers. Each match
+was reviewed in context before changing code.
 
 ## Consolidated in this change
 
