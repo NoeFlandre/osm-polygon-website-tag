@@ -450,4 +450,79 @@ def test_finalize_private_status_scan_is_bounded_and_fail_closed() -> None:
             yield Batch(["success"])
             yield Batch([None])
 
-    asser
+    assert _column_has_unfinished_status(cast(pq.ParquetFile, Parquet()), "website_text_status")
+    assert calls == [{"columns": ["website_text_status"], "batch_size": 8_192}]
+
+
+def test_finalize_snapshot_state_advances_only_expected_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = type("State", (), {"metadata": {"status": STATUS_EXTRACTING}})()
+    transitions: list[str] = []
+    actions: list[str] = []
+
+    def transition(_state: object, status: str) -> None:
+        transitions.append(status)
+        state.metadata["status"] = status
+
+    monkeypatch.setattr(finalize_module, "transition_status", transition)
+    monkeypatch.setattr(finalize_module, "analyze_results", lambda _root: actions.append("analyze"))
+    monkeypatch.setattr(finalize_module, "build_card", lambda _root: actions.append("card"))
+
+    finalize_module._advance_snapshot_state(tmp_path, state)
+
+    assert transitions == [
+        STATUS_EXTRACTED,
+        STATUS_ENRICHING,
+        STATUS_ENRICHED,
+        STATUS_ANALYZED,
+        STATUS_CARD_BUILT,
+    ]
+    assert actions == ["analyze", "card"]
+
+
+def test_finalize_run_requires_card_built_or_complete_after_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verification = type("Report", (), {"ok": True, "checked_shards": ("a",)})()
+    state = type("State", (), {"metadata": {"status": STATUS_CARD_BUILT}})()
+    transitions: list[str] = []
+    monkeypatch.setattr(finalize_module, "verify_results", lambda _root: verification)
+    monkeypatch.setattr(finalize_module, "load_run", lambda _root: state)
+    monkeypatch.setattr(
+        finalize_module,
+        "transition_status",
+        lambda _state, status: transitions.append(status),
+    )
+    monkeypatch.setattr(
+        finalize_module,
+        "_write_completion_receipt",
+        lambda _root: {"manifest_digest": "a" * 64},
+    )
+
+    result = finalize_run(tmp_path)
+
+    assert result.ok is True
+    assert result.receipt == {"manifest_digest": "a" * 64}
+    assert result.verification is verification
+    assert transitions == [STATUS_VERIFIED, STATUS_COMPLETE]
+
+    state.metadata["status"] = STATUS_ANALYZED
+    failed = finalize_run(tmp_path)
+    assert failed.ok is False
+    assert failed.receipt == {}
+    assert failed.verification.ok is False
+    assert failed.verification.checked_shards == ("a",)
+    assert "card_built or complete" in failed.verification.errors[0]
+
+
+def test_replace_receipt_atomic_delegates_to_completion_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {"manifest_digest": "b" * 64}
+    monkeypatch.setattr(finalize_module, "_write_completion_receipt", lambda root: expected)
+
+    assert replace_receipt_atomic(tmp_path) is expected
