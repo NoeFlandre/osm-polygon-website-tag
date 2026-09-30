@@ -590,16 +590,52 @@ def test_cli_publish_plan_runs(tmp_path: Path) -> None:
     assert rc == 0
 
 
-def test_cli_publish_plan_uses_hf_dataset_repo_from_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_cli_publish_plan_uses_but_does_not_echo_hf_dataset_repo_from_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HF_DATASET_REPO", "someone/else")
     run_dir = _setup_run(tmp_path)
+    configured_repo_ids: list[str | None] = []
+
+    def build_plan(_run_dir: Path, *, repo_id: str | None) -> SimpleNamespace:
+        configured_repo_ids.append(repo_id)
+        return SimpleNamespace(repo_id=repo_id, artifact_paths=(), readme_path=None)
+
+    monkeypatch.setattr(cli, "build_publish_plan", build_plan)
 
     rc = main(["publish-plan", "--run-dir", str(run_dir)])
 
+    output = capsys.readouterr().out
     assert rc == 0
-    assert json.loads(capsys.readouterr().out)["repo_id"] == "someone/else"
+    assert configured_repo_ids == ["someone/else"]
+    assert "someone/else" not in output
+    assert json.loads(output)["repo_id"] is None
+
+
+def test_cli_publish_plan_echoes_explicit_repo_id_without_echoing_setting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HF_DATASET_REPO", "configured/hidden")
+    run_dir = _setup_run(tmp_path)
+
+    rc = main(
+        [
+            "publish-plan",
+            "--run-dir",
+            str(run_dir),
+            "--repo-id",
+            "explicit/visible",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert rc == 0
+    assert "configured/hidden" not in output
+    assert json.loads(output)["repo_id"] == "explicit/visible"
 
 
 def test_cli_create_repo_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:

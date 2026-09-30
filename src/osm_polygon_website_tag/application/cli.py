@@ -423,7 +423,8 @@ def publish_plan_command(
     plan = build_publish_plan(run_dir, repo_id=_configured_hf_dataset_repo(repo_id))
     _json(
         {
-            "repo_id": plan.repo_id,
+            # Do not echo values sourced from Settings; only reveal an explicit CLI option.
+            "repo_id": repo_id,
             "artifact_count": len(plan.artifact_paths),
             "readme": str(plan.readme_path) if plan.readme_path else None,
         }

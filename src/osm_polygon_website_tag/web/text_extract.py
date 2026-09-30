@@ -149,17 +149,23 @@ class _MetaCharsetParser(HTMLParser):
 def _raw_declared_meta_charset(start_tag: str, attrs: list[tuple[str, str | None]]) -> str | None:
     """Read a meta charset without expanding character references."""
     raw_attributes = _raw_meta_attributes(start_tag)
-    if _meta_charset_contains_reference(raw_attributes):
-        return None
     # dict(reversed(...)) keeps the first of repeated attributes, as HTML does.
     attributes = dict(reversed([(name, value or "") for name, value in attrs]))
+    if _meta_charset_contains_reference(raw_attributes, attributes):
+        return None
     return _declared_charset(attributes)
 
 
-def _meta_charset_contains_reference(attributes: dict[str, str]) -> bool:
-    raw_charset = attributes.get("charset", "")
-    raw_content_charset = charset_parameter(attributes.get("content", "")) or ""
-    return "&" in raw_charset or "&" in raw_content_charset
+def _meta_charset_contains_reference(
+    raw_attributes: dict[str, str], attributes: dict[str, str]
+) -> bool:
+    """Reject references only in the charset field selected by HTML precedence."""
+    if attributes.get("charset"):
+        return "&" in raw_attributes.get("charset", "")
+    if _http_equiv_charset(attributes) is None:
+        return False
+    raw_content_charset = charset_parameter(raw_attributes.get("content", "")) or ""
+    return "&" in raw_content_charset
 
 
 def _raw_meta_attributes(start_tag: str) -> dict[str, str]:

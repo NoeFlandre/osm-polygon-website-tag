@@ -903,6 +903,15 @@ def test_meta_charset_with_a_character_reference_declares_nothing() -> None:
     assert "专业" in decode_html(html.replace(b"&#49;", b"1"))
 
 
+def test_shadowed_content_charset_reference_does_not_hide_literal_charset() -> None:
+    tag = b'<meta charset="gb2312" content="text/html;charset=gb&#50;312">'
+    text = "专业" * 10
+    html = tag + f"<p>{text}</p>".encode("gb18030")
+
+    assert text_extract._meta_charset(tag) == "gb18030"
+    assert text in decode_html(html)
+
+
 def test_detection_prefers_cp1252_over_its_lookalikes(monkeypatch: pytest.MonkeyPatch) -> None:
     body = b"caf\xe9 \x80 \x93quoted\x94"
     monkeypatch.setattr(trafilatura_utils, "detect_encoding", lambda _b: ["iso8859-15", "cp1252"])
