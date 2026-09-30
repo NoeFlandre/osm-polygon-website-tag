@@ -193,56 +193,56 @@ def _debug_requested() -> bool:
     return _debug["enabled"] or os.environ.get(DEBUG_ENV) == "1"
 
 
-def _register_commands() -> None:
+def _register_commands(target: typer.Typer) -> None:
     from . import grid5000, languages, publish, run, sentences, verify
 
-    app.command(
+    target.command(
         "init",
         epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
     )(run.init_command)
-    app.command(
+    target.command(
         "extract",
         epilog='Example: osm-polygon-website-tag extract region.osm.pbf --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
     )(run.extract_command)
-    app.command("analyze-results")(verify.analyze_command)
-    app.command("build-card")(verify.card_command)
-    app.command("verify-results")(verify.verify_command)
-    app.command("refresh-card")(verify.refresh_card_command)
-    app.command("finalize-run")(verify.finalize_command)
-    app.command("finalize-snapshot")(verify.finalize_snapshot_command)
-    app.command("publish-plan")(publish.publish_plan_command)
-    app.command(
+    target.command("analyze-results")(verify.analyze_command)
+    target.command("build-card")(verify.card_command)
+    target.command("verify-results")(verify.verify_command)
+    target.command("refresh-card")(verify.refresh_card_command)
+    target.command("finalize-run")(verify.finalize_command)
+    target.command("finalize-snapshot")(verify.finalize_snapshot_command)
+    target.command("publish-plan")(publish.publish_plan_command)
+    target.command(
         "publish",
         epilog='Example: osm-polygon-website-tag publish --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1" --apply',
     )(publish.publish_command)
-    app.command(
+    target.command(
         "release-stats",
         epilog='Example: osm-polygon-website-tag release-stats --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
     )(publish.release_stats_command)
-    app.command(
+    target.command(
         "create-repo",
         epilog="Example: osm-polygon-website-tag create-repo --repo-id owner/name --apply",
     )(publish.create_repo_command)
-    app.command("card-stats")(verify.card_stats_command)
-    app.command("geometry-stats")(verify.geometry_stats_command)
-    app.command("publish-trackio")(publish.publish_trackio_command)
-    app.command(
+    target.command("card-stats")(verify.card_stats_command)
+    target.command("geometry-stats")(verify.geometry_stats_command)
+    target.command("publish-trackio")(publish.publish_trackio_command)
+    target.command(
         "run-all",
         epilog='Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
     )(run.run_all_command)
-    app.command("detect-languages")(languages.detect_languages_command)
-    app.command("segment-sentences")(sentences.segment_sentences_command)
-    app.command(
+    target.command("detect-languages")(languages.detect_languages_command)
+    target.command("segment-sentences")(sentences.segment_sentences_command)
+    target.command(
         "grid5000-prepare",
         epilog='Example: osm-polygon-website-tag grid5000-prepare --run-dir <run> --bundle-dir <bundle> --model-path <model_v3.bin> --commit "$(git rev-parse HEAD)"',
     )(grid5000.grid5000_prepare_command)
-    app.command("grid5000-run")(grid5000.grid5000_run_command)
-    app.command("grid5000-sync")(grid5000.grid5000_sync_command)
-    app.command("grid5000-prepare-sentences")(grid5000.grid5000_prepare_sentences_command)
-    app.command("grid5000-run-sentences")(grid5000.grid5000_run_sentences_command)
-    app.command("grid5000-sync-sentences")(grid5000.grid5000_sync_sentences_command)
+    target.command("grid5000-run")(grid5000.grid5000_run_command)
+    target.command("grid5000-sync")(grid5000.grid5000_sync_command)
+    target.command("grid5000-prepare-sentences")(grid5000.grid5000_prepare_sentences_command)
+    target.command("grid5000-run-sentences")(grid5000.grid5000_run_sentences_command)
+    target.command("grid5000-sync-sentences")(grid5000.grid5000_sync_sentences_command)
 
 
-_register_commands()
+_register_commands(app)
 
 __all__ = ["app", "main"]

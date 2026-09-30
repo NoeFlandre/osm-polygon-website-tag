@@ -5,8 +5,9 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -27,6 +28,7 @@ from osm_polygon_website_tag.pipeline.enrich import (
     _apply_cached_results,
     _apply_result,
     _completed_fetch,
+    _dispatch_extraction,
     _drain_interrupted_fetches,
     _extract_default_fetch,
     _extract_fetched,
@@ -97,6 +99,21 @@ class ConcurrentFetchRecorder:
         with self._lock:
             self._active -= 1
         return FetchResult("ok", url, final_url=url, body=f"text from {url}".encode())
+
+
+class RecordingTextCache:
+    """Record normalized cache entries at the enrichment boundary."""
+
+    def __init__(self) -> None:
+        self.records: list[tuple[CachedText, str]] = []
+        self.flush_count = 0
+
+    def record(self, value: CachedText, *, invocation_id: str) -> CachedText:
+        self.records.append((value, invocation_id))
+        return value
+
+    def flush(self) -> None:
+        self.flush_count += 1
 
 
 def test_private_enrichment_state_helpers_are_deterministic(tmp_path: Path) -> None:
@@ -179,6 +196,322 @@ def test_private_enrichment_url_queue_and_fetch_helpers(tmp_path: Path) -> None:
         cache.flush()
     finally:
         cache.close()
+
+
+def test_queue_tag_marks_absent_invalid_and_complete_values_without_fetching() -> None:
+    pending: dict[str, list[tuple[dict[str, object], str]]] = {}
+    lookup: set[str] = set()
+
+    absent: dict[str, object] = {"website": None, "contact_website_text": "kept"}
+    _queue_tag(
+        absent,
+        value_column="website",
+        field_prefix="website",
+        invocation_id="run",
+        pending=pending,
+        lookup_urls=lookup,
+    )
+    assert absent == {
+        "website": None,
+        "contact_website_text": "kept",
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "absent",
+    }
+
+    invalid: dict[str, object] = {"website": "ftp://example.org", "website_text": "stale"}
+    _queue_tag(
+        invalid,
+        value_column="website",
+        field_prefix="website",
+        invocation_id="run",
+        pending=pending,
+        lookup_urls=lookup,
+    )
+    assert invalid == {
+        "website": "ftp://example.org",
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "invalid_url",
+    }
+
+    complete: dict[str, object] = {
+        "website": "https://example.org",
+        "website_text": "cached text",
+        "website_word_count": 2,
+        "website_text_status": "success",
+    }
+    _queue_tag(
+        complete,
+        value_column="website",
+        field_prefix="website",
+        invocation_id="run",
+        pending=pending,
+        lookup_urls=lookup,
+    )
+
+    assert complete["website_text"] == "cached text"
+    assert lookup == set()
+    assert pending == {}
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    [
+        ({"website_text_status": "success", "website_text": "text", "website_word_count": 1}, True),
+        (
+            {"website_text_status": "fetch_error", "website_text": "text", "website_word_count": 1},
+            False,
+        ),
+        ({"website_text_status": "success", "website_text": None, "website_word_count": 1}, False),
+        (
+            {"website_text_status": "success", "website_text": "text", "website_word_count": None},
+            False,
+        ),
+    ],
+)
+def test_complete_text_requires_success_text_and_word_count(
+    row: dict[str, object], expected: bool
+) -> None:
+    assert _has_complete_text(row, "website") is expected
+
+
+def test_mark_invalid_url_clears_previous_text_fields() -> None:
+    row: dict[str, object] = {
+        "website_text": "stale text",
+        "website_word_count": 2,
+        "website_text_status": "success",
+        "contact_website_text": "separate field",
+    }
+
+    _mark_invalid_url(row, "website", "ftp://example.org", "run-7")
+
+    assert row == {
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "invalid_url",
+        "contact_website_text": "separate field",
+    }
+
+
+def test_record_fetches_records_in_source_order_and_updates_all_references() -> None:
+    first_url = "https://example.org/first"
+    second_url = "https://example.org/second"
+    first_row: dict[str, object] = {}
+    second_rows: tuple[dict[str, object], dict[str, object]] = ({}, {})
+    pending = {
+        first_url: [(first_row, "website")],
+        second_url: [
+            (second_rows[0], "website"),
+            (second_rows[1], "contact_website"),
+        ],
+    }
+    futures: dict[str, Future[FetchResult]] = {url: Future() for url in pending}
+    futures[second_url].set_result(
+        FetchResult("ok", second_url, final_url=second_url, body=b"second page")
+    )
+    futures[first_url].set_result(FetchResult("fetch_error", first_url, message="http_503"))
+    cache = RecordingTextCache()
+
+    _record_fetches(
+        pending,
+        futures,
+        cache=cast(TextCache, cache),
+        invocation_id="run",
+        extractor=_extract,
+    )
+
+    assert [value.url for value, _invocation in cache.records] == [first_url, second_url]
+    assert all(invocation == "run" for _value, invocation in cache.records)
+    assert first_row == {
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "fetch_error",
+    }
+    assert second_rows == (
+        {
+            "website_text": "second page",
+            "website_word_count": 2,
+            "website_text_status": "success",
+        },
+        {
+            "contact_website_text": "second page",
+            "contact_website_word_count": 2,
+            "contact_website_text_status": "success",
+        },
+    )
+
+
+def test_resolve_pending_fetches_a_miss_and_records_its_cache_value() -> None:
+    url = "https://example.org/page"
+    row: dict[str, object] = {}
+    pending = {url: [(row, "website"), (row, "contact_website")]}
+    fetched_urls: list[str] = []
+    cache = RecordingTextCache()
+
+    def fetch(value: str) -> FetchResult:
+        fetched_urls.append(value)
+        return FetchResult("ok", value, final_url=value, body=b"page text")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        _resolve_pending(
+            pending,
+            cache=cast(TextCache, cache),
+            invocation_id="resolve-run",
+            fetcher=fetch,
+            extractor=_extract,
+            fetch_pool=pool,
+        )
+
+    assert fetched_urls == [url]
+    assert [(value.url, value.status, value.text) for value, _ in cache.records] == [
+        (url, "success", "page text")
+    ]
+    assert cache.records[0][1] == "resolve-run"
+    assert row == {
+        "website_text": "page text",
+        "website_word_count": 2,
+        "website_text_status": "success",
+        "contact_website_text": "page text",
+        "contact_website_word_count": 2,
+        "contact_website_text_status": "success",
+    }
+
+
+def test_record_one_fetch_preserves_failure_metadata_for_all_references() -> None:
+    url = "https://example.org/page"
+    first_row: dict[str, object] = {}
+    second_row: dict[str, object] = {}
+    future: Future[FetchResult] = Future()
+    future.set_result(
+        FetchResult(
+            "fetch_error",
+            url,
+            final_url="https://example.org/blocked",
+            message="http_429",
+        )
+    )
+    cache = RecordingTextCache()
+
+    _record_one_fetch(
+        url,
+        future,
+        [(first_row, "website"), (second_row, "contact_website")],
+        cache=cast(TextCache, cache),
+        invocation_id="retry-2",
+        extractor=_extract,
+    )
+
+    assert cache.records == [
+        (
+            CachedText(
+                url,
+                "fetch_error",
+                None,
+                None,
+                "https://example.org/blocked",
+                "http_429",
+                0,
+                "",
+                None,
+                "retry-2",
+            ),
+            "retry-2",
+        )
+    ]
+    assert first_row == {
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "fetch_error",
+    }
+    assert second_row == {
+        "contact_website_text": None,
+        "contact_website_word_count": None,
+        "contact_website_text_status": "fetch_error",
+    }
+
+
+def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "https://example.org/page"
+    successful = FetchResult("ok", url, final_url=url, body=b"page")
+    expected = CachedText(url, "success", "page", 1, url, None, 0, "", "2.1.0", "run")
+    submitted: list[tuple[object, ...]] = []
+
+    class ExtractPool:
+        def submit(self, function: object, *args: object) -> Future[CachedText]:
+            submitted.append((function, *args))
+            future: Future[CachedText] = Future()
+            future.set_result(expected)
+            return future
+
+    extracted: dict[str, CachedText] = {}
+    deferred: dict[str, Future[CachedText]] = {}
+    pool = ExtractPool()
+    _dispatch_extraction(
+        url,
+        successful,
+        invocation_id="run",
+        extractor=_extract,
+        extract_pool=cast(ProcessPoolExecutor, pool),
+        extracted=extracted,
+        deferred_extractions=deferred,
+    )
+    assert extracted == {}
+    assert deferred[url].result() == expected
+    assert submitted == [(_extract_default_fetch, url, successful, "run")]
+
+    failed = FetchResult("fetch_error", url, message="http_503")
+    failure = CachedText(url, "fetch_error", None, None, None, "http_503", 0, "", None, "run")
+    monkeypatch.setattr(enrich_module, "_extract_fetched", lambda *_args, **_kwargs: failure)
+    _dispatch_extraction(
+        url,
+        failed,
+        invocation_id="run",
+        extractor=_extract,
+        extract_pool=cast(ProcessPoolExecutor, pool),
+        extracted=extracted,
+        deferred_extractions=deferred,
+    )
+    assert extracted == {url: failure}
+    assert list(deferred) == [url]
+    assert len(submitted) == 1
+
+
+def test_drain_interrupted_fetches_caches_only_completed_results() -> None:
+    completed_url = "https://example.org/completed"
+    failed_url = "https://example.org/failed"
+    cancelled_url = "https://example.org/cancelled"
+    rows = {url: {} for url in (completed_url, failed_url, cancelled_url)}
+    pending = {url: [(row, "website")] for url, row in rows.items()}
+    completed: Future[FetchResult] = Future()
+    completed.set_result(
+        FetchResult("ok", completed_url, final_url=completed_url, body=b"durable result")
+    )
+    failed: Future[FetchResult] = Future()
+    failed.set_exception(RuntimeError("fetch worker failed"))
+    cancelled: Future[FetchResult] = Future()
+    assert cancelled.cancel()
+    futures = {completed_url: completed, failed_url: failed, cancelled_url: cancelled}
+    cache = RecordingTextCache()
+
+    _drain_interrupted_fetches(
+        pending,
+        futures,
+        cache=cast(TextCache, cache),
+        invocation_id="interrupted-run",
+        extractor=_extract,
+    )
+
+    assert [(value.url, invocation) for value, invocation in cache.records] == [
+        (completed_url, "interrupted-run")
+    ]
+    assert rows[completed_url] == {
+        "website_text": "durable result",
+        "website_word_count": 2,
+        "website_text_status": "success",
+    }
+    assert rows[failed_url] == {}
+    assert rows[cancelled_url] == {}
 
 
 def test_private_enrichment_batch_and_future_helpers(tmp_path: Path) -> None:

@@ -157,11 +157,15 @@ def test_cli_help_snapshot_preserves_every_command_option_and_default() -> None:
 
 
 def test_cli_command_names_dispatch_to_their_public_adapters() -> None:
-    callbacks = {
-        command.name: command.callback for command in app.registered_commands if command.name
-    }
+    registered_app = typer.Typer(
+        name="osm-polygon-website-tag",
+        help="Analyze and publish OSM polygons carrying website tags.",
+        no_args_is_help=True,
+        rich_markup_mode=None,
+    )
+    cli._register_commands(registered_app)
 
-    assert callbacks == {
+    expected_callbacks = {
         "init": run.init_command,
         "extract": run.extract_command,
         "analyze-results": verify.analyze_command,
@@ -187,6 +191,28 @@ def test_cli_command_names_dispatch_to_their_public_adapters() -> None:
         "grid5000-run-sentences": grid5000.grid5000_run_sentences_command,
         "grid5000-sync-sentences": grid5000.grid5000_sync_sentences_command,
     }
+
+    for command_app in (app, registered_app):
+        callbacks = {
+            command.name: command.callback
+            for command in command_app.registered_commands
+            if command.name
+        }
+        assert callbacks == expected_callbacks
+
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    expected_help = json.loads(
+        (Path(__file__).parents[1] / "fixtures" / "cli_help.json").read_text(encoding="utf-8")
+    )["commands"]
+    actual_help = {
+        name: runner.invoke(
+            registered_app, [name, "--help"], color=False, terminal_width=100
+        ).output
+        for name in sorted(expected_callbacks)
+    }
+    assert actual_help == expected_help
 
 
 def test_cli_run_examples_use_the_portable_data_root_fallback() -> None:
