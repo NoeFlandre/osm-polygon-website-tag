@@ -380,7 +380,7 @@ def test_scoped_mutation_config_limits_generation_to_selected_source_modules() -
     ]
 
 
-def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
+def test_scoped_mutation_config_expands_root_package_filter_to_all_sources() -> None:
     config = SimpleNamespace(only_mutate=[])
 
     source_paths = mutation_runner._configure_source_scope(
@@ -388,11 +388,13 @@ def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
         config=config,
     )
 
-    assert source_paths == (Path("src/osm_polygon_website_tag/__init__.py"),)
-    assert config.only_mutate == ["src/osm_polygon_website_tag/__init__.py"]
+    expected = tuple(sorted(Path("src/osm_polygon_website_tag").rglob("*.py")))
+    assert source_paths == expected
+    assert "src/osm_polygon_website_tag/web/web_fetch.py" in config.only_mutate
+    assert "src/osm_polygon_website_tag/pipeline/enrich.py" in config.only_mutate
 
 
-def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> None:
+def test_scoped_mutation_config_expands_nested_package_filter_to_all_sources() -> None:
     config = SimpleNamespace(only_mutate=[])
 
     source_paths = mutation_runner._configure_source_scope(
@@ -400,10 +402,9 @@ def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> N
         config=config,
     )
 
-    assert source_paths == (Path("src/osm_polygon_website_tag/reporting/geographic/__init__.py"),)
-    assert config.only_mutate == [
-        "src/osm_polygon_website_tag/reporting/geographic/__init__.py",
-    ]
+    package = Path("src/osm_polygon_website_tag/reporting/geographic")
+    assert source_paths == tuple(sorted(package.rglob("*.py")))
+    assert "src/osm_polygon_website_tag/reporting/geographic/aggregation.py" in config.only_mutate
 
 
 def test_scoped_mutation_config_rejects_unqualified_filters() -> None:

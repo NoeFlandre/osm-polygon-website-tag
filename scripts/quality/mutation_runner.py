@@ -44,6 +44,7 @@ def _source_path_for_mutant_name(mutant_name: str) -> Path:
             f"mutation scope must use a fully qualified package filter: {mutant_name!r}"
         )
 
+    package_wildcard = mutant_name.endswith(".*")
     module_name = mutant_name.removesuffix(".*")
     mutation_marker = module_name.find(".x")
     if mutation_marker >= 0:
@@ -52,18 +53,25 @@ def _source_path_for_mutant_name(mutant_name: str) -> Path:
         raise ValueError(f"mutation scope is not a source module: {mutant_name!r}")
 
     if module_name == _PACKAGE_NAME:
-        return _PACKAGE_SOURCE_ROOT / "__init__.py"
+        return _PACKAGE_SOURCE_ROOT if package_wildcard else _PACKAGE_SOURCE_ROOT / "__init__.py"
 
     relative_module = module_name.removeprefix(f"{_PACKAGE_NAME}.")
     candidate = _PACKAGE_SOURCE_ROOT.joinpath(*relative_module.split("."))
     if candidate.is_dir():
-        return candidate / "__init__.py"
+        return candidate if package_wildcard else candidate / "__init__.py"
     return candidate.with_suffix(".py")
 
 
 def _source_paths_for_mutant_names(mutant_names: Iterable[str]) -> tuple[Path, ...]:
     """Return the deterministic, deduplicated source scope for mutmut names."""
-    return tuple(sorted({_source_path_for_mutant_name(name) for name in mutant_names}))
+    source_paths: set[Path] = set()
+    for name in mutant_names:
+        source_path = _source_path_for_mutant_name(name)
+        if source_path.is_dir():
+            source_paths.update(source_path.rglob("*.py"))
+        else:
+            source_paths.add(source_path)
+    return tuple(sorted(source_paths))
 
 
 def _configure_source_scope(
