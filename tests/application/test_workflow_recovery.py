@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -355,7 +356,12 @@ def test_run_all_refuses_changed_source_inventory(make_pbf, tmp_path: Path) -> N
     root = _sources(make_pbf, tmp_path)
     result = run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")
     source = next(root.rglob("a-latest.osm.pbf"))
-    source.touch()
+    previous = source.stat()
+    os.utime(
+        source,
+        ns=(previous.st_atime_ns, previous.st_mtime_ns + 20_000_000_000),
+    )
+    assert source.stat().st_mtime_ns != previous.st_mtime_ns
 
     with pytest.raises(ValueError, match="inventory changed"):
         run_all(source_root=root, output_root=tmp_path / "runs", run_id="production")

@@ -11,6 +11,17 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "osm_polygon_website_tag"
 
 
+def _navigation_targets(value: object) -> list[str]:
+    """Return documentation paths from flat or nested MkDocs navigation."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [target for item in value for target in _navigation_targets(item)]
+    if isinstance(value, dict):
+        return [target for item in value.values() for target in _navigation_targets(item)]
+    return []
+
+
 def test_cli_reference_lists_every_command() -> None:
     import typer.main
 
@@ -41,7 +52,7 @@ def test_every_navigation_target_exists() -> None:
     import yaml
 
     nav = yaml.safe_load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"))["nav"]
-    targets = [target for entry in nav for target in entry.values()]
+    targets = _navigation_targets(nav)
 
     assert targets
     assert [target for target in targets if not (ROOT / "docs" / target).is_file()] == []

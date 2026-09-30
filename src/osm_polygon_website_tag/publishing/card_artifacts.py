@@ -7,6 +7,7 @@ module remains focused on fresh builds and compatibility updates.
 from __future__ import annotations
 
 from collections.abc import Collection
+from dataclasses import dataclass
 from pathlib import Path
 
 from osm_polygon_website_tag.reporting.card import (
@@ -29,7 +30,7 @@ from osm_polygon_website_tag.reporting.card_patching import (
     update_sentence_section,
     update_website_text_section,
 )
-from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
+from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
@@ -62,35 +63,65 @@ def refresh_card_for_release(
     """
     root = Path(run_dir)
     readme = root / "README.md"
+    expected = _ExpectedCardIdentity(
+        readme_custom_sha256=expected_readme_custom_sha256,
+        dataset_custom_sha256=expected_dataset_custom_sha256,
+        readme_preserved_sha256=expected_readme_preserved_sha256,
+    )
     if not readme.is_file():
-        yaml_path = root / "dataset.yaml"
-        original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
-        bundle = render_card_bundle(
-            root,
-            source_names=source_names,
-            _yaml_source=original_yaml,
-        )
-        _validate_trusted_card_identity(
-            bundle.readme,
-            bundle.dataset_yaml,
-            expected_readme_custom_sha256=expected_readme_custom_sha256,
-            expected_dataset_custom_sha256=expected_dataset_custom_sha256,
-            expected_readme_preserved_sha256=expected_readme_preserved_sha256,
-        )
-        promote_release_card_artifacts(
-            root,
-            source_names=source_names,
-            summary=bundle.summary,
-            geometry=bundle.geometry,
-            readme=readme,
-            original_readme=None,
-            updated_readme=bundle.readme,
-            yaml_path=yaml_path,
-            original_yaml=original_yaml,
-            updated_yaml=bundle.dataset_yaml,
-        )
-        return readme
+        _render_fresh_release_card(root, readme, source_names=source_names, expected=expected)
+    else:
+        _patch_existing_release_card(root, readme, source_names=source_names, expected=expected)
+    return readme
 
+
+@dataclass(frozen=True)
+class _ExpectedCardIdentity:
+    """Optional trusted digests a refreshed card must still match."""
+
+    readme_custom_sha256: str | None
+    dataset_custom_sha256: str | None
+    readme_preserved_sha256: str | None
+
+
+def _render_fresh_release_card(
+    root: Path,
+    readme: Path,
+    *,
+    source_names: Collection[str] | None,
+    expected: _ExpectedCardIdentity,
+) -> None:
+    """Render, validate, and promote a card for a run that has no README yet."""
+    yaml_path = root / "dataset.yaml"
+    original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
+    bundle = render_card_bundle(
+        root,
+        source_names=source_names,
+        _yaml_source=original_yaml,
+    )
+    _validate_expected_card_identity(bundle.readme, bundle.dataset_yaml, expected)
+    promote_release_card_artifacts(
+        root,
+        source_names=source_names,
+        summary=bundle.summary,
+        geometry=bundle.geometry,
+        readme=readme,
+        original_readme=None,
+        updated_readme=bundle.readme,
+        yaml_path=yaml_path,
+        original_yaml=original_yaml,
+        updated_yaml=bundle.dataset_yaml,
+    )
+
+
+def _patch_existing_release_card(
+    root: Path,
+    readme: Path,
+    *,
+    source_names: Collection[str] | None,
+    expected: _ExpectedCardIdentity,
+) -> None:
+    """Recompute release statistics and patch the existing README and YAML."""
     text_population = compute_text_population_summary(root, source_names=source_names)
     summary = compute_polygon_density_summary(
         root,
@@ -109,30 +140,11 @@ def refresh_card_for_release(
         text_population=text_population,
     )
     original_readme = readme.read_bytes()
-    updated_readme = _update_readme_front_matter(original_readme, stats)
-    updated_readme = update_website_text_section(updated_readme, stats)
-    updated_readme = update_language_section(updated_readme, stats)
-    updated_readme = update_sentence_section(updated_readme, stats)
-    updated_readme = update_geographic_section(
-        update_geometry_section(updated_readme, geometry), stats
-    )
+    updated_readme = _patched_release_readme(original_readme, stats, geometry)
     yaml_path = root / "dataset.yaml"
     original_yaml = yaml_path.read_bytes() if yaml_path.is_file() else None
-    updated_yaml = (
-        _update_release_yaml(original_yaml, stats)
-        if original_yaml is not None
-        else _merge_yaml_custom_metadata(
-            _render_yaml_front_matter(stats).encode("utf-8"),
-            _readme_front_matter(original_readme),
-        )
-    )
-    _validate_trusted_card_identity(
-        updated_readme,
-        updated_yaml,
-        expected_readme_custom_sha256=expected_readme_custom_sha256,
-        expected_dataset_custom_sha256=expected_dataset_custom_sha256,
-        expected_readme_preserved_sha256=expected_readme_preserved_sha256,
-    )
+    updated_yaml = _updated_release_yaml(original_yaml, stats, original_readme)
+    _validate_expected_card_identity(updated_readme, updated_yaml, expected)
     promote_release_card_artifacts(
         root,
         source_names=source_names,
@@ -145,7 +157,42 @@ def refresh_card_for_release(
         original_yaml=original_yaml,
         updated_yaml=updated_yaml,
     )
-    return readme
+
+
+def _patched_release_readme(
+    original_readme: bytes, stats: CardStats, geometry: GeometryStats
+) -> bytes:
+    """Patch every derived README block while keeping other sections intact."""
+    updated_readme = _update_readme_front_matter(original_readme, stats)
+    updated_readme = update_website_text_section(updated_readme, stats)
+    updated_readme = update_language_section(updated_readme, stats)
+    updated_readme = update_sentence_section(updated_readme, stats)
+    return update_geographic_section(update_geometry_section(updated_readme, geometry), stats)
+
+
+def _updated_release_yaml(
+    original_yaml: bytes | None, stats: CardStats, original_readme: bytes
+) -> bytes:
+    """Patch the existing YAML, or derive it from the README's front matter."""
+    if original_yaml is not None:
+        return _update_release_yaml(original_yaml, stats)
+    return _merge_yaml_custom_metadata(
+        _render_yaml_front_matter(stats).encode("utf-8"),
+        _readme_front_matter(original_readme),
+    )
+
+
+def _validate_expected_card_identity(
+    readme: bytes, dataset_yaml: bytes, expected: _ExpectedCardIdentity
+) -> None:
+    """Validate rendered card bytes against the trusted expected digests."""
+    _validate_trusted_card_identity(
+        readme,
+        dataset_yaml,
+        expected_readme_custom_sha256=expected.readme_custom_sha256,
+        expected_dataset_custom_sha256=expected.dataset_custom_sha256,
+        expected_readme_preserved_sha256=expected.readme_preserved_sha256,
+    )
 
 
 def promote_release_card_artifacts(

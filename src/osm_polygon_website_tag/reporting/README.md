@@ -5,7 +5,8 @@ Builds and validates public-facing local artifacts.
 - Modules: `artifact_inventory`, `card`, `card_rendering`, `card_metadata`,
   `card_patching`, `card_stats`, `file_hashing`, `geometry_stats`, `geographic`,
   `repair`, `text_population`, `verify`, `verification` (`analysis`,
-  `language`, `receipt`, `rows`, `sentence`, `shards`, `text`), and `finalize`.
+  `language`, `receipt`, `rows`, `sentence`, `shard_scan`, `shards`, `text`), and
+  `finalize`.
 - Dependencies: `contracts`, `storage`, `pipeline`, and `runtime`.
 - `geographic` aggregates public centroids into H3 resolution-3 counts and
   atomically renders the logarithmic `assets/geographic_polygon_density.png`
@@ -50,7 +51,9 @@ Builds and validates public-facing local artifacts.
 - `verify` is the stable verification entry point; its internal section
   validators live under `verification/` and are not public API. They cover
   rows, shards, text, language pairs, sentence segmentation, analysis and card
-  output, and the completion receipt.
+  output, and the completion receipt. `shard_scan` holds the shared
+  read-schema/skip/wrap and bounded-batch scaffolding of the language and
+  sentence verifiers.
 - `geometry_stats` computes the deterministic polygon surface, shape, and
   extent statistics of every validated public row, streaming geometry decoding
   one record batch at a time. It also embeds the canonical global text

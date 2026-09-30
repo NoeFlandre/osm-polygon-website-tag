@@ -7,11 +7,14 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import text_verification_row as _row
 
 from osm_polygon_website_tag.reporting.verification.text import (
     verify_text_invariants,
     verify_text_paths,
 )
+
+URL = "https://example.org"
 
 TEXT_SCHEMA = pa.schema(
     [
@@ -25,27 +28,6 @@ TEXT_SCHEMA = pa.schema(
         pa.field("contact_website_text_status", pa.string()),
     ]
 )
-
-URL = "https://example.org"
-
-
-def _row(
-    *,
-    website: str | None = URL,
-    text: str | None = "one two",
-    word_count: int | None = 2,
-    status: str | None = "success",
-) -> dict[str, object]:
-    return {
-        "website": website,
-        "website_text": text,
-        "website_word_count": word_count,
-        "website_text_status": status,
-        "contact_website": None,
-        "contact_website_text": None,
-        "contact_website_word_count": None,
-        "contact_website_text_status": "absent",
-    }
 
 
 def _shard(path: Path, rows: list[dict[str, object]]) -> Path:

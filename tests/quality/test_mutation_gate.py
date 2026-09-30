@@ -200,11 +200,19 @@ def test_fail_on_growth_keeps_the_original_baseline(
     assert baseline.read_text(encoding="utf-8") == original
 
 
-def test_baseline_generation_defaults_to_the_repository_file() -> None:
+def test_baseline_generation_defaults_to_the_repository_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from scripts.quality import mutation_baseline
 
-    parser_default = mutation_baseline.main.__doc__
-    assert parser_default
+    monkeypatch.chdir(tmp_path)
+    results = tmp_path / "results.txt"
+    results.write_text("    module.x_f__mutmut_1: survived\n", encoding="utf-8")
+
+    assert mutation_baseline.main(["--results", str(results)]) == 0
+
+    baseline = tmp_path / "docs" / "quality" / "mutation-baseline.txt"
+    assert mutation_gate.read_baseline(baseline) == {"module.x_f__mutmut_1"}
     assert mutation_baseline.render([]).endswith("\n")
     assert "# Recorded mutants: 0" in mutation_baseline.render([])
 

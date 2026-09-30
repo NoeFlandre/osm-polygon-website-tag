@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import sentence_verification_row as _row
 
 from osm_polygon_website_tag.reporting.verification import sentence as sentence_module
 from osm_polygon_website_tag.reporting.verification.sentence import verify_sentence_invariants
@@ -28,23 +30,6 @@ _SCHEMA = pa.schema(
         pa.field("contact_website_sentence_status", pa.string()),
     ]
 )
-
-
-def _row(**overrides: Any) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "website_text_status": "success",
-        "website_language": "eng_Latn",
-        "website_sentences": ["One. ", "Two."],
-        "website_sentence_count": 2,
-        "website_sentence_status": "success",
-        "contact_website_text_status": "absent",
-        "contact_website_language": None,
-        "contact_website_sentences": None,
-        "contact_website_sentence_count": None,
-        "contact_website_sentence_status": "absent",
-    }
-    row.update(overrides)
-    return row
 
 
 def _write(tmp_path: Path, rows: list[dict[str, Any]], *, schema: pa.Schema = _SCHEMA) -> Path:
@@ -242,6 +227,24 @@ def test_every_row_of_a_large_shard_is_verified(tmp_path: Path) -> None:
     ]
 
 
+def test_contact_sentence_errors_keep_the_absolute_row_after_a_batch_boundary(
+    tmp_path: Path,
+) -> None:
+    rows = [_row() for _ in range(sentence_module._SENTENCE_BATCH_ROWS + 1)]
+    rows[-1] = _row(
+        contact_website_text_status="success",
+        contact_website_language="fra_Latn",
+        contact_website_sentences=None,
+        contact_website_sentence_count=None,
+        contact_website_sentence_status="success",
+    )
+    path = _write(tmp_path, rows)
+
+    assert _verify(tmp_path) == [
+        f"{path} row {sentence_module._SENTENCE_BATCH_ROWS} contact_website sentences are missing"
+    ]
+
+
 def _field(**overrides: Any) -> list[str]:
     """Verify one website field directly and return the errors it produced."""
     errors: list[str] = []
@@ -415,6 +418,24 @@ def test_shard_verification_reads_bounded_batches(
     assert sizes == [sentence_module._SENTENCE_BATCH_ROWS, 1]
 
 
+def test_shard_verification_projects_only_sentence_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projections: list[list[str] | None] = []
+
+    def capture_projection(
+        _path: Path, columns: list[str] | None, _batch_rows: int
+    ) -> Iterator[tuple[int, pa.RecordBatch]]:
+        projections.append(columns)
+        return iter(())
+
+    monkeypatch.setattr(sentence_module, "iter_bounded_batches", capture_projection)
+
+    sentence_module._verify_sentence_shard(Path("source.parquet"), [])
+
+    assert projections == [list(sentence_module._SENTENCE_COLUMNS)]
+
+
 def test_sentence_columns_match_the_published_contract() -> None:
     assert sentence_module._SENTENCE_COLUMNS == (
         "website_text_status",
@@ -428,5 +449,4 @@ def test_sentence_columns_match_the_published_contract() -> None:
         "contact_website_sentence_count",
         "contact_website_sentence_status",
     )
-    assert sentence_module._FIELDS_PER_PREFIX == 5
     assert sentence_module._SENTENCE_BATCH_ROWS == 512
