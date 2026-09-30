@@ -52,20 +52,24 @@ def _coverage_functions(coverage: dict[str, Any]) -> dict[str, dict[int, float]]
     for raw_path, file_data in coverage.get("files", {}).items():
         if "functions" not in file_data:
             continue
-        functions = file_data["functions"]
-        entries: dict[int, float] = {}
-        for function_data in functions.values():
-            start_line = function_data.get("start_line")
-            summary = function_data.get("summary", {})
-            if isinstance(start_line, int) and isinstance(
-                summary.get("percent_covered"), (int, float)
-            ):
-                entries[start_line] = float(summary["percent_covered"])
+        entries = _function_coverage_entries(file_data["functions"])
         raw = Path(raw_path)
         candidates = {_path_key(raw), _path_key(Path.cwd() / raw)}
         for candidate in candidates:
             indexed[candidate] = entries
     return indexed
+
+
+def _function_coverage_entries(functions: dict[str, Any]) -> dict[int, float]:
+    """Index usable function summaries from one Coverage JSON file record."""
+    entries: dict[int, float] = {}
+    for function_data in functions.values():
+        start_line = function_data.get("start_line")
+        summary = function_data.get("summary", {})
+        covered = summary.get("percent_covered")
+        if isinstance(start_line, int) and isinstance(covered, (int, float)):
+            entries[start_line] = float(covered)
+    return entries
 
 
 def _blocks(blocks: Iterable[Any]) -> Iterable[Any]:
@@ -94,18 +98,22 @@ def _walk(blocks: Iterable[Any]) -> Iterable[Any]:
         yield from _walk(getattr(block, "closures", ()))
 
 
-def _expand_paths(paths: Sequence[Path]) -> list[Path]:
-    """Expand directory inputs into deterministic Python source paths."""
-    expanded: list[Path] = []
-    seen: set[Path] = set()
+def _path_candidates(paths: Sequence[Path]) -> Iterable[Path]:
+    """Yield source files from each input in stable directory order."""
     for path in paths:
         candidates = sorted(path.rglob("*.py")) if path.is_dir() else [path]
-        for candidate in candidates:
-            if not candidate.is_file():
-                continue
-            resolved = candidate.resolve()
-            if resolved in seen:
-                continue
+        yield from candidates
+
+
+def _expand_paths(paths: Sequence[Path]) -> list[Path]:
+    """Expand directory inputs into deterministic, existing Python paths."""
+    expanded: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in _path_candidates(paths):
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        if resolved not in seen:
             seen.add(resolved)
             expanded.append(candidate)
     return expanded
@@ -169,6 +177,22 @@ def _render(scores: Sequence[FunctionScore]) -> str:
     return "\n".join(lines)
 
 
+def _report_scores(scores: Sequence[FunctionScore], max_crap: float) -> int:
+    """Print scores and enforce the exclusive CRAP threshold."""
+    if not scores:
+        print("unable to build CRAP report: no functions found", file=sys.stderr)
+        return 2
+    print(_render(scores))
+    failures = [score for score in scores if score.crap >= max_crap]
+    if failures:
+        print(
+            f"{len(failures)} function(s) are at or above the CRAP threshold {max_crap:.2f}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the report and return a process exit code."""
     args = _parser().parse_args(argv)
@@ -178,19 +202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:  # CoverageJoinError too
         print(f"unable to build CRAP report: {exc}", file=sys.stderr)
         return 2
-    if not scores:
-        print("unable to build CRAP report: no functions found", file=sys.stderr)
-        return 2
-
-    print(_render(scores))
-    failures = [score for score in scores if score.crap >= args.max_crap]
-    if failures:
-        print(
-            f"{len(failures)} function(s) are at or above the CRAP threshold {args.max_crap:.2f}",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    return _report_scores(scores, args.max_crap)
 
 
 if __name__ == "__main__":

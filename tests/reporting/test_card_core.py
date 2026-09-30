@@ -22,6 +22,8 @@ import osm_polygon_website_tag.reporting.card_stats as card_stats_module
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
 )
+from osm_polygon_website_tag.reporting import geometry_stats
+from osm_polygon_website_tag.reporting.artifact_inventory import source_scoped_parquet_paths
 from osm_polygon_website_tag.reporting.card import (
     build_card,
 )
@@ -49,8 +51,8 @@ def test_card_stats_private_arrow_helpers_count_invalid_values_and_select_source
     second = directory / "b.parquet"
     pq.write_table(pa.table({"value": [1]}), first)
     pq.write_table(pa.table({"value": [2]}), second)
-    assert card_stats_module._selected_parquets(directory, None) == [first, second]
-    assert card_stats_module._selected_parquets(directory, {"b.osm.pbf"}) == [second]
+    assert source_scoped_parquet_paths(directory, None) == [first, second]
+    assert source_scoped_parquet_paths(directory, {"b.osm.pbf"}) == [second]
 
 
 def test_card_stats_uses_arrow_columns_without_row_dicts(
@@ -405,7 +407,7 @@ def test_build_card_forwards_custom_yaml_source_to_bundle_renderer(
 
     monkeypatch.setattr(card_module, "render_card_bundle", render_bundle)
     monkeypatch.setattr(card_module, "build_polygon_density_map", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(card_module, "_staged_geometry_stats", lambda *_args: [])
+    monkeypatch.setattr(card_module, "stage_geometry_stats", lambda *_args: [])
     monkeypatch.setattr(card_module, "atomic_promote_bundle", lambda _promotions: None)
 
     card_module.build_card(tmp_path, _yaml_source=b"custom")
@@ -525,7 +527,7 @@ def test_build_card_preserves_collaborator_and_staging_contracts(  # noqa: C901,
     monkeypatch.setattr(card_module, "compute_polygon_density_summary", fake_summary)
     monkeypatch.setattr(card_module, "compute_card_stats", fake_stats)
     monkeypatch.setattr(card_module, "compute_geometry_stats", fake_geometry_stats)
-    monkeypatch.setattr(card_module, "render_geometry_stats", fake_render_geometry)
+    monkeypatch.setattr(geometry_stats, "render_geometry_stats", fake_render_geometry)
     monkeypatch.setattr(card_module, "build_polygon_density_map", fake_map)
     monkeypatch.setattr(card_module, "render_markdown", fakerender_markdown)
     monkeypatch.setattr(card_module, "_render_yaml_front_matter", fake_render_yaml)

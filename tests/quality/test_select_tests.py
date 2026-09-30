@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+from scripts.quality import select_tests
 from scripts.quality.select_tests import (
     ALWAYS,
     BROAD_SENTINEL,
@@ -103,3 +106,43 @@ def test_selection_is_sorted_and_deduplicated() -> None:
     )
 
     assert selected == sorted(set(selected))
+
+
+def test_git_diff_filters_empty_names_and_preserves_diff_arguments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        seen["command"] = command
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="a.py\n\n b.py \n")
+
+    monkeypatch.setattr(select_tests.subprocess, "run", fake_run)
+
+    assert select_tests._git_diff("main...HEAD", cwd=tmp_path) == {"a.py", "b.py"}
+    assert seen["command"] == ["git", "diff", "--name-only", "main...HEAD"]
+    assert seen["cwd"] == tmp_path
+    assert seen["check"] is True
+
+
+def test_changed_paths_unions_branch_and_worktree_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def fake_diff(*revisions: str, cwd: Path | None = None) -> set[str]:
+        del cwd
+        calls.append(" ".join(revisions))
+        return {"branch.py"} if len(calls) == 1 else {"working.py", "branch.py"}
+
+    monkeypatch.setattr(select_tests, "_git_diff", fake_diff)
+
+    assert select_tests.changed_paths("main") == ["branch.py", "working.py"]
+    assert calls == ["main...HEAD", "HEAD"]
+
+
+def test_cli_prints_selected_paths(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    monkeypatch.setattr(select_tests, "changed_paths", lambda base: [base])
+    monkeypatch.setattr(select_tests, "select", lambda paths: paths)
+
+    assert select_tests.main(["--base", "feature"]) == 0
+    assert capsys.readouterr().out == "feature\n"

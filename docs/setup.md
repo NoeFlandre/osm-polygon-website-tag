@@ -189,7 +189,7 @@ tier runs.
 | --- | --- | --- | --- |
 | 1 | `git commit` | Ruff lint and format on the commit, `ty`, and `just focused` — only the tests the diff can plausibly break | seconds |
 | 2 | `git push` | `just qa-push`: Ruff, `ty`, and the same bounded selection | under a minute |
-| 3 | pull request | `just qa-pr`: lock baseline, Ruff, `ty`, one instrumented run of the whole suite, CRAP (max 6); beside it the container smoke test and one mutation shard per changed function | minutes |
+| 3 | pull request | `just qa-pr`: lock baseline, Ruff, `ty`, one instrumented run of the whole suite (package and quality scripts), CRAP strictly below 6; beside it the container smoke test and one mutation shard per changed function | minutes |
 | 4 | merge / release | `just qa-merge` locally, and `just release-verify <run-dir>` before publishing | minutes |
 | 5 | nightly 03:00 UTC or manual | the exhaustive mutation sweep, sharded per package area | hours |
 

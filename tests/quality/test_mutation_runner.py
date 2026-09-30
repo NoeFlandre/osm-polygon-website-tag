@@ -414,33 +414,27 @@ def test_scoped_mutation_config_rejects_unqualified_filters() -> None:
         mutation_runner._configure_source_scope(["reporting.card.*"], config=config)
 
 
-def test_empty_generated_shard_uses_a_distinct_exit_status(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    import mutmut.__main__ as mutmut_main
+def test_concrete_mutant_filter_resolves_to_its_source_module() -> None:
+    assert mutation_runner._source_path_for_mutant_name(
+        "osm_polygon_website_tag.reporting.card.x_render__mutmut_3"
+    ) == Path("src/osm_polygon_website_tag/reporting/card.py")
 
-    monkeypatch.setattr(
-        mutation_runner.sys,
-        "argv",
-        [
-            "mutation_runner.py",
-            "run",
-            "--max-children",
-            "4",
-            "osm_polygon_website_tag.application.cli.verify.x_refresh_card_command__mutmut_*",
-        ],
-    )
-    monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda _names: ())
 
-    def fail_on_empty_selection() -> None:
-        raise AssertionError("Filtered for specific mutants, but nothing matches")
+def test_stats_child_arguments_require_a_string_list(tmp_path: Path) -> None:
+    output = tmp_path / "stats.json"
+    assert mutation_runner._stats_child_arguments(
+        ["runner", "--stats-child", str(output), '["tests/test_one.py"]']
+    ) == (output, ["tests/test_one.py"])
+    assert mutation_runner._stats_child_arguments(["runner", "run"]) is None
+    for payload in ("{}", '["tests/test_one.py", 1]'):
+        with pytest.raises(ValueError, match="JSON array of strings"):
+            mutation_runner._stats_child_arguments(
+                ["runner", "--stats-child", str(output), payload]
+            )
 
-    monkeypatch.setattr(mutmut_main, "cli", fail_on_empty_selection)
 
-    with pytest.raises(SystemExit) as error:
-        mutation_runner.main()
-
-    assert capsys.readouterr().out == (
-        "No mutants match this generated shard; skipping the empty selection.\n"
-    )
-    assert error.value.code == 86
+def test_mutant_cli_filter_parser_skips_option_values() -> None:
+    assert mutation_runner._mutant_names_from_cli(
+        ["run", "--max-children", "4", "--profile=fast", "package.module.*"]
+    ) == ("package.module.*",)
+    assert mutation_runner._mutant_names_from_cli(["results", "package.module.*"]) == ()

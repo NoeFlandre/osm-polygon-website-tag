@@ -37,6 +37,41 @@ def render(names: Sequence[str]) -> str:
     return "\n".join([*HEADER, f"# Recorded mutants: {len(unique)}", "", *unique]) + "\n"
 
 
+def _write_baseline(target: Path, names: Sequence[str]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render(names), encoding="utf-8")
+    print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
+
+
+def _report_growth(
+    *,
+    fail_on_growth: bool,
+    grown: Sequence[str],
+    baseline: Path,
+    output: Path | None,
+    target: Path,
+    names: Sequence[str],
+) -> bool:
+    if not fail_on_growth or not grown:
+        return False
+    _print_growth(grown, baseline)
+    _write_candidate(output, baseline, target, names)
+    return True
+
+
+def _print_growth(grown: Sequence[str], baseline: Path) -> None:
+    print(f"the sweep found {len(grown)} survivor(s) outside {baseline}:", file=sys.stderr)
+    for name in grown:
+        print(f"  {name}", file=sys.stderr)
+
+
+def _write_candidate(
+    output: Path | None, baseline: Path, target: Path, names: Sequence[str]
+) -> None:
+    if output is not None and output.resolve() != baseline.resolve():
+        _write_baseline(target, names)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Rewrite the baseline file from a results listing."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -55,18 +90,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     names = unverified_mutants(lines)
     target = args.output or args.baseline
     grown = sorted(set(names) - read_baseline(args.baseline))
-    if args.fail_on_growth and grown:
-        print(f"the sweep found {len(grown)} survivor(s) outside {args.baseline}:", file=sys.stderr)
-        for name in grown:
-            print(f"  {name}", file=sys.stderr)
-        if args.output is not None and args.output.resolve() != args.baseline.resolve():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(render(names), encoding="utf-8")
-            print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
+    if _report_growth(
+        fail_on_growth=args.fail_on_growth,
+        grown=grown,
+        baseline=args.baseline,
+        output=args.output,
+        target=target,
+        names=names,
+    ):
         return 1
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render(names), encoding="utf-8")
-    print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
+    _write_baseline(target, names)
     return 0
 
 

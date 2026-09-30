@@ -86,10 +86,13 @@ def _verify_results(
         _verify_text_invariants(root, status, errors)
         _verify_language_invariants(root, errors)
     _verify_sentence_invariants(root, errors)
-    if preserve_card_sections:
-        _verify_release_status_artifacts(root, status, include_receipt, errors)
-    else:
-        _verify_status_artifacts(root, status, include_receipt, errors)
+    _verify_status_artifacts(
+        root,
+        status,
+        include_receipt,
+        errors,
+        preserve_card_sections=preserve_card_sections,
+    )
     return VerificationReport(not errors, errors, checked)
 
 
@@ -109,22 +112,14 @@ def _verify_status_artifacts(
     status: object,
     include_receipt: bool,
     errors: list[str],
+    *,
+    preserve_card_sections: bool = False,
 ) -> None:
     if status in {"card_built", "verified", "complete"}:
-        _verify_analysis_and_card(root, errors)
-    if status == "complete" and include_receipt:
-        _verify_receipt(root, errors)
-
-
-def _verify_release_status_artifacts(
-    root: Path,
-    status: object,
-    include_receipt: bool,
-    errors: list[str],
-) -> None:
-    """Use release card compatibility checks without changing strict defaults."""
-    if status in {"card_built", "verified", "complete"}:
-        _verify_release_analysis_and_card(root, errors)
+        if preserve_card_sections:
+            _verify_release_analysis_and_card(root, errors)
+        else:
+            _verify_analysis_and_card(root, errors)
     if status == "complete" and include_receipt:
         _verify_receipt(root, errors)
 

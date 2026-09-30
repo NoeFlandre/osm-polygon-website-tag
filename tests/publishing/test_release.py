@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from tests.publishing.receipt_helpers import recording_receipt_reads
 from tests.reporting.test_finalize import _setup
 
 import osm_polygon_website_tag.publishing.release as release_module
@@ -25,7 +26,6 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
 )
 from osm_polygon_website_tag.reporting.finalize import (
     _write_completion_receipt,
-    finalize_run,
     replace_receipt_atomic,
 )
 from osm_polygon_website_tag.reporting.verify import verify_results
@@ -40,13 +40,6 @@ class _RecordingUploader:
 
     def __call__(self, run_dir: Path, **kwargs: Any) -> None:
         self.calls.append({"run_dir": run_dir, **kwargs})
-
-
-@pytest.fixture
-def run_dir(tmp_path: Path) -> Path:
-    root, _state = _setup(tmp_path)
-    assert finalize_run(root).ok
-    return root
 
 
 def test_dry_run_plans_exactly_the_card_and_report(run_dir: Path) -> None:
@@ -1400,31 +1393,13 @@ def test_recoverable_card_identities_accept_an_existing_readme(tmp_path: Path) -
     release_module._require_recoverable_card_identities(tmp_path, missing)
 
 
-def _recording_receipt_reads(
-    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
-) -> list[tuple[str, dict[str, object]]]:
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def read(_path: Path, **kwargs: object) -> dict[str, object]:
-        calls.append(("read", kwargs))
-        return payload
-
-    def identity(_payload: dict[str, object], **kwargs: object) -> str:
-        calls.append(("identity", kwargs))
-        return "id"
-
-    monkeypatch.setattr(release_module, "_read_receipt_payload", read)
-    monkeypatch.setattr(release_module, "_receipt_data_identity", identity)
-    return calls
-
-
 _LOCAL_RECEIPT = {"error_type": ValueError, "label": "release completion receipt"}
 
 
 def test_card_refresh_identities_read_the_local_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = _recording_receipt_reads(monkeypatch, {"readme_yaml_custom_sha256": "r"})
+    calls = recording_receipt_reads(monkeypatch, release_module, {"readme_yaml_custom_sha256": "r"})
     monkeypatch.setattr(release_module, "_completion_receipt_path", lambda root: root / "r.json")
     monkeypatch.setattr(release_module, "_require_recoverable_card_identities", lambda *_a: None)
 
@@ -1438,7 +1413,7 @@ def test_card_refresh_identities_read_the_local_receipt(
 def test_completion_data_identity_labels_both_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = _recording_receipt_reads(monkeypatch, {})
+    calls = recording_receipt_reads(monkeypatch, release_module, {})
 
     assert release_module._completion_data_identity(tmp_path / "r.json") == "id"
     assert calls == [("read", _LOCAL_RECEIPT), ("identity", _LOCAL_RECEIPT)]

@@ -113,13 +113,13 @@ COVERAGE_JSON := env("COVERAGE_JSON", "/tmp/osm-polygon-website-tag-coverage.jso
 # the serial suite spent most of its eighteen minutes waiting on I/O.
 # Tier 3/4: the single source of test and coverage truth.
 coverage:
-    uv run --locked pytest -n auto --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
+    uv run --locked pytest -n auto --cov=osm_polygon_website_tag --cov=scripts.quality --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
 
 # Depends on nothing so CI never runs the suite twice; run `just coverage`
 # first, or use `just qa-pr`, which sequences them.
 # Tier 3/4: CRAP gate over the existing coverage artifact.
 crap:
-    uv run --locked python scripts/quality/crap_report.py --coverage-json "{{ COVERAGE_JSON }}" --path src/osm_polygon_website_tag --max-crap 6
+    uv run --locked python scripts/quality/crap_report.py --coverage-json "{{ COVERAGE_JSON }}" --path src/osm_polygon_website_tag --path scripts --max-crap 6
 
 # Every mutant reruns the tests that cover it, so the mutation recipes give
 # property tests a short, derandomized budget (see tests/conftest.py).

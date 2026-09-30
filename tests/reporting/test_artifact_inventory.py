@@ -9,7 +9,11 @@ from pathlib import Path
 import pytest
 
 from osm_polygon_website_tag.reporting import artifact_inventory
-from osm_polygon_website_tag.reporting.artifact_inventory import hash_file, publishable_paths
+from osm_polygon_website_tag.reporting.artifact_inventory import (
+    hash_file,
+    publishable_paths,
+    source_scoped_parquet_paths,
+)
 
 
 def test_publishable_paths_are_deterministic_and_exclude_operational_files(
@@ -52,6 +56,23 @@ def test_publishable_paths_are_deterministic_and_exclude_operational_files(
         "rejections/a.parquet",
         "stats.json",
     )
+
+
+def test_source_scoped_parquet_paths_are_sorted_and_filter_pbf_names(tmp_path: Path) -> None:
+    directory = tmp_path / "polygons"
+    directory.mkdir()
+    for name in ("zeta.parquet", "alpha.parquet", "other.txt", "beta.parquet"):
+        (directory / name).write_bytes(b"fixture")
+
+    assert source_scoped_parquet_paths(directory, None) == [
+        directory / "alpha.parquet",
+        directory / "beta.parquet",
+        directory / "zeta.parquet",
+    ]
+    assert source_scoped_parquet_paths(directory, {"zeta.osm.pbf", "alpha.osm.pbf"}) == [
+        directory / "alpha.parquet",
+        directory / "zeta.parquet",
+    ]
 
 
 def test_hash_file_matches_sha256(tmp_path: Path) -> None:

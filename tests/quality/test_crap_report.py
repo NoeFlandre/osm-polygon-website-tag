@@ -7,6 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from radon.complexity import cc_visit
+from scripts.quality import crap_report
+
 REPORT = Path(__file__).parents[2] / "scripts" / "quality" / "crap_report.py"
 TARGET = Path(__file__).parents[2] / "src" / "osm_polygon_website_tag" / "domain" / "tags.py"
 
@@ -31,15 +35,6 @@ def _coverage_file(tmp_path: Path, percent: float) -> Path:
     return path
 
 
-def _run_report(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(REPORT), "--path", str(TARGET), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-
 def _run_report_for(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(REPORT), "--path", str(path), *args],
@@ -50,7 +45,8 @@ def _run_report_for(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_crap_report_passes_a_well_covered_function(tmp_path: Path) -> None:
-    result = _run_report(
+    result = _run_report_for(
+        TARGET,
         "--coverage-json",
         str(_coverage_file(tmp_path, 100.0)),
         "--max-crap",
@@ -63,14 +59,15 @@ def test_crap_report_passes_a_well_covered_function(tmp_path: Path) -> None:
 
 
 def test_crap_report_defaults_to_a_strict_six_threshold(tmp_path: Path) -> None:
-    result = _run_report("--coverage-json", str(_coverage_file(tmp_path, 0.0)))
+    result = _run_report_for(TARGET, "--coverage-json", str(_coverage_file(tmp_path, 0.0)))
 
     assert result.returncode == 1
     assert "6.00" in result.stderr
 
 
 def test_crap_report_fails_when_threshold_is_reached(tmp_path: Path) -> None:
-    result = _run_report(
+    result = _run_report_for(
+        TARGET,
         "--coverage-json",
         str(_coverage_file(tmp_path, 0.0)),
         "--max-crap",
@@ -82,8 +79,80 @@ def test_crap_report_fails_when_threshold_is_reached(tmp_path: Path) -> None:
     assert "at or above" in result.stderr
 
 
+def test_crap_report_main_scores_functions_in_process(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = crap_report.main(
+        [
+            "--coverage-json",
+            str(_coverage_file(tmp_path, 100.0)),
+            "--path",
+            str(TARGET),
+            "--path",
+            str(TARGET),
+        ]
+    )
+
+    assert result == 0
+    assert "normalize_value" in capsys.readouterr().out
+
+
+def test_crap_report_main_covers_failure_and_empty_report_paths(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    failed = crap_report.main(
+        [
+            "--coverage-json",
+            str(_coverage_file(tmp_path, 0.0)),
+            "--path",
+            str(TARGET),
+        ]
+    )
+    assert failed == 1
+    assert "at or above" in capsys.readouterr().err
+
+    empty_module = tmp_path / "empty.py"
+    empty_module.write_text("value = 1\n", encoding="utf-8")
+    empty_coverage = tmp_path / "empty-coverage.json"
+    empty_coverage.write_text(
+        json.dumps({"files": {str(empty_module): {"functions": {}}}}), encoding="utf-8"
+    )
+    no_functions = crap_report.main(
+        ["--coverage-json", str(empty_coverage), "--path", str(empty_module)]
+    )
+    assert no_functions == 2
+    assert "no functions found" in capsys.readouterr().err
+
+
+def test_crap_report_main_covers_missing_coverage_and_block_walk(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing_coverage = tmp_path / "missing.json"
+    missing_coverage.write_text(json.dumps({"files": {}}), encoding="utf-8")
+    missing = crap_report.main(["--coverage-json", str(missing_coverage), "--path", str(TARGET)])
+    assert missing == 2
+    assert "missing from the coverage report" in capsys.readouterr().err
+
+    blocks = crap_report._blocks(
+        cc_visit(
+            "def outer(flag):\n"
+            "    def inner():\n"
+            "        return flag\n"
+            "    return inner()\n"
+            "class Example:\n"
+            "    def method(self, value):\n"
+            "        return value\n"
+        )
+    )
+    assert [block.name for block in blocks] == ["outer", "inner", "method"]
+    assert crap_report._coverage_functions({"files": {"unused.py": {}}}) == {}
+    assert crap_report._expand_paths([TARGET, TARGET]) == [TARGET]
+    assert crap_report._expand_paths([tmp_path / "missing.py"]) == []
+
+
 def test_crap_report_treats_threshold_as_an_exclusive_upper_bound(tmp_path: Path) -> None:
-    result = _run_report(
+    result = _run_report_for(
+        TARGET,
         "--coverage-json",
         str(_coverage_file(tmp_path, 0.0)),
         "--max-crap",

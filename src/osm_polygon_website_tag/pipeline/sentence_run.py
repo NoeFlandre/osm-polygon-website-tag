@@ -18,6 +18,11 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
     SentenceSegmentationResult,
     segment_sentence_shard,
 )
+from osm_polygon_website_tag.pipeline.time_budget import (
+    budget_exhausted,
+    seconds_remaining,
+    start_deadline,
+)
 
 
 class _Segmenter(Protocol):
@@ -51,12 +56,12 @@ def run_sentence_shards(
     segment: _Segmenter = segment_sentence_shard,
 ) -> SentenceRunProgress:
     """Segment sorted shards until complete or the shared budget expires."""
-    deadline = _deadline(time_budget_seconds, clock)
+    deadline = start_deadline(time_budget_seconds, clock)
     changed_shards = 0
     processed_rows = 0
     for shard in shards:
-        remaining = _remaining(deadline, clock)
-        if _exhausted(remaining):
+        remaining = seconds_remaining(deadline, clock)
+        if budget_exhausted(remaining):
             return SentenceRunProgress(changed_shards, processed_rows, completed=False)
         result = segment(
             shard, splitter=splitter, batch_rows=batch_rows, time_budget_seconds=remaining
@@ -67,27 +72,6 @@ def run_sentence_shards(
         record(shard, result)
         changed_shards += int(result.changed)
     return SentenceRunProgress(changed_shards, processed_rows, completed=True)
-
-
-def _deadline(time_budget_seconds: float | None, clock: Callable[[], float]) -> float | None:
-    """Start one shared monotonic clock only for bounded runs."""
-    if time_budget_seconds is None:
-        return None
-    return clock() + time_budget_seconds
-
-
-def _remaining(deadline: float | None, clock: Callable[[], float]) -> float | None:
-    """Return the budget left for the next shard."""
-    if deadline is None:
-        return None
-    return deadline - clock()
-
-
-def _exhausted(remaining: float | None) -> bool:
-    """Return whether no time remains for another shard."""
-    if remaining is None:
-        return False
-    return remaining <= 0
 
 
 __all__ = ["SentenceRunProgress", "run_sentence_shards"]

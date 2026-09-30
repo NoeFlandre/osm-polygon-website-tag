@@ -10,6 +10,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+from osm_polygon_website_tag.reporting.artifact_inventory import source_scoped_parquet_paths
 from osm_polygon_website_tag.reporting.text_population import (
     iter_canonical_text_coordinates,
 )
@@ -35,11 +36,7 @@ def sorted_public_polygon_parquets(
     returned. This keeps progress cards and maps aligned with the uploaded
     remote snapshot instead of every local extraction artifact.
     """
-    paths = sorted((Path(run_dir) / "polygons").glob("*.parquet"))
-    if source_names is None:
-        return paths
-    stems = {name.removesuffix(".osm.pbf") for name in source_names}
-    return [path for path in paths if path.stem in stems]
+    return source_scoped_parquet_paths(Path(run_dir) / "polygons", source_names)
 
 
 def iter_lat_lon_runs(
@@ -284,17 +281,5 @@ def _text_polygon_parquets(
         except OSError:
             regional_polygons = None
         if regional_polygons is not None and regional_polygons.is_dir():
-            return _select_polygon_parquets(regional_polygons, source_names)
+            return source_scoped_parquet_paths(regional_polygons, source_names)
     return sorted_public_polygon_parquets(root, source_names=source_names)
-
-
-def _select_polygon_parquets(
-    directory: Path,
-    source_names: Collection[str] | None,
-) -> list[Path]:
-    """Select deterministic polygon paths from an arbitrary polygon directory."""
-    paths = sorted(directory.glob("*.parquet"))
-    if source_names is None:
-        return paths
-    stems = {name.removesuffix(".osm.pbf") for name in source_names}
-    return [path for path in paths if path.stem in stems]

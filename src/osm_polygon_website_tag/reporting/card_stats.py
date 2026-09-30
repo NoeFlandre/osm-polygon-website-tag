@@ -32,6 +32,7 @@ from osm_polygon_website_tag.contracts.sentence_schema import (
     SENTENCE_UNSUPPORTED_LANGUAGE,
 )
 from osm_polygon_website_tag.contracts.text_schema import status_has_retryable_value
+from osm_polygon_website_tag.reporting.artifact_inventory import source_scoped_parquet_paths
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
@@ -175,7 +176,7 @@ def _artifact_paths(
         if not directory.exists():
             raise FileNotFoundError(f"missing {directory}")
     public, observations, rejections = (
-        _selected_parquets(directory, source_names) for directory in directories
+        source_scoped_parquet_paths(directory, source_names) for directory in directories
     )
     return public, observations, rejections, run_dir / "analysis"
 
@@ -295,7 +296,7 @@ def _regional_public_shards(
         return list(public_shards)
     if not regional_public_dir.is_dir():
         return list(public_shards)
-    return _selected_parquets(regional_public_dir, source_names)
+    return source_scoped_parquet_paths(regional_public_dir, source_names)
 
 
 def _text_polygon_ids(batch: Any) -> set[tuple[str, int]]:
@@ -473,14 +474,6 @@ def _read_snapshot_status(run_dir: Path) -> str | None:
     return (
         "done" if isinstance(metadata, dict) and metadata.get("snapshot_status") == "done" else None
     )
-
-
-def _selected_parquets(directory: Path, source_names: Collection[str] | None) -> list[Path]:
-    paths = sorted(directory.glob("*.parquet"))
-    if source_names is None:
-        return paths
-    stems = {name.removesuffix(".osm.pbf") for name in source_names}
-    return [path for path in paths if path.stem in stems]
 
 
 def _count_parquets(paths: Iterable[Path]) -> int:

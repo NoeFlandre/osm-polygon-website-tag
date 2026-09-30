@@ -603,18 +603,17 @@ def _maybe_publish_enriched_shard(
 
 
 def _run_needs_enrichment(run_dir: Path) -> bool:
-    for shard in sorted((run_dir / "polygons").glob("*.parquet")):
-        if _shard_needs_enrichment(shard):
-            return True
-    return False
+    return _run_has_shard_needing(run_dir, _shard_needs_enrichment)
 
 
 def _run_needs_language_detection(run_dir: Path) -> bool:
     """Return whether any public shard lacks a complete language result."""
-    for shard in sorted((run_dir / "polygons").glob("*.parquet")):
-        if shard_needs_language_detection(shard):
-            return True
-    return False
+    return _run_has_shard_needing(run_dir, shard_needs_language_detection)
+
+
+def _run_has_shard_needing(run_dir: Path, predicate: Callable[[Path], bool]) -> bool:
+    """Apply a stage-specific completeness rule across the sorted public shards."""
+    return any(predicate(shard) for shard in sorted((run_dir / "polygons").glob("*.parquet")))
 
 
 def _shard_needs_enrichment(shard: Path) -> bool:

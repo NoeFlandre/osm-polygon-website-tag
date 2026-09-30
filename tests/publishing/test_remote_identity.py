@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from tests.reporting.test_finalize import _setup
+from tests.publishing.receipt_helpers import recording_receipt_reads
 
 import osm_polygon_website_tag.publishing.remote_identity as remote_identity
 from osm_polygon_website_tag.publishing.release import (
@@ -21,36 +21,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.finalize import (
-    finalize_run,
-)
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
-
-
-@pytest.fixture
-def run_dir(tmp_path: Path) -> Path:
-    root, _state = _setup(tmp_path)
-    assert finalize_run(root).ok
-    return root
-
-
-def _recording_receipt_reads(
-    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
-) -> list[tuple[str, dict[str, object]]]:
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def read(_path: Path, **kwargs: object) -> dict[str, object]:
-        calls.append(("read", kwargs))
-        return payload
-
-    def identity(_payload: dict[str, object], **kwargs: object) -> str:
-        calls.append(("identity", kwargs))
-        return "id"
-
-    monkeypatch.setattr(remote_identity, "_read_receipt_payload", read)
-    monkeypatch.setattr(remote_identity, "_receipt_data_identity", identity)
-    return calls
-
 
 _REMOTE_ENTRIES: dict[str, dict[str, int | str]] = {
     "remote/a.parquet": {"size_bytes": 3, "sha256": "ra"},
@@ -709,7 +680,7 @@ def test_remote_data_identity_rejects_a_disagreeing_receipt(
 def test_remote_data_identity_labels_both_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = _recording_receipt_reads(monkeypatch, {})
+    calls = recording_receipt_reads(monkeypatch, remote_identity, {})
     api = SimpleNamespace(hf_hub_download=lambda *_args, **_kwargs: str(tmp_path / "r.json"))
     remote = {
         "error_type": remote_identity._RemoteDataMismatchError,

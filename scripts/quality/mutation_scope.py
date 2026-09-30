@@ -61,15 +61,22 @@ def module_filters(paths: Iterable[str], *, root: Path | None = None) -> list[st
     base = root if root is not None else Path.cwd()
     filters: set[str] = set()
     for raw in paths:
-        path = Path(raw)
-        if path.suffix != ".py":
-            continue
-        parts = _source_parts(path)
-        if parts is None:
-            parts = _mirrored_source_parts(path, base)
-        if parts is not None:
-            filters.add(".".join([PACKAGE_NAME, *parts, "*"]))
+        module_filter = _module_filter(Path(raw), base)
+        if module_filter is not None:
+            filters.add(module_filter)
     return sorted(filters)
+
+
+def _module_filter(path: Path, root: Path) -> str | None:
+    """Map a changed source or mirrored test path to its whole-module filter."""
+    if path.suffix != ".py":
+        return None
+    parts = _source_parts(path)
+    if parts is None:
+        parts = _mirrored_source_parts(path, root)
+    if parts is None:
+        return None
+    return ".".join([PACKAGE_NAME, *parts, "*"])
 
 
 def _source_parts(path: Path) -> list[str] | None:
@@ -119,13 +126,33 @@ def parse_diff(diff: str) -> dict[str, set[int]]:
     """
     lines: dict[str, set[int]] = {}
     for path, pure_addition, start, added in _hunks(diff):
-        kept = [
-            start + offset
-            for offset, text in enumerate(added)
-            if not (pure_addition and _is_blank_or_comment(text))
-        ]
-        lines.setdefault(path, set()).update(kept or [0])
+        lines.setdefault(path, set()).update(
+            _kept_hunk_lines(start, added, pure_addition=pure_addition)
+        )
     return lines
+
+
+def _kept_hunk_lines(start: int, added: list[str], *, pure_addition: bool) -> list[int]:
+    """Keep behavior-changing added lines, or mark a module-level hunk with zero."""
+    kept = [
+        start + offset
+        for offset, text in enumerate(added)
+        if not (pure_addition and _is_blank_or_comment(text))
+    ]
+    return kept or [0]
+
+
+def _emit_hunk(
+    hunk: tuple[str, bool, int, list[str]] | None,
+) -> tuple[tuple[str, bool, int, list[str]], ...]:
+    """Make the optional pending hunk yieldable without branching the parser."""
+    return (hunk,) if hunk is not None else ()
+
+
+def _append_added_line(hunk: tuple[str, bool, int, list[str]] | None, raw: str) -> None:
+    """Record one added diff line when a hunk is open."""
+    if hunk is not None and raw.startswith("+"):
+        hunk[3].append(raw[1:])
 
 
 def _hunks(diff: str) -> Iterator[tuple[str, bool, int, list[str]]]:
@@ -134,15 +161,18 @@ def _hunks(diff: str) -> Iterator[tuple[str, bool, int, list[str]]]:
     current: str | None = None
     for raw in diff.splitlines():
         if raw.startswith("+++ b/"):
+            yield from _emit_hunk(hunk)
             current = raw[len("+++ b/") :].strip()
-        elif current is not None and (match := _HUNK.match(raw)):
-            if hunk is not None:
-                yield hunk
+            hunk = None
+        if current is None:
+            continue
+        match = _HUNK.match(raw)
+        if match is not None:
+            yield from _emit_hunk(hunk)
             hunk = (current, match.group("old") == "0", int(match.group("start")), [])
-        elif hunk is not None and raw.startswith("+"):
-            hunk[3].append(raw[1:])
-    if hunk is not None:
-        yield hunk
+            continue
+        _append_added_line(hunk, raw)
+    yield from _emit_hunk(hunk)
 
 
 def _is_blank_or_comment(line: str) -> bool:
@@ -165,38 +195,77 @@ def function_filters(
         path = Path(raw)
         if path.suffix != ".py":
             continue
-        parts = _source_parts(path)
-        if parts is None:
-            # A changed test re-checks the module it mirrors: weakening a test
-            # would otherwise leave that module's mutants unverified until some
-            # later change happened to touch the source. Which mutants a test
-            # edit reaches cannot be read off the diff, so it takes the module.
-            mirrored = _mirrored_source_parts(path, base)
-            if mirrored is None:
-                continue
-            module = ".".join([PACKAGE_NAME, *mirrored])
-            whole_module.add(module)
-            scoped[module] = [f"{module}.*"]
-            continue
-        module = ".".join([PACKAGE_NAME, *parts])
-        source = base / path
-        if not source.is_file():
-            continue
-        names = _changed_function_names(source, lines)
-        if names is None:
-            whole_module.add(module)
-            scoped[module] = [f"{module}.*"]
-        elif names and module not in whole_module:
-            scoped[module] = [f"{module}.{name}__mutmut_*" for name in sorted(names)]
+        scope = _path_scope(path, lines, base)
+        if scope is not None:
+            _merge_scope(scope, scoped, whole_module)
     return scoped
+
+
+def _path_scope(path: Path, lines: set[int], root: Path) -> tuple[str, list[str], bool] | None:
+    """Choose the source-function or mirrored-test policy for one Python path."""
+    parts = _source_parts(path)
+    if parts is None:
+        return _test_scope(path, root)
+    return _source_scope(path, parts, lines, root)
+
+
+def _test_scope(path: Path, root: Path) -> tuple[str, list[str], bool] | None:
+    """Scope a changed test to the whole source module whose contract it covers."""
+    mirrored = _mirrored_source_parts(path, root)
+    if mirrored is None:
+        return None
+    module = ".".join([PACKAGE_NAME, *mirrored])
+    return module, [f"{module}.*"], True
+
+
+def _source_scope(
+    path: Path, parts: list[str], lines: set[int], root: Path
+) -> tuple[str, list[str], bool] | None:
+    """Map changed source lines to their enclosing functions or whole module."""
+    if not (root / path).is_file():
+        return None
+    module = ".".join([PACKAGE_NAME, *parts])
+    names = _changed_function_names(root / path, lines)
+    if names is None:
+        return module, [f"{module}.*"], True
+    if not names:
+        return None
+    filters = [f"{module}.{name}__mutmut_*" for name in sorted(names)]
+    return module, filters, False
+
+
+def _merge_scope(
+    scope: tuple[str, list[str], bool],
+    scoped: dict[str, list[str]],
+    whole_module: set[str],
+) -> None:
+    module, filters, is_whole_module = scope
+    if is_whole_module:
+        whole_module.add(module)
+        scoped[module] = filters
+    elif module not in whole_module:
+        scoped[module] = filters
 
 
 def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
     """Return the mutant prefixes a change reaches, or ``None`` for whole-module."""
+    tree = _read_source_tree(source)
+    if tree is None:
+        return None
+    covered, names = _changed_functions(tree, lines)
+    return names if lines <= covered else None
+
+
+def _read_source_tree(source: Path) -> ast.Module | None:
+    """Parse one source module, using whole-module scope if it cannot be read."""
     try:
-        tree = ast.parse(source.read_text(encoding="utf-8"))
+        return ast.parse(source.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, UnicodeError):
         return None
+
+
+def _changed_functions(tree: ast.Module, lines: set[int]) -> tuple[set[int], set[str]]:
+    """Collect covered source spans and the mutable functions touched by a diff."""
     covered: set[int] = set(_import_lines(tree))
     names: set[str] = set()
     for name, start, end in _iter_functions(tree):
@@ -204,9 +273,7 @@ def _changed_function_names(source: Path, lines: set[int]) -> set[str] | None:
         covered.update(span)
         if name is not None and any(line in span for line in lines):
             names.add(name)
-    if any(line not in covered for line in lines):
-        return None
-    return names
+    return covered, names
 
 
 def _import_lines(tree: ast.Module) -> Iterator[int]:
@@ -230,18 +297,36 @@ def _iter_functions(
     inside it or its class is yielded separately.
     """
     for node in ast.iter_child_nodes(tree):
-        if not isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        start = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
-        end = node.end_lineno or node.lineno
-        if _is_unmutated(node):
-            yield None, start, end
-        elif isinstance(node, ast.ClassDef):
-            yield from _iter_functions(node, node.name)
-        else:
-            prefix = f"x\u01c1{class_name}\u01c1{node.name}" if class_name else f"x_{node.name}"
-            yield prefix, start, end
-            yield from _iter_functions(node, class_name)
+        yield from _function_blocks(node, class_name)
+
+
+def _function_blocks(
+    node: ast.AST, class_name: str | None
+) -> Iterator[tuple[str | None, int, int]]:
+    """Yield mutation spans for one function or class and its nested callables."""
+    if not isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+        return
+    start = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
+    end = node.end_lineno or node.lineno
+    if _is_unmutated(node):
+        yield None, start, end
+        return
+    yield from _mutable_function_blocks(node, class_name, start, end)
+
+
+def _mutable_function_blocks(
+    node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+    class_name: str | None,
+    start: int,
+    end: int,
+) -> Iterator[tuple[str | None, int, int]]:
+    """Yield a mutable class's methods or one function and its nested closures."""
+    if isinstance(node, ast.ClassDef):
+        yield from _iter_functions(node, node.name)
+        return
+    prefix = f"x\u01c1{class_name}\u01c1{node.name}" if class_name else f"x_{node.name}"
+    yield prefix, start, end
+    yield from _iter_functions(node, class_name)
 
 
 def _is_unmutated(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -278,14 +363,17 @@ def module_function_filters(module: str, *, root: Path | None = None) -> list[st
     whole-module filter covers.
     """
     base = root if root is not None else Path.cwd()
-    relative = [] if module == PACKAGE_NAME else module.removeprefix(f"{PACKAGE_NAME}.").split(".")
-    candidate = base / PACKAGE_ROOT.joinpath(*relative)
-    source = candidate / "__init__.py" if candidate.is_dir() else candidate.with_suffix(".py")
-    try:
-        tree = ast.parse(source.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError, UnicodeError):
+    tree = _read_source_tree(_module_source(module, base))
+    if tree is None:
         return None
     return [f"{module}.{name}__mutmut_*" for name, _start, _end in _iter_functions(tree) if name]
+
+
+def _module_source(module: str, root: Path) -> Path:
+    """Resolve a package module name to its Python source path."""
+    relative = [] if module == PACKAGE_NAME else module.removeprefix(f"{PACKAGE_NAME}.").split(".")
+    candidate = root / PACKAGE_ROOT.joinpath(*relative)
+    return candidate / "__init__.py" if candidate.is_dir() else candidate.with_suffix(".py")
 
 
 def shards(
@@ -297,23 +385,53 @@ def shards(
     """Return the CI matrix: one entry per bounded group of function filters."""
     matrix: list[dict[str, str]] = []
     for module in sorted(scoped):
-        filters = scoped[module]
-        if filters == [f"{module}.*"]:
-            expanded = module_function_filters(module, root=root)
-            if expanded == []:
-                # No functions means no mutants: a shard would only make
-                # mutmut stop with "no test case for any mutant".
-                continue
-            # An unreadable module keeps the whole-module filter so the scope
-            # is never silently narrowed.
-            filters = expanded or filters
-        groups = [filters[start : start + size] for start in range(0, len(filters), size)] or [
-            filters
-        ]
-        for index, group in enumerate(groups, start=1):
-            name = module if len(groups) == 1 else f"{module} [{index}/{len(groups)}]"
-            matrix.append({"name": name, "filters": " ".join(group)})
+        matrix.extend(_module_shards(module, scoped[module], root=root, size=size))
     return matrix
+
+
+def _expanded_filters(module: str, filters: list[str], root: Path | None) -> list[str] | None:
+    """Expand a whole-module filter, or omit a module known to have no mutants."""
+    if filters != [f"{module}.*"]:
+        return filters
+    expanded = module_function_filters(module, root=root)
+    if expanded == []:
+        return None
+    return expanded or filters
+
+
+def _module_shards(
+    module: str,
+    original_filters: list[str],
+    *,
+    root: Path | None,
+    size: int,
+) -> list[dict[str, str]]:
+    filters = _expanded_filters(module, original_filters, root)
+    if filters is None:
+        return []
+    groups = [filters[start : start + size] for start in range(0, len(filters), size)] or [filters]
+    return [
+        {
+            "name": _shard_name(module, index, len(groups)),
+            "filters": " ".join(group),
+        }
+        for index, group in enumerate(groups, start=1)
+    ]
+
+
+def _shard_name(module: str, index: int, total: int) -> str:
+    """Keep one-shard names compact and number every split module shard."""
+    return module if total == 1 else f"{module} [{index}/{total}]"
+
+
+def _print_filters(scoped: dict[str, list[str]], *, json_output: bool) -> None:
+    """Render either the shard matrix or the flat command-line filter list."""
+    if json_output:
+        print(json.dumps(shards(scoped), separators=(",", ":")))
+        return
+    for module in sorted(scoped):
+        for filter_expression in scoped[module]:
+            print(filter_expression)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -332,12 +450,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: cannot diff against {args.base!r}: {exc.stderr.strip()}", file=sys.stderr)
         return 2
     scoped = function_filters(lines)
-    if args.json:
-        print(json.dumps(shards(scoped), separators=(",", ":")))
-    else:
-        for filters in (scoped[module] for module in sorted(scoped)):
-            for filter_expression in filters:
-                print(filter_expression)
+    _print_filters(scoped, json_output=args.json)
     return 0
 
 

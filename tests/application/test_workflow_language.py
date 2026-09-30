@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import pyarrow.parquet as pq
 import pytest
+from tests.application.workflow_helpers import (
+    WEBSITE_OSM as _WEBSITE_OSM,
+)
+from tests.application.workflow_helpers import (
+    InterruptingLanguageDetector,
+    RecordingLanguageDetector,
+)
+from tests.application.workflow_helpers import (
+    sources as _sources,
+)
 
 from osm_polygon_website_tag.application import source_processing, workflow
 from osm_polygon_website_tag.application.workflow import (
@@ -19,11 +28,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
-from osm_polygon_website_tag.contracts.text_schema import count_words
-from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
-from osm_polygon_website_tag.publishing.incremental import CheckpointV2
 from osm_polygon_website_tag.reporting.finalize import FinalizationReport
-from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.verify import VerificationReport
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_CARD_BUILT,
@@ -33,113 +38,8 @@ from osm_polygon_website_tag.runtime.run_state import (
     load_run,
     upsert_run_metadata,
 )
-from osm_polygon_website_tag.web.text_extract import TextExtraction
-from osm_polygon_website_tag.web.web_fetch import FetchResult
 
-_EMPTY_OSM = """<?xml version="1.0" encoding="UTF-8"?>
-<osm version="0.6"><node id="1" lat="0.0" lon="0.0"/></osm>
-"""
-
-
-_WEBSITE_OSM = """<?xml version="1.0" encoding="UTF-8"?>
-<osm version="0.6">
-  <node id="1" lat="0.0" lon="0.0"/><node id="2" lat="0.0" lon="1.0"/>
-  <node id="3" lat="1.0" lon="1.0"/><node id="4" lat="1.0" lon="0.0"/>
-  <way id="100" version="1" timestamp="2024-01-01T00:00:00Z">
-    <nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="1"/>
-    <tag k="building" v="yes"/><tag k="contact:website" v="example.org"/>
-  </way>
-</osm>
-"""
-
-
-def _noop_progress(_message: str) -> None:
-    return None
-
-
-class RecordingLanguageDetector:
-    """Small deterministic detector for workflow tests."""
-
-    identity = ModelIdentity("repo", "model.bin", "revision", "a" * 64)
-
-    def __init__(self) -> None:
-        self.calls: list[list[str]] = []
-
-    def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]:
-        self.calls.append(list(texts))
-        return [LanguagePrediction("eng_Latn", 0.9) for _text in texts]
-
-
-class InterruptingLanguageDetector(RecordingLanguageDetector):
-    """Detector that interrupts after a selected prediction call."""
-
-    def __init__(self, *, interrupt_on_call: int) -> None:
-        super().__init__()
-        self.interrupt_on_call = interrupt_on_call
-
-    def predict(self, texts: Sequence[str]) -> list[LanguagePrediction]:
-        result = super().predict(texts)
-        if len(self.calls) == self.interrupt_on_call:
-            raise KeyboardInterrupt
-        return result
-
-
-@pytest.fixture(autouse=True)
-def _offline_remote_reconciliation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep workflow tests local; remote reconciliation has dedicated unit tests."""
-    from osm_polygon_website_tag.publishing.incremental import load_upload_checkpoint
-
-    monkeypatch.setattr(
-        "osm_polygon_website_tag.application.workflow.reconcile_upload_checkpoint",
-        lambda run_dir, **_kwargs: load_upload_checkpoint(run_dir),
-    )
-
-
-def _write_card_contract_fixture(run_dir: Path, receipt: object) -> None:
-    map_path = run_dir / POLYGON_DENSITY_ASSET_REL_PATH
-    map_path.parent.mkdir(parents=True)
-    map_path.write_bytes(b"map")
-    (run_dir / "stats.json").write_text("stats")
-    receipt_path = run_dir / "manifests" / "completion_receipt.json"
-    receipt_path.parent.mkdir(parents=True, exist_ok=True)
-    receipt_path.write_text(json.dumps(receipt))
-
-
-def _checkpoint() -> CheckpointV2:
-    return {"schema_version": "v2", "global_bundle": {}, "sources": {}}
-
-
-def _sources(make_pbf, tmp_path: Path) -> Path:
-    first = make_pbf(_WEBSITE_OSM, name="a-latest.osm.pbf")
-    second = make_pbf(_EMPTY_OSM, name="b-latest.osm.pbf")
-    root = tmp_path / "sources"
-    root.mkdir()
-    (root / "a-latest.osm.pbf").write_bytes((first / "a-latest.osm.pbf").read_bytes())
-    nested = root / "nested"
-    nested.mkdir()
-    (nested / "b-latest.osm.pbf").write_bytes((second / "b-latest.osm.pbf").read_bytes())
-    return root
-
-
-@pytest.fixture(autouse=True)
-def _inject_static_text_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
-    from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard as real_enrich
-
-    def enrich(shard, **kwargs):
-        return real_enrich(
-            shard,
-            **kwargs,
-            fetcher=lambda url: FetchResult("ok", url, final_url=url, body=b"website text"),
-            extractor=lambda _html, *, url: TextExtraction(
-                "success",
-                f"text from {url}",
-                count_words(f"text from {url}"),
-                None,
-                "2.1.0",
-            ),
-        )
-
-    monkeypatch.setattr(source_processing, "enrich_polygon_shard", enrich, raising=False)
+pytestmark = pytest.mark.usefixtures("offline_remote_reconciliation", "static_text_enrichment")
 
 
 def test_finalize_forwards_progress_and_requires_success(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 from osm_polygon_website_tag.reporting import file_hashing as _file_hashing
@@ -34,6 +34,18 @@ _DATA_MANIFEST_FILES = frozenset(
 def publishable_paths(root: Path) -> tuple[Path, ...]:
     """Return the deterministic, content-only publication inventory."""
     return tuple(root / relative_path for relative_path in _publishable_relative_paths(root))
+
+
+def source_scoped_parquet_paths(
+    directory: Path,
+    source_names: Collection[str] | None,
+) -> list[Path]:
+    """Select sorted Parquet shards from a directory and optional PBF inventory."""
+    paths = sorted(directory.glob("*.parquet"))
+    if source_names is None:
+        return paths
+    source_stems = {name.removesuffix(".osm.pbf") for name in source_names}
+    return [path for path in paths if path.stem in source_stems]
 
 
 def _publishable_relative_paths(root: Path) -> list[str]:
@@ -139,4 +151,5 @@ __all__ = [
     "hash_file",
     "parquet_manifest_sha256",
     "publishable_paths",
+    "source_scoped_parquet_paths",
 ]

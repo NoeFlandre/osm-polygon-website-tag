@@ -37,10 +37,9 @@ from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
 from osm_polygon_website_tag.reporting.geometry_stats import (
-    GEOMETRY_STATS_FILENAME,
     GeometryStats,
     compute_geometry_stats,
-    render_geometry_stats,
+    stage_geometry_stats,
 )
 from osm_polygon_website_tag.reporting.text_population import (
     TextPopulationSummary,
@@ -135,7 +134,7 @@ def build_card(
             (staged_readme, readme_path),
             (staged_yaml, yaml_path),
         ]
-        promotions.extend(_staged_geometry_stats(staged_stats, root, bundle.geometry))
+        promotions.extend(stage_geometry_stats(staged_stats, root, bundle.geometry))
         atomic_promote_bundle(promotions)
     finally:
         staged_map.unlink(missing_ok=True)
@@ -166,7 +165,7 @@ def update_card_with_geometry(
         if updated != original:
             staged_readme.write_bytes(updated)
             promotions.append((staged_readme, readme))
-        promotions.extend(_staged_geometry_stats(staged_stats, root, geometry))
+        promotions.extend(stage_geometry_stats(staged_stats, root, geometry))
         if promotions:
             atomic_promote_bundle(promotions)
     finally:
@@ -204,20 +203,6 @@ def _selected_public_paths(
 def _has_schema(paths: Collection[Path], schema: pa.Schema) -> bool:
     """Return whether any selected shard carries an exact public contract."""
     return any(pq.read_schema(path).equals(schema, check_metadata=True) for path in paths)
-
-
-def _staged_geometry_stats(
-    staged: Path,
-    run_dir: Path,
-    geometry: GeometryStats,
-) -> list[tuple[Path, Path]]:
-    """Stage stats JSON only when regeneration would change its bytes."""
-    target = run_dir / GEOMETRY_STATS_FILENAME
-    rendered = render_geometry_stats(geometry)
-    if target.is_file() and target.read_text(encoding="utf-8") == rendered:
-        return []
-    staged.write_text(rendered, encoding="utf-8")
-    return [(staged, target)]
 
 
 __all__ = [

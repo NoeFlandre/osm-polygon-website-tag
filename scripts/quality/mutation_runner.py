@@ -21,7 +21,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Final, cast
 
@@ -37,13 +37,17 @@ _TEST_SELECTION_ENV: Final = "MUTATION_TEST_PATHS"
 _EMPTY_SHARD_EXIT_CODE: Final = 86
 
 
-def _source_path_for_mutant_name(mutant_name: str) -> Path:
-    """Map a mutmut module or mutant filter to its source file."""
+def _validate_mutant_package(mutant_name: str) -> None:
+    """Require a fully qualified filter from the package being tested."""
     if not (mutant_name == _PACKAGE_NAME or mutant_name.startswith(f"{_PACKAGE_NAME}.")):
         raise ValueError(
             f"mutation scope must use a fully qualified package filter: {mutant_name!r}"
         )
 
+
+def _module_for_mutant_name(mutant_name: str) -> tuple[str, bool]:
+    """Validate a mutmut filter and return its source module and package mode."""
+    _validate_mutant_package(mutant_name)
     package_wildcard = mutant_name.endswith(".*")
     module_name = mutant_name.removesuffix(".*")
     mutation_marker = module_name.find(".x")
@@ -51,7 +55,12 @@ def _source_path_for_mutant_name(mutant_name: str) -> Path:
         module_name = module_name[:mutation_marker]
     if "*" in module_name or module_name == "":
         raise ValueError(f"mutation scope is not a source module: {mutant_name!r}")
+    return module_name, package_wildcard
 
+
+def _source_path_for_mutant_name(mutant_name: str) -> Path:
+    """Map a mutmut module or mutant filter to its source file."""
+    module_name, package_wildcard = _module_for_mutant_name(mutant_name)
     if module_name == _PACKAGE_NAME:
         return _PACKAGE_SOURCE_ROOT if package_wildcard else _PACKAGE_SOURCE_ROOT / "__init__.py"
 
@@ -91,24 +100,26 @@ def _configure_source_scope(
     return source_paths
 
 
+def _positional_mutant_filters(arguments: Iterable[str]) -> tuple[str, ...]:
+    """Keep positional mutmut filters while consuming option values."""
+    arguments = iter(arguments)
+    names: list[str] = []
+    for argument in arguments:
+        if argument == "--max-children":
+            next(arguments, None)
+            continue
+        if argument.startswith(("--max-children=", "-")):
+            continue
+        names.append(argument)
+    return tuple(names)
+
+
 def _mutant_names_from_cli(arguments: Iterable[str]) -> tuple[str, ...]:
     """Extract positional mutmut filters from the adapter's ``run`` command."""
     arguments = iter(arguments)
     if next(arguments, None) != "run":
         return ()
-
-    names: list[str] = []
-    skip_option_value = False
-    for argument in arguments:
-        if skip_option_value:
-            skip_option_value = False
-        elif argument == "--max-children":
-            skip_option_value = True
-        elif argument.startswith(("--max-children=", "-")):
-            continue
-        else:
-            names.append(argument)
-    return tuple(names)
+    return _positional_mutant_filters(arguments)
 
 
 def _is_empty_filter_error(error: AssertionError) -> bool:
@@ -364,16 +375,24 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
     return exit_code
 
 
-def main() -> None:
-    """Install the isolated hooks and delegate argument parsing to mutmut."""
-    if len(sys.argv) == 4 and sys.argv[1] == "--stats-child":
-        output_path = Path(sys.argv[2])
-        tests = json.loads(sys.argv[3])
-        if not isinstance(tests, list) or not all(isinstance(test, str) for test in tests):
-            raise ValueError("stats child tests must be a JSON array of strings")
-        raise SystemExit(_run_stats_child(output_path, tests))
+def _stats_child_arguments(argv: Sequence[str]) -> tuple[Path, list[str]] | None:
+    """Parse the private child invocation, rejecting malformed test payloads."""
+    if len(argv) != 4 or argv[1] != "--stats-child":
+        return None
+    output_path = Path(argv[2])
+    tests = json.loads(argv[3])
+    return output_path, _validated_test_list(tests)
 
-    import mutmut.__main__ as mutmut_main
+
+def _validated_test_list(tests: Any) -> list[str]:
+    """Require a stats-child payload to contain only pytest path strings."""
+    if isinstance(tests, list) and all(isinstance(test, str) for test in tests):
+        return tests
+    raise ValueError("stats child tests must be a JSON array of strings")
+
+
+def _install_mutmut_hooks(mutmut_main: Any) -> None:
+    """Install fresh-process coverage, mutant-test, and stats adapters."""
 
     def gather_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
         return _gather_coverage(runner, source_files)
@@ -387,7 +406,11 @@ def main() -> None:
     mutmut_main.gather_coverage = cast(Any, gather_coverage)
     mutmut_main.PytestRunner.run_tests = cast(Any, run_tests)
     mutmut_main.PytestRunner.run_stats = cast(Any, run_stats)
-    mutant_names = _mutant_names_from_cli(sys.argv[1:])
+
+
+def _run_mutmut_cli(mutmut_main: Any, arguments: Sequence[str]) -> None:
+    """Apply any requested source scope, then run mutmut with its usual CLI."""
+    mutant_names = _mutant_names_from_cli(arguments)
     if mutant_names:
         _configure_source_scope(mutant_names)
     sys.argv[0] = "mutmut"
@@ -398,6 +421,19 @@ def main() -> None:
             print("No mutants match this generated shard; skipping the empty selection.")
             raise SystemExit(_EMPTY_SHARD_EXIT_CODE) from exc
         raise
+
+
+def main() -> None:
+    """Install isolated hooks, or execute the private stats-child command."""
+    child = _stats_child_arguments(sys.argv)
+    if child is not None:
+        output_path, tests = child
+        raise SystemExit(_run_stats_child(output_path, tests))
+
+    import mutmut.__main__ as mutmut_main
+
+    _install_mutmut_hooks(mutmut_main)
+    _run_mutmut_cli(mutmut_main, sys.argv[1:])
 
 
 if __name__ == "__main__":

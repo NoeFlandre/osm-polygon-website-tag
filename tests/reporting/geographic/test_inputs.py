@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from osm_polygon_website_tag.contracts.arrow import call_arrow_kernel
+from osm_polygon_website_tag.reporting.artifact_inventory import source_scoped_parquet_paths
 from osm_polygon_website_tag.reporting.geographic.inputs import (
     _coordinate_value,
     _iter_batch_rows,
@@ -17,7 +18,6 @@ from osm_polygon_website_tag.reporting.geographic.inputs import (
     _path_columns,
     _reserve_text_identity,
     _row_is_eligible,
-    _select_polygon_parquets,
     _successful_non_empty_text,
     _text_path_columns,
     _text_polygon_parquets,
@@ -101,9 +101,9 @@ def test_select_polygon_parquets_supports_unfiltered_and_source_scoped_reads(
     france.touch()
     monaco.touch()
 
-    assert _select_polygon_parquets(directory, None) == [france, monaco]
-    assert _select_polygon_parquets(directory, {"monaco-latest.osm.pbf"}) == [monaco]
-    assert _select_polygon_parquets(directory, {"missing-latest.osm.pbf"}) == []
+    assert source_scoped_parquet_paths(directory, None) == [france, monaco]
+    assert source_scoped_parquet_paths(directory, {"monaco-latest.osm.pbf"}) == [monaco]
+    assert source_scoped_parquet_paths(directory, {"missing-latest.osm.pbf"}) == []
 
 
 def test_text_column_contract_requires_identity_only_for_global_deduplication() -> None:

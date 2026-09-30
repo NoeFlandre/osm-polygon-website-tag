@@ -25,12 +25,16 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 from osm_polygon_website_tag.contracts.sentence_schema import SENTENCE_SCHEMA_VERSION
 from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
-from osm_polygon_website_tag.pipeline.grid5000_bundle import validate_positive_grid_time
 from osm_polygon_website_tag.pipeline.sentence_checkpoint import (
     load_sentence_checkpoint,
     sentence_checkpoint_store,
 )
 from osm_polygon_website_tag.pipeline.sentences import SentenceSplitter, segment_batch
+from osm_polygon_website_tag.pipeline.time_budget import (
+    deadline_reached,
+    start_deadline,
+    validate_batch_options,
+)
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 
@@ -106,7 +110,7 @@ def segment_sentence_shard(
     """Segment website text in bounded batches and promote a v1.5 shard."""
     validate_segmentation_options(batch_rows, time_budget_seconds)
     clock_function = clock if clock is not None else monotonic
-    deadline = _deadline(time_budget_seconds, clock_function)
+    deadline = start_deadline(time_budget_seconds, clock_function)
     shard = Path(shard_path)
     context = _prepare_context(shard, splitter)
     if context is None:
@@ -133,10 +137,7 @@ def segment_sentence_shard(
 
 def validate_segmentation_options(batch_rows: int, time_budget_seconds: float | None) -> None:
     """Validate shared CLI and shard settings before reading run artifacts."""
-    if batch_rows < 1:
-        raise ValueError("batch_rows must be positive")
-    if time_budget_seconds is not None:
-        validate_positive_grid_time(time_budget_seconds)
+    validate_batch_options(batch_rows, time_budget_seconds)
 
 
 def _validate_source_schema(schema: pa.Schema, shard: Path) -> None:
@@ -146,18 +147,6 @@ def _validate_source_schema(schema: pa.Schema, shard: Path) -> None:
     if schema_matches(schema, POLYGON_PUBLIC_SCHEMA_V1_5):
         return
     raise ValueError(f"unsupported polygon schema for segmentation: {shard.name}")
-
-
-def _deadline(time_budget_seconds: float | None, clock: Callable[[], float]) -> float | None:
-    """Return the monotonic instant at which processing must stop."""
-    if time_budget_seconds is None:
-        return None
-    return clock() + time_budget_seconds
-
-
-def _deadline_reached(deadline: float | None, clock: Callable[[], float]) -> bool:
-    """Return whether the time budget is exhausted."""
-    return deadline is not None and clock() >= deadline
 
 
 def _prepare_context(shard: Path, splitter: SentenceSplitter) -> _Context | None:
@@ -203,7 +192,7 @@ def _process_batches(
         originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
         if not originals:
             continue
-        if _deadline_reached(deadline, clock):
+        if deadline_reached(deadline, clock):
             raise _PausedError(_Progress(processed_rows, max_batch_rows))
         segmented = _migrate_rows(segment_batch(originals, splitter))
         context.store.write_part(
