@@ -172,15 +172,29 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
     monkeypatch: pytest.MonkeyPatch,
     capsys,
 ) -> None:
-    bundle = SimpleNamespace(payload=lambda: {"source_shard": "source.parquet"})
-    result = SimpleNamespace(payload=lambda: {"completed": True, "shard_sha256": "a" * 64})
+    language_bundle = SimpleNamespace(
+        payload=lambda: {"source_shard": "source.parquet", "aaa": "first when sorted"}
+    )
+    sentence_bundle = SimpleNamespace(
+        model=SimpleNamespace(filename="sat.bin", revision="revision-1"),
+        payload=lambda: {
+            "sentence_shard": "sentences.parquet",
+            "aaa": "first when sorted",
+        },
+    )
+    result = SimpleNamespace(payload=lambda: {"shard_sha256": "a" * 64, "completed": True})
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+    validations: list[tuple[Path, str]] = []
 
-    monkeypatch.setattr(grid5000, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    def require_under_data_root(path: Path, *, label: str) -> Path:
+        validations.append((Path(path), label))
+        return Path(path)
+
+    monkeypatch.setattr(grid5000, "require_under_data_root", require_under_data_root)
     monkeypatch.setattr(
         grid5000,
         "prepare_language_bundle",
-        lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or bundle,
+        lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or language_bundle,
     )
     monkeypatch.setattr(
         grid5000,
@@ -191,6 +205,34 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         grid5000,
         "sync_language_bundle",
         lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        grid5000,
+        "prepare_sentence_bundle",
+        lambda *args, **kwargs: (
+            calls.append(("prepare_sentences", args, kwargs)) or sentence_bundle
+        ),
+    )
+    monkeypatch.setattr(
+        grid5000,
+        "load_sentence_bundle",
+        lambda *args, **kwargs: calls.append(("load_sentences", args, kwargs)) or sentence_bundle,
+    )
+    splitter = object()
+    monkeypatch.setattr(
+        grid5000,
+        "load_sat_splitter_from_path",
+        lambda *args, **kwargs: calls.append(("load_splitter", args, kwargs)) or splitter,
+    )
+    monkeypatch.setattr(
+        grid5000,
+        "run_sentence_bundle",
+        lambda *args, **kwargs: calls.append(("run_sentences", args, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        grid5000,
+        "sync_sentence_bundle",
+        lambda *args, **kwargs: calls.append(("sync_sentences", args, kwargs)) or result,
     )
 
     assert (
@@ -205,11 +247,34 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
                 str(tmp_path / "model.bin"),
                 "--commit",
                 "abc123",
+                "--shard",
+                "source.parquet",
+                "--time-budget-seconds",
+                "123",
+                "--batch-rows",
+                "7",
             ]
         )
         == 0
     )
-    assert main(["grid5000-run", "--bundle-dir", str(tmp_path / "bundle")]) == 0
+    prepare_output = json.loads(capsys.readouterr().out)
+    assert (
+        main(
+            [
+                "grid5000-run",
+                "--bundle-dir",
+                str(tmp_path / "bundle"),
+                "--time-budget-seconds",
+                "12.5",
+                "--batch-rows",
+                "4",
+                "--job-id",
+                "job-1",
+            ]
+        )
+        == 0
+    )
+    run_output = json.loads(capsys.readouterr().out)
     assert (
         main(
             [
@@ -222,13 +287,160 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    sync_output = json.loads(capsys.readouterr().out)
 
-    assert [name for name, _args, _kwargs in calls] == ["prepare", "run", "sync"]
+    assert (
+        main(
+            [
+                "grid5000-prepare-sentences",
+                "--run-dir",
+                str(tmp_path / "run"),
+                "--bundle-dir",
+                str(tmp_path / "sentence-bundle"),
+                "--model-dir",
+                str(tmp_path / "sat-model"),
+                "--model-revision",
+                "revision-1",
+                "--commit",
+                "def456",
+                "--time-budget-seconds",
+                "321",
+                "--batch-rows",
+                "9",
+                "--max-rows",
+                "11",
+            ]
+        )
+        == 0
+    )
+    prepare_sentences_output = json.loads(capsys.readouterr().out)
+    assert (
+        main(
+            [
+                "grid5000-run-sentences",
+                "--bundle-dir",
+                str(tmp_path / "sentence-bundle"),
+                "--time-budget-seconds",
+                "10.5",
+                "--batch-rows",
+                "3",
+                "--job-id",
+                "job-2",
+            ]
+        )
+        == 0
+    )
+    run_sentences_output = json.loads(capsys.readouterr().out)
+    assert (
+        main(
+            [
+                "grid5000-sync-sentences",
+                "--bundle-dir",
+                str(tmp_path / "sentence-bundle"),
+                "--run-dir",
+                str(tmp_path / "run"),
+            ]
+        )
+        == 0
+    )
+    sync_sentences_output = json.loads(capsys.readouterr().out)
+
+    assert all(
+        list(payload) == sorted(payload)
+        for payload in (
+            prepare_output,
+            run_output,
+            sync_output,
+            prepare_sentences_output,
+            run_sentences_output,
+            sync_sentences_output,
+        )
+    )
+
+    assert [name for name, _args, _kwargs in calls] == [
+        "prepare",
+        "run",
+        "sync",
+        "prepare_sentences",
+        "load_sentences",
+        "load_splitter",
+        "run_sentences",
+        "sync_sentences",
+    ]
     assert calls[0][1] == (tmp_path / "run", tmp_path / "bundle")
-    assert calls[0][2]["model_path"] == tmp_path / "model.bin"
+    assert calls[0][2] == {
+        "model_path": tmp_path / "model.bin",
+        "commit": "abc123",
+        "time_budget_seconds": 123,
+        "batch_rows": 7,
+        "shard_name": "source.parquet",
+    }
     assert calls[1][1] == (tmp_path / "bundle",)
+    assert calls[1][2] == {
+        "time_budget_seconds": 12.5,
+        "batch_rows": 4,
+        "job_id": "job-1",
+    }
     assert calls[2][1] == (tmp_path / "bundle", tmp_path / "run")
-    assert "source.parquet" in capsys.readouterr().out
+    assert calls[3][1] == (tmp_path / "run", tmp_path / "sentence-bundle")
+    assert calls[3][2] == {
+        "model_dir": tmp_path / "sat-model",
+        "model_revision": "revision-1",
+        "commit": "def456",
+        "time_budget_seconds": 321,
+        "batch_rows": 9,
+        "max_rows": 11,
+    }
+    assert calls[4][1:] == ((tmp_path / "sentence-bundle",), {})
+    assert calls[5] == (
+        "load_splitter",
+        (tmp_path / "sentence-bundle" / "sat.bin",),
+        {"revision": "revision-1"},
+    )
+    assert calls[6][1] == (tmp_path / "sentence-bundle",)
+    assert calls[6][2] == {
+        "splitter": splitter,
+        "time_budget_seconds": 10.5,
+        "batch_rows": 3,
+        "job_id": "job-2",
+    }
+    assert calls[7][1] == (tmp_path / "sentence-bundle", tmp_path / "run")
+    assert validations == [
+        (tmp_path / "run", "run directory"),
+        (tmp_path / "bundle", "Grid'5000 bundle directory"),
+        (tmp_path / "model.bin", "GlotLID model path"),
+        (tmp_path / "bundle", "Grid'5000 bundle directory"),
+        (tmp_path / "run", "run directory"),
+        (tmp_path / "run", "run directory"),
+        (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
+        (tmp_path / "sat-model", "SaT model directory"),
+        (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
+        (tmp_path / "run", "run directory"),
+    ]
+    assert prepare_output == {
+        "aaa": "first when sorted",
+        "bundle_dir": str(tmp_path / "bundle"),
+        "source_shard": "source.parquet",
+    }
+    assert run_output == {"completed": True, "shard_sha256": "a" * 64}
+    assert sync_output == {
+        "bundle_dir": str(tmp_path / "bundle"),
+        "run_dir": str(tmp_path / "run"),
+        "completed": True,
+        "shard_sha256": "a" * 64,
+    }
+    assert prepare_sentences_output == {
+        "aaa": "first when sorted",
+        "bundle_dir": str(tmp_path / "sentence-bundle"),
+        "sentence_shard": "sentences.parquet",
+    }
+    assert run_sentences_output == {"completed": True, "shard_sha256": "a" * 64}
+    assert sync_sentences_output == {
+        "bundle_dir": str(tmp_path / "sentence-bundle"),
+        "run_dir": str(tmp_path / "run"),
+        "completed": True,
+        "shard_sha256": "a" * 64,
+    }
 
 
 def test_cli_finalize_snapshot_reports_result(

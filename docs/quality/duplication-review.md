@@ -77,6 +77,26 @@ until Noé and maintainers of both repositories agree on canonical coverage
 semantics, dependency ownership, tests, and a named maintainer for any shared
 implementation. No shared package is proposed in this review.
 
+Issue #82 identifies two meaningful candidates in sibling repositories
+`osm-polygon-description-tag` and `osm-polygon-wikidata-only`: SSRF-safe web
+transport (URL validation, DNS/IP checks, redirects, timeouts, response-size
+limits, and robots policy) and stable artifact writing via `storage/atomic.py`.
+The issue describes these as partly reimplemented, but this review did not scan
+those sibling source trees, so it does not claim verified clones or identical
+contracts. Keep this work here as the reference implementation for now.
+
+Before any extraction or sibling edit, the owners should name a maintainer
+across the consuming repositories and agree on: (1) the public transport and
+error contract, security behavior, dependencies, and versioning; (2) a shared
+contract test corpus that each repository can run against its adapter; and (3)
+release and vulnerability-fix responsibilities. Audit the sibling code against
+that contract first. Extract a cohesive implementation only if one owner can
+maintain its release and compatibility surface; otherwise keep repository
+implementations independent and backport reviewed fixes. For atomic writes,
+compare schemas and durability guarantees before proposing any shared helper.
+This review did not modify `osm-polygon-description-tag`,
+`osm-polygon-wikidata-only`, `osm-worldcover`, or the excluded geoparser.
+
 Mutation thresholds are also intentionally repository-specific. WorldCover's
 current score gate treats timeouts as killed and uses an 80% floor, while this
 repository uses a strict baseline ratchet and treats timeouts and other
@@ -84,7 +104,6 @@ unverified outcomes as failures. Do not copy the WorldCover threshold into
 this repository. The overall and per-area thresholds and their denominator for
 issue #91 still need the repository owner's decision.
 
-Manifest generation and stable artifact writing look similar across the two
-repositories, but their schemas and atomic-write contracts differ. No shared
-runtime helper is justified without an owner-approved contract. This review
-did not modify `osm-worldcover` or the excluded geoparser repository.
+Manifest generation and stable artifact writing look similar across
+`osm-worldcover`, but their schemas and atomic-write contracts differ. No
+shared runtime helper is justified without an owner-approved contract.
