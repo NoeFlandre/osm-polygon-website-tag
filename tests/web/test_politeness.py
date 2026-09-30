@@ -112,6 +112,45 @@ def test_a_request_after_the_delay_has_passed_does_not_wait() -> None:
     assert clock.sleeps == []
 
 
+@pytest.mark.parametrize(("host_delay", "expected_wait"), [(5.0, 5.0), (1.0, 2.0)])
+def test_host_delay_after_a_request_keeps_the_stronger_spacing(
+    host_delay: float,
+    expected_wait: float,
+) -> None:
+    clock = _Clock()
+    limiter = _limiter(clock, concurrency=1, delay_seconds=2.0)
+    with limiter.slot("a.example"):
+        pass
+
+    limiter.set_host_delay("a.example", host_delay)
+    with limiter.slot("a.example"):
+        pass
+
+    assert clock.sleeps == [expected_wait]
+
+
+def test_host_delay_configured_before_first_request_controls_later_spacing() -> None:
+    clock = _Clock()
+    limiter = _limiter(clock, concurrency=1, delay_seconds=0.0)
+    limiter.set_host_delay("a.example", 3.0)
+    starts: list[float] = []
+
+    for _ in range(2):
+        with limiter.slot("a.example"):
+            starts.append(clock.now)
+
+    assert starts == [100.0, 103.0]
+    assert clock.sleeps == [3.0]
+
+
+@pytest.mark.parametrize("seconds", [-1.0, float("nan"), float("inf")])
+def test_invalid_host_delay_is_rejected(seconds: float) -> None:
+    limiter = HostLimiter(HostPolicy())
+
+    with pytest.raises(ValueError, match="host delay"):
+        limiter.set_host_delay("a.example", seconds)
+
+
 def test_back_off_holds_the_host_and_never_shortens_a_longer_hold() -> None:
     clock = _Clock()
     limiter = _limiter(clock, concurrency=1, delay_seconds=0.0)

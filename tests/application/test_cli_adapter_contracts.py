@@ -437,13 +437,16 @@ def test_publish_adapter_applies_only_when_requested(
     assert json.loads(capsys.readouterr().out) == {"artifact_count": 2, "dry_run": False}
 
 
+@pytest.mark.parametrize("has_readme", [True, False])
 def test_publish_plan_reports_resolved_artifact_count_and_readme(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    has_readme: bool,
 ) -> None:
     run_dir = tmp_path / "run"
     readme = run_dir / "README.md"
+    readme_path = readme if has_readme else None
     calls: list[tuple[Path, str | None]] = []
     monkeypatch.setattr(publish, "_configured_hf_dataset_repo", lambda repo_id: "owner/configured")
     monkeypatch.setattr(
@@ -451,18 +454,55 @@ def test_publish_plan_reports_resolved_artifact_count_and_readme(
         "build_publish_plan",
         lambda path, *, repo_id: (
             calls.append((path, repo_id))
-            or SimpleNamespace(artifact_paths=(Path("one"), Path("two")), readme_path=readme)
+            or SimpleNamespace(artifact_paths=(Path("one"), Path("two")), readme_path=readme_path)
         ),
     )
 
     assert publish.publish_plan_command(run_dir) == 0
 
     assert calls == [(run_dir, "owner/configured")]
-    assert json.loads(capsys.readouterr().out) == {
+    expected = {
         "repo_id": None,
         "artifact_count": 2,
-        "readme": str(readme),
+        "readme": str(readme) if has_readme else None,
     }
+    output = capsys.readouterr().out
+    assert output == json.dumps(expected, indent=2) + "\n"
+    assert json.loads(output) == expected
+
+
+def test_create_repo_adapter_keeps_preview_read_only_and_forwards_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def repo_exists(*, repo_id: str) -> bool:
+        calls.append(("exists", repo_id))
+        return True
+
+    def create_repo(*, repo_id: str, exist_ok: bool) -> str:
+        calls.append(("create", repo_id, exist_ok))
+        return "owner/dataset"
+
+    monkeypatch.setattr(publish, "repo_exists", repo_exists)
+    monkeypatch.setattr(publish, "create_repo", create_repo)
+
+    assert publish.create_repo_command(repo_id="owner/dataset") == 0
+
+    preview = {"applied": False, "exists": True, "repo_id": "owner/dataset"}
+    output = capsys.readouterr().out
+    assert output == json.dumps(preview, indent=2) + "\n"
+    assert json.loads(output) == preview
+    assert calls == [("exists", "owner/dataset")]
+
+    assert publish.create_repo_command(repo_id="owner/dataset", exist_ok=True, apply=True) == 0
+
+    assert capsys.readouterr().out == "owner/dataset\n"
+    assert calls == [
+        ("exists", "owner/dataset"),
+        ("create", "owner/dataset", True),
+    ]
 
 
 def test_trackio_adapter_previews_resolved_snapshot_without_publishing(
@@ -494,7 +534,7 @@ def test_trackio_adapter_previews_resolved_snapshot_without_publishing(
     assert publish.publish_trackio_command(run_dir, apply=False) == 0
 
     assert calls == [(run_dir, "configured/dataset")]
-    assert json.loads(capsys.readouterr().out) == {
+    expected = {
         "dry_run": True,
         "manifest_digest": "digest",
         "metrics": {"row_count": 4},
@@ -503,6 +543,9 @@ def test_trackio_adapter_previews_resolved_snapshot_without_publishing(
         "run_name": "dataset-1",
         "space_id": "NoeFlandre/osm-polygon-website-tag-metrics",
     }
+    output = capsys.readouterr().out
+    assert output == json.dumps(expected, default=str, indent=2, sort_keys=True) + "\n"
+    assert json.loads(output) == expected
 
 
 def test_trackio_adapter_publishes_the_selected_snapshot_when_applied(
@@ -547,7 +590,7 @@ def test_trackio_adapter_publishes_the_selected_snapshot_when_applied(
         ("build", run_dir, "owner/dataset"),
         ("publish", snapshot, "owner/metrics", "custom-project"),
     ]
-    assert json.loads(capsys.readouterr().out) == {
+    expected = {
         "dry_run": False,
         "space_id": "owner/metrics",
         "project": "custom-project",
@@ -556,6 +599,9 @@ def test_trackio_adapter_publishes_the_selected_snapshot_when_applied(
         "metrics": {"row_count": 8},
         "remote": {"revision": "published-revision"},
     }
+    output = capsys.readouterr().out
+    assert output == json.dumps(expected, default=str, indent=2, sort_keys=True) + "\n"
+    assert json.loads(output) == expected
 
 
 def test_release_stats_adapter_forwards_confirmation_and_serializes_report(
@@ -583,7 +629,10 @@ def test_release_stats_adapter_forwards_confirmation_and_serializes_report(
     )
 
     assert calls == [(tmp_path / "run", "owner/dataset", "owner/dataset", False)]
-    assert json.loads(capsys.readouterr().out) == {"published": False, "digest": "digest"}
+    expected = {"published": False, "digest": "digest"}
+    output = capsys.readouterr().out
+    assert output == json.dumps(expected, default=str, indent=2, sort_keys=True) + "\n"
+    assert json.loads(output) == expected
 
 
 def test_release_stats_adapter_forwards_apply_and_canonical_repository(
@@ -619,7 +668,7 @@ def test_release_stats_adapter_forwards_apply_and_canonical_repository(
             True,
         )
     ]
-    assert json.loads(capsys.readouterr().out) == {
-        "published": True,
-        "digest": "release-digest",
-    }
+    expected = {"published": True, "digest": "release-digest"}
+    output = capsys.readouterr().out
+    assert output == json.dumps(expected, default=str, indent=2, sort_keys=True) + "\n"
+    assert json.loads(output) == expected

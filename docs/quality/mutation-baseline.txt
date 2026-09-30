@@ -26,7 +26,7 @@
 # their changed branches apply a zero-turn longitude correction at the boundary.
 # In pipeline.extraction, omitting the status argument selects its existing
 # default, and encoding aliases/defaults write the same ASCII-escaped JSON.
-# Recorded mutants: 162
+# Recorded mutants: 161
 
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
@@ -121,7 +121,6 @@ osm_polygon_website_tag.reporting.geometry_stats.x__accumulate_batch__mutmut_13
 osm_polygon_website_tag.reporting.geometry_stats.x__accumulate_batch__mutmut_18
 osm_polygon_website_tag.reporting.geometry_stats.x__accumulate_batch__mutmut_28
 osm_polygon_website_tag.reporting.geometry_stats.x__accumulate_batch__mutmut_41
-osm_polygon_website_tag.reporting.geometry_stats.x__accumulate_shard__mutmut_10
 osm_polygon_website_tag.reporting.geometry_stats.x__as_float__mutmut_3
 osm_polygon_website_tag.reporting.geometry_stats.x__as_int__mutmut_3
 osm_polygon_website_tag.reporting.geometry_stats.x__bbox_metre_values__mutmut_18

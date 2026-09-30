@@ -273,6 +273,26 @@ def test_connect_rejects_rebound_private_peer(monkeypatch, peer: str) -> None:
     assert sock.closed
 
 
+def test_connect_returns_a_public_peer_and_forwards_connection_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sock = _FakeSocket("93.184.216.34")
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def create_connection(*args: object, **kwargs: object) -> _FakeSocket:
+        calls.append((args, kwargs))
+        return sock
+
+    monkeypatch.setattr(web_fetch_module.socket, "create_connection", create_connection)
+    address = ("example.org", 443)
+
+    result = web_fetch_module._connect_public(address, 3.0, source_address=("127.0.0.1", 0))
+
+    assert result is sock
+    assert sock.closed is False
+    assert calls == [((address, 3.0), {"source_address": ("127.0.0.1", 0)})]
+
+
 @pytest.mark.parametrize(
     ("connection", "handler", "method"),
     [
@@ -298,6 +318,30 @@ _PUBLIC = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
 def _public_resolver(_host: str, _port: int):
     return _PUBLIC
+
+
+def test_follow_redirects_can_skip_robots_for_the_policy_request() -> None:
+    requested = "https://example.org/page"
+    seen: list[str] = []
+
+    def request(url: str, _timeout: float, _max_bytes: int) -> HttpResponse:
+        seen.append(url)
+        return HttpResponse(200, {"content-type": "text/html"}, b"page")
+
+    result = web_fetch_module._follow_redirects(
+        requested,
+        request,
+        _public_resolver,
+        3.0,
+        16,
+        0,
+        check_robots=False,
+    )
+
+    assert result == FetchResult(
+        "ok", requested, final_url=requested, body=b"page", media_type="text/html"
+    )
+    assert seen == [requested]
 
 
 def test_module_constants_are_pinned() -> None:

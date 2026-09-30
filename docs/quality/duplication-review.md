@@ -9,7 +9,7 @@ A one-off Python AST scan covered `src/osm_polygon_website_tag/**/*.py`,
 source locations, consistently renamed identifiers, parameters, nested
 definition names, and keyword labels within each body, then grouped identical
 normalized trees containing at least 24 AST nodes. It counted 1,370
-production and 2,901 test function bodies; 1,076 and 2,090, respectively, met
+production and 2,921 test function bodies; 1,076 and 2,106, respectively, met
 the size cutoff. Among those, it found three repeated production-body groups
 (seven bodies) and five repeated test-body groups (10 bodies). This scan
 normalizes local identifiers, parameters, nested definition names, and keyword
