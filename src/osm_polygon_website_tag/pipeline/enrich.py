@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import multiprocessing
 import shutil
+from collections import deque
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
@@ -38,6 +39,7 @@ DEFAULT_BATCH_ROWS = 512
 DEFAULT_FETCH_WORKERS = 8
 MAX_FETCH_WORKERS = 32
 MAX_EXTRACT_WORKERS = 4
+MAX_PREFETCH_BATCHES = 2
 Fetcher = Callable[[str], FetchResult]
 Extractor = Callable[..., TextExtraction]
 _Reference = tuple[dict[str, object], str]
@@ -51,6 +53,25 @@ class _RowState:
     original: dict[str, object]
     row: dict[str, object]
     before: tuple[object, ...]
+
+
+@dataclass
+class _PreparedEnrichmentBatch:
+    """Rows and fetches prepared while earlier batches are being extracted."""
+
+    states: list[_RowState]
+    pending: _PendingReferences
+    futures: dict[str, Future[FetchResult]]
+
+
+@dataclass
+class _EnrichmentProgress:
+    """Counters for batches committed by one enrichment invocation."""
+
+    changed: bool
+    processed_rows: int
+    max_batch_rows: int
+    next_part_index: int
 
 
 @dataclass(frozen=True)
@@ -209,21 +230,23 @@ def _process_enrichment_batches(
     workers: int,
 ) -> tuple[bool, int]:
     """Process and checkpoint every unprocessed batch in source order."""
-    changed = False
-    processed_rows = checkpoint.completed_rows
-    max_batch_rows = 0
     rows_to_skip = checkpoint.completed_rows
+    prepared_batches: deque[_PreparedEnrichmentBatch] = deque()
+    progress = _EnrichmentProgress(False, checkpoint.completed_rows, 0, next_part_index)
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="website-fetch") as fetch_pool:
         extract_pool_context = _extract_pool_context(extractor, workers)
         with extract_pool_context as extract_pool:
-            for batch in parquet.iter_batches(batch_size=batch_rows):
-                originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
-                if not originals:
-                    continue
-                enriched_rows, batch_changed = _enrich_batch(
-                    originals,
+            try:
+                _run_enrichment_batches(
+                    parquet=parquet,
                     source_schema=source_schema,
                     target_schema_version=target_schema_version,
+                    batch_rows=batch_rows,
+                    rows_to_skip=rows_to_skip,
+                    prepared_batches=prepared_batches,
+                    progress=progress,
+                    store=store,
+                    checkpoint=checkpoint,
                     cache=cache,
                     invocation_id=invocation_id,
                     fetcher=fetcher,
@@ -231,20 +254,204 @@ def _process_enrichment_batches(
                     fetch_pool=fetch_pool,
                     extract_pool=extract_pool,
                 )
-                changed = changed or batch_changed
-                cache.flush()
-                store.write_part(
-                    checkpoint.directory,
-                    next_part_index,
-                    enriched_rows,
-                    batch_rows=batch_rows,
+            except KeyboardInterrupt:
+                _drain_prefetched_batches(
+                    prepared_batches,
+                    cache=cache,
+                    invocation_id=invocation_id,
+                    extractor=extractor,
                 )
-                next_part_index += 1
-                processed_rows += len(enriched_rows)
-                max_batch_rows = max(max_batch_rows, len(enriched_rows))
-    if processed_rows != source_row_count:
+                cache.flush()
+                raise
+    if progress.processed_rows != source_row_count:
         raise ValueError("enrichment row count changed")
-    return changed, max_batch_rows
+    return progress.changed, progress.max_batch_rows
+
+
+def _run_enrichment_batches(
+    *,
+    parquet: pq.ParquetFile,
+    source_schema: pa.Schema,
+    target_schema_version: str,
+    batch_rows: int,
+    rows_to_skip: int,
+    prepared_batches: deque[_PreparedEnrichmentBatch],
+    progress: _EnrichmentProgress,
+    store: CheckpointStore,
+    checkpoint: Checkpoint,
+    cache: TextCache,
+    invocation_id: str,
+    fetcher: Fetcher,
+    extractor: Extractor,
+    fetch_pool: ThreadPoolExecutor,
+    extract_pool: ProcessPoolExecutor | None,
+) -> None:
+    """Prefetch bounded batches and commit their results in source order."""
+    for batch in parquet.iter_batches(batch_size=batch_rows):
+        originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
+        if not originals:
+            continue
+        prepared_batches.append(
+            _prepare_enrichment_batch(
+                originals,
+                source_schema=source_schema,
+                cache=cache,
+                invocation_id=invocation_id,
+                fetcher=fetcher,
+                fetch_pool=fetch_pool,
+            )
+        )
+        if len(prepared_batches) == MAX_PREFETCH_BATCHES:
+            _checkpoint_next_prepared_batch(
+                prepared_batches,
+                target_schema_version=target_schema_version,
+                cache=cache,
+                invocation_id=invocation_id,
+                extractor=extractor,
+                extract_pool=extract_pool,
+                store=store,
+                checkpoint=checkpoint,
+                progress=progress,
+                batch_rows=batch_rows,
+            )
+    while prepared_batches:
+        _checkpoint_next_prepared_batch(
+            prepared_batches,
+            target_schema_version=target_schema_version,
+            cache=cache,
+            invocation_id=invocation_id,
+            extractor=extractor,
+            extract_pool=extract_pool,
+            store=store,
+            checkpoint=checkpoint,
+            progress=progress,
+            batch_rows=batch_rows,
+        )
+
+
+def _checkpoint_next_prepared_batch(
+    prepared_batches: deque[_PreparedEnrichmentBatch],
+    *,
+    target_schema_version: str,
+    cache: TextCache,
+    invocation_id: str,
+    extractor: Extractor,
+    extract_pool: ProcessPoolExecutor | None,
+    store: CheckpointStore,
+    checkpoint: Checkpoint,
+    progress: _EnrichmentProgress,
+    batch_rows: int,
+) -> None:
+    """Commit the next ready batch and advance its durable source prefix."""
+    changed, row_count = _checkpoint_prepared_batch(
+        prepared_batches.popleft(),
+        target_schema_version=target_schema_version,
+        cache=cache,
+        invocation_id=invocation_id,
+        extractor=extractor,
+        extract_pool=extract_pool,
+        store=store,
+        checkpoint=checkpoint,
+        part_index=progress.next_part_index,
+        batch_rows=batch_rows,
+    )
+    progress.changed = progress.changed or changed
+    progress.next_part_index += 1
+    progress.processed_rows += row_count
+    progress.max_batch_rows = max(progress.max_batch_rows, row_count)
+
+
+def _drain_prefetched_batches(
+    prepared_batches: deque[_PreparedEnrichmentBatch],
+    *,
+    cache: TextCache,
+    invocation_id: str,
+    extractor: Extractor,
+) -> None:
+    """Cache completed fetches after interruption without writing new parts."""
+    for prepared in prepared_batches:
+        _drain_interrupted_fetches(
+            prepared.pending,
+            prepared.futures,
+            cache=cache,
+            invocation_id=invocation_id,
+            extractor=extractor,
+        )
+
+
+def _prepare_enrichment_batch(
+    originals: list[dict[str, object]],
+    *,
+    source_schema: pa.Schema,
+    cache: TextCache,
+    invocation_id: str,
+    fetcher: Fetcher,
+    fetch_pool: ThreadPoolExecutor,
+) -> _PreparedEnrichmentBatch:
+    """Resolve cache hits and start this batch's network work."""
+    states, pending, lookup_urls = _prepare_batch(
+        originals,
+        source_schema=source_schema,
+        invocation_id=invocation_id,
+    )
+    unresolved = _apply_cached_results(
+        pending,
+        lookup_urls,
+        cache=cache,
+        invocation_id=invocation_id,
+    )
+    futures = _submit_fetches(unresolved, fetch_pool=fetch_pool, fetcher=fetcher)
+    return _PreparedEnrichmentBatch(states, unresolved, futures)
+
+
+def _checkpoint_prepared_batch(
+    prepared: _PreparedEnrichmentBatch,
+    *,
+    target_schema_version: str,
+    cache: TextCache,
+    invocation_id: str,
+    extractor: Extractor,
+    extract_pool: ProcessPoolExecutor | None,
+    store: CheckpointStore,
+    checkpoint: Checkpoint,
+    part_index: int,
+    batch_rows: int,
+) -> tuple[bool, int]:
+    """Finish one prefetched batch and persist its source-order checkpoint."""
+    try:
+        _record_fetches(
+            prepared.pending,
+            prepared.futures,
+            cache=cache,
+            invocation_id=invocation_id,
+            extractor=extractor,
+            extract_pool=extract_pool,
+        )
+    except KeyboardInterrupt:
+        _drain_interrupted_fetches(
+            prepared.pending,
+            prepared.futures,
+            cache=cache,
+            invocation_id=invocation_id,
+            extractor=extractor,
+        )
+        cache.flush()
+        raise
+    prepared.futures.clear()
+    enriched_rows = _finalize_batch(prepared.states, schema_version=target_schema_version)
+    batch_changed = any(
+        state.before != tuple(state.row.get(name) for name in TEXT_COLUMN_NAMES)
+        or state.original.get("schema_version") != target_schema_version
+        for state in prepared.states
+    )
+    cache.flush()
+    store.write_part(
+        checkpoint.directory,
+        part_index,
+        enriched_rows,
+        batch_rows=batch_rows,
+    )
+    return batch_changed, len(enriched_rows)
 
 
 def _extract_pool_context(
@@ -269,46 +476,6 @@ def _skip_checkpointed_rows(
     if rows_to_skip:
         return originals[rows_to_skip:], 0
     return originals, 0
-
-
-def _enrich_batch(
-    originals: list[dict[str, object]],
-    *,
-    source_schema: pa.Schema,
-    target_schema_version: str,
-    cache: TextCache,
-    invocation_id: str,
-    fetcher: Fetcher,
-    extractor: Extractor,
-    fetch_pool: ThreadPoolExecutor,
-    extract_pool: ProcessPoolExecutor | None = None,
-) -> tuple[list[dict[str, object]], bool]:
-    """Enrich one batch and return rows plus whether any values changed."""
-    states, pending, lookup_urls = _prepare_batch(
-        originals,
-        source_schema=source_schema,
-        invocation_id=invocation_id,
-    )
-    unresolved = _apply_cached_results(
-        pending,
-        lookup_urls,
-        cache=cache,
-        invocation_id=invocation_id,
-    )
-    _resolve_pending(
-        unresolved,
-        cache=cache,
-        invocation_id=invocation_id,
-        fetcher=fetcher,
-        extractor=extractor,
-        fetch_pool=fetch_pool,
-        extract_pool=extract_pool,
-    )
-    return _finalize_batch(states, schema_version=target_schema_version), any(
-        state.before != tuple(state.row.get(name) for name in TEXT_COLUMN_NAMES)
-        or state.original.get("schema_version") != target_schema_version
-        for state in states
-    )
 
 
 def _prepare_batch(

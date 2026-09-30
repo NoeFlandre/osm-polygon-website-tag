@@ -67,6 +67,7 @@ def test_performance_job_saves_a_base_measurement_and_compares_medians() -> None
     assert "--benchmark-save=base" in base["run"]
     assert "--benchmark-json=" in base["run"]
     assert "just bench-compare" in compare["run"]
+    assert "OSM_POLY_BENCHMARK_ACCEPTANCE=1" in justfile
     assert "--benchmark-compare-fail=median:25%" in justfile
     assert "--benchmark-json=" in justfile
 

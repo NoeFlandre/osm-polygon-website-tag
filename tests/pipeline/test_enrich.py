@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -26,6 +27,7 @@ from osm_polygon_website_tag.pipeline.enrich import (
     _apply_result,
     _completed_fetch,
     _drain_interrupted_fetches,
+    _extract_default_fetch,
     _extract_fetched,
     _fetch,
     _finalize_batch,
@@ -260,6 +262,134 @@ def test_completed_fetches_are_extracted_before_a_slow_earlier_url(tmp_path: Pat
         assert rows[slow_url]["website_text"] == "slow"
     finally:
         cache.close()
+
+
+def test_next_batch_fetch_starts_while_current_batch_is_being_extracted(
+    tmp_path: Path,
+) -> None:
+    """A slow parse in one batch does not leave the fetch pool idle at its boundary."""
+    next_fetch_started = threading.Event()
+    shard = tmp_path / "run" / "polygons" / "source.parquet"
+    write_legacy_polygon_shard(
+        shard,
+        [
+            legacy_polygon_row(
+                polygon_id=f"source:way/{index}",
+                website=f"https://example.org/{index}",
+                contact=None,
+            )
+            for index in range(2)
+        ],
+    )
+
+    def fetch(url: str) -> FetchResult:
+        if url.endswith("/1"):
+            next_fetch_started.set()
+        return FetchResult("ok", url, final_url=url, body=url.encode())
+
+    def extract(body: bytes, *, url: str) -> TextExtraction:
+        if url.endswith("/0"):
+            assert next_fetch_started.wait(timeout=2)
+        value = body.decode()
+        return TextExtraction("success", value, 1, None, "test")
+
+    enrich_polygon_shard(
+        shard,
+        cache_path=tmp_path / "run" / "cache" / "text.sqlite3",
+        invocation_id="prefetch",
+        fetcher=fetch,
+        extractor=extract,
+        batch_rows=1,
+        fetch_workers=2,
+    )
+
+    assert next_fetch_started.is_set()
+    assert [row["website_text"] for row in pq.read_table(shard).to_pylist()] == [
+        "https://example.org/0",
+        "https://example.org/1",
+    ]
+
+
+def test_prefetched_enrichment_is_deterministic_across_completion_orders(
+    tmp_path: Path,
+) -> None:
+    """Out-of-order fetch completion preserves Parquet rows and cache content."""
+    source_indexes = [0, 1, 0, 2, 3, 1]
+
+    def run_once(name: str, delays: dict[int, float]) -> tuple[bytes, list[tuple[object, ...]]]:
+        run_dir = tmp_path / name
+        shard = run_dir / "polygons" / "source.parquet"
+        rows = [
+            legacy_polygon_row(
+                polygon_id=f"source:way/{index}",
+                website=f"https://example.org/{source_index}",
+                contact=None,
+            )
+            for index, source_index in enumerate(source_indexes)
+        ]
+        write_legacy_polygon_shard(shard, rows)
+
+        def fetch(url: str) -> FetchResult:
+            index = int(url.rsplit("/", 1)[1])
+            time.sleep(delays[index])
+            if index == 1:
+                return FetchResult("fetch_error", url, message="temporary failure")
+            return FetchResult("ok", url, final_url=url, body=f"stable page {index}".encode())
+
+        cache_path = run_dir / "cache" / "text.sqlite3"
+        enrich_polygon_shard(
+            shard,
+            cache_path=cache_path,
+            invocation_id="deterministic-run",
+            fetcher=fetch,
+            extractor=_extract,
+            batch_rows=2,
+            fetch_workers=4,
+        )
+        with sqlite3.connect(cache_path) as connection:
+            cache_rows = connection.execute(
+                """SELECT url, status, text, word_count, final_url, message,
+                          attempt_count, trafilatura_version, invocation_id
+                   FROM website_text ORDER BY url"""
+            ).fetchall()
+        return shard.read_bytes(), cache_rows
+
+    first = run_once("completion-order-a", {0: 0.03, 1: 0.01, 2: 0.02, 3: 0.0})
+    second = run_once("completion-order-b", {0: 0.0, 1: 0.02, 2: 0.01, 3: 0.03})
+
+    assert first == second
+
+
+def test_default_process_pool_extractor_entry_point() -> None:
+    fetched = FetchResult(
+        "ok",
+        "https://example.org/library",
+        final_url="https://example.org/library",
+        body=(
+            b"<html><body><article><h1>Public Library</h1><p>"
+            + (
+                b"The library provides books, archives, meeting rooms, and services "
+                b"for everyone in the local community. " * 8
+            )
+            + b"</p></article></body></html>"
+        ),
+        media_type="text/html",
+    )
+
+    extracted = _extract_default_fetch(
+        fetched.requested_url, fetched, invocation_id="process-pool-test"
+    )
+
+    assert extracted.status == "success"
+    assert extracted.text is not None
+    assert "Public Library" in extracted.text
+    assert extracted.invocation_id == "process-pool-test"
+    with pytest.raises(ValueError, match="successful fetch has no body"):
+        _extract_default_fetch(
+            fetched.requested_url,
+            FetchResult("ok", fetched.requested_url, final_url=fetched.requested_url, body=None),
+            invocation_id="process-pool-test",
+        )
 
 
 def test_assemble_checkpoint_streams_arrow_batches(

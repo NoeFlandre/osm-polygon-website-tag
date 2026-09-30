@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pyarrow as pa
@@ -35,6 +36,17 @@ _ARTICLE = (
     )
     + "</article></body></html>"
 ).encode()
+_ARTICLE_PARAGRAPH = (
+    "Benchmark pages contain useful public information about places, services, opening times, "
+    "local history, and ways to contact the organization. " * 12
+)
+_LARGE_ARTICLE = (
+    "<html><head><title>Benchmark</title></head><body><nav>"
+    + "".join(f'<a href="/nav/{index}">Navigation {index}</a>' for index in range(200))
+    + "</nav><article>"
+    + "".join(f"<p>{_ARTICLE_PARAGRAPH}</p>" for _ in range(60))
+    + "</article></body></html>"
+).encode()
 _IDENTITY = ModelIdentity("benchmark", "model.bin", "revision", "b" * 64)
 
 
@@ -46,6 +58,33 @@ def _fetch_after_latency(url: str) -> FetchResult:
         url,
         final_url=url,
         body=_ARTICLE,
+        charset="utf-8",
+        media_type="text/html",
+    )
+
+
+def _fetch_after_200_ms(url: str) -> FetchResult:
+    """Match the flat-latency enrichment acceptance case without network I/O."""
+    time.sleep(0.2)
+    return FetchResult(
+        "ok",
+        url,
+        final_url=url,
+        body=_LARGE_ARTICLE,
+        charset="utf-8",
+        media_type="text/html",
+    )
+
+
+def _fetch_with_tail_latency(url: str) -> FetchResult:
+    """Match the 2% five-second tail enrichment acceptance case."""
+    index = int(url.rsplit("/", 1)[1])
+    time.sleep(5.0 if index % 50 == 0 else 0.2)
+    return FetchResult(
+        "ok",
+        url,
+        final_url=url,
+        body=_LARGE_ARTICLE,
         charset="utf-8",
         media_type="text/html",
     )
@@ -84,6 +123,87 @@ def test_enrichment_throughput(benchmark: BenchmarkFixture, tmp_path: Path) -> N
 
     assert last_shard is not None
     assert pq.read_table(last_shard).num_rows == 256
+
+
+def _benchmark_large_enrichment(
+    benchmark: BenchmarkFixture,
+    tmp_path: Path,
+    *,
+    fetcher: Callable[[str], FetchResult],
+    limit_seconds: float,
+) -> None:
+    """Measure 1,024 large pages with the production extractor and worker cap."""
+    sequence = 0
+    last_shard: Path | None = None
+
+    def setup() -> tuple[tuple[Path, Path, str], dict[str, object]]:
+        nonlocal sequence, last_shard
+        sequence += 1
+        directory = tmp_path / f"run-{sequence}"
+        directory.mkdir()
+        last_shard = directory / "polygons.parquet"
+        write_legacy_polygon_shard(
+            last_shard,
+            [
+                legacy_polygon_row(
+                    polygon_id=f"source:way/{index}",
+                    website=f"https://example.org/page/{index}",
+                    contact=None,
+                )
+                for index in range(1024)
+            ],
+        )
+        return (last_shard, directory / "cache.sqlite3", f"benchmark-{sequence}"), {}
+
+    def run_once(shard: Path, cache_path: Path, invocation_id: str) -> int:
+        result = enrich_polygon_shard(
+            shard,
+            cache_path=cache_path,
+            invocation_id=invocation_id,
+            fetcher=fetcher,
+            batch_rows=512,
+            fetch_workers=32,
+        )
+        return result.row_count
+
+    result = benchmark.pedantic(
+        run_once,
+        setup=setup,
+        rounds=2,
+        iterations=1,
+        warmup_rounds=0,
+    )
+
+    assert result == 1024
+    assert last_shard is not None
+    assert pq.read_table(last_shard).num_rows == 1024
+    benchmark.extra_info["acceptance_limit_seconds"] = limit_seconds
+    if os.environ.get("OSM_POLY_BENCHMARK_ACCEPTANCE") == "1":
+        assert benchmark.stats.stats.median <= limit_seconds
+
+
+def test_enrichment_1024_flat_latency_acceptance(
+    benchmark: BenchmarkFixture, tmp_path: Path
+) -> None:
+    """Keep the 200 ms, 1,024-page real-extractor case under eight seconds."""
+    _benchmark_large_enrichment(
+        benchmark,
+        tmp_path,
+        fetcher=_fetch_after_200_ms,
+        limit_seconds=8.0,
+    )
+
+
+def test_enrichment_1024_tail_latency_acceptance(
+    benchmark: BenchmarkFixture, tmp_path: Path
+) -> None:
+    """Keep the 2% five-second tail case under fifteen seconds."""
+    _benchmark_large_enrichment(
+        benchmark,
+        tmp_path,
+        fetcher=_fetch_with_tail_latency,
+        limit_seconds=15.0,
+    )
 
 
 class _BenchmarkDetector:

@@ -62,7 +62,7 @@ bench-save name="base":
     uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q --benchmark-save={{name}}
 
 bench-compare name="base":
-    uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q \
+    OSM_POLY_BENCHMARK_ACCEPTANCE=1 uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q \
         --benchmark-compare --benchmark-compare-fail=median:25% \
         --benchmark-json=/tmp/osm-polygon-website-tag-benchmarks.json
 
