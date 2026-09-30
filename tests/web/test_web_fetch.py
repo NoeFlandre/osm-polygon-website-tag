@@ -876,6 +876,58 @@ class _TrickleResponse:
         return chunk
 
 
+def test_download_once_pins_direct_handlers_timeout_and_exact_read_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handlers: list[object] = []
+    timeouts: list[float | None] = []
+    read_limits: list[int] = []
+
+    class Response:
+        def __init__(self) -> None:
+            self.status = 200
+            self.headers = {"Content-Type": "text/html"}
+            self.pending = b"page"
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read1(self, limit: int) -> bytes:
+            read_limits.append(limit)
+            chunk, self.pending = self.pending[:limit], self.pending[limit:]
+            return chunk
+
+    class Opener:
+        def open(self, _request: object, *, timeout: float | None) -> Response:
+            timeouts.append(timeout)
+            return Response()
+
+    def build_opener(*registered: object) -> Opener:
+        handlers.extend(registered)
+        return Opener()
+
+    def unexpected_proxy_lookup() -> dict[str, str]:
+        raise AssertionError("the safe transport must ignore environment proxies")
+
+    monkeypatch.setattr(web_fetch_module.urllib.request, "getproxies", unexpected_proxy_lookup)
+    monkeypatch.setattr(web_fetch_module.urllib.request, "build_opener", build_opener)
+
+    response = web_fetch_module._download_once("https://example.org/page", 3.0, 4)
+
+    assert response == HttpResponse(200, {"Content-Type": "text/html"}, b"page")
+    assert timeouts == [3.0]
+    assert read_limits == [5, 1]
+    assert {type(handler).__name__ for handler in handlers} >= {
+        "ProxyHandler",
+        "_NoRedirect",
+        "_PublicHTTPHandler",
+        "_PublicHTTPSHandler",
+    }
+
+
 def test_read_before_deadline_reads_in_bounded_chunks(monkeypatch) -> None:
     monkeypatch.setattr(web_fetch_module, "READ_CHUNK_BYTES", 4)
     response = _TrickleResponse(b"abcdefghij")

@@ -156,6 +156,39 @@ def test_cli_help_snapshot_preserves_every_command_option_and_default() -> None:
     assert actual == json.loads(expected_path.read_text(encoding="utf-8"))
 
 
+def test_cli_command_names_dispatch_to_their_public_adapters() -> None:
+    callbacks = {
+        command.name: command.callback for command in app.registered_commands if command.name
+    }
+
+    assert callbacks == {
+        "init": run.init_command,
+        "extract": run.extract_command,
+        "analyze-results": verify.analyze_command,
+        "build-card": verify.card_command,
+        "verify-results": verify.verify_command,
+        "refresh-card": verify.refresh_card_command,
+        "finalize-run": verify.finalize_command,
+        "finalize-snapshot": verify.finalize_snapshot_command,
+        "publish-plan": publish.publish_plan_command,
+        "publish": publish.publish_command,
+        "release-stats": publish.release_stats_command,
+        "create-repo": publish.create_repo_command,
+        "card-stats": verify.card_stats_command,
+        "geometry-stats": verify.geometry_stats_command,
+        "publish-trackio": publish.publish_trackio_command,
+        "run-all": run.run_all_command,
+        "detect-languages": languages.detect_languages_command,
+        "segment-sentences": sentences.segment_sentences_command,
+        "grid5000-prepare": grid5000.grid5000_prepare_command,
+        "grid5000-run": grid5000.grid5000_run_command,
+        "grid5000-sync": grid5000.grid5000_sync_command,
+        "grid5000-prepare-sentences": grid5000.grid5000_prepare_sentences_command,
+        "grid5000-run-sentences": grid5000.grid5000_run_sentences_command,
+        "grid5000-sync-sentences": grid5000.grid5000_sync_sentences_command,
+    }
+
+
 def test_cli_run_examples_use_the_portable_data_root_fallback() -> None:
     from typer.testing import CliRunner
 
