@@ -129,7 +129,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.pylint]
-# Typer commands take many options, so cli.py is exempt below. The rest of the
+# Typer commands take many options, so the CLI package is exempt below. The rest of the
 # package is held to this bound; the listed modules predate it (TODO(#76)).
 max-args = 6
 
@@ -138,7 +138,10 @@ max-args = 6
 "tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018", "ARG", "FBT", "ANN", "PLR0913"]
 # The quality scripts are CLIs that print their reports.
 "scripts/**/*.py" = ["T201"]
-"src/osm_polygon_website_tag/application/cli.py" = ["E501", "PLR0913", "FBT001", "FBT002"]
+"src/osm_polygon_website_tag/application/cli/__init__.py" = ["E501", "FBT001", "FBT002"]
+"src/osm_polygon_website_tag/application/cli/grid5000.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/application/cli/publish.py" = ["FBT001", "FBT002"]
+"src/osm_polygon_website_tag/application/cli/run.py" = ["PLR0913", "FBT001", "FBT002"]
 # shapely's transform() passes a z argument that the projection closures ignore.
 "src/osm_polygon_website_tag/domain/geometry.py" = ["ARG001"]
 # Signatures that predate the argument-count and boolean-flag rules. New modules

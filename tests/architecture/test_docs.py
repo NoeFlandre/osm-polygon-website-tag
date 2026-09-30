@@ -36,6 +36,29 @@ def test_cli_reference_lists_every_command() -> None:
     assert commands == documented
 
 
+def test_cli_package_modules_stay_below_the_size_budget() -> None:
+    cli_package = PACKAGE / "application" / "cli"
+    modules = sorted(cli_package.glob("*.py"))
+
+    assert {path.stem for path in modules} == {
+        "__init__",
+        "__main__",
+        "grid5000",
+        "languages",
+        "publish",
+        "run",
+        "sentences",
+        "verify",
+    }
+    oversized = {
+        path.name: len(path.read_text(encoding="utf-8").splitlines())
+        for path in modules
+        if len(path.read_text(encoding="utf-8").splitlines()) > 250
+    }
+
+    assert oversized == {}
+
+
 @pytest.mark.parametrize(
     "package", ["application", "contracts", "pipeline", "reporting", "publishing"]
 )

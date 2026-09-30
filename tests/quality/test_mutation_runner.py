@@ -326,7 +326,7 @@ def test_generated_shard_with_no_mutants_uses_a_distinct_exit_status(monkeypatch
             "run",
             "--max-children",
             "4",
-            "osm_polygon_website_tag.application.cli.x_refresh_card_command__mutmut_*",
+            "osm_polygon_website_tag.application.cli.verify.x_refresh_card_command__mutmut_*",
         ],
     )
     monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda _names: ())
@@ -426,7 +426,7 @@ def test_empty_generated_shard_uses_a_distinct_exit_status(
             "run",
             "--max-children",
             "4",
-            "osm_polygon_website_tag.application.cli.x_refresh_card_command__mutmut_*",
+            "osm_polygon_website_tag.application.cli.verify.x_refresh_card_command__mutmut_*",
         ],
     )
     monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda _names: ())

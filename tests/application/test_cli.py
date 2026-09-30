@@ -18,7 +18,16 @@ from huggingface_hub.errors import HfHubHTTPError
 from tests.fixtures.polygon_shards import v1_2_polygon_row as _row
 
 from osm_polygon_website_tag.application import cli
-from osm_polygon_website_tag.application.cli import app, main
+from osm_polygon_website_tag.application.cli import (
+    app,
+    grid5000,
+    languages,
+    main,
+    publish,
+    run,
+    sentences,
+    verify,
+)
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
@@ -30,7 +39,11 @@ from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelId
 from osm_polygon_website_tag.publishing import publish as publish_module
 from osm_polygon_website_tag.reporting.geometry_stats import compute_geometry_stats
 from osm_polygon_website_tag.runtime.run_state import (
+    STATUS_ANALYZED,
+    STATUS_CARD_BUILT,
     STATUS_COMPLETE,
+    STATUS_ENRICHED,
+    STATUS_ENRICHING,
     RunState,
     SourceManifestEntry,
     hash_shard,
@@ -124,7 +137,9 @@ def test_cli_help_snapshot_preserves_every_command_option_and_default() -> None:
 
     runner = CliRunner()
     root_result = runner.invoke(app, ["--help"], color=False, terminal_width=100)
-    commands = sorted(command.name for command in app.registered_commands)
+    commands = sorted(
+        name for command in app.registered_commands if (name := command.name) is not None
+    )
     command_results = {
         name: runner.invoke(app, [name, "--help"], color=False, terminal_width=100)
         for name in commands
@@ -161,19 +176,19 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
     result = SimpleNamespace(payload=lambda: {"completed": True, "shard_sha256": "a" * 64})
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(grid5000, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "prepare_language_bundle",
         lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or bundle,
     )
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "run_language_bundle",
         lambda *args, **kwargs: calls.append(("run", args, kwargs)) or result,
     )
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "sync_language_bundle",
         lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
     )
@@ -222,7 +237,7 @@ def test_cli_finalize_snapshot_reports_result(
     capsys,
 ) -> None:
     monkeypatch.setattr(
-        cli,
+        verify,
         "finalize_snapshot",
         lambda _run_dir: SimpleNamespace(
             ok=True,
@@ -377,9 +392,9 @@ def test_cli_publish_trackio_defaults_to_dry_run(
         dataset_repo="owner/dataset",
         metrics={"dataset_public_polygon_rows": 3},
     )
-    monkeypatch.setattr(cli, "build_trackio_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(publish, "build_trackio_snapshot", lambda *_args, **_kwargs: snapshot)
     monkeypatch.setattr(
-        cli,
+        publish,
         "publish_trackio_snapshot",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("published")),
     )
@@ -401,7 +416,7 @@ def test_cli_detect_languages_rejects_a_run_outside_the_data_root_before_model_l
 ) -> None:
     run_dir = _setup_run(tmp_path)
     monkeypatch.setattr(
-        cli,
+        languages,
         "load_glotlid_detector",
         lambda *_args, **_kwargs: pytest.fail("unsafe run must not load GlotLID"),
         raising=False,
@@ -427,9 +442,11 @@ def test_cli_detect_languages_loads_one_model_and_updates_run(
         predict=lambda texts: [LanguagePrediction("eng_Latn", 0.9) for _text in texts],
     )
     loaded: list[Path] = []
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
-    monkeypatch.setattr(cli, "model_cache_dir", {"glotlid": cache_dir}.__getitem__)
-    monkeypatch.setattr(cli, "load_glotlid_detector", lambda path: loaded.append(path) or detector)
+    monkeypatch.setattr(languages, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(languages, "model_cache_dir", {"glotlid": cache_dir}.__getitem__)
+    monkeypatch.setattr(
+        languages, "load_glotlid_detector", lambda path: loaded.append(path) or detector
+    )
 
     assert main(["detect-languages", "--run-dir", str(run_dir)]) == 0
 
@@ -458,10 +475,12 @@ def test_cli_detect_languages_forwards_batch_and_time_budget(
     detector = SimpleNamespace(identity=ModelIdentity("repo", "file", "revision", "a" * 64))
     observed: dict[str, object] = {}
 
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
-    monkeypatch.setattr(cli, "model_cache_dir", {"glotlid": tmp_path / "model-cache"}.__getitem__)
-    monkeypatch.setattr(cli, "load_glotlid_detector", lambda _path: detector)
-    monkeypatch.setattr(cli, "shard_needs_language_detection", lambda _path: True)
+    monkeypatch.setattr(languages, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(
+        languages, "model_cache_dir", {"glotlid": tmp_path / "model-cache"}.__getitem__
+    )
+    monkeypatch.setattr(languages, "load_glotlid_detector", lambda _path: detector)
+    monkeypatch.setattr(languages, "shard_needs_language_detection", lambda _path: True)
 
     def detect(_path, *, detector, batch_rows, time_budget_seconds):
         observed.update(
@@ -477,7 +496,7 @@ def test_cli_detect_languages_forwards_batch_and_time_budget(
             processed_rows=1,
         )
 
-    monkeypatch.setattr(cli, "detect_language_shard", detect)
+    monkeypatch.setattr(languages, "detect_language_shard", detect)
 
     assert (
         main(
@@ -506,7 +525,9 @@ def test_cli_rejects_invalid_language_budget_before_reading_run(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(ValueError, match="time_budget_seconds must be positive"):
-        cli.detect_languages_command(tmp_path / "missing", time_budget_seconds=cast(float, value))
+        languages.detect_languages_command(
+            tmp_path / "missing", time_budget_seconds=cast(float, value)
+        )
 
 
 def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
@@ -520,9 +541,9 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
     transition_status(state, "verified")
     transition_status(state, STATUS_COMPLETE)
     upsert_run_metadata(state, {"snapshot_status": "done"})
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(languages, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
-        cli,
+        languages,
         "load_glotlid_detector",
         lambda *_args, **_kwargs: pytest.fail("frozen snapshot must not load GlotLID"),
     )
@@ -532,7 +553,7 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
 
 def test_cli_frozen_snapshot_error_message_is_stable() -> None:
     with pytest.raises(ValueError) as exc_info:
-        cli._reject_frozen_language_run(
+        languages._reject_frozen_language_run(
             RunState(
                 Path("run"),
                 "run",
@@ -579,7 +600,7 @@ def test_cli_publish_plan_uses_but_does_not_echo_hf_dataset_repo_from_environmen
         configured_repo_ids.append(repo_id)
         return SimpleNamespace(repo_id=repo_id, artifact_paths=(), readme_path=None)
 
-    monkeypatch.setattr(cli, "build_publish_plan", build_plan)
+    monkeypatch.setattr(publish, "build_publish_plan", build_plan)
 
     rc = main(["publish-plan", "--run-dir", str(run_dir)])
 
@@ -662,29 +683,29 @@ def test_cli_analyze_card_refresh_and_finalize_commands_delegate(
 ) -> None:
     run_dir = tmp_path / "run"
     state = SimpleNamespace(metadata={"status": "enriched"})
-    monkeypatch.setattr(cli, "load_run", lambda _run_dir: state)
-    monkeypatch.setattr(cli, "analyze_results", lambda _run_dir: SimpleNamespace(value=1))
-    monkeypatch.setattr(cli, "build_card", lambda _run_dir: run_dir / "README.md")
+    monkeypatch.setattr(verify, "load_run", lambda _run_dir: state)
+    monkeypatch.setattr(verify, "analyze_results", lambda _run_dir: SimpleNamespace(value=1))
+    monkeypatch.setattr(verify, "build_card", lambda _run_dir: run_dir / "README.md")
     monkeypatch.setattr(
-        cli,
+        verify,
         "refresh_card_run",
         lambda _run_dir: SimpleNamespace(ok=True, verification=SimpleNamespace(errors=[])),
     )
     monkeypatch.setattr(
-        cli,
+        verify,
         "finalize_run",
         lambda _run_dir: SimpleNamespace(ok=True, receipt={"manifest_digest": "a" * 64}),
     )
     monkeypatch.setattr(
-        cli,
+        verify,
         "transition_status",
         lambda _state, new_status: state.metadata.__setitem__("status", new_status),
     )
 
-    assert cli.analyze_command(run_dir) == 0
-    assert cli.card_command(run_dir) == 0
-    assert cli.refresh_card_command(run_dir) == 0
-    assert cli.finalize_command(run_dir) == 0
+    assert verify.analyze_command(run_dir) == 0
+    assert verify.card_command(run_dir) == 0
+    assert verify.refresh_card_command(run_dir) == 0
+    assert verify.finalize_command(run_dir) == 0
     assert '"digest"' in capsys.readouterr().out
 
 
@@ -703,9 +724,9 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
         def close(self, *, completed: bool) -> None:
             events.append(completed)
 
-    monkeypatch.setattr(cli, "ProgressReporter", FakeProgress)
+    monkeypatch.setattr(run, "ProgressReporter", FakeProgress)
     monkeypatch.setattr(
-        cli,
+        run,
         "run_all",
         lambda **kwargs: (
             calls.append(kwargs)
@@ -714,7 +735,7 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
     )
 
     assert (
-        cli.run_all_command(
+        run.run_all_command(
             source_root=tmp_path / "source",
             output_root=tmp_path / "runs",
             run_id="run",
@@ -755,13 +776,13 @@ def test_cli_segment_sentences_loads_the_pinned_model_and_updates_run(
         split=lambda texts: [[text] for text in texts],
     )
 
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(sentences, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
-        cli,
+        sentences,
         "load_sat_splitter_from_path",
         lambda path, *, revision: loaded.append((path, revision)) or splitter,
     )
-    monkeypatch.setattr(cli, "shard_needs_sentence_segmentation", lambda _path: True)
+    monkeypatch.setattr(sentences, "shard_needs_sentence_segmentation", lambda _path: True)
 
     observed: dict[str, object] = {}
 
@@ -777,7 +798,7 @@ def test_cli_segment_sentences_loads_the_pinned_model_and_updates_run(
             processed_rows=1,
         )
 
-    monkeypatch.setattr(cli, "run_sentence_shards", _passthrough_sentence_run(segment))
+    monkeypatch.setattr(sentences, "run_sentence_shards", _passthrough_sentence_run(segment))
 
     assert (
         main(
@@ -820,10 +841,10 @@ def test_cli_segment_sentences_reports_nothing_to_do(
 ) -> None:
     """A fully segmented run must not load the model at all."""
     run_dir = _setup_run(tmp_path)
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
-    monkeypatch.setattr(cli, "shard_needs_sentence_segmentation", lambda _path: False)
+    monkeypatch.setattr(sentences, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(sentences, "shard_needs_sentence_segmentation", lambda _path: False)
     monkeypatch.setattr(
-        cli,
+        sentences,
         "load_sat_splitter_from_path",
         lambda *_args, **_kwargs: pytest.fail("no shard needs the model"),
     )
@@ -862,29 +883,29 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
     result = SimpleNamespace(payload=lambda: {"completed": True, "shards": []})
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    monkeypatch.setattr(cli, "require_under_data_root", lambda path, **_kwargs: Path(path))
+    monkeypatch.setattr(grid5000, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "prepare_sentence_bundle",
         lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or bundle,
     )
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "run_sentence_bundle",
         lambda *args, **kwargs: calls.append(("run", args, kwargs)) or result,
     )
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "sync_sentence_bundle",
         lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
     )
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "load_sat_splitter_from_path",
         lambda model_dir, *, revision: SimpleNamespace(model_dir=model_dir, revision=revision),
     )
     monkeypatch.setattr(
-        cli,
+        grid5000,
         "load_sentence_bundle",
         lambda bundle_dir: SimpleNamespace(
             model=SimpleNamespace(filename="sat-3l-sm", revision="137da05")
@@ -981,20 +1002,20 @@ def test_cli_language_shard_runner_records_only_completed_results(
         calls.append((shard, detector, batch_rows, time_budget_seconds))
         return next(results)
 
-    monkeypatch.setattr(cli, "detect_language_shard", detect)
+    monkeypatch.setattr(languages, "detect_language_shard", detect)
     monkeypatch.setattr(
-        cli,
+        languages,
         "_record_completed_language_shard",
         lambda received_state, shard, result: records.append((shard, result)),
     )
 
-    assert cli._run_language_shards(
+    assert languages._run_language_shards(
         shards,
         detector=detector,
         state=state,
         batch_rows=16,
         time_budget_seconds=None,
-    ) == cli._LanguageRunProgress(1, 5, completed=True)
+    ) == languages._LanguageRunProgress(1, 5, completed=True)
     assert calls == [(shards[0], detector, 16, None), (shards[1], detector, 16, None)]
     assert [shard for shard, _result in records] == shards
 
@@ -1007,7 +1028,7 @@ def test_cli_language_shard_runner_stops_on_incomplete_or_exhausted_budget(
     state = RunState(Path("run"), "run")
     records: list[object] = []
     monkeypatch.setattr(
-        cli,
+        languages,
         "detect_language_shard",
         lambda *_args, **_kwargs: SimpleNamespace(
             row_count=4,
@@ -1018,46 +1039,46 @@ def test_cli_language_shard_runner_stops_on_incomplete_or_exhausted_budget(
         ),
     )
     monkeypatch.setattr(
-        cli,
+        languages,
         "_record_completed_language_shard",
         lambda *_args: records.append(True),
     )
 
-    assert cli._run_language_shards(
+    assert languages._run_language_shards(
         [shard],
         detector=detector,
         state=state,
         batch_rows=8,
         time_budget_seconds=None,
-    ) == cli._LanguageRunProgress(0, 4, completed=False)
+    ) == languages._LanguageRunProgress(0, 4, completed=False)
     assert records == []
 
-    monkeypatch.setattr(cli, "_remaining_language_budget", lambda *_args, **_kwargs: 0.0)
-    assert cli._run_language_shards(
+    monkeypatch.setattr(languages, "_remaining_language_budget", lambda *_args, **_kwargs: 0.0)
+    assert languages._run_language_shards(
         [shard],
         detector=detector,
         state=state,
         batch_rows=8,
         time_budget_seconds=1.0,
-    ) == cli._LanguageRunProgress(0, 0, completed=False)
+    ) == languages._LanguageRunProgress(0, 0, completed=False)
 
 
 def test_cli_language_private_helpers_preserve_budget_and_payload_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(cli, "monotonic", lambda: 8.5)
-    assert cli._language_start_time(None) is None
-    assert cli._language_start_time(2.0) == 8.5
-    assert cli._remaining_language_budget(None, started_at=None) is None
-    assert cli._remaining_language_budget(10.0, started_at=8.0) == 9.5
-    assert not cli._language_budget_exhausted(None)
-    assert not cli._language_budget_exhausted(0.1)
-    assert cli._language_budget_exhausted(0.0)
-    assert cli._language_budget_exhausted(-0.1)
-    assert cli._language_command_payload(
+    monkeypatch.setattr(languages, "monotonic", lambda: 8.5)
+    assert languages._language_start_time(None) is None
+    assert languages._language_start_time(2.0) == 8.5
+    assert languages._remaining_language_budget(None, started_at=None) is None
+    assert languages._remaining_language_budget(10.0, started_at=8.0) == 9.5
+    assert not languages._language_budget_exhausted(None)
+    assert not languages._language_budget_exhausted(0.1)
+    assert languages._language_budget_exhausted(0.0)
+    assert languages._language_budget_exhausted(-0.1)
+    assert languages._language_command_payload(
         Path("run"), changed_shards=1, completed=True, processed_rows=2, bounded=False
     ) == {"changed_shards": 1, "run_dir": "run"}
-    assert cli._language_command_payload(
+    assert languages._language_command_payload(
         Path("run"), changed_shards=1, completed=False, processed_rows=2, bounded=True
     ) == {
         "changed_shards": 1,
@@ -1075,7 +1096,7 @@ def test_cli_remaining_budget_requires_both_clock_inputs(
     time_budget_seconds: float | None,
     started_at: float | None,
 ) -> None:
-    assert cli._remaining_language_budget(time_budget_seconds, started_at=started_at) is None
+    assert languages._remaining_language_budget(time_budget_seconds, started_at=started_at) is None
 
 
 def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1083,39 +1104,39 @@ def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -
         Path("run"),
         "run",
         sources={"a.osm.pbf": SourceManifestEntry(filename="a.osm.pbf", size_bytes=0, mtime_ns=0)},
-        metadata={"status": cli.STATUS_ANALYZED},
+        metadata={"status": STATUS_ANALYZED},
     )
-    cli._validate_language_shard_membership(state, [Path("a.parquet")])
+    languages._validate_language_shard_membership(state, [Path("a.parquet")])
     with pytest.raises(ValueError, match="not in the source manifest"):
-        cli._validate_language_shard_membership(state, [Path("missing.parquet")])
+        languages._validate_language_shard_membership(state, [Path("missing.parquet")])
 
     frozen = RunState(
         Path("run"),
         "run",
-        metadata={"status": cli.STATUS_COMPLETE, "snapshot_status": "done"},
+        metadata={"status": STATUS_COMPLETE, "snapshot_status": "done"},
     )
     with pytest.raises(ValueError, match="frozen snapshot"):
-        cli._reject_frozen_language_run(frozen)
-    cli._reject_frozen_language_run(
-        RunState(Path("run"), "run", metadata={"status": cli.STATUS_COMPLETE})
+        languages._reject_frozen_language_run(frozen)
+    languages._reject_frozen_language_run(
+        RunState(Path("run"), "run", metadata={"status": STATUS_COMPLETE})
     )
 
     transitions: list[tuple[object, str]] = []
     monkeypatch.setattr(
-        cli,
+        languages,
         "transition_status",
         lambda received_state, status: transitions.append((received_state, status)),
     )
-    cli._prepare_language_command_state(state)
-    assert transitions == [(state, cli.STATUS_ENRICHING)]
+    languages._prepare_language_command_state(state)
+    assert transitions == [(state, STATUS_ENRICHING)]
     transitions.clear()
-    enriching = RunState(Path("run"), "run", metadata={"status": cli.STATUS_ENRICHING})
-    cli._prepare_language_command_state(enriching)
+    enriching = RunState(Path("run"), "run", metadata={"status": STATUS_ENRICHING})
+    languages._prepare_language_command_state(enriching)
     assert transitions == []
-    cli._finish_language_command_state(enriching)
-    assert transitions == [(enriching, cli.STATUS_ENRICHED)]
+    languages._finish_language_command_state(enriching)
+    assert transitions == [(enriching, STATUS_ENRICHED)]
     with pytest.raises(ValueError) as exc_info:
-        cli._prepare_language_command_state(
+        languages._prepare_language_command_state(
             RunState(Path("run"), "run", metadata={"status": "initialized"})
         )
     assert str(exc_info.value) == "detect-languages requires an extracted/enriched run"
@@ -1123,13 +1144,13 @@ def test_cli_language_private_state_contracts(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.parametrize(
     ("status", "snapshot_status"),
-    [(cli.STATUS_COMPLETE, "pending"), (cli.STATUS_ENRICHED, "done")],
+    [(STATUS_COMPLETE, "pending"), (STATUS_ENRICHED, "done")],
 )
 def test_cli_frozen_snapshot_guard_requires_both_markers(
     status: str,
     snapshot_status: str,
 ) -> None:
-    cli._reject_frozen_language_run(
+    languages._reject_frozen_language_run(
         RunState(
             Path("run"),
             "run",
@@ -1138,18 +1159,20 @@ def test_cli_frozen_snapshot_guard_requires_both_markers(
     )
 
 
-@pytest.mark.parametrize("status", [cli.STATUS_CARD_BUILT, cli.STATUS_COMPLETE])
+@pytest.mark.parametrize("status", [STATUS_CARD_BUILT, STATUS_COMPLETE])
 def test_cli_language_state_preparation_accepts_late_statuses(
     status: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = RunState(Path("run"), "run", metadata={"status": status})
     transitions: list[str] = []
-    monkeypatch.setattr(cli, "transition_status", lambda _state, value: transitions.append(value))
+    monkeypatch.setattr(
+        languages, "transition_status", lambda _state, value: transitions.append(value)
+    )
 
-    cli._prepare_language_command_state(state)
+    languages._prepare_language_command_state(state)
 
-    assert transitions == [cli.STATUS_ENRICHING]
+    assert transitions == [STATUS_ENRICHING]
 
 
 def test_cli_main_preserves_app_exit_and_error_contracts(
@@ -1188,14 +1211,14 @@ def test_cli_main_preserves_app_exit_and_error_contracts(
 def test_cli_records_completed_language_shard_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[object, dict[str, object]]] = []
     monkeypatch.setattr(
-        cli,
+        languages,
         "update_public_shard_metadata",
         lambda state, **kwargs: calls.append((state, kwargs)),
     )
     state = RunState(Path("run"), "run")
     result = SimpleNamespace(row_count=7, shard_sha256="a" * 64)
 
-    cli._record_completed_language_shard(state, Path("monaco-latest.parquet"), result)
+    languages._record_completed_language_shard(state, Path("monaco-latest.parquet"), result)
 
     assert calls == [
         (
@@ -1322,7 +1345,7 @@ def _stderr_for(
     flags: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> str:
     monkeypatch.setenv("OSM_POLY_DATA_DIR", "/data-root")
-    monkeypatch.setattr(cli, "compute_card_stats", lambda _run_dir: SimpleNamespace(ok=True))
+    monkeypatch.setattr(verify, "compute_card_stats", lambda _run_dir: SimpleNamespace(ok=True))
     assert cli.main([*flags, "card-stats", "--run-dir", "/run"]) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {"ok": True}
@@ -1395,8 +1418,8 @@ def test_run_all_silences_progress_when_quiet(
     def fail_run(**_kwargs: object) -> None:
         raise ValueError("stop")
 
-    monkeypatch.setattr(cli, "ProgressReporter", Reporter)
-    monkeypatch.setattr(cli, "run_all", fail_run)
+    monkeypatch.setattr(run, "ProgressReporter", Reporter)
+    monkeypatch.setattr(run, "run_all", fail_run)
     argv = ["run-all", "--source-root", str(tmp_path), "--output-root", str(tmp_path / "o")]
     argv += ["--run-id", "r"]
 
@@ -1410,8 +1433,8 @@ def test_create_repo_is_a_dry_run_without_apply(
 ) -> None:
     writes: list[object] = []
     checked: list[str] = []
-    monkeypatch.setattr(cli, "create_repo", lambda **kwargs: writes.append(kwargs))
-    monkeypatch.setattr(cli, "repo_exists", lambda *, repo_id: checked.append(repo_id) or True)
+    monkeypatch.setattr(publish, "create_repo", lambda **kwargs: writes.append(kwargs))
+    monkeypatch.setattr(publish, "repo_exists", lambda *, repo_id: checked.append(repo_id) or True)
 
     assert main(["create-repo", "--repo-id", "owner/name"]) == 0
 
@@ -1428,7 +1451,9 @@ def test_create_repo_with_apply_creates_it(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(cli, "create_repo", lambda **kwargs: calls.append(kwargs) or "owner/name")
+    monkeypatch.setattr(
+        publish, "create_repo", lambda **kwargs: calls.append(kwargs) or "owner/name"
+    )
 
     assert main(["create-repo", "--repo-id", "owner/name", "--exist-ok", "--apply"]) == 0
 
@@ -1495,7 +1520,7 @@ def test_debug_log_never_shows_the_data_root_value(
 def test_debug_log_says_when_the_default_data_root_is_used(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(cli, "compute_card_stats", lambda _run_dir: SimpleNamespace(ok=True))
+    monkeypatch.setattr(verify, "compute_card_stats", lambda _run_dir: SimpleNamespace(ok=True))
     monkeypatch.setenv("OSM_POLY_DATA_DIR", "  ")
 
     assert cli.main(["-vv", "card-stats", "--run-dir", "/run"]) == 0
@@ -1511,7 +1536,7 @@ def test_publish_trackio_without_the_package_is_a_clean_classified_error(
     def missing(_name: str) -> object:
         raise ModuleNotFoundError("trackio")
 
-    monkeypatch.setattr(cli, "build_trackio_snapshot", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(publish, "build_trackio_snapshot", lambda *_a, **_k: SimpleNamespace())
     monkeypatch.setattr(trackio.importlib, "import_module", missing)
 
     code = cli.main(["publish-trackio", "--run-dir", str(tmp_path), "--apply"])

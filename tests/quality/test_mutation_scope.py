@@ -45,11 +45,11 @@ def test_filters_are_deduplicated_and_sorted() -> None:
     paths = [
         "src/osm_polygon_website_tag/pipeline/sat.py",
         "src/osm_polygon_website_tag/pipeline/sat.py",
-        "src/osm_polygon_website_tag/application/cli.py",
+        "src/osm_polygon_website_tag/application/cli/verify.py",
     ]
 
     assert mutation_scope.module_filters(paths, root=_ROOT) == [
-        "osm_polygon_website_tag.application.cli.*",
+        "osm_polygon_website_tag.application.cli.verify.*",
         "osm_polygon_website_tag.pipeline.sat.*",
     ]
 
