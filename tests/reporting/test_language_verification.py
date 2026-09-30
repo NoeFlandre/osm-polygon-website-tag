@@ -88,6 +88,16 @@ def test_verify_language_row_reports_both_prefixes_with_exact_locations() -> Non
     ]
 
 
+def test_verify_language_row_rejects_extra_values() -> None:
+    with pytest.raises(ValueError):
+        language_module._verify_language_row(
+            Path("polygons/source.parquet"),
+            0,
+            ["success", "eng_Latn", 0.9, "absent", None, None, "extra"],
+            [],
+        )
+
+
 def test_verify_language_file_reports_unreadable_and_ignores_legacy_shards(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

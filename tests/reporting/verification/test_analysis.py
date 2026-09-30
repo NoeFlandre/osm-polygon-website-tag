@@ -1073,6 +1073,20 @@ def test_release_geographic_section_compares_the_exact_section(
     assert errors == expected
 
 
+def test_release_geographic_section_reports_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable_readme(_path: Path) -> bytes:
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable_readme)
+    errors: list[str] = []
+
+    analysis._verify_release_geographic_section(tmp_path, object(), errors)
+
+    assert errors == ["README geographic section is unreadable: denied"]
+
+
 def test_release_density_yaml_matches_all_geographic_summary_fields(tmp_path: Path) -> None:
     stats = SimpleNamespace(
         polygon_density_h3_resolution=7,
@@ -1105,6 +1119,21 @@ def test_release_density_yaml_matches_all_geographic_summary_fields(tmp_path: Pa
     errors.clear()
     analysis._verify_release_density_yaml(tmp_path, stats, errors)
     assert errors == []
+
+
+def test_release_density_yaml_reports_read_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable_dataset(_path: Path, *, encoding: str | None = None) -> str:
+        del encoding
+        raise OSError("denied")
+
+    monkeypatch.setattr(Path, "read_text", unreadable_dataset)
+    errors: list[str] = []
+
+    analysis._verify_release_density_yaml(tmp_path, object(), errors)
+
+    assert errors == ["dataset.yaml geographic fields are unreadable: denied"]
 
 
 def test_readability_of_no_artifacts_is_true(tmp_path: Path) -> None:

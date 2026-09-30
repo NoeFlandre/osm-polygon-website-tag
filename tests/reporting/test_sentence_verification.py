@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -415,6 +416,24 @@ def test_shard_verification_reads_bounded_batches(
     sentence_module._verify_sentence_shard(path, [])
 
     assert sizes == [sentence_module._SENTENCE_BATCH_ROWS, 1]
+
+
+def test_shard_verification_projects_only_sentence_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    projections: list[list[str] | None] = []
+
+    def capture_projection(
+        _path: Path, columns: list[str] | None, _batch_rows: int
+    ) -> Iterator[tuple[int, pa.RecordBatch]]:
+        projections.append(columns)
+        return iter(())
+
+    monkeypatch.setattr(sentence_module, "iter_bounded_batches", capture_projection)
+
+    sentence_module._verify_sentence_shard(Path("source.parquet"), [])
+
+    assert projections == [list(sentence_module._SENTENCE_COLUMNS)]
 
 
 def test_sentence_columns_match_the_published_contract() -> None:
