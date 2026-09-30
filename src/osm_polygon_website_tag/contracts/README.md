@@ -17,6 +17,8 @@ the shared dynamic compute-kernel adapter.
 - `TEXT_UNFINISHED_STATUSES`, `TEXT_TRANSIENT_STATUSES`, and
   `TEXT_DETERMINISTIC_STATUSES` are the canonical resume-priority categories;
   `TEXT_NULL_STATUS` is the persisted summary sentinel for null Arrow values.
+- `robots_disallowed` is a documented deterministic text status and is counted
+  as a failed URL result in the public card statistics.
 - `arrow.call_arrow_kernel` is the single dynamic dispatch boundary for
   named PyArrow compute kernels used by schema and reporting code.
 - Excludes: pipeline behavior, persistence, and remote adapters.

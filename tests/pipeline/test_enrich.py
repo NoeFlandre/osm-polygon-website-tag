@@ -216,6 +216,52 @@ def test_private_enrichment_batch_and_future_helpers(tmp_path: Path) -> None:
         cache.close()
 
 
+def test_completed_fetches_are_extracted_before_a_slow_earlier_url(tmp_path: Path) -> None:
+    """A fast page is parsed while an earlier submitted request is still active."""
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+    extraction_order: list[str] = []
+
+    def fetch(url: str) -> FetchResult:
+        if url.endswith("/slow"):
+            slow_started.set()
+            assert release_slow.wait(timeout=3)
+        else:
+            assert slow_started.wait(timeout=3)
+        return FetchResult("ok", url, final_url=url, body=url.rsplit("/", 1)[1].encode())
+
+    def extract(body: bytes, *, url: str) -> TextExtraction:
+        extraction_order.append(url)
+        if url.endswith("/fast"):
+            release_slow.set()
+        value = body.decode()
+        return TextExtraction("success", value, 1, None, "test")
+
+    slow_url = "https://example.org/slow"
+    fast_url = "https://example.org/fast"
+    pending = {
+        slow_url: [({}, "website")],
+        fast_url: [({}, "website")],
+    }
+    rows = {url: references[0][0] for url, references in pending.items()}
+    cache = TextCache(tmp_path / "cache.sqlite3")
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = _submit_fetches(pending, fetch_pool=pool, fetcher=fetch)
+            _record_fetches(
+                pending,
+                futures,
+                cache=cache,
+                invocation_id="run",
+                extractor=extract,
+            )
+        assert extraction_order == [fast_url, slow_url]
+        assert rows[fast_url]["website_text"] == "fast"
+        assert rows[slow_url]["website_text"] == "slow"
+    finally:
+        cache.close()
+
+
 def test_assemble_checkpoint_streams_arrow_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

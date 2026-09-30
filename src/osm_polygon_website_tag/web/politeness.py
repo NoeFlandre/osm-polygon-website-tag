@@ -57,6 +57,21 @@ class HostLimiter:
         self._lock = threading.Lock()
         self._slots: dict[str, threading.Semaphore] = {}
         self._next_start: dict[str, float] = {}
+        self._last_start: dict[str, float] = {}
+        self._host_delays: dict[str, float] = {}
+
+    def set_host_delay(self, host: str, seconds: float) -> None:
+        """Apply a host's published crawl delay, without weakening local limits."""
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("host delay must be finite and non-negative")
+        with self._lock:
+            self._host_delays[host] = seconds
+            last_start = self._last_start.get(host)
+            if last_start is not None:
+                delay = max(self.policy.delay_seconds, seconds)
+                self._next_start[host] = max(
+                    self._next_start.get(host, last_start + delay), last_start + delay
+                )
 
     @contextmanager
     def slot(self, host: str) -> Iterator[None]:
@@ -75,7 +90,9 @@ class HostLimiter:
                 start = max(now, self._next_start.get(host, now))
                 wait = start - now
                 if wait == 0.0:
-                    self._next_start[host] = now + self.policy.delay_seconds
+                    delay = max(self.policy.delay_seconds, self._host_delays.get(host, 0.0))
+                    self._last_start[host] = now
+                    self._next_start[host] = now + delay
                     return
             self._sleep(wait)
 

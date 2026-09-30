@@ -549,7 +549,8 @@ def test_release_geometry_section_normalizes_newlines_and_requires_exact_block(
     errors.clear()
     readme.write_bytes(b"\xff")
     analysis._verify_release_geometry_section(tmp_path, geometry, errors)
-    assert errors and errors[0].startswith("README geometry section is unreadable: ")
+    assert len(errors) == 1
+    assert errors[0].startswith("README geometry section is unreadable: ")
 
 
 def test_map_verifier_rejects_bytes_from_a_different_global_summary(

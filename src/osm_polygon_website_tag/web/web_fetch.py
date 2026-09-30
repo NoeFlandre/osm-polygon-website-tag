@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import math
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import urllib.robotparser
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.web.content_type import charset_parameter, media_type
@@ -25,6 +28,8 @@ from osm_polygon_website_tag.web.politeness import (
 
 MAX_RESPONSE_BYTES = 20_000_000
 REQUEST_TIMEOUT_SECONDS = 30.0
+ROBOTS_TIMEOUT_SECONDS = 5.0
+ROBOTS_MAX_BYTES = 500_000
 MAX_REDIRECTS = 3
 READ_CHUNK_BYTES = 65_536
 USER_AGENT = f"osm-polygon-website-tag/{__version__} (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
@@ -50,13 +55,29 @@ class HttpResponse:
 class FetchResult:
     """Structured website download result."""
 
-    status: Literal["ok", "invalid_url", "unsafe_url", "fetch_error"]
+    status: Literal["ok", "invalid_url", "unsafe_url", "fetch_error", "robots_disallowed"]
     requested_url: str
     final_url: str | None = None
     body: bytes | None = None
     message: str | None = None
     charset: str | None = None
     media_type: str | None = None
+
+
+@dataclass(frozen=True)
+class _RobotsPolicy:
+    """Cached robots rules and any safe-transport failure for one origin."""
+
+    parser: urllib.robotparser.RobotFileParser | None
+    error_status: Literal["unsafe_url", "fetch_error"] | None = None
+    final_url: str | None = None
+    message: str | None = None
+    crawl_delay: float | None = None
+
+
+_ROBOTS_CACHE: dict[str, _RobotsPolicy] = {}
+_ROBOTS_CACHE_LOCK = threading.Lock()
+_ROBOTS_LOAD_LOCKS: dict[str, threading.Lock] = {}
 
 
 def normalize_http_url(raw: str) -> str:
@@ -206,6 +227,7 @@ def fetch_html(
         timeout_seconds,
         max_bytes,
         max_redirects,
+        limiter=limiter,
     )
 
 
@@ -279,10 +301,17 @@ def _follow_redirects(
     timeout_seconds: float,
     max_bytes: int,
     max_redirects: int,
+    *,
+    limiter: HostLimiter | None = None,
+    check_robots: bool = True,
 ) -> FetchResult:
     """Fetch a normalized URL while validating each redirect target."""
     current = requested
     for redirect_number in range(max_redirects + 1):
+        if check_robots:
+            robots_result = _check_robots(current, requested, transport, resolver, limiter)
+            if robots_result is not None:
+                return robots_result
         next_url, result = _fetch_step(
             current,
             requested,
@@ -295,10 +324,189 @@ def _follow_redirects(
         )
         if result is not None:
             return result
-        if next_url is None:  # pragma: no cover - _fetch_step always returns one terminal value
-            raise AssertionError("fetch step returned neither a result nor a redirect")
-        current = next_url
+        current = _require_redirect_url(next_url)
     raise AssertionError("redirect loop exhausted")  # pragma: no cover
+
+
+def _check_robots(
+    current: str,
+    requested: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+    limiter: HostLimiter | None,
+) -> FetchResult | None:
+    """Return a robots policy failure or allow this redirect target."""
+    policy = _robots_policy(current, transport, resolver)
+    return _apply_robots_policy(policy, current, requested, limiter)
+
+
+def _apply_robots_policy(
+    policy: _RobotsPolicy,
+    current: str,
+    requested: str,
+    limiter: HostLimiter | None,
+) -> FetchResult | None:
+    """Apply policy errors and crawl delay before testing the requested path."""
+    failure = _robots_policy_error(policy, current, requested)
+    if failure is not None:
+        return failure
+    _honor_robots_crawl_delay(policy, current, limiter)
+    return _robots_disallowed_result(policy, current, requested)
+
+
+def _robots_policy_error(policy: _RobotsPolicy, current: str, requested: str) -> FetchResult | None:
+    if policy.error_status is None:
+        return None
+    return FetchResult(
+        policy.error_status,
+        requested,
+        final_url=policy.final_url or current,
+        message=policy.message,
+    )
+
+
+def _honor_robots_crawl_delay(
+    policy: _RobotsPolicy,
+    current: str,
+    limiter: HostLimiter | None,
+) -> None:
+    if limiter is None or policy.crawl_delay is None:
+        return
+    limiter.set_host_delay(host_of(current), policy.crawl_delay)
+
+
+def _robots_disallowed_result(
+    policy: _RobotsPolicy, current: str, requested: str
+) -> FetchResult | None:
+    if policy.parser is None or policy.parser.can_fetch(USER_AGENT, current):
+        return None
+    return FetchResult(
+        "robots_disallowed",
+        requested,
+        final_url=current,
+        message="robots_disallowed",
+    )
+
+
+def _require_redirect_url(next_url: str | None) -> str:
+    """Enforce the redirect step's one-terminal-value contract."""
+    if next_url is None:  # pragma: no cover - _fetch_step always returns a result
+        raise AssertionError("fetch step returned neither a result nor a redirect")
+    return next_url
+
+
+def _robots_policy(
+    url: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+) -> _RobotsPolicy:
+    """Return one cached, safely fetched robots policy for a URL's origin."""
+    parsed = urllib.parse.urlsplit(url)
+    origin = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    with _ROBOTS_CACHE_LOCK:
+        cached = _ROBOTS_CACHE.get(origin)
+        if cached is not None:
+            return cached
+        load_lock = _ROBOTS_LOAD_LOCKS.setdefault(origin, threading.Lock())
+    with load_lock:
+        with _ROBOTS_CACHE_LOCK:
+            cached = _ROBOTS_CACHE.get(origin)
+            if cached is not None:
+                return cached
+        policy = _fetch_robots_policy(origin, transport, resolver)
+        with _ROBOTS_CACHE_LOCK:
+            _ROBOTS_CACHE[origin] = policy
+        return policy
+
+
+def _fetch_robots_policy(
+    origin: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+) -> _RobotsPolicy:
+    """Fetch and parse one origin's policy without reapplying robots checks."""
+    robots_url = urllib.parse.urljoin(f"{origin}/", "robots.txt")
+    fetched = _follow_redirects(
+        robots_url,
+        transport,
+        resolver,
+        ROBOTS_TIMEOUT_SECONDS,
+        ROBOTS_MAX_BYTES,
+        MAX_REDIRECTS,
+        check_robots=False,
+    )
+    failure = _robots_fetch_failure(robots_url, fetched)
+    if failure is not None:
+        return failure
+    assert fetched.body is not None
+    return _parse_robots_policy(robots_url, fetched.body)
+
+
+def _robots_fetch_failure(robots_url: str, fetched: FetchResult) -> _RobotsPolicy | None:
+    """Classify unsafe, absent, or unavailable robots responses."""
+    if fetched.status == "unsafe_url":
+        return _RobotsPolicy(
+            None,
+            error_status="unsafe_url",
+            final_url=fetched.final_url,
+            message="robots_unsafe_url",
+        )
+    if _robots_response_is_missing(fetched):
+        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+    return None if _robots_response_is_ok(fetched) else _robots_unavailable_policy(fetched)
+
+
+def _robots_response_is_missing(fetched: FetchResult) -> bool:
+    return fetched.status == "fetch_error" and fetched.message in {"http_404", "http_410"}
+
+
+def _robots_response_is_ok(fetched: FetchResult) -> bool:
+    return fetched.status == "ok" and fetched.body is not None
+
+
+def _robots_unavailable_policy(fetched: FetchResult) -> _RobotsPolicy:
+    return _RobotsPolicy(
+        None,
+        error_status="fetch_error",
+        final_url=fetched.final_url,
+        message="robots_unavailable",
+    )
+
+
+def _parse_robots_policy(robots_url: str, body: bytes) -> _RobotsPolicy:
+    """Parse one bounded robots response, allowing malformed policy on error."""
+    parser = urllib.robotparser.RobotFileParser(robots_url)
+    try:
+        parser.parse(body.decode("utf-8", errors="replace").splitlines())
+    except Exception:  # noqa: BLE001 - malformed robots text is treated as no rules
+        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+    crawl_delay, valid = _robots_crawl_delay(parser)
+    if not valid:
+        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+    return _RobotsPolicy(parser, crawl_delay=crawl_delay)
+
+
+def _robots_crawl_delay(
+    parser: urllib.robotparser.RobotFileParser,
+) -> tuple[float | None, bool]:
+    """Return a finite nonnegative delay and whether parsing it succeeded."""
+    try:
+        value = parser.crawl_delay(USER_AGENT)
+        if value is None:
+            return None, True
+        delay = float(value)
+    except Exception:  # noqa: BLE001 - malformed crawl delay is treated as no rules
+        return None, False
+    if not math.isfinite(delay) or delay < 0:
+        return None, True
+    return delay, True
+
+
+def _allow_all_robots_parser(robots_url: str) -> urllib.robotparser.RobotFileParser:
+    """Return a parser marked as checked with no blocking rules."""
+    parser = urllib.robotparser.RobotFileParser(robots_url)
+    cast(Any, parser).allow_all = True
+    return parser
 
 
 def _fetch_step(

@@ -222,6 +222,12 @@ def test_only_the_exact_lowercase_empty_status_counts_as_empty() -> None:
     assert stats.website_text_failure_count == 2
 
 
+def test_robots_disallowed_is_included_in_failure_counts() -> None:
+    statuses = _status(["robots_disallowed"])
+
+    assert card_stats._count_invalid_statuses(statuses) == 1
+
+
 def test_invalid_statuses_count_everything_outside_the_known_set() -> None:
     known = _status(["absent", "pending", "success", "empty"])
 

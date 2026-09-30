@@ -18,6 +18,7 @@ TEXT_STATUSES = frozenset(
         "empty",
         "invalid_url",
         "unsafe_url",
+        "robots_disallowed",
         "fetch_error",
         "extract_error",
     }
@@ -32,7 +33,7 @@ TEXT_TERMINAL_STATUSES = frozenset({"absent", "success"})
 TEXT_NULL_STATUS = "__null__"
 TEXT_UNFINISHED_STATUSES = frozenset({"pending", TEXT_NULL_STATUS})
 TEXT_TRANSIENT_STATUSES = frozenset({"empty", "fetch_error", "extract_error"})
-TEXT_DETERMINISTIC_STATUSES = frozenset({"invalid_url", "unsafe_url"})
+TEXT_DETERMINISTIC_STATUSES = frozenset({"invalid_url", "unsafe_url", "robots_disallowed"})
 
 TEXT_COLUMN_NAMES = (
     "website_text",

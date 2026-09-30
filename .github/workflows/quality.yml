@@ -114,7 +114,8 @@ jobs:
           git checkout "${{ github.event.pull_request.head.sha }}" -- benchmarks
           # The base lockfile predates pytest-benchmark, so add it for this run only.
           uv run --locked --with "pytest-benchmark>=5.3,<6" pytest benchmarks --no-cov \
-            -p no:cacheprovider -q --benchmark-save=base
+            -p no:cacheprovider -q --benchmark-save=base \
+            --benchmark-json=/tmp/osm-polygon-website-tag-base-benchmarks.json
 
       - name: Time the head against it
         run: |

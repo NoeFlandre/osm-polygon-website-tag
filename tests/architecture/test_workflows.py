@@ -58,6 +58,19 @@ def test_advisory_benchmarks_do_not_block_the_aggregate_check() -> None:
         assert f"needs.{required_job}.result" in results
 
 
+def test_performance_job_saves_a_base_measurement_and_compares_medians() -> None:
+    job = _load("quality.yml")["jobs"]["benchmarks"]
+    base = next(step for step in job["steps"] if step.get("name") == "Time the base")
+    compare = next(step for step in job["steps"] if step.get("name") == "Time the head against it")
+    justfile = (WORKFLOWS.parent.parent / "justfile").read_text(encoding="utf-8")
+
+    assert "--benchmark-save=base" in base["run"]
+    assert "--benchmark-json=" in base["run"]
+    assert "just bench-compare" in compare["run"]
+    assert "--benchmark-compare-fail=median:25%" in justfile
+    assert "--benchmark-json=" in justfile
+
+
 def test_the_docs_build_gates_pull_requests() -> None:
     workflow = _load("quality.yml")
     steps = workflow["jobs"]["docs"]["steps"]
@@ -72,6 +85,23 @@ def test_mutation_shards_start_beside_the_quality_gate_and_skip_pushes() -> None
 
     assert mutation["needs"] == "scope"
     assert "github.event_name == 'pull_request'" in mutation["if"]
+
+
+def test_nightly_mutation_merge_requires_every_area_artifact() -> None:
+    jobs = _load("mutation-sweep.yml")["jobs"]
+    areas = jobs["area"]["strategy"]["matrix"]["area"]
+    merge_steps = jobs["merge"]["steps"]
+    require_step = next(
+        step
+        for step in merge_steps
+        if step.get("name") == "Require a result artifact from every area"
+    )
+    setup_uv = next(step for step in jobs["area"]["steps"] if "setup-uv" in step.get("uses", ""))
+
+    assert 'artifact="areas/results-${area}.txt"' in require_step["run"]
+    assert '[[ ! -f "$artifact" ]]' in require_step["run"]
+    assert all(area in require_step["run"] for area in areas)
+    assert setup_uv["with"]["cache-dependency-glob"] == "uv.lock"
 
 
 def test_only_the_pages_deploy_job_may_write_pages() -> None:

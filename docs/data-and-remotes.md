@@ -21,6 +21,21 @@ that is equal to or contained by it. The pipeline records each PBF's filename,
 size, and nanosecond mtime, checks those values before and after processing,
 and never copies, renames, moves, hashes, or modifies the source file.
 
+## Website crawl policy
+
+Before each page request, the fetcher reads and caches that origin's
+`robots.txt` through the same public-IP, redirect, timeout, and response-size
+checks as page requests. A disallowed URL is recorded as
+`robots_disallowed`, which contributes to the card's failure counts. The
+crawler honors a published `Crawl-delay` in addition to its configured
+per-host limit. A missing or 404/410 policy permits fetching; malformed policy
+text is treated as having no rules. Unsafe redirects and robots-server
+failures prevent the page request.
+
+This policy governs network requests made by the updated crawler. Existing
+successful text in local caches or frozen snapshots is retained and is not
+retroactively rechecked or removed.
+
 ## Run artifacts
 
 Each run owns a directory under the output root:

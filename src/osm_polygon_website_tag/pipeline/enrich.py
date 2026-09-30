@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import inspect
+import multiprocessing
 import shutil
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable, Iterable
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +37,7 @@ DEFAULT_BATCH_ROWS = 512
 # unbounded number of sockets or put avoidable pressure on public websites.
 DEFAULT_FETCH_WORKERS = 8
 MAX_FETCH_WORKERS = 32
+MAX_EXTRACT_WORKERS = 4
 Fetcher = Callable[[str], FetchResult]
 Extractor = Callable[..., TextExtraction]
 _Reference = tuple[dict[str, object], str]
@@ -211,34 +214,49 @@ def _process_enrichment_batches(
     max_batch_rows = 0
     rows_to_skip = checkpoint.completed_rows
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="website-fetch") as fetch_pool:
-        for batch in parquet.iter_batches(batch_size=batch_rows):
-            originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
-            if not originals:
-                continue
-            enriched_rows, batch_changed = _enrich_batch(
-                originals,
-                source_schema=source_schema,
-                target_schema_version=target_schema_version,
-                cache=cache,
-                invocation_id=invocation_id,
-                fetcher=fetcher,
-                extractor=extractor,
-                fetch_pool=fetch_pool,
-            )
-            changed = changed or batch_changed
-            cache.flush()
-            store.write_part(
-                checkpoint.directory,
-                next_part_index,
-                enriched_rows,
-                batch_rows=batch_rows,
-            )
-            next_part_index += 1
-            processed_rows += len(enriched_rows)
-            max_batch_rows = max(max_batch_rows, len(enriched_rows))
+        extract_pool_context = _extract_pool_context(extractor, workers)
+        with extract_pool_context as extract_pool:
+            for batch in parquet.iter_batches(batch_size=batch_rows):
+                originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
+                if not originals:
+                    continue
+                enriched_rows, batch_changed = _enrich_batch(
+                    originals,
+                    source_schema=source_schema,
+                    target_schema_version=target_schema_version,
+                    cache=cache,
+                    invocation_id=invocation_id,
+                    fetcher=fetcher,
+                    extractor=extractor,
+                    fetch_pool=fetch_pool,
+                    extract_pool=extract_pool,
+                )
+                changed = changed or batch_changed
+                cache.flush()
+                store.write_part(
+                    checkpoint.directory,
+                    next_part_index,
+                    enriched_rows,
+                    batch_rows=batch_rows,
+                )
+                next_part_index += 1
+                processed_rows += len(enriched_rows)
+                max_batch_rows = max(max_batch_rows, len(enriched_rows))
     if processed_rows != source_row_count:
         raise ValueError("enrichment row count changed")
     return changed, max_batch_rows
+
+
+def _extract_pool_context(
+    extractor: Extractor, workers: int
+) -> ProcessPoolExecutor | nullcontext[None]:
+    """Run only the built-in native extractor in isolated worker processes."""
+    if extractor is not extract_main_text:
+        return nullcontext(None)
+    return ProcessPoolExecutor(
+        max_workers=min(workers, MAX_EXTRACT_WORKERS),
+        mp_context=multiprocessing.get_context("spawn"),
+    )
 
 
 def _skip_checkpointed_rows(
@@ -263,6 +281,7 @@ def _enrich_batch(
     fetcher: Fetcher,
     extractor: Extractor,
     fetch_pool: ThreadPoolExecutor,
+    extract_pool: ProcessPoolExecutor | None = None,
 ) -> tuple[list[dict[str, object]], bool]:
     """Enrich one batch and return rows plus whether any values changed."""
     states, pending, lookup_urls = _prepare_batch(
@@ -283,6 +302,7 @@ def _enrich_batch(
         fetcher=fetcher,
         extractor=extractor,
         fetch_pool=fetch_pool,
+        extract_pool=extract_pool,
     )
     return _finalize_batch(states, schema_version=target_schema_version), any(
         state.before != tuple(state.row.get(name) for name in TEXT_COLUMN_NAMES)
@@ -461,14 +481,15 @@ def _resolve_pending(
     fetcher: Fetcher,
     extractor: Extractor,
     fetch_pool: ThreadPoolExecutor,
+    extract_pool: ProcessPoolExecutor | None = None,
 ) -> None:
-    """Fetch cache misses concurrently, then extract and write results serially.
+    """Fetch cache misses concurrently, then record results on the caller thread.
 
     ``TextCache`` deliberately remains confined to the caller thread because it
-    owns one SQLite connection. Network retrieval can safely fan out, but the
-    Trafilatura/lxml parser is kept on the caller thread because its native
-    parser state is not safe to run concurrently on this platform. Cache
-    writes, extraction, and row application stay ordered and deterministic.
+    owns one SQLite connection. Network retrieval can safely fan out, and the
+    native Trafilatura/lxml parser runs in a small process pool for the default
+    extractor. Custom extractors stay in the caller thread. Cache writes and row
+    application remain ordered and deterministic.
     """
     futures = _submit_fetches(pending, fetch_pool=fetch_pool, fetcher=fetcher)
     try:
@@ -478,6 +499,7 @@ def _resolve_pending(
             cache=cache,
             invocation_id=invocation_id,
             extractor=extractor,
+            extract_pool=extract_pool,
         )
     except KeyboardInterrupt:
         # Preserve every result that already completed while Ctrl-C was
@@ -511,17 +533,87 @@ def _record_fetches(
     cache: TextCache,
     invocation_id: str,
     extractor: Extractor,
+    extract_pool: ProcessPoolExecutor | None = None,
 ) -> None:
-    """Record completed fetches and apply them to all referencing rows."""
-    for url, future in futures.items():
-        _record_one_fetch(
+    """Extract as fetches finish, then record and apply them in URL order.
+
+    Waiting in submission order can leave completed responses idle behind one
+    slow host. Processing each result as it arrives lets extraction overlap
+    with the remaining requests. The default native extractor runs in a
+    process pool; custom extractors stay on the caller thread. Cache writes and
+    row updates retain insertion order used by checkpoint assembly.
+    """
+    urls_by_future = {future: url for url, future in futures.items()}
+    extracted, deferred_extractions = _extract_completed_fetches(
+        futures.values(),
+        urls_by_future=urls_by_future,
+        invocation_id=invocation_id,
+        extractor=extractor,
+        extract_pool=extract_pool,
+    )
+    for url, references in pending.items():
+        cached_text = _completed_extraction(url, extracted, deferred_extractions)
+        cached = cache.record(cached_text, invocation_id=invocation_id)
+        for row, field_prefix in references:
+            _apply_result(row, field_prefix, cached)
+
+
+def _extract_completed_fetches(
+    futures: Iterable[Future[FetchResult]],
+    *,
+    urls_by_future: dict[Future[FetchResult], str],
+    invocation_id: str,
+    extractor: Extractor,
+    extract_pool: ProcessPoolExecutor | None,
+) -> tuple[dict[str, CachedText], dict[str, Future[CachedText]]]:
+    """Consume network results promptly and dispatch native parsing separately."""
+    extracted: dict[str, CachedText] = {}
+    deferred_extractions: dict[str, Future[CachedText]] = {}
+    for future in as_completed(futures):
+        url = urls_by_future[future]
+        fetched = future.result()
+        _dispatch_extraction(
             url,
-            future,
-            pending[url],
-            cache=cache,
+            fetched,
             invocation_id=invocation_id,
             extractor=extractor,
+            extract_pool=extract_pool,
+            extracted=extracted,
+            deferred_extractions=deferred_extractions,
         )
+    return extracted, deferred_extractions
+
+
+def _dispatch_extraction(
+    url: str,
+    fetched: FetchResult,
+    *,
+    invocation_id: str,
+    extractor: Extractor,
+    extract_pool: ProcessPoolExecutor | None,
+    extracted: dict[str, CachedText],
+    deferred_extractions: dict[str, Future[CachedText]],
+) -> None:
+    """Schedule native parsing or extract one result on the caller thread."""
+    if extract_pool is not None and fetched.status == "ok" and fetched.body is not None:
+        deferred_extractions[url] = extract_pool.submit(
+            _extract_default_fetch, url, fetched, invocation_id
+        )
+    else:
+        extracted[url] = _extract_fetched(
+            url, fetched, invocation_id=invocation_id, extractor=extractor
+        )
+
+
+def _completed_extraction(
+    url: str,
+    extracted: dict[str, CachedText],
+    deferred_extractions: dict[str, Future[CachedText]],
+) -> CachedText:
+    """Wait for one scheduled parse or return its caller-thread result."""
+    if url in deferred_extractions:
+        return deferred_extractions[url].result()
+    return extracted[url]
 
 
 def _record_one_fetch(
@@ -622,6 +714,31 @@ def _extract_fetched(
         )
     final_url = fetched.final_url or url
     extracted = _run_extractor(extractor, fetched.body, final_url, fetched)
+    return _cached_extraction(url, final_url, extracted, invocation_id=invocation_id)
+
+
+def _extract_default_fetch(url: str, fetched: FetchResult, invocation_id: str) -> CachedText:
+    """Process-pool entry point for the thread-unsafe native text extractor."""
+    if fetched.body is None:
+        raise ValueError("successful fetch has no body")
+    final_url = fetched.final_url or url
+    extracted = extract_main_text(
+        fetched.body,
+        url=final_url,
+        charset=fetched.charset,
+        media_type=fetched.media_type,
+    )
+    return _cached_extraction(url, final_url, extracted, invocation_id=invocation_id)
+
+
+def _cached_extraction(
+    url: str,
+    final_url: str,
+    extracted: TextExtraction,
+    *,
+    invocation_id: str,
+) -> CachedText:
+    """Convert a text-extraction result into the cache's normalized row."""
     return CachedText(
         url,
         extracted.status,

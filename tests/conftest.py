@@ -96,5 +96,10 @@ def make_pbf(tmp_path: Path):
 def memory_http(monkeypatch: pytest.MonkeyPatch) -> MemoryHTTPFixture:
     """Inject canned HTTP responses without opening a network socket."""
     fixture = MemoryHTTPFixture()
+    # Robots policy is origin-cached between normal fetches. Each hermetic
+    # transport fixture gets a fresh cache so route-specific policies remain
+    # isolated, including when tests reuse the same numeric origin.
+    monkeypatch.setattr(web_fetch, "_ROBOTS_CACHE", {})
+    monkeypatch.setattr(web_fetch, "_ROBOTS_LOAD_LOCKS", {})
     monkeypatch.setattr(web_fetch, "_download_once", fixture.download)
     return fixture

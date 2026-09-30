@@ -69,6 +69,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Sync locked environment
         run: uv sync --locked
@@ -105,6 +106,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Sync locked environment
         run: uv sync --locked
@@ -116,11 +118,24 @@ jobs:
           pattern: mutation-results-*
           merge-multiple: true
 
+      - name: Require a result artifact from every area
+        run: |
+          set -euo pipefail
+          areas=(pipeline reporting application publishing domain contracts runtime web storage)
+          for area in "${areas[@]}"; do
+            artifact="areas/results-${area}.txt"
+            if [[ ! -f "$artifact" ]]; then
+              echo "mutation area $area produced no result artifact: $artifact" >&2
+              exit 1
+            fi
+          done
+
       # The recorded baseline is never rewritten upward by the sweep: a new
       # survivor fails this job, and the regenerated file is only an artifact
       # to review and commit deliberately.
       - name: Merge the areas into a candidate baseline
         run: |
+          set -euo pipefail
           cat areas/results-*.txt > merged.txt
           uv run --locked python scripts/quality/mutation_baseline.py \
             --results merged.txt --baseline docs/quality/mutation-baseline.txt \

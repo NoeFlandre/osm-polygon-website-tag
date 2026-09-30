@@ -254,8 +254,9 @@ def test_render_markdown_has_a_stable_complete_output_contract() -> None:
         ## Method
 
         - Geometry assembled with libosmium; text extracted with Trafilatura and never truncated. Word counts are Unicode `\w+` matches.
-        - Text status is one of `absent`, `pending`, `success`, `empty`, `invalid_url`, `unsafe_url`, `fetch_error`, `extract_error`. A source is enriched only when every status is `success` or `absent`. Failed values retry on later resumptions; successful values are cached.
+        - Text status is one of `absent`, `pending`, `success`, `empty`, `invalid_url`, `unsafe_url`, `robots_disallowed`, `fetch_error`, `extract_error`. A source is enriched only when every status is `success` or `absent`. Failed values retry on later resumptions; successful values are cached.
         - URLs resolving to anything other than a public IP are refused as `unsafe_url`, before and after redirects.
+        - Before a page is fetched, the crawler applies that origin's cached `robots.txt` rules through the same URL-safety checks; `Crawl-delay` is honored. Existing cached text is retained and is not retroactively rechecked.
         - [Live metrics](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics) · [source code](https://github.com/NoeFlandre/osm-polygon-website-tag)
 
         ## Provenance and license

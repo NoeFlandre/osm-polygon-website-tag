@@ -2,10 +2,19 @@
 
 Owns safe HTTP retrieval, Trafilatura adaptation, and persistent text caching.
 
+`web_fetch` checks and caches each origin's `robots.txt` before requesting a
+page, applies its `Crawl-delay`, and uses the same SSRF-safe transport for both
+requests. Previously cached successful text remains reusable and is not
+retroactively removed.
+
 - Modules: `web_fetch`, `content_type`, `encoding_labels`, `text_extract`, `text_cache`.
 - Dependencies: `contracts` only.
 - Entry points: URL normalization, bounded fetch, main-text extraction, `TextCache`.
 - Excludes: OSM classification, reporting, publication, and orchestration.
+
+`web_fetch` is this repository's reference implementation for safe website
+retrieval. A reusable shared package remains a separate follow-up because it
+would need coordinated changes in sibling repositories.
 
 `text_extract` resolves the installed Trafilatura version lazily and caches it
 for the process. Every extraction result still records the exact installed

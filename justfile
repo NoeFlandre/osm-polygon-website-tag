@@ -57,13 +57,14 @@ unit:
 bench:
     uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q
 
-# Save a baseline, then fail if a later run is >50% slower on the mean.
+# Save a baseline, then fail if a later median is >25% slower.
 bench-save name="base":
     uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q --benchmark-save={{name}}
 
 bench-compare name="base":
     uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q \
-        --benchmark-compare --benchmark-compare-fail=mean:50%
+        --benchmark-compare --benchmark-compare-fail=median:25% \
+        --benchmark-json=/tmp/osm-polygon-website-tag-benchmarks.json
 
 acceptance:
     uv run --locked pytest -n auto tests/acceptance

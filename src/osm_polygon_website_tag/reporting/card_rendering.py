@@ -287,12 +287,17 @@ def _render_methodology_section(stats: CardStats) -> list[str]:
         ),
         (
             "- Text status is one of `absent`, `pending`, `success`, `empty`, "
-            "`invalid_url`, `unsafe_url`, `fetch_error`, `extract_error`. "
+            "`invalid_url`, `unsafe_url`, `robots_disallowed`, `fetch_error`, `extract_error`. "
             + _enrichment_policy(stats)
         ),
         (
             "- URLs resolving to anything other than a public IP are refused as "
             "`unsafe_url`, before and after redirects."
+        ),
+        (
+            "- Before a page is fetched, the crawler applies that origin's cached `robots.txt` "
+            "rules through the same URL-safety checks; `Crawl-delay` is honored. "
+            "Existing cached text is retained and is not retroactively rechecked."
         ),
         (
             f"- [Live metrics]({TRACKIO_SPACE_URL}) \u00b7 "
