@@ -1782,10 +1782,10 @@ def test_extract_pool_stays_inline_until_html_repays_worker_startup(
 
     monkeypatch.setattr(enrich_module, "ProcessPoolExecutor", RecordingPool)
     monkeypatch.setattr(enrich_module, "POOL_START_BYTES", 10)
-    calls: list[str] = []
+    calls: list[tuple[str, FetchResult, str]] = []
 
     def extract(url: str, fetched: FetchResult, invocation_id: str) -> CachedText:
-        calls.append(url)
+        calls.append((url, fetched, invocation_id))
         if fetched.body == b"boom":
             raise ValueError("bad page")
         return CachedText(url, "success", "t", 1, url, None, 0, "", "v", invocation_id)
@@ -1793,7 +1793,8 @@ def test_extract_pool_stays_inline_until_html_repays_worker_startup(
     monkeypatch.setattr(enrich_module, "_extract_default_fetch", extract)
     small = FetchResult("ok", "u", final_url="u", body=b"12345")
     with _ExtractPool(3) as pool:
-        assert pool.submit("a", small, "run").result().url == "a"
+        first = pool.submit("a", small, "run").result()
+        assert (first.url, first.invocation_id) == ("a", "run")
         assert pool.submit("b", small, "run").result().url == "b"  # 10 bytes: still inline
         assert started == []
         assert pool.submit("c", small, "run").result().url == "c"  # 15 bytes: spawns
@@ -1802,7 +1803,8 @@ def test_extract_pool_stays_inline_until_html_repays_worker_startup(
         with pytest.raises(ValueError, match="bad page"):
             pool.submit("d", failing, "run").result()
     assert started == [3, -1]
-    assert calls == ["a", "b", "c", "d"]
+    failing_call = ("d", failing, "run")
+    assert calls == [("a", small, "run"), ("b", small, "run"), ("c", small, "run"), failing_call]
     with _ExtractPool(3) as idle, pytest.raises(ValueError, match="bad page"):
         idle.submit("e", failing, "run").result()
     assert started == [3, -1]
