@@ -45,11 +45,11 @@ def test_filters_are_deduplicated_and_sorted() -> None:
     paths = [
         "src/osm_polygon_website_tag/pipeline/sat.py",
         "src/osm_polygon_website_tag/pipeline/sat.py",
-        "src/osm_polygon_website_tag/application/cli.py",
+        "src/osm_polygon_website_tag/application/cli/verify.py",
     ]
 
     assert mutation_scope.module_filters(paths, root=_ROOT) == [
-        "osm_polygon_website_tag.application.cli.*",
+        "osm_polygon_website_tag.application.cli.verify.*",
         "osm_polygon_website_tag.pipeline.sat.*",
     ]
 
@@ -259,6 +259,44 @@ def test_a_changed_import_does_not_charge_the_whole_module(tmp_path: Path) -> No
     }
 
 
+def test_pure_additions_ignore_blank_and_comment_lines() -> None:
+    diff = (
+        "+++ b/src/pkg/mod.py\n"
+        "@@ -5,0 +6,5 @@ def old() -> int:\n"
+        "+\n+\n+# helper\n+def new() -> int:\n+    return 2\n"
+    )
+
+    assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {9, 10}}
+
+
+def test_a_comment_replacing_code_still_counts() -> None:
+    diff = "+++ b/src/pkg/mod.py\n@@ -3 +3 @@\n-LIMIT = 3\n+# LIMIT removed\n"
+
+    assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {3}}
+
+
+def test_parse_diff_tracks_line_numbers_across_hunks_and_files() -> None:
+    diff = (
+        "+++ b/a.py\n@@ -1,2 +1,2 @@\n-x\n-y\n+x = 1\n+\n"
+        "@@ -9,0 +10,2 @@\n+\n+z = 2\n"
+        "+++ b/b.py\n@@ -1 +1,0 @@\n-gone\n"
+    )
+
+    assert mutation_scope.parse_diff(diff) == {"a.py": {1, 2, 11}, "b.py": {0}}
+
+
+def test_a_deletion_only_hunk_scopes_the_whole_module(tmp_path: Path) -> None:
+    module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "shrunk.py"
+    module.parent.mkdir(parents=True)
+    module.write_text('"""Module."""\n\n\ndef kept() -> int:\n    return 1\n', encoding="utf-8")
+    relative = "src/osm_polygon_website_tag/reporting/shrunk.py"
+    lines = mutation_scope.parse_diff(f"+++ b/{relative}\n@@ -3 +2,0 @@\n-LIMIT = 3\n")
+
+    assert mutation_scope.function_filters(lines, root=tmp_path) == {
+        "osm_polygon_website_tag.reporting.shrunk": ["osm_polygon_website_tag.reporting.shrunk.*"]
+    }
+
+
 def test_a_changed_module_constant_still_charges_the_whole_module(tmp_path: Path) -> None:
     module = tmp_path / "src" / "osm_polygon_website_tag" / "reporting" / "constant.py"
     module.parent.mkdir(parents=True)
@@ -372,23 +410,29 @@ def test_a_single_shard_keeps_the_plain_module_name() -> None:
     assert matrix == [{"name": module, "filters": f"{module}.x_compute_card_stats__mutmut_*"}]
 
 
-def test_a_module_without_functions_keeps_its_whole_module_filter(tmp_path: Path) -> None:
-    """Never silently narrow a scope we cannot expand."""
+def test_a_module_without_functions_gets_no_shard(tmp_path: Path) -> None:
+    """mutmut only mutates functions, so such a shard has nothing to run.
+
+    It used to keep a whole-module filter, and mutmut then stopped with "could
+    not find any test case for any mutant", failing CI on a constants module.
+    """
     module = f"{mutation_scope.PACKAGE_NAME}.constants"
     source = tmp_path / mutation_scope.PACKAGE_ROOT / "constants.py"
     source.parent.mkdir(parents=True)
-    source.write_text("VALUE = 1\n", encoding="utf-8")
+    source.write_text("class Settings:\n    value: int = 1\n", encoding="utf-8")
+    other = f"{mutation_scope.PACKAGE_NAME}.other"
+    (source.parent / "other.py").write_text("def f():\n    return 1\n", encoding="utf-8")
 
     assert mutation_scope.module_function_filters(module, root=tmp_path) == []
-    assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == [
-        {"name": module, "filters": f"{module}.*"}
-    ]
+    assert mutation_scope.shards(
+        {module: [f"{module}.*"], other: [f"{other}.*"]}, root=tmp_path
+    ) == [{"name": other, "filters": f"{other}.x_f__mutmut_*"}]
 
 
 def test_an_unreadable_module_keeps_its_whole_module_filter(tmp_path: Path) -> None:
     module = f"{mutation_scope.PACKAGE_NAME}.missing"
 
-    assert mutation_scope.module_function_filters(module, root=tmp_path) == []
+    assert mutation_scope.module_function_filters(module, root=tmp_path) is None
     assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == [
         {"name": module, "filters": f"{module}.*"}
     ]
@@ -405,3 +449,126 @@ def test_methods_are_sharded_under_their_mutmut_prefix(tmp_path: Path) -> None:
     assert mutation_scope.module_function_filters(module, root=tmp_path) == [
         f"{module}.xǁStoreǁappend__mutmut_*"
     ]
+
+
+def test_a_hunk_of_only_blank_or_hash_lines_scopes_the_whole_module() -> None:
+    diff = "+++ b/src/pkg/mod.py\n@@ -7,0 +8,2 @@\n+\n+# inside a triple-quoted string\n"
+
+    assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {0}}
+
+
+def test_the_package_root_resolves_to_its_init_and_gets_no_shard_without_functions() -> None:
+    root = mutation_scope.PACKAGE_NAME
+
+    assert mutation_scope.module_function_filters(root, root=_ROOT) == []
+    assert mutation_scope.shards({root: [f"{root}.*"]}, root=_ROOT) == []
+
+
+_DECORATED = """import functools
+
+import typer
+
+app = typer.Typer()
+
+
+@app.command("go")
+def go_command() -> int:
+    return 1
+
+
+@functools.cache
+def cached(x: int) -> int:
+    def inner() -> int:
+        return x
+    return inner()
+
+
+@functools.lru_cache
+@functools.wraps(cached)
+def stacked() -> int:
+    return 2
+
+
+def plain() -> int:
+    return 3
+
+
+@dataclass
+class Box:
+    def method(self) -> int:
+        return 4
+
+
+class Tools:
+    @staticmethod
+    def static() -> int:
+        return 5
+
+    @classmethod
+    def build(cls) -> int:
+        return 6
+
+    @property
+    def prop(self) -> int:
+        return 7
+
+    def normal(self) -> int:
+        return 8
+"""
+
+
+def _write_decorated(tmp_path: Path) -> str:
+    source = tmp_path / mutation_scope.PACKAGE_ROOT / "decorated.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(_DECORATED, encoding="utf-8")
+    return f"{mutation_scope.PACKAGE_NAME}.decorated"
+
+
+def test_functions_mutmut_never_mutates_get_no_filter(tmp_path: Path) -> None:
+    module = _write_decorated(tmp_path)
+
+    filters = mutation_scope.module_function_filters(module, root=tmp_path)
+
+    prefix = f"{module}."
+    assert filters == [
+        f"{prefix}x_plain__mutmut_*",
+        f"{prefix}xǁToolsǁstatic__mutmut_*",
+        f"{prefix}xǁToolsǁbuild__mutmut_*",
+        f"{prefix}xǁToolsǁnormal__mutmut_*",
+    ]
+
+
+def test_a_change_inside_a_decorated_function_does_not_scope_the_module(tmp_path: Path) -> None:
+    module = _write_decorated(tmp_path)
+    path = f"{mutation_scope.PACKAGE_ROOT}/decorated.py"
+    lines = _DECORATED.splitlines()
+    inside_command = lines.index("    return 1") + 1
+    on_decorator = lines.index('@app.command("go")') + 1
+    inside_class = lines.index("    def method(self) -> int:") + 1
+
+    scoped = mutation_scope.function_filters(
+        {path: {inside_command, on_decorator, inside_class}}, root=tmp_path
+    )
+
+    assert module not in scoped
+
+
+def test_a_change_beside_a_decorated_function_still_scopes_only_that_function(
+    tmp_path: Path,
+) -> None:
+    module = _write_decorated(tmp_path)
+    path = f"{mutation_scope.PACKAGE_ROOT}/decorated.py"
+    plain_body = _DECORATED.splitlines().index("    return 3") + 1
+
+    scoped = mutation_scope.function_filters({path: {plain_body}}, root=tmp_path)
+
+    assert scoped == {module: [f"{module}.x_plain__mutmut_*"]}
+
+
+def test_a_shard_of_only_decorated_functions_is_not_emitted(tmp_path: Path) -> None:
+    source = tmp_path / mutation_scope.PACKAGE_ROOT / "commands.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('@app.command("a")\ndef a() -> int:\n    return 1\n', encoding="utf-8")
+    module = f"{mutation_scope.PACKAGE_NAME}.commands"
+
+    assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == []

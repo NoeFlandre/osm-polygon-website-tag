@@ -68,32 +68,68 @@ just docker-build
 just docker-smoke
 ```
 
-For a local run, mount the immutable input read-only and keep generated files
-on a separate writable volume:
+### Data layout
+
+The runtime image sets `OSM_POLY_DATA_DIR=/data` and declares four mount
+points. Only the raw input is read-only:
+
+| Path | Purpose | Mount |
+| --- | --- | --- |
+| `/data/raw` | PBF sources | read-only |
+| `/data/runs` | run output and checkpoints | writable |
+| `/data/models` | GlotLID and SaT model caches (`/data/models/glotlid`, `/data/models/sat`) | writable |
+| `/data/grid5000` | Grid'5000 bundles | writable |
+
+The image contains no production PBFs, generated runs, `.env` files or tokens.
+The container user must be able to write to the runs and models directories.
+For `docker run`, pass `--user "$(id -u):$(id -g)"`; Compose reads
+`HOST_UID` and `HOST_GID` so files on the host belong to you.
+
+### With Compose
+
+`compose.yaml` runs the same read-only, non-root container with those mounts.
+Point it at your directories with `OSM_RAW_DIR`, `OSM_RUNS_DIR`,
+`OSM_MODELS_DIR` and `OSM_GRID5000_DIR` (defaults: `./data/raw`,
+`./data/runs`, `./data/models` and `./data/grid5000`):
+
+```bash
+mkdir -p data/raw data/runs data/models data/grid5000
+HOST_UID="$(id -u)" HOST_GID="$(id -g)" OSM_RAW_DIR=/path/to/pbf-root \
+  docker compose run --rm pipeline run-all \
+  --source-root /data/raw --output-root /data/runs \
+  --run-id geofabrik-website-v1 \
+  --repo-id NoeFlandre/osm-polygon-website-tag
+```
+
+Language detection works the same way once `/data/models` is mounted: add
+`--detect-languages` to `run-all`, or run
+`docker compose run --rm pipeline detect-languages --help` for the standalone
+stage.
+
+### Secrets
+
+Publishing needs `HF_TOKEN`; a dry run does not. Never bake it into an image or
+commit it. Either export it and pass it through, or keep it in a git-ignored
+`.env` file, which Compose reads when present (`.env.example` shows the names):
+
+```bash
+export HF_TOKEN=...            # or put HF_TOKEN=... in .env
+docker compose run --rm pipeline run-all --apply \
+  --source-root /data/raw --output-root /data/runs \
+  --run-id geofabrik-website-v1 --repo-id NoeFlandre/osm-polygon-website-tag
+```
+
+With plain `docker run`, pass the token by name (`--env HF_TOKEN`) so it does
+not appear in the command line:
 
 ```bash
 docker run --rm --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --user "$(id -u):$(id -g)" \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw",dst=/data/raw,readonly \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs",dst=/data/runs \
-  osm-polygon-website-tag:local run-all \
-  --source-root /data/raw \
-  --output-root /data/runs \
-  --run-id geofabrik-website-v1 \
-  --repo-id NoeFlandre/osm-polygon-website-tag
-```
-
-The image does not contain production PBFs, generated runs, `.env` files, or
-tokens. For an explicitly approved upload, pass a token through the
-environment only and add `--apply`:
-
-```bash
-docker run --rm --read-only \
-  --tmpfs /tmp:rw,noexec,nosuid,size=512m \
   --env HF_TOKEN \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw",dst=/data/raw,readonly \
-  --mount type=bind,src="/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs",dst=/data/runs \
+  --mount type=bind,src=/path/to/pbf-root,dst=/data/raw,readonly \
+  --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/runs",dst=/data/runs \
+  --mount type=bind,src="${OSM_POLY_DATA_DIR:-./data}/models",dst=/data/models \
   osm-polygon-website-tag:local run-all \
   --source-root /data/raw --output-root /data/runs \
   --run-id geofabrik-website-v1 \
@@ -153,7 +189,7 @@ tier runs.
 | --- | --- | --- | --- |
 | 1 | `git commit` | Ruff lint and format on the commit, `ty`, and `just focused` — only the tests the diff can plausibly break | seconds |
 | 2 | `git push` | `just qa-push`: Ruff, `ty`, and the same bounded selection | under a minute |
-| 3 | pull request | `just qa-pr`: lock baseline, Ruff, `ty`, one instrumented run of the whole suite, CRAP (max 6); beside it the container smoke test and one mutation shard per changed function | minutes |
+| 3 | pull request | `just qa-pr`: lock baseline, Ruff, `ty`, one instrumented run of the whole suite (package and quality scripts), CRAP strictly below 6; beside it the container smoke test and one mutation shard per changed function | minutes |
 | 4 | merge / release | `just qa-merge` locally, and `just release-verify <run-dir>` before publishing | minutes |
 | 5 | nightly 03:00 UTC or manual | the exhaustive mutation sweep, sharded per package area | hours |
 
@@ -178,12 +214,13 @@ what is on the Hub.
 
 Two duplications were removed when these tiers were introduced: the
 pull-request gate used to run the whole suite once plainly and again under
-coverage, and the container image was built by both the quality job and the
-Docker workflow. `crap` therefore no longer depends on `coverage` — `qa-pr`
-sequences them so the suite is instrumented exactly once. The Quality and
-Docker workflows also cancel superseded pull-request runs, which previously
+coverage, and the container image was built by both the quality job and a
+separate Docker job. `crap` therefore no longer depends on `coverage` — `qa-pr`
+sequences them so the suite is instrumented exactly once. The Quality
+workflow also cancels superseded pull-request runs, which previously
 left a twenty-five-job mutation matrix running for a commit nobody was
-waiting on.
+waiting on. Require only the `ci-ok` check in branch protection: it waits for
+every other Quality job and accepts a skipped one.
 
 ## Mutation testing
 
@@ -224,15 +261,15 @@ Build and deployment → Source`) before the first deployment.
 
 ## Storage defaults
 
-The production source root used by the reviewed workflow is
-`/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw`. Generated runs
-default to `/Volumes/Seagate M3/projects/osm-polygon-website-tag`; set
-`OSM_POLY_DATA_DIR=/some/local/output/path` to override the generated-data root.
+The source root is any read-only directory of `.osm.pbf` files, passed with
+`--source-root`. The generated-data root (runs, model caches, Grid'5000
+bundles) comes from `OSM_POLY_DATA_DIR`, in the environment or `.env`, and
+defaults to `./data`.
 The CLI's explicit `--output-root` still controls the run location and must
 remain outside the source root.
 
-When that Seagate project directory is mounted, `just` automatically keeps its
-UV package cache there as well. An explicitly set `UV_CACHE_DIR` still takes
+On the maintainer's machine, `just` also keeps its UV package cache on the
+project volume when it is mounted. An explicitly set `UV_CACHE_DIR` still takes
 precedence; direct `uv` commands can use the same cache by exporting that
 variable first.
 
@@ -244,7 +281,7 @@ environment or the local Hugging Face store, never from a token option.
 
 Use `scripts/grid5000/` only after the local locked environment and pinned
 model are ready. The workflow keeps the run, model cache, bundle, and receipts
-on Seagate. It transfers one shard and its checkpoint prefix to Grid'5000,
+under the data root. It transfers one shard and its checkpoint prefix to Grid'5000,
 then runs `grid5000-run` on one reserved GPU node with no network access. The
 OAR wrapper requests one GPU for 30 minutes and enforces a 25-minute detection
 budget. The staged bundle is intentionally tiny and

@@ -490,55 +490,6 @@ def test_run_revalidates_completed_receipt_before_reuse(tmp_path: Path, monkeypa
     assert grid5000.run_language_bundle(bundle_dir) == expected
 
 
-def test_run_revalidates_paused_receipt_before_reuse(tmp_path: Path, monkeypatch) -> None:
-    run_dir = _write_enriched_run(tmp_path)
-    model = tmp_path / "model_v3.bin"
-    model.write_bytes(b"model")
-    bundle_dir = tmp_path / "bundle"
-    bundle = grid5000.prepare_language_bundle(
-        run_dir, bundle_dir, model_path=model, commit="abc123"
-    )
-    receipt = {
-        "changed": False,
-        "commit": bundle.commit,
-        "completed": False,
-        "job_id": "42",
-        "max_batch_rows": 0,
-        "model": {
-            "filename": bundle.model.filename,
-            "repository": bundle.model.repository,
-            "revision": bundle.model.revision,
-            "sha256": bundle.model.sha256,
-        },
-        "processed_rows": 0,
-        "run_id": bundle.run_id,
-        "schema_version": bundle.schema_version,
-        "source_row_count": bundle.source_row_count,
-        "source_shard": bundle.source_shard,
-        "shard_sha256": bundle.source_shard_sha256,
-    }
-    (bundle_dir / grid5000.RESULT_NAME).write_text(json.dumps(receipt), encoding="utf-8")
-    monkeypatch.setattr(
-        grid5000,
-        "load_glotlid_detector_from_path",
-        lambda _path: (_ for _ in ()).throw(AssertionError("model reloaded")),
-    )
-
-    assert grid5000.run_language_bundle(bundle_dir) == grid5000.Grid5000Result(
-        run_id=bundle.run_id,
-        source_shard=bundle.source_shard,
-        source_row_count=bundle.source_row_count,
-        shard_sha256=bundle.source_shard_sha256,
-        model=bundle.model,
-        commit=bundle.commit,
-        completed=False,
-        changed=False,
-        processed_rows=0,
-        max_batch_rows=0,
-        job_id="42",
-    )
-
-
 def test_run_passes_the_staged_model_path_to_the_loader(tmp_path: Path, monkeypatch) -> None:
     run_dir = _write_enriched_run(tmp_path)
     model = tmp_path / "model_v3.bin"

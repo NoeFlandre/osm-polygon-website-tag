@@ -135,7 +135,6 @@ def extract_pbf(
     _validate_area_settings(area_workers, max_in_flight_areas)
 
     started = dt.datetime.now(tz=dt.UTC)
-    started_iso = started.replace(microsecond=0).isoformat()
     source_before = snapshot_source_fingerprint(pbf_path)
     stem = pbf_path.name.removesuffix(".osm.pbf")
     region = region_from_pbf_filename(pbf_path.name)
@@ -167,11 +166,9 @@ def extract_pbf(
         pbf_path,
         run_state,
         source_after,
-        region=region,
         final_paths=final_paths,
         counts=counts,
         started=started,
-        started_iso=started_iso,
     )
 
 
@@ -180,16 +177,16 @@ def _finish_extraction(
     run_state: RunState | None,
     source_after: SourceFingerprint,
     *,
-    region: str,
     final_paths: tuple[Path, Path, Path],
     counts: tuple[int, int, int],
     started: dt.datetime,
-    started_iso: str,
 ) -> ExtractionResult:
     """Record the finished extraction in the run state and summarize it."""
     finished = dt.datetime.now(tz=dt.UTC)
+    started_iso = started.replace(microsecond=0).isoformat()
     finished_iso = finished.replace(microsecond=0).isoformat()
     duration = (finished - started).total_seconds()
+    region = region_from_pbf_filename(pbf_path.name)
     public_count, obs_count, rej_count = counts
 
     if run_state is not None:

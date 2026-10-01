@@ -698,7 +698,9 @@ def test_completed_process_progress_retains_rows_and_completion() -> None:
 
 
 def test_deadline_is_reached_at_the_exact_boundary() -> None:
-    assert detection._deadline_reached(1.0, lambda: 1.0) is True
+    from osm_polygon_website_tag.pipeline.time_budget import deadline_reached
+
+    assert deadline_reached(1.0, lambda: 1.0) is True
 
 
 def test_process_batches_reports_a_paused_progress_state_at_the_deadline() -> None:

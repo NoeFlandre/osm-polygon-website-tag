@@ -22,14 +22,14 @@ def verify_optional_shard(
     """
     try:
         schema = pq.read_schema(path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - verification records unreadable files as findings
         errors.append(f"unreadable {label} shard {path}: {exc}")
         return
     if not all(name in schema.names for name in required_columns):
         return
     try:
         verify_shard(path, errors)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - keep independent invariant failures reportable
         errors.append(f"{label} invariant verification failed for {path}: {exc}")
 
 

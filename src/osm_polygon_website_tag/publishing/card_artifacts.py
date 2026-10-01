@@ -38,10 +38,9 @@ from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_
 from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.polygon_density import build_polygon_density_map
 from osm_polygon_website_tag.reporting.geometry_stats import (
-    GEOMETRY_STATS_FILENAME,
     GeometryStats,
     compute_geometry_stats,
-    render_geometry_stats,
+    stage_geometry_stats,
 )
 from osm_polygon_website_tag.reporting.text_population import compute_text_population_summary
 
@@ -275,7 +274,7 @@ def _release_card_promotions(
             staged_yaml,
         ),
         *_stage_release_map(root, staged_map),
-        *_stage_geometry_stats(staged_stats, root, geometry),
+        *stage_geometry_stats(staged_stats, root, geometry),
     ]
 
 
@@ -356,20 +355,6 @@ def _stage_release_map(root: Path, staged_map: Path) -> list[tuple[Path, Path]]:
     if target.is_file() and staged_map.read_bytes() == target.read_bytes():
         return []
     return [(staged_map, target)]
-
-
-def _stage_geometry_stats(
-    staged: Path,
-    run_dir: Path,
-    geometry: GeometryStats,
-) -> list[tuple[Path, Path]]:
-    """Stage stats JSON only when regeneration would change its bytes."""
-    target = run_dir / GEOMETRY_STATS_FILENAME
-    rendered = render_geometry_stats(geometry)
-    if target.is_file() and target.read_text(encoding="utf-8") == rendered:
-        return []
-    staged.write_text(rendered, encoding="utf-8")
-    return [(staged, target)]
 
 
 __all__ = ["promote_release_card_artifacts", "refresh_card_for_release"]

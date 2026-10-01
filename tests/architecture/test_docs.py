@@ -11,15 +11,52 @@ ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "src" / "osm_polygon_website_tag"
 
 
+def _navigation_targets(value: object) -> list[str]:
+    """Return documentation paths from flat or nested MkDocs navigation."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [target for item in value for target in _navigation_targets(item)]
+    if isinstance(value, dict):
+        return [target for item in value.values() for target in _navigation_targets(item)]
+    return []
+
+
 def test_cli_reference_lists_every_command() -> None:
-    cli = (PACKAGE / "application" / "cli.py").read_text(encoding="utf-8")
-    commands = set(re.findall(r'@app\.command\("([^"]+)"\)', cli))
+    import typer.main
+
+    from osm_polygon_website_tag.application.cli import app
+
+    commands = set(typer.main.get_command(app).commands)  # ty: ignore[unresolved-attribute]
     reference = (ROOT / "docs" / "cli.md").read_text(encoding="utf-8")
     table = reference.split("## Commands", 1)[1].split("\n## ", 1)[0]
     documented = set(re.findall(r"^\| `([^`]+)` \|", table, re.MULTILINE))
 
     assert commands
     assert commands == documented
+
+
+def test_cli_package_modules_stay_below_the_size_budget() -> None:
+    cli_package = PACKAGE / "application" / "cli"
+    modules = sorted(cli_package.glob("*.py"))
+
+    assert {path.stem for path in modules} == {
+        "__init__",
+        "__main__",
+        "grid5000",
+        "languages",
+        "publish",
+        "run",
+        "sentences",
+        "verify",
+    }
+    oversized = {
+        path.name: len(path.read_text(encoding="utf-8").splitlines())
+        for path in modules
+        if len(path.read_text(encoding="utf-8").splitlines()) > 250
+    }
+
+    assert oversized == {}
 
 
 @pytest.mark.parametrize(
@@ -32,3 +69,13 @@ def test_package_readme_names_every_module(package: str) -> None:
     missing = sorted(module for module in modules if f"`{module}`" not in readme)
 
     assert missing == []
+
+
+def test_every_navigation_target_exists() -> None:
+    import yaml
+
+    nav = yaml.safe_load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"))["nav"]
+    targets = _navigation_targets(nav)
+
+    assert targets
+    assert [target for target in targets if not (ROOT / "docs" / target).is_file()] == []

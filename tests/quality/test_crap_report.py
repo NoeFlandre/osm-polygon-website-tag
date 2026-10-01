@@ -7,39 +7,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from radon.complexity import cc_visit
+from scripts.quality import crap_report
+
 REPORT = Path(__file__).parents[2] / "scripts" / "quality" / "crap_report.py"
 TARGET = Path(__file__).parents[2] / "src" / "osm_polygon_website_tag" / "domain" / "tags.py"
 
 
 def _coverage_file(tmp_path: Path, percent: float) -> Path:
+    """Coverage for every function of ``TARGET``, all at ``percent``."""
+    from radon.complexity import cc_visit
+
+    entries = {
+        f"{block.name}@{block.lineno}": {
+            "start_line": block.lineno,
+            "summary": {"percent_covered": percent},
+        }
+        for block in cc_visit(TARGET.read_text(encoding="utf-8"))
+        if block.__class__.__name__ != "Class"
+    }
     path = tmp_path / "coverage.json"
     path.write_text(
-        json.dumps(
-            {
-                "files": {
-                    "src/osm_polygon_website_tag/domain/tags.py": {
-                        "functions": {
-                            "normalize_value": {
-                                "summary": {"percent_covered": percent},
-                                "start_line": 42,
-                            }
-                        }
-                    }
-                }
-            }
-        ),
+        json.dumps({"files": {str(TARGET): {"functions": entries}}}),
         encoding="utf-8",
     )
     return path
-
-
-def _run_report(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, str(REPORT), "--path", str(TARGET), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
 
 
 def _run_report_for(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -52,7 +45,8 @@ def _run_report_for(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_crap_report_passes_a_well_covered_function(tmp_path: Path) -> None:
-    result = _run_report(
+    result = _run_report_for(
+        TARGET,
         "--coverage-json",
         str(_coverage_file(tmp_path, 100.0)),
         "--max-crap",
@@ -65,14 +59,15 @@ def test_crap_report_passes_a_well_covered_function(tmp_path: Path) -> None:
 
 
 def test_crap_report_defaults_to_a_strict_six_threshold(tmp_path: Path) -> None:
-    result = _run_report("--coverage-json", str(_coverage_file(tmp_path, 0.0)))
+    result = _run_report_for(TARGET, "--coverage-json", str(_coverage_file(tmp_path, 0.0)))
 
     assert result.returncode == 1
     assert "6.00" in result.stderr
 
 
 def test_crap_report_fails_when_threshold_is_reached(tmp_path: Path) -> None:
-    result = _run_report(
+    result = _run_report_for(
+        TARGET,
         "--coverage-json",
         str(_coverage_file(tmp_path, 0.0)),
         "--max-crap",
@@ -84,8 +79,80 @@ def test_crap_report_fails_when_threshold_is_reached(tmp_path: Path) -> None:
     assert "at or above" in result.stderr
 
 
+def test_crap_report_main_scores_functions_in_process(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = crap_report.main(
+        [
+            "--coverage-json",
+            str(_coverage_file(tmp_path, 100.0)),
+            "--path",
+            str(TARGET),
+            "--path",
+            str(TARGET),
+        ]
+    )
+
+    assert result == 0
+    assert "normalize_value" in capsys.readouterr().out
+
+
+def test_crap_report_main_covers_failure_and_empty_report_paths(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    failed = crap_report.main(
+        [
+            "--coverage-json",
+            str(_coverage_file(tmp_path, 0.0)),
+            "--path",
+            str(TARGET),
+        ]
+    )
+    assert failed == 1
+    assert "at or above" in capsys.readouterr().err
+
+    empty_module = tmp_path / "empty.py"
+    empty_module.write_text("value = 1\n", encoding="utf-8")
+    empty_coverage = tmp_path / "empty-coverage.json"
+    empty_coverage.write_text(
+        json.dumps({"files": {str(empty_module): {"functions": {}}}}), encoding="utf-8"
+    )
+    no_functions = crap_report.main(
+        ["--coverage-json", str(empty_coverage), "--path", str(empty_module)]
+    )
+    assert no_functions == 2
+    assert "no functions found" in capsys.readouterr().err
+
+
+def test_crap_report_main_covers_missing_coverage_and_block_walk(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing_coverage = tmp_path / "missing.json"
+    missing_coverage.write_text(json.dumps({"files": {}}), encoding="utf-8")
+    missing = crap_report.main(["--coverage-json", str(missing_coverage), "--path", str(TARGET)])
+    assert missing == 2
+    assert "missing from the coverage report" in capsys.readouterr().err
+
+    blocks = crap_report._blocks(
+        cc_visit(
+            "def outer(flag):\n"
+            "    def inner():\n"
+            "        return flag\n"
+            "    return inner()\n"
+            "class Example:\n"
+            "    def method(self, value):\n"
+            "        return value\n"
+        )
+    )
+    assert [block.name for block in blocks] == ["outer", "inner", "method"]
+    assert crap_report._coverage_functions({"files": {"unused.py": {}}}) == {}
+    assert crap_report._expand_paths([TARGET, TARGET]) == [TARGET]
+    assert crap_report._expand_paths([tmp_path / "missing.py"]) == []
+
+
 def test_crap_report_treats_threshold_as_an_exclusive_upper_bound(tmp_path: Path) -> None:
-    result = _run_report(
+    result = _run_report_for(
+        TARGET,
         "--coverage-json",
         str(_coverage_file(tmp_path, 0.0)),
         "--max-crap",
@@ -102,7 +169,19 @@ def test_crap_report_expands_a_directory_in_deterministic_order(tmp_path: Path) 
     (source_dir / "zeta.py").write_text("def zeta():\n    return 1\n", encoding="utf-8")
     (source_dir / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
     coverage = tmp_path / "coverage.json"
-    coverage.write_text('{"files": {}}', encoding="utf-8")
+    coverage.write_text(
+        json.dumps(
+            {
+                "files": {
+                    str(source_dir / name): {
+                        "functions": {name: {"start_line": 1, "summary": {"percent_covered": 100}}}
+                    }
+                    for name in ("zeta.py", "alpha.py")
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = _run_report_for(
         source_dir,
@@ -126,7 +205,21 @@ def test_crap_report_counts_class_methods_once_not_as_classes(tmp_path: Path) ->
         "class ProgressReporter:\n    def __call__(self) -> None:\n        return None\n",
         encoding="utf-8",
     )
-    coverage = _coverage_file(tmp_path, 100.0)
+    coverage = tmp_path / "coverage.json"
+    coverage.write_text(
+        json.dumps(
+            {
+                "files": {
+                    str(source): {
+                        "functions": {
+                            "__call__": {"start_line": 2, "summary": {"percent_covered": 100}}
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     result = _run_report_for(
         source,
         "--coverage-json",
@@ -153,3 +246,104 @@ def test_production_function_complexity_is_shallow() -> None:
                 failures.append(f"{path}:{block.lineno} {block.name}={block.complexity}")
 
     assert failures == []
+
+
+_DECORATED_SOURCE = """import functools
+
+
+@functools.cache
+def cached(x):
+    def inner(y):
+        if y:
+            return 1
+        return 2
+    return inner(x)
+
+
+class Box:
+    @property
+    def value(self):
+        return 1
+
+    @staticmethod
+    def make(a):
+        return a
+"""
+
+
+def _module(tmp_path: Path) -> Path:
+    path = tmp_path / "mod.py"
+    path.write_text(_DECORATED_SOURCE, encoding="utf-8")
+    return path
+
+
+def _coverage_for(path: Path, functions: dict[str, tuple[int, float]], tmp_path: Path) -> Path:
+    report = tmp_path / "cov.json"
+    entries = {
+        name: {"start_line": line, "summary": {"percent_covered": percent}}
+        for name, (line, percent) in functions.items()
+    }
+    report.write_text(json.dumps({"files": {str(path): {"functions": entries}}}), encoding="utf-8")
+    return report
+
+
+_ALL_COVERED = {
+    "cached": (5, 100.0),
+    "cached.inner": (6, 100.0),
+    "Box.value": (15, 100.0),
+    "Box.make": (19, 100.0),
+}
+
+
+def test_decorated_methods_and_nested_closures_are_each_scored_once(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = _coverage_for(module, _ALL_COVERED, tmp_path)
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 0
+    listed = [line.split()[0] for line in result.stdout.splitlines()[2:]]
+    assert sorted(listed) == sorted(f"{module}:{line}" for line in (5, 6, 15, 19))
+
+
+def test_an_uncovered_closure_is_scored_and_fails_the_gate(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = _coverage_for(module, {**_ALL_COVERED, "cached.inner": (6, 0.0)}, tmp_path)
+
+    result = _run_report_for(module, "--coverage-json", str(report), "--max-crap", "5")
+
+    assert result.returncode == 1
+    assert f"{module}:6" in result.stdout
+
+
+def test_a_function_without_a_coverage_entry_is_an_error_not_zero_percent(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    functions = {name: entry for name, entry in _ALL_COVERED.items() if name != "Box.make"}
+    report = _coverage_for(module, functions, tmp_path)
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 2
+    assert f"{module}:19 make has no coverage entry" in result.stderr
+
+
+def test_a_file_missing_from_the_coverage_report_is_an_error(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = tmp_path / "cov.json"
+    report.write_text(json.dumps({"files": {}}), encoding="utf-8")
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 2
+    assert f"{module} is missing from the coverage report" in result.stderr
+
+
+def test_coverage_without_per_function_data_is_an_error(tmp_path: Path) -> None:
+    module = _module(tmp_path)
+    report = tmp_path / "cov.json"
+    report.write_text(json.dumps({"files": {str(module): {"summary": {}}}}), encoding="utf-8")
+
+    result = _run_report_for(module, "--coverage-json", str(report))
+
+    assert result.returncode == 2
+    assert "coverage 7.5 or newer" in result.stderr

@@ -1,0 +1,29 @@
+name: Bug report
+description: Something produces a wrong result, crashes, or breaks a gate
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command, and its stderr. Redact any token.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: "`git rev-parse --short HEAD`, or the release tag."
+  - type: textarea
+    id: run
+    attributes:
+      label: Run layout
+      description: The source and output roots used, and whether the run was resumed.

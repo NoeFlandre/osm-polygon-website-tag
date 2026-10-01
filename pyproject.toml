@@ -18,18 +18,20 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 
+# Runtime dependencies are bounded below their next major version.
 dependencies = [
-    "duckdb>=1.0.0",
+    "duckdb>=1.0.0,<2",
     "fasttext>=0.9.3,<1",
     "h3>=4,<5",
-    "huggingface-hub>=1.25.1",
+    "huggingface-hub>=1.25.1,<2",
+    "httpx>=0.28.1,<1",
     "matplotlib>=3.8,<4",
-    "osmium>=4.3.1",
-    "pyarrow>=25.0.0",
+    "osmium>=4.3.1,<5",
+    "pyarrow>=25.0.0,<26",
     "pydantic>=2.6,<3",
     "pydantic-settings>=2.2,<3",
-    "pyproj>=3.6.0",
-    "shapely>=2.0.0",
+    "pyproj>=3.6.0,<4",
+    "shapely>=2.0.0,<3",
     "rich>=14,<15",
     "tqdm>=4.67,<5",
     "trafilatura>=2.1,<3",
@@ -62,15 +64,19 @@ packages = ["src/osm_polygon_website_tag"]
 
 [dependency-groups]
 dev = [
-    "pytest>=8",
-    "pytest-cov>=5",
+    "pytest>=8,<10",
+    "pytest-cov>=5,<8",
     "pre-commit>=4.5,<5",
-    "ruff>=0.5",
-    "ty>=0.0.65",
+    # ruff and ty change their rules between releases: bound them to the
+    # tested series, and let Dependabot propose the next one.
+    "ruff>=0.5,<0.17",
+    "ty>=0.0.65,<0.1",
     "mkdocs-material>=9.6,<10",
     "mutmut>=3,<4",
     "radon>=6,<7",
     "pytest-xdist>=3,<4",
+    "hypothesis>=6,<7",
+    "pytest-benchmark>=5.3,<6",
 ]
 
 [tool.ruff]
@@ -94,15 +100,78 @@ select = [
     "PTH",  # use pathlib
     "ERA",  # eradicate commented-out code
     "RUF",  # ruff-specific
+    "BLE",  # blind except
+    "PGH",  # blanket noqa / type: ignore
+    "PLW",  # pylint warnings
+    "PLE",  # pylint errors
+    "PERF", # performance anti-patterns
+    "PIE",  # misc anti-patterns
+    "T20",  # print
+    "TRY300", # return inside try
+    "DTZ",  # naive datetimes
+    "ARG",  # unused arguments
+    "C90",  # mccabe complexity
+    "PLR0912", # too many branches
+    "PLR0913", # too many arguments
+    "PLR0915", # too many statements
+    "FBT001", # boolean positional argument
+    "FBT002", # boolean default positional argument
+    "ANN001", # missing argument annotation
+    "ANN201", # missing public return annotation
+    "ANN202", # missing private return annotation
+    "ANN204", # missing special-method return annotation
+    # TRY004 is left out: the wrong-type checks validate untrusted file and
+    # model contents, where ValueError is the contract the CLI maps to exit 3.
 ]
 ignore = [
     "S101",  # asserts allowed in tests
     "E501",  # line length handled by formatter; some long dict literals are clearer on one line
 ]
 
+[tool.ruff.lint.pylint]
+# Typer commands take many options, so the CLI package is exempt below. The rest of the
+# package is held to this bound; the listed modules predate it (TODO(#76)).
+max-args = 6
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018"]
-"src/osm_polygon_website_tag/application/cli.py" = ["E501"]
+# Test fakes and lambdas mirror real signatures, so unused arguments are intentional.
+"tests/**/*.py" = ["S101", "S105", "S106", "S603", "S607", "E501", "PTH107", "S108", "B018", "ARG", "FBT", "ANN", "PLR0913"]
+# The quality scripts are CLIs that print their reports.
+"scripts/**/*.py" = ["T201"]
+"src/osm_polygon_website_tag/application/cli/__init__.py" = ["E501", "FBT001", "FBT002"]
+"src/osm_polygon_website_tag/application/cli/grid5000.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/application/cli/publish.py" = ["FBT001", "FBT002"]
+"src/osm_polygon_website_tag/application/cli/run.py" = ["PLR0913", "FBT001", "FBT002"]
+# shapely's transform() passes a z argument that the projection closures ignore.
+"src/osm_polygon_website_tag/domain/geometry.py" = ["ARG001"]
+# Signatures that predate the argument-count and boolean-flag rules. New modules
+# are held to them; shrink this list as each function is reshaped (TODO(#76)).
+"src/osm_polygon_website_tag/application/source_processing.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/application/workflow.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/contracts/polygon_schema.py" = ["FBT001"]
+"src/osm_polygon_website_tag/pipeline/detect_languages.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/pipeline/enrich.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/extraction_handler.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/extraction_records.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/grid5000.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/grid5000_sentences.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/pipeline/partition_aggregate.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/pipeline/sentence_run.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/publishing/card_artifacts.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/publishing/incremental.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/publishing/release.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/card_metadata.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/aggregation.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/h3_geometry.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/models.py" = ["FBT001"]
+"src/osm_polygon_website_tag/reporting/geographic/polygon_density.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/language.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/receipt.py" = ["FBT001", "FBT002", "PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/sentence.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/reporting/verification/text.py" = ["FBT001", "PLR0913"]
+"src/osm_polygon_website_tag/reporting/verify.py" = ["FBT001"]
+"src/osm_polygon_website_tag/runtime/run_state.py" = ["PLR0913"]
+"src/osm_polygon_website_tag/web/web_fetch.py" = ["PLR0913"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -115,6 +184,12 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
+    "-m",
+    "not benchmark and not benchmark_stress",
+]
+markers = [
+    "benchmark: opt-in performance benchmarks; excluded from ordinary test runs",
+    "benchmark_stress: additional 1,024-row performance acceptance cases",
 ]
 
 [tool.mutmut]

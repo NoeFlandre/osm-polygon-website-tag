@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypedDict
 
@@ -45,6 +45,8 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
     update_source_enrichment_status,
 )
+from osm_polygon_website_tag.web.politeness import HostPolicy
+from osm_polygon_website_tag.web.web_fetch import FetchResult, make_polite_fetcher
 
 
 @dataclass(frozen=True)
@@ -61,8 +63,10 @@ class SourceProcessingContext:
     area_workers: int | None
     max_in_flight_areas: int | None
     fetch_workers: int | None
+    host_policy: HostPolicy | None
     detect_languages: bool
     language_detector: LanguageDetector | None
+    fetcher: Callable[[str], FetchResult] | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,7 @@ class _EnrichmentKwargs(TypedDict, total=False):
     cache_path: Path
     invocation_id: str
     fetch_workers: int | None
+    fetcher: Callable[[str], FetchResult]
 
 
 def process_sources(
@@ -115,6 +120,8 @@ def process_sources(
     allow_extraction: bool,
 ) -> SourcePhaseCounts:
     """Process sources in the caller-provided order and aggregate phase counts."""
+    if context.host_policy is not None and context.fetcher is None:
+        context = replace(context, fetcher=make_polite_fetcher(context.host_policy))
     counts = SourcePhaseCounts()
     for index, source in enumerate(ordered_sources, start=1):
         result = _process_source(
@@ -377,6 +384,10 @@ def _enrich_shard(shard: Path, context: SourceProcessingContext) -> EnrichmentRe
     }
     if context.fetch_workers is not None:
         kwargs["fetch_workers"] = context.fetch_workers
+    if context.fetcher is not None:
+        kwargs["fetcher"] = context.fetcher
+    elif context.host_policy is not None:
+        kwargs["fetcher"] = make_polite_fetcher(context.host_policy)
     return enrich_polygon_shard(shard, **kwargs)
 
 
@@ -592,18 +603,17 @@ def _maybe_publish_enriched_shard(
 
 
 def _run_needs_enrichment(run_dir: Path) -> bool:
-    for shard in sorted((run_dir / "polygons").glob("*.parquet")):
-        if _shard_needs_enrichment(shard):
-            return True
-    return False
+    return _run_has_shard_needing(run_dir, _shard_needs_enrichment)
 
 
 def _run_needs_language_detection(run_dir: Path) -> bool:
     """Return whether any public shard lacks a complete language result."""
-    for shard in sorted((run_dir / "polygons").glob("*.parquet")):
-        if shard_needs_language_detection(shard):
-            return True
-    return False
+    return _run_has_shard_needing(run_dir, shard_needs_language_detection)
+
+
+def _run_has_shard_needing(run_dir: Path, predicate: Callable[[Path], bool]) -> bool:
+    """Apply a stage-specific completeness rule across the sorted public shards."""
+    return any(predicate(shard) for shard in sorted((run_dir / "polygons").glob("*.parquet")))
 
 
 def _shard_needs_enrichment(shard: Path) -> bool:

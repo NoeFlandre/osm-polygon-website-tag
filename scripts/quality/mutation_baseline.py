@@ -10,10 +10,11 @@ sweep: a scoped run leaves most mutants unchecked.
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from scripts.quality.mutation_gate import unverified_mutants
+from scripts.quality.mutation_gate import read_baseline, unverified_mutants
 
 HEADER = (
     "# Mutation baseline: mutants the suite does not yet verify.",
@@ -36,17 +37,69 @@ def render(names: Sequence[str]) -> str:
     return "\n".join([*HEADER, f"# Recorded mutants: {len(unique)}", "", *unique]) + "\n"
 
 
+def _write_baseline(target: Path, names: Sequence[str]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(render(names), encoding="utf-8")
+    print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
+
+
+def _report_growth(
+    *,
+    fail_on_growth: bool,
+    grown: Sequence[str],
+    baseline: Path,
+    output: Path | None,
+    target: Path,
+    names: Sequence[str],
+) -> bool:
+    if not fail_on_growth or not grown:
+        return False
+    _print_growth(grown, baseline)
+    _write_candidate(output, baseline, target, names)
+    return True
+
+
+def _print_growth(grown: Sequence[str], baseline: Path) -> None:
+    print(f"the sweep found {len(grown)} survivor(s) outside {baseline}:", file=sys.stderr)
+    for name in grown:
+        print(f"  {name}", file=sys.stderr)
+
+
+def _write_candidate(
+    output: Path | None, baseline: Path, target: Path, names: Sequence[str]
+) -> None:
+    if output is not None and output.resolve() != baseline.resolve():
+        _write_baseline(target, names)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Rewrite the baseline file from a results listing."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, required=True)
     parser.add_argument("--baseline", type=Path, default=Path("docs/quality/mutation-baseline.txt"))
+    parser.add_argument(
+        "--output", type=Path, help="write the regenerated baseline here instead of --baseline"
+    )
+    parser.add_argument(
+        "--fail-on-growth",
+        action="store_true",
+        help="exit 1 when the sweep left a survivor the current baseline does not record",
+    )
     args = parser.parse_args(argv)
     lines = args.results.read_text(encoding="utf-8").splitlines()
     names = unverified_mutants(lines)
-    args.baseline.parent.mkdir(parents=True, exist_ok=True)
-    args.baseline.write_text(render(names), encoding="utf-8")
-    print(f"recorded {len(set(names))} unverified mutant(s) in {args.baseline}")
+    target = args.output or args.baseline
+    grown = sorted(set(names) - read_baseline(args.baseline))
+    if _report_growth(
+        fail_on_growth=args.fail_on_growth,
+        grown=grown,
+        baseline=args.baseline,
+        output=args.output,
+        target=target,
+        names=names,
+    ):
+        return 1
+    _write_baseline(target, names)
     return 0
 
 

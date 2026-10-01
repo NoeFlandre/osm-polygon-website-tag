@@ -87,11 +87,11 @@ def _migrate_to_staged(
         sink.close()
         _validate_migrated_shard(staged, sink.row_count, row_count)
         atomic_promote_bundle([(staged, shard)])
-        return sink.max_pending_rows
     except BaseException:
         sink.close()
         staged.unlink(missing_ok=True)
         raise
+    return sink.max_pending_rows
 
 
 def _write_migration_batches(

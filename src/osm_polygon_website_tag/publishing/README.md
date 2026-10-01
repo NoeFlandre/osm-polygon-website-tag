@@ -2,8 +2,9 @@
 
 Adapts verified artifacts to Hugging Face publication.
 
-- Modules: `card_artifacts`, `hf_token`, `incremental`, `publish`, `release`,
-  `remote_identity`, and `trackio`.
+- Modules: `card_artifacts`, `errors`, `hf_token`, `incremental`, `publish`,
+  `release`, `remote_identity`, and `trackio`. `errors` holds the exceptions the
+  CLI maps to exit codes (`TrackioUnavailableError`, exit 5).
 - `release` orchestrates the local card/report release flow; `remote_identity`
   owns the read-only Hub checks (`default_hub_verifier`, remote revision, data,
   Parquet, text-population, and per-file size/SHA-256 identity) that the

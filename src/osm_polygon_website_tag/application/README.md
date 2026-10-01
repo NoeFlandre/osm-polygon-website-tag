@@ -17,8 +17,10 @@ separate from workflow side effects.
     PBF side effects; `workflow` only composes its plan with the stage calls.
   - `progress`: adapts workflow messages to stable logs or interactive tqdm
     progress without leaking terminal concerns into the pipeline.
-  - `cli`: exposes the typed Typer application, uses Rich for human-facing
-    stderr, and delegates to application entry points.
+  - `cli`: exposes the typed Typer application and shared `RunDir` / `RepoId`
+    options; `run`, `languages`, `sentences`, `grid5000`, `publish`, and `verify`
+    hold the command adapters by stage. Rich output and error mapping live in
+    `cli.__init__`.
   - `grid5000_runner`: provides the dependency-light, offline entry point for
     one staged language-detection bundle on a reserved compute node.
   - `grid5000_sentence_runner`: the matching offline entry point for one staged

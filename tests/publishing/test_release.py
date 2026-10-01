@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from tests.fixtures.call_recording import recording_stub
+from tests.publishing.receipt_helpers import recording_receipt_reads
 from tests.reporting.test_finalize import _setup
 
 import osm_polygon_website_tag.publishing.release as release_module
@@ -25,7 +27,6 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
 )
 from osm_polygon_website_tag.reporting.finalize import (
     _write_completion_receipt,
-    finalize_run,
     replace_receipt_atomic,
 )
 from osm_polygon_website_tag.reporting.verify import verify_results
@@ -40,13 +41,6 @@ class _RecordingUploader:
 
     def __call__(self, run_dir: Path, **kwargs: Any) -> None:
         self.calls.append({"run_dir": run_dir, **kwargs})
-
-
-@pytest.fixture
-def run_dir(tmp_path: Path) -> Path:
-    root, _state = _setup(tmp_path)
-    assert finalize_run(root).ok
-    return root
 
 
 def test_dry_run_plans_exactly_the_card_and_report(run_dir: Path) -> None:
@@ -1094,28 +1088,35 @@ def test_release_card_and_stats_threads_the_run_through_every_gate(
     files = (ReleasedFile(relative_path="README.md", sha256="f", size_bytes=1),)
     publication = object()
 
-    def record(name: str, result: object = None):
-        def stub(*args: object, **kwargs: object) -> object:
-            calls.append((name, args, kwargs))
-            return result
-
-        return stub
-
-    monkeypatch.setattr(release_module, "_require_exact_repo", record("repo"))
-    monkeypatch.setattr(release_module, "_require_complete_release", record("complete", "exp"))
-    monkeypatch.setattr(release_module, "_recompute_card", record("recompute", True))
-    monkeypatch.setattr(release_module, "verify_release_results", record("verify", report))
-    monkeypatch.setattr(release_module, "_require_verified", record("verified"))
-    monkeypatch.setattr(release_module, "compute_data_manifest_sha256", record("data", "d-sha"))
-    monkeypatch.setattr(release_module, "build_card_release_plan", record("plan", files))
-    monkeypatch.setattr(release_module, "_publish_if_requested", record("publish", publication))
+    monkeypatch.setattr(release_module, "_require_exact_repo", recording_stub(calls, "repo"))
+    monkeypatch.setattr(
+        release_module, "_require_complete_release", recording_stub(calls, "complete", "exp")
+    )
+    monkeypatch.setattr(release_module, "_recompute_card", recording_stub(calls, "recompute", True))
+    monkeypatch.setattr(
+        release_module, "verify_release_results", recording_stub(calls, "verify", report)
+    )
+    monkeypatch.setattr(release_module, "_require_verified", recording_stub(calls, "verified"))
+    monkeypatch.setattr(
+        release_module,
+        "compute_data_manifest_sha256",
+        recording_stub(calls, "data", "d-sha"),
+    )
+    monkeypatch.setattr(
+        release_module, "build_card_release_plan", recording_stub(calls, "plan", files)
+    )
+    monkeypatch.setattr(
+        release_module, "_publish_if_requested", recording_stub(calls, "publish", publication)
+    )
     monkeypatch.setattr(
         release_module,
         "_publication_report_fields",
-        record("fields", ("rev", True, False, ("README.md",))),
+        recording_stub(calls, "fields", ("rev", True, False, ("README.md",))),
     )
     monkeypatch.setattr(
-        release_module, "compute_parquet_manifest_sha256", record("parquet", "p-sha")
+        release_module,
+        "compute_parquet_manifest_sha256",
+        recording_stub(calls, "parquet", "p-sha"),
     )
     uploader, verifier, checker = object(), object(), object()
 
@@ -1125,9 +1126,9 @@ def test_release_card_and_stats_threads_the_run_through_every_gate(
         repo_id="owner/repo",
         repo_kind="model",
         apply=True,
-        uploader=uploader,  # type: ignore
-        verifier=verifier,  # type: ignore
-        remote_checker=checker,  # type: ignore
+        uploader=uploader,  # ty: ignore[invalid-argument-type]
+        verifier=verifier,  # ty: ignore[invalid-argument-type]
+        remote_checker=checker,  # ty: ignore[invalid-argument-type]
     )
 
     assert result == release_module.CardReleaseReport(
@@ -1193,7 +1194,7 @@ def _external_text_population(
         calls.append(("entries", (root, received), {}))
         if isinstance(actual, Exception):
             raise actual
-        return iter(actual)  # type: ignore
+        return iter(actual)  # ty: ignore[no-matching-overload]
 
     monkeypatch.setattr(release_module, "_read_receipt_payload", read)
     monkeypatch.setattr(release_module, "_text_population_manifest_entries_from_paths", entries)
@@ -1291,10 +1292,10 @@ def _publish_with(tmp_path: Path, checker: object) -> object:
         tmp_path,
         repo_id="owner/repo",
         repo_kind="dataset",
-        files=("file",),  # type: ignore
+        files=("file",),  # ty: ignore[invalid-argument-type]
         uploader=None,
         verifier=None,
-        remote_checker=checker,  # type: ignore
+        remote_checker=checker,  # ty: ignore[invalid-argument-type]
     )
 
 
@@ -1400,31 +1401,13 @@ def test_recoverable_card_identities_accept_an_existing_readme(tmp_path: Path) -
     release_module._require_recoverable_card_identities(tmp_path, missing)
 
 
-def _recording_receipt_reads(
-    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
-) -> list[tuple[str, dict[str, object]]]:
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def read(_path: Path, **kwargs: object) -> dict[str, object]:
-        calls.append(("read", kwargs))
-        return payload
-
-    def identity(_payload: dict[str, object], **kwargs: object) -> str:
-        calls.append(("identity", kwargs))
-        return "id"
-
-    monkeypatch.setattr(release_module, "_read_receipt_payload", read)
-    monkeypatch.setattr(release_module, "_receipt_data_identity", identity)
-    return calls
-
-
 _LOCAL_RECEIPT = {"error_type": ValueError, "label": "release completion receipt"}
 
 
 def test_card_refresh_identities_read_the_local_receipt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = _recording_receipt_reads(monkeypatch, {"readme_yaml_custom_sha256": "r"})
+    calls = recording_receipt_reads(monkeypatch, release_module, {"readme_yaml_custom_sha256": "r"})
     monkeypatch.setattr(release_module, "_completion_receipt_path", lambda root: root / "r.json")
     monkeypatch.setattr(release_module, "_require_recoverable_card_identities", lambda *_a: None)
 
@@ -1438,7 +1421,7 @@ def test_card_refresh_identities_read_the_local_receipt(
 def test_completion_data_identity_labels_both_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = _recording_receipt_reads(monkeypatch, {})
+    calls = recording_receipt_reads(monkeypatch, release_module, {})
 
     assert release_module._completion_data_identity(tmp_path / "r.json") == "id"
     assert calls == [("read", _LOCAL_RECEIPT), ("identity", _LOCAL_RECEIPT)]
@@ -1459,7 +1442,7 @@ def test_publish_if_requested_keeps_an_explicit_uploader_unchecked(
         repo_id="o/r",
         repo_kind="dataset",
         files=(),
-        uploader=uploader,  # type: ignore
+        uploader=uploader,  # ty: ignore[invalid-argument-type]
         verifier=None,
         remote_checker=None,
     )

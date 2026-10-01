@@ -24,7 +24,7 @@ def print_receipt(run: Callable[[], Mapping[str, object]]) -> int:
     try:
         payload = run()
     except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        sys.stderr.write(f"error: {exc}\n")
         return 2
-    print(json.dumps(payload, default=str, indent=2, sort_keys=True))
+    sys.stdout.write(json.dumps(payload, default=str, indent=2, sort_keys=True) + "\n")
     return 0

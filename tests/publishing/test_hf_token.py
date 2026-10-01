@@ -70,20 +70,46 @@ def test_stored_token_requires_a_non_empty_string(
     assert resolve_hf_token() is None
 
 
-def test_stored_token_errors_are_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "error", [OSError("credential store unreadable"), ValueError("corrupt credential file")]
+)
+def test_an_unreadable_credential_store_means_no_token_and_logs_why(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
+) -> None:
     monkeypatch.delenv("HF_TOKEN", raising=False)
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
 
     def raise_error() -> None:
-        raise RuntimeError("credential store unavailable")
+        raise error
 
-    monkeypatch.setitem(
-        sys.modules,
-        "huggingface_hub",
-        SimpleNamespace(get_token=raise_error),
-    )
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(get_token=raise_error))
+
+    with caplog.at_level("DEBUG", logger="osm_polygon_website_tag.publishing.hf_token"):
+        assert resolve_hf_token() is None
+    assert caplog.messages == [f"no stored Hugging Face token: {type(error).__name__}: {error}"]
+
+
+def test_a_missing_huggingface_hub_means_no_stored_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
 
     assert resolve_hf_token() is None
+
+
+def test_an_unexpected_credential_store_error_is_not_hidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    def raise_error() -> None:
+        raise RuntimeError("bug")
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(get_token=raise_error))
+
+    with pytest.raises(RuntimeError, match="bug"):
+        resolve_hf_token()
 
 
 def test_the_real_credential_store_is_readable(monkeypatch: pytest.MonkeyPatch) -> None:

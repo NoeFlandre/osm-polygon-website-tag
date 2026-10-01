@@ -37,7 +37,7 @@ from osm_polygon_website_tag.reporting.finalize import finalize_run
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.repair import refresh_card_run
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
-from osm_polygon_website_tag.runtime.paths import assert_seagate_path, glotlid_model_cache_dir
+from osm_polygon_website_tag.runtime.paths import model_cache_dir, require_under_data_root
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ANALYZED,
     STATUS_CARD_BUILT,
@@ -57,6 +57,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     upsert_run_metadata,
 )
 from osm_polygon_website_tag.runtime.safety import assert_path_safe_against, normalize_path
+from osm_polygon_website_tag.web.politeness import HostPolicy
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ def run_all(
     area_workers: int | None = None,
     max_in_flight_areas: int | None = None,
     fetch_workers: int | None = None,
+    host_policy: HostPolicy | None = None,
     detect_languages: bool = False,
     language_detector: LanguageDetector | None = None,
 ) -> WorkflowResult:
@@ -108,7 +110,7 @@ def run_all(
     Optional worker settings are forwarded to the extraction and enrichment
     stages; ``None`` delegates to their bounded defaults. Language detection
     is opt-in; when enabled, a supplied detector is used for hermetic tests,
-    otherwise the pinned GlotLID model is loaded from the Seagate data root.
+    otherwise the pinned GlotLID model is loaded from the data root.
     """
     source_root_path = normalize_path(source_root)
     output_root_path = assert_path_safe_against(output_root, source_root_path)
@@ -149,6 +151,7 @@ def run_all(
         area_workers=area_workers,
         max_in_flight_areas=max_in_flight_areas,
         fetch_workers=fetch_workers,
+        host_policy=host_policy,
         detect_languages=detect_languages,
         language_detector=detector,
     )
@@ -217,9 +220,8 @@ def _prepare_language_detector(
         return None
     if language_detector is not None:
         return language_detector
-    assert_seagate_path(run_dir, label="run directory")
-    model_cache = glotlid_model_cache_dir()
-    assert_seagate_path(model_cache, label="GlotLID model cache")
+    require_under_data_root(run_dir, label="run directory")
+    model_cache = model_cache_dir("glotlid")
     return load_glotlid_detector(model_cache)
 
 

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from osm_polygon_website_tag.publishing.errors import TrackioUnavailableError
 from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import (
@@ -126,7 +127,7 @@ def _load_trackio() -> Any:
     try:
         return importlib.import_module("trackio")
     except ModuleNotFoundError as exc:
-        raise RuntimeError(
+        raise TrackioUnavailableError(
             "Trackio publishing requires the optional 'trackio' package; "
             "run with `uv run --with trackio ...`"
         ) from exc

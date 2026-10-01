@@ -42,7 +42,7 @@ import it.
    interruption resumes at the first unfinished batch.
 4. **Optional language detection.** When `--detect-languages` is enabled,
    `run-all` or `detect-languages` loads one pinned GlotLID model from the
-   Seagate cache, predicts successful website texts in bounded batches, and
+   data-root model cache, predicts successful website texts in bounded batches, and
    atomically upgrades each public shard to schema v1.4. The default workflow
    does not load the model.
 5. **Analysis.** `analyze-results` uses DuckDB with explicit memory and

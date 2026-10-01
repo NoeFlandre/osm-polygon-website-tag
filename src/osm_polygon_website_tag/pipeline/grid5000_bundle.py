@@ -1,7 +1,7 @@
 """Shared contract primitives for offline Grid'5000 bundles.
 
 Both staged stages -- language detection and sentence segmentation -- move the
-same shapes between the Seagate run and a reserved node: a JSON bundle
+same shapes between the local run and a reserved node: a JSON bundle
 manifest, a JSON result receipt, a pinned model identity, and directories that
 must be created or replaced without destroying prior work. Those primitives
 live here so neither stage owns a private copy of them.

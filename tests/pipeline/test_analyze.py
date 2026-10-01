@@ -1182,7 +1182,7 @@ def test_write_cell_tables_writes_every_table_under_its_contract(
         lambda received, path, **kwargs: groups.append((received, path, kwargs)),
     )
 
-    assert module._write_cell_tables(con, tmp_path) == (cells_obs, cells_canon)  # type: ignore
+    assert module._write_cell_tables(con, tmp_path) == (cells_obs, cells_canon)  # ty: ignore[invalid-argument-type]
 
     assert tables == [
         (
@@ -1347,7 +1347,7 @@ def test_closing_the_connection_suppresses_its_failure() -> None:
         def close(self) -> None:
             raise RuntimeError("already closed")
 
-    _close_analysis_connection(_Connection())  # type: ignore
+    _close_analysis_connection(_Connection())  # ty: ignore[invalid-argument-type]
 
 
 def test_global_cell_rows_report_absent_cells_as_zero() -> None:
@@ -1369,7 +1369,7 @@ def test_cells_per_group_default_to_all_observations(
     )
     con = object()
 
-    _write_cells_per_group(con, tmp_path / "cells.parquet")  # type: ignore
+    _write_cells_per_group(con, tmp_path / "cells.parquet")  # ty: ignore[invalid-argument-type]
 
     [(received, query, path)] = copies
     assert received is con
@@ -1382,9 +1382,9 @@ def test_cells_per_group_default_to_all_observations(
 
 def test_class_count_refusal_is_exact(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"^unsupported class query$"):
-        _write_class_count(None, tmp_path / "x.parquet", column="bad", view="public_polygons")  # type: ignore
+        _write_class_count(None, tmp_path / "x.parquet", column="bad", view="public_polygons")  # ty: ignore[invalid-argument-type]
 
 
 def test_cells_per_group_refusal_is_exact(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"^unsupported group query$"):
-        _write_cells_per_group(None, tmp_path / "x.parquet", group_column="bad")  # type: ignore
+        _write_cells_per_group(None, tmp_path / "x.parquet", group_column="bad")  # ty: ignore[invalid-argument-type]

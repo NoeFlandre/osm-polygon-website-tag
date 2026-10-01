@@ -53,6 +53,19 @@ test:
 unit:
     uv run --locked pytest -n auto tests --ignore=tests/acceptance --ignore=tests/architecture
 
+# Run the opt-in performance suite separately from the ordinary test run.
+bench:
+    uv run --locked pytest -m benchmark tests/benchmarks --no-cov -p no:cacheprovider -q
+
+# Save a baseline, then fail if a later median is >25% slower.
+bench-save name="base":
+    uv run --locked pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov -p no:cacheprovider -q --benchmark-save={{name}}
+
+bench-compare name="base":
+    OSM_POLY_BENCHMARK_ACCEPTANCE=1 uv run --locked pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov -p no:cacheprovider -q \
+        --benchmark-compare --benchmark-compare-fail=median:25% \
+        --benchmark-json=/tmp/osm-polygon-website-tag-benchmarks.json
+
 acceptance:
     uv run --locked pytest -n auto tests/acceptance
 
@@ -71,6 +84,15 @@ release-stats run_dir:
         --run-dir "{{ run_dir }}" \
         --confirm-repo 'NoeFlandre/osm-polygon-website-tag' \
         --apply
+
+# Check every locked dependency against the PyPI advisory database.
+audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    requirements="$(mktemp)"
+    trap 'rm -f "$requirements"' EXIT
+    uv export --locked --no-hashes --no-emit-project --quiet > "$requirements"
+    uvx pip-audit==2.10.1 --requirement "$requirements" --disable-pip --no-deps
 
 build:
     uv build --out-dir "{{ BUILD_OUTPUT_DIR }}"
@@ -91,16 +113,18 @@ COVERAGE_JSON := env("COVERAGE_JSON", "/tmp/osm-polygon-website-tag-coverage.jso
 # the serial suite spent most of its eighteen minutes waiting on I/O.
 # Tier 3/4: the single source of test and coverage truth.
 coverage:
-    uv run --locked pytest -n auto --cov=osm_polygon_website_tag --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
+    uv run --locked pytest -n auto --cov=osm_polygon_website_tag --cov=scripts.quality --cov-report=term-missing --cov-report=json:"{{ COVERAGE_JSON }}" --cov-fail-under=75
 
 # Depends on nothing so CI never runs the suite twice; run `just coverage`
 # first, or use `just qa-pr`, which sequences them.
 # Tier 3/4: CRAP gate over the existing coverage artifact.
 crap:
-    uv run --locked python scripts/quality/crap_report.py --coverage-json "{{ COVERAGE_JSON }}" --path src/osm_polygon_website_tag --max-crap 6
+    uv run --locked python scripts/quality/crap_report.py --coverage-json "{{ COVERAGE_JSON }}" --path src/osm_polygon_website_tag --path scripts --max-crap 6
 
+# Every mutant reruns the tests that cover it, so the mutation recipes give
+# property tests a short, derandomized budget (see tests/conftest.py).
 mutation: mutation-clean
-    uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}"
+    HYPOTHESIS_PROFILE=mutation uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}"
     just mutation-gate
 
 # Results persist in the mutant workspace between invocations, so a run must
@@ -132,7 +156,7 @@ mutation-scope base="origin/main":
     # -- regenerating fourteen thousand mutants costs minutes -- and the gate is
     # told the scope so stale verdicts from other modules are ignored.
     # shellcheck disable=SC2086
-    if uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters; then
+    if HYPOTHESIS_PROFILE=mutation uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" $filters; then
         :
     else
         status=$?
@@ -155,7 +179,7 @@ mutation-module filters:
     set -euo pipefail
     just mutation-clean
     read -r -a shard <<< "{{ filters }}"
-    if uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"; then
+    if HYPOTHESIS_PROFILE=mutation uv run --locked python scripts/quality/mutation_runner.py run --max-children "{{ MUTATION_CHILDREN }}" "${shard[@]}"; then
         :
     else
         status=$?
@@ -177,7 +201,7 @@ mutation-gate *scopes:
     results="${TMPDIR:-/tmp}/osm-polygon-website-tag-mutmut-results.txt"
     uv run --locked mutmut results --all true > "$results"
     uv run --locked python scripts/quality/mutation_gate.py \
-        --results "$results" --baseline docs/quality/mutation-baseline.txt {{ scopes }}
+        --results "$results" --baseline docs/quality/mutation-baseline.txt --strict-baseline {{ scopes }}
 
 smoke:
     just docker-smoke
@@ -220,11 +244,12 @@ qa-push base="origin/main": ruff typecheck
 # run, and `crap` reads that run's artifact. The per-module mutation matrix
 # runs beside this job; `mutation_scope.py` emits one shard per changed
 # function. `build` proves the sdist and wheel still package.
+# `audit` fails the gate on a known-vulnerable pin in uv.lock.
 # Tier 3: the pull-request gate.
-qa-pr: baseline ruff typecheck coverage crap build
+qa-pr: baseline ruff typecheck coverage crap build audit
 
 # Everything the pull request proved, plus the container smoke test. In CI the
-# Docker workflow owns the container gate and runs it beside the quality job,
+# Quality workflow's `docker` job owns the container gate and runs it beside the quality job,
 # so this recipe is for proving a merge locally in one command.
 # Tier 4: the merge gate.
 qa-merge: qa-pr

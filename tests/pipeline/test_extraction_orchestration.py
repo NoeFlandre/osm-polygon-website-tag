@@ -167,9 +167,7 @@ def test_extract_and_promote_rejects_unequal_shard_lists(
     )
     monkeypatch.setattr(extraction_module, "snapshot_source_fingerprint", lambda _p: "same")
     captured: list[Any] = []
-    monkeypatch.setattr(
-        extraction_module, "atomic_promote_bundle", lambda pairs: captured.extend(pairs)
-    )
+    monkeypatch.setattr(extraction_module, "atomic_promote_bundle", captured.extend)
     finals = (tmp_path / "x", tmp_path / "y")  # one short: strict zip must raise
 
     with pytest.raises(ValueError, match="zip"):

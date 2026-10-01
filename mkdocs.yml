@@ -33,6 +33,8 @@ nav:
   - Operations and resume: operations.md
   - Architecture: architecture.md
   - Data and remotes: data-and-remotes.md
+  - Quality:
+      - Duplication review: quality/duplication-review.md
   - Archive:
       - Language detection design: history/language-detection-design.md
       - Language detection plan: history/language-detection-plan.md

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from tests.reporting.test_finalize import _setup
+from tests.publishing.receipt_helpers import recording_receipt_reads
 
 import osm_polygon_website_tag.publishing.remote_identity as remote_identity
 from osm_polygon_website_tag.publishing.release import (
@@ -21,36 +21,7 @@ from osm_polygon_website_tag.reporting.artifact_inventory import (
     hash_file,
     publishable_paths,
 )
-from osm_polygon_website_tag.reporting.finalize import (
-    finalize_run,
-)
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
-
-
-@pytest.fixture
-def run_dir(tmp_path: Path) -> Path:
-    root, _state = _setup(tmp_path)
-    assert finalize_run(root).ok
-    return root
-
-
-def _recording_receipt_reads(
-    monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
-) -> list[tuple[str, dict[str, object]]]:
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    def read(_path: Path, **kwargs: object) -> dict[str, object]:
-        calls.append(("read", kwargs))
-        return payload
-
-    def identity(_payload: dict[str, object], **kwargs: object) -> str:
-        calls.append(("identity", kwargs))
-        return "id"
-
-    monkeypatch.setattr(remote_identity, "_read_receipt_payload", read)
-    monkeypatch.setattr(remote_identity, "_receipt_data_identity", identity)
-    return calls
-
 
 _REMOTE_ENTRIES: dict[str, dict[str, int | str]] = {
     "remote/a.parquet": {"size_bytes": 3, "sha256": "ra"},
@@ -67,103 +38,12 @@ def _released(identity: str | None) -> ReleasedFile:
     )
 
 
-def test_remote_verification_refuses_data_identity_mismatch(
-    run_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    remote_receipt = tmp_path / "completion_receipt.json"
-    remote_receipt.write_text(
-        json.dumps({"data_manifest_sha256": "0" * 64}),
-        encoding="utf-8",
-    )
-    parquet_entries = [
-        SimpleNamespace(
-            path=path.relative_to(run_dir).as_posix(),
-            size=path.stat().st_size,
-            lfs=SimpleNamespace(sha256=hash_file(path)),
-        )
-        for path in publishable_paths(run_dir)
-        if path.suffix == ".parquet"
-    ]
+def _remote_identity_hub_api(
+    remote_root: Path, parquet_entries: list[SimpleNamespace]
+) -> type[object]:
+    """Build the read-only Hub double shared by matching and tampered releases."""
 
-    class _Api:
-        def __init__(self, *, token: str) -> None:
-            assert token
-
-        def repo_info(self, repo_id: str, *, repo_type: str) -> SimpleNamespace:
-            assert repo_id == DEFAULT_HF_DATASET
-            assert repo_type == "dataset"
-            return SimpleNamespace(sha="remote-revision")
-
-        def hf_hub_download(
-            self,
-            repo_id: str,
-            filename: str,
-            *,
-            revision: str,
-            repo_type: str,
-        ) -> str:
-            assert repo_id == DEFAULT_HF_DATASET
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            if filename == "manifests/completion_receipt.json":
-                return str(remote_receipt)
-            return str(run_dir / filename)
-
-        def list_repo_tree(
-            self,
-            _repo_id: str,
-            *,
-            path_in_repo: str,
-            recursive: bool,
-            expand: bool,
-            revision: str,
-            repo_type: str,
-        ) -> list[SimpleNamespace]:
-            assert recursive is True
-            assert expand is False
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
-
-    monkeypatch.setattr(
-        "osm_polygon_website_tag.publishing.remote_identity.resolve_hf_token",
-        lambda: "token",
-    )
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=_Api))
-
-    with pytest.raises(ValueError, match="data identity"):
-        default_hub_verifier(DEFAULT_HF_DATASET, build_card_release_plan(run_dir))
-
-
-def test_default_remote_verifier_accepts_matching_data_and_card(
-    run_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    files = build_card_release_plan(run_dir)
-    remote_root = tmp_path / "remote"
-    for item in files:
-        destination = remote_root / item.relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes((run_dir / item.relative_path).read_bytes())
-    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
-        destination = remote_root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes((run_dir / relative).read_bytes())
-    parquet_entries = [
-        SimpleNamespace(
-            path=path.relative_to(run_dir).as_posix(),
-            size=path.stat().st_size,
-            lfs=SimpleNamespace(sha256=hash_file(path)),
-        )
-        for path in publishable_paths(run_dir)
-        if path.suffix == ".parquet"
-    ]
-    assert parquet_entries
-
-    class _Api:
+    class RemoteApi:
         def __init__(self, *, token: str) -> None:
             assert token
 
@@ -215,11 +95,83 @@ def test_default_remote_verifier_accepts_matching_data_and_card(
             assert repo_type == "dataset"
             return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
 
+    return RemoteApi
+
+
+def test_remote_verification_refuses_data_identity_mismatch(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    files = build_card_release_plan(run_dir)
+    remote_root = tmp_path / "remote"
+    for item in files:
+        destination = remote_root / item.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
+        destination = remote_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / relative).read_bytes())
+    remote_receipt = remote_root / "manifests" / "completion_receipt.json"
+    remote_receipt.parent.mkdir(parents=True, exist_ok=True)
+    remote_receipt.write_text(
+        json.dumps({"data_manifest_sha256": "0" * 64}),
+        encoding="utf-8",
+    )
+    parquet_entries = [
+        SimpleNamespace(
+            path=path.relative_to(run_dir).as_posix(),
+            size=path.stat().st_size,
+            lfs=SimpleNamespace(sha256=hash_file(path)),
+        )
+        for path in publishable_paths(run_dir)
+        if path.suffix == ".parquet"
+    ]
+
     monkeypatch.setattr(
         "osm_polygon_website_tag.publishing.remote_identity.resolve_hf_token",
         lambda: "token",
     )
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=_Api))
+    api = _remote_identity_hub_api(remote_root, parquet_entries)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=api))
+
+    with pytest.raises(ValueError, match="data identity"):
+        default_hub_verifier(DEFAULT_HF_DATASET, files)
+
+
+def test_default_remote_verifier_accepts_matching_data_and_card(
+    run_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    files = build_card_release_plan(run_dir)
+    remote_root = tmp_path / "remote"
+    for item in files:
+        destination = remote_root / item.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / item.relative_path).read_bytes())
+    for relative in ("manifests/sources.json", "manifests/expected_sources.json"):
+        destination = remote_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((run_dir / relative).read_bytes())
+    parquet_entries = [
+        SimpleNamespace(
+            path=path.relative_to(run_dir).as_posix(),
+            size=path.stat().st_size,
+            lfs=SimpleNamespace(sha256=hash_file(path)),
+        )
+        for path in publishable_paths(run_dir)
+        if path.suffix == ".parquet"
+    ]
+    assert parquet_entries
+
+    monkeypatch.setattr(
+        "osm_polygon_website_tag.publishing.remote_identity.resolve_hf_token",
+        lambda: "token",
+    )
+    api = _remote_identity_hub_api(remote_root, parquet_entries)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=api))
 
     assert default_hub_verifier(DEFAULT_HF_DATASET, files) == "remote-revision"
 
@@ -249,38 +201,10 @@ def test_remote_verifier_rejects_changed_source_manifest_with_matching_receipt(
         if path.suffix == ".parquet"
     ]
 
-    class _Api:
-        def hf_hub_download(
-            self,
-            _repo_id: str,
-            filename: str,
-            *,
-            revision: str,
-            repo_type: str,
-        ) -> str:
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            return str(remote_root / filename)
-
-        def list_repo_tree(
-            self,
-            _repo_id: str,
-            *,
-            path_in_repo: str,
-            recursive: bool,
-            expand: bool,
-            revision: str,
-            repo_type: str,
-        ) -> list[SimpleNamespace]:
-            assert recursive is True
-            assert expand is False
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
-
+    api = _remote_identity_hub_api(remote_root, parquet_entries)(token="test-token")
     with pytest.raises(ValueError, match="data manifest"):
         remote_identity._verify_remote_data_identity(
-            _Api(), DEFAULT_HF_DATASET, "remote-revision", files
+            api, DEFAULT_HF_DATASET, "remote-revision", files
         )
 
 
@@ -316,63 +240,12 @@ def test_remote_verifier_detects_changed_parquet_with_an_unchanged_receipt(
         )
     assert parquet_entries
 
-    class _Api:
-        def __init__(self, *, token: str) -> None:
-            assert token
-
-        def repo_info(self, repo_id: str, *, repo_type: str) -> SimpleNamespace:
-            assert repo_id == DEFAULT_HF_DATASET
-            assert repo_type == "dataset"
-            return SimpleNamespace(sha="remote-revision")
-
-        def get_paths_info(
-            self,
-            repo_id: str,
-            *,
-            paths: list[str],
-            revision: str,
-            repo_type: str,
-        ) -> list[SimpleNamespace]:
-            assert repo_id == DEFAULT_HF_DATASET
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            return [SimpleNamespace(size=(remote_root / paths[0]).stat().st_size)]
-
-        def hf_hub_download(
-            self,
-            repo_id: str,
-            filename: str,
-            *,
-            revision: str,
-            repo_type: str,
-        ) -> str:
-            assert repo_id == DEFAULT_HF_DATASET
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            return str(remote_root / filename)
-
-        def list_repo_tree(
-            self,
-            repo_id: str,
-            *,
-            path_in_repo: str,
-            recursive: bool,
-            expand: bool,
-            revision: str,
-            repo_type: str,
-        ) -> list[SimpleNamespace]:
-            assert repo_id == DEFAULT_HF_DATASET
-            assert recursive is True
-            assert expand is False
-            assert revision == "remote-revision"
-            assert repo_type == "dataset"
-            return [entry for entry in parquet_entries if entry.path.startswith(path_in_repo + "/")]
-
     monkeypatch.setattr(
         "osm_polygon_website_tag.publishing.remote_identity.resolve_hf_token",
         lambda: "token",
     )
-    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=_Api))
+    api = _remote_identity_hub_api(remote_root, parquet_entries)
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(HfApi=api))
 
     with pytest.raises(ValueError, match="data manifest"):
         default_hub_verifier(DEFAULT_HF_DATASET, files)
@@ -653,7 +526,7 @@ def test_receipt_data_identity_accepts_a_digest_or_a_legacy_receipt(
 )
 def test_receipt_data_identity_rejects_an_invalid_digest(payload: dict[str, object]) -> None:
     with pytest.raises(KeyError, match=r"r has no data identity"):
-        remote_identity._receipt_data_identity(payload, error_type=KeyError, label="r")  # type: ignore
+        remote_identity._receipt_data_identity(payload, error_type=KeyError, label="r")  # ty: ignore[invalid-argument-type]
 
 
 def test_remote_revision_rejects_an_info_without_a_sha() -> None:
@@ -709,7 +582,7 @@ def test_remote_data_identity_rejects_a_disagreeing_receipt(
 def test_remote_data_identity_labels_both_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = _recording_receipt_reads(monkeypatch, {})
+    calls = recording_receipt_reads(monkeypatch, remote_identity, {})
     api = SimpleNamespace(hf_hub_download=lambda *_args, **_kwargs: str(tmp_path / "r.json"))
     remote = {
         "error_type": remote_identity._RemoteDataMismatchError,

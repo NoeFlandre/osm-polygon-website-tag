@@ -185,7 +185,7 @@ def _make_pbf(make_pbf, xml: str, name: str, tmp_path: Path) -> Path:
     return next(src.iterdir())
 
 
-def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:
+def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:  # noqa: PLR0915 - too long or branchy; TODO(#76) split with the fixture work
     """End-to-end acceptance test on three synthetic sources.
 
     Asserts:

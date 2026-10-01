@@ -1,7 +1,7 @@
 # AGENTS.md
 
-Conventions for AI coding agents (and humans) working in this repository.
-If you are an automated agent, read this file end-to-end before making changes.
+Conventions for automated coding agents working in this repository. Human
+contributors: [CONTRIBUTING.md](CONTRIBUTING.md) has the same gates in short.
 
 ## Ground rules
 
@@ -26,10 +26,10 @@ If you are an automated agent, read this file end-to-end before making changes.
   (`osm_polygon_website_tag`), not relative paths from `src/`.
 - Use the root Just recipes as the canonical command interface. Recipes invoke
   Python tools through `uv run --locked`, so the locked `.venv` is always used.
-- Code lives on the Mac. Generated runs live in the dedicated Seagate data
-  directory. Production PBFs are immutable read-only inputs supplied
-  explicitly by `--source-root`; never use that source tree as an output
-  location.
+- Generated runs, model caches and bundles live under the data root
+  (`OSM_POLY_DATA_DIR`, default `./data`). Production PBFs are immutable
+  read-only inputs supplied explicitly by `--source-root`; never use that
+  source tree as an output location.
 
 ## Quality gates
 
@@ -43,8 +43,9 @@ just pre-push
 
 The underlying gates remain Ruff lint/format, ty, pytest, and `uv build`.
 GitHub Actions runs `just qa-pr` (baseline, Ruff, ty, the instrumented
-pytest suite with coverage, the CRAP gate, and `uv build`) plus the scoped
-mutation matrix; the Docker workflow runs the container smoke test. If a check is intentionally
+pytest suite with coverage, the CRAP gate, `uv build`, and `pip-audit`) plus the
+scoped mutation matrix, the docs build and the container smoke test; `ci-ok` is
+the single check that summarizes them. If a check is intentionally
 skipped, call it out explicitly in the final report.
 
 ## Style

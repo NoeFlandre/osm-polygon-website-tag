@@ -4,20 +4,35 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import math
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import urllib.robotparser
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from osm_polygon_website_tag import __version__
+from osm_polygon_website_tag.web.content_type import charset_parameter, media_type
+from osm_polygon_website_tag.web.politeness import (
+    RETRY_STATUSES,
+    HostLimiter,
+    HostPolicy,
+    host_of,
+    retry_after_seconds,
+)
+
 MAX_RESPONSE_BYTES = 20_000_000
 REQUEST_TIMEOUT_SECONDS = 30.0
+ROBOTS_TIMEOUT_SECONDS = 5.0
+ROBOTS_MAX_BYTES = 500_000
 MAX_REDIRECTS = 3
 READ_CHUNK_BYTES = 65_536
-USER_AGENT = "osm-polygon-website-tag/0.1 (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
+USER_AGENT = f"osm-polygon-website-tag/{__version__} (+https://github.com/NoeFlandre/osm-polygon-website-tag)"
 
 Resolver = Callable[[str, int], list[tuple[Any, ...]]]
 RequestOnce = Callable[[str, float, int], "HttpResponse"]
@@ -40,11 +55,29 @@ class HttpResponse:
 class FetchResult:
     """Structured website download result."""
 
-    status: Literal["ok", "invalid_url", "unsafe_url", "fetch_error"]
+    status: Literal["ok", "invalid_url", "unsafe_url", "fetch_error", "robots_disallowed"]
     requested_url: str
     final_url: str | None = None
     body: bytes | None = None
     message: str | None = None
+    charset: str | None = None
+    media_type: str | None = None
+
+
+@dataclass(frozen=True)
+class _RobotsPolicy:
+    """Cached robots rules and any safe-transport failure for one origin."""
+
+    parser: urllib.robotparser.RobotFileParser | None
+    error_status: Literal["unsafe_url", "fetch_error"] | None = None
+    final_url: str | None = None
+    message: str | None = None
+    crawl_delay: float | None = None
+
+
+_ROBOTS_CACHE: dict[str, _RobotsPolicy] = {}
+_ROBOTS_CACHE_LOCK = threading.Lock()
+_ROBOTS_LOAD_LOCKS: dict[str, threading.Lock] = {}
 
 
 def normalize_http_url(raw: str) -> str:
@@ -90,6 +123,8 @@ def _normalise_http_hostname(parsed: urllib.parse.SplitResult) -> str:
     if hostname is None:
         raise ValueError("missing_hostname")
     hostname = hostname.rstrip(".").lower()
+    if not hostname:
+        raise ValueError("missing_hostname")
     if hostname == "localhost" or hostname.endswith(".localhost"):
         raise ValueError("localhost_not_allowed")
     return _encode_hostname(hostname)
@@ -173,20 +208,82 @@ def fetch_html(
     timeout_seconds: float = REQUEST_TIMEOUT_SECONDS,
     max_bytes: int = MAX_RESPONSE_BYTES,
     max_redirects: int = MAX_REDIRECTS,
+    limiter: HostLimiter | None = None,
 ) -> FetchResult:
-    """Fetch one HTML document while validating each redirect target."""
+    """Fetch one HTML document while validating each redirect target.
+
+    With a ``limiter``, requests to one host are capped and spaced, and a 429 or
+    503 that carries a short ``Retry-After`` is retried once after the pause.
+    """
     requested_or_error = _normalise_requested_url(raw_url)
     if isinstance(requested_or_error, FetchResult):
         return requested_or_error
     requested = requested_or_error
+    transport = request_once or _download_once
     return _follow_redirects(
         requested,
-        request_once or _download_once,
+        transport if limiter is None else _polite(transport, limiter),
         resolver,
         timeout_seconds,
         max_bytes,
         max_redirects,
+        limiter=limiter,
     )
+
+
+def make_polite_fetcher(policy: HostPolicy) -> Callable[[str], FetchResult]:
+    """A ``fetch_html`` that shares one per-host limiter across all its callers."""
+    limiter = HostLimiter(policy)
+    return lambda url: fetch_html(url, limiter=limiter)
+
+
+def _polite(transport: RequestOnce, limiter: HostLimiter) -> RequestOnce:
+    """Wrap a transport with the host limits and one bounded Retry-After retry."""
+
+    def request(url: str, timeout_seconds: float, max_bytes: int) -> HttpResponse:
+        host = host_of(url)
+        response, wait = _throttled(
+            transport,
+            limiter,
+            host,
+            (url, timeout_seconds, max_bytes),
+            retry_after_cap=limiter.policy.max_retry_after_seconds,
+        )
+        if wait is None:
+            return response
+        return _throttled(
+            transport,
+            limiter,
+            host,
+            (url, timeout_seconds, max_bytes),
+            retry_after_cap=limiter.policy.max_retry_after_seconds,
+        )[0]
+
+    return request
+
+
+def _throttled(
+    transport: RequestOnce,
+    limiter: HostLimiter,
+    host: str,
+    args: tuple[str, float, int],
+    *,
+    retry_after_cap: float | None = None,
+) -> tuple[HttpResponse, float | None]:
+    with limiter.slot(host):
+        response = transport(*args)
+        wait = _retry_wait(response, retry_after_cap) if retry_after_cap is not None else None
+        if wait is not None:
+            limiter.back_off(host, wait)
+        return response, wait
+
+
+def _retry_wait(response: HttpResponse, cap: float) -> float | None:
+    """Seconds to pause before retrying, when the server asked for a short one."""
+    if response.status_code not in RETRY_STATUSES:
+        return None
+    wait = retry_after_seconds(_header(response.headers, _RETRY_AFTER))
+    return wait if wait is not None and wait <= cap else None
 
 
 def _normalise_requested_url(raw_url: str) -> str | FetchResult:
@@ -204,26 +301,250 @@ def _follow_redirects(
     timeout_seconds: float,
     max_bytes: int,
     max_redirects: int,
+    *,
+    limiter: HostLimiter | None = None,
+    check_robots: bool = True,
 ) -> FetchResult:
     """Fetch a normalized URL while validating each redirect target."""
+    if max_redirects < 0:
+        raise AssertionError("redirect loop exhausted")
     current = requested
-    for redirect_number in range(max_redirects + 1):
-        next_url, result = _fetch_step(
+    for _ in range(max_redirects):
+        outcome = _request_redirect_hop(
             current,
             requested,
             transport,
             resolver,
             timeout_seconds,
             max_bytes,
-            redirect_number,
-            max_redirects,
+            limiter,
+            check_robots=check_robots,
         )
-        if result is not None:
-            return result
-        if next_url is None:  # pragma: no cover - _fetch_step always returns one terminal value
-            raise AssertionError("fetch step returned neither a result nor a redirect")
-        current = next_url
-    raise AssertionError("redirect loop exhausted")  # pragma: no cover
+        if isinstance(outcome, FetchResult):
+            return outcome
+        current = outcome
+
+    outcome = _request_redirect_hop(
+        current,
+        requested,
+        transport,
+        resolver,
+        timeout_seconds,
+        max_bytes,
+        limiter,
+        check_robots=check_robots,
+    )
+    if isinstance(outcome, FetchResult):
+        return outcome
+    return FetchResult("fetch_error", requested, final_url=current, message="redirect_limit")
+
+
+def _request_redirect_hop(
+    current: str,
+    requested: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+    timeout_seconds: float,
+    max_bytes: int,
+    limiter: HostLimiter | None,
+    *,
+    check_robots: bool,
+) -> FetchResult | str:
+    """Check policy and execute one bounded redirect hop."""
+    if check_robots:
+        robots_result = _check_robots(current, requested, transport, resolver, limiter)
+        if robots_result is not None:
+            return robots_result
+    next_url, result = _fetch_step(
+        current,
+        requested,
+        transport,
+        resolver,
+        timeout_seconds,
+        max_bytes,
+    )
+    return result if result is not None else _require_redirect_url(next_url)
+
+
+def _check_robots(
+    current: str,
+    requested: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+    limiter: HostLimiter | None,
+) -> FetchResult | None:
+    """Return a robots policy failure or allow this redirect target."""
+    policy = _robots_policy(current, transport, resolver)
+    return _apply_robots_policy(policy, current, requested, limiter)
+
+
+def _apply_robots_policy(
+    policy: _RobotsPolicy,
+    current: str,
+    requested: str,
+    limiter: HostLimiter | None,
+) -> FetchResult | None:
+    """Apply policy errors and crawl delay before testing the requested path."""
+    failure = _robots_policy_error(policy, current, requested)
+    if failure is not None:
+        return failure
+    _honor_robots_crawl_delay(policy, current, limiter)
+    return _robots_disallowed_result(policy, current, requested)
+
+
+def _robots_policy_error(policy: _RobotsPolicy, current: str, requested: str) -> FetchResult | None:
+    if policy.error_status is None:
+        return None
+    return FetchResult(
+        policy.error_status,
+        requested,
+        final_url=policy.final_url or current,
+        message=policy.message,
+    )
+
+
+def _honor_robots_crawl_delay(
+    policy: _RobotsPolicy,
+    current: str,
+    limiter: HostLimiter | None,
+) -> None:
+    if limiter is None or policy.crawl_delay is None:
+        return
+    limiter.set_host_delay(host_of(current), policy.crawl_delay)
+
+
+def _robots_disallowed_result(
+    policy: _RobotsPolicy, current: str, requested: str
+) -> FetchResult | None:
+    if policy.parser is None or policy.parser.can_fetch(USER_AGENT, current):
+        return None
+    return FetchResult(
+        "robots_disallowed",
+        requested,
+        final_url=current,
+        message="robots_disallowed",
+    )
+
+
+def _require_redirect_url(next_url: str | None) -> str:
+    """Enforce the redirect step's one-terminal-value contract."""
+    if next_url is None:  # pragma: no cover - _fetch_step always returns a result
+        raise AssertionError("fetch step returned neither a result nor a redirect")
+    return next_url
+
+
+def _robots_policy(
+    url: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+) -> _RobotsPolicy:
+    """Return one cached, safely fetched robots policy for a URL's origin."""
+    parsed = urllib.parse.urlsplit(url)
+    origin = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    with _ROBOTS_CACHE_LOCK:
+        cached = _ROBOTS_CACHE.get(origin)
+        if cached is not None:
+            return cached
+        load_lock = _ROBOTS_LOAD_LOCKS.setdefault(origin, threading.Lock())
+    with load_lock:
+        with _ROBOTS_CACHE_LOCK:
+            cached = _ROBOTS_CACHE.get(origin)
+            if cached is not None:
+                return cached
+        policy = _fetch_robots_policy(origin, transport, resolver)
+        with _ROBOTS_CACHE_LOCK:
+            _ROBOTS_CACHE[origin] = policy
+        return policy
+
+
+def _fetch_robots_policy(
+    origin: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+) -> _RobotsPolicy:
+    """Fetch and parse one origin's policy without reapplying robots checks."""
+    robots_url = urllib.parse.urljoin(f"{origin}/", "robots.txt")
+    fetched = _follow_redirects(
+        robots_url,
+        transport,
+        resolver,
+        ROBOTS_TIMEOUT_SECONDS,
+        ROBOTS_MAX_BYTES,
+        MAX_REDIRECTS,
+        check_robots=False,
+    )
+    failure = _robots_fetch_failure(robots_url, fetched)
+    if failure is not None:
+        return failure
+    assert fetched.body is not None
+    return _parse_robots_policy(robots_url, fetched.body)
+
+
+def _robots_fetch_failure(robots_url: str, fetched: FetchResult) -> _RobotsPolicy | None:
+    """Classify unsafe, absent, or unavailable robots responses."""
+    if fetched.status == "unsafe_url":
+        return _RobotsPolicy(
+            None,
+            error_status="unsafe_url",
+            final_url=fetched.final_url,
+            message="robots_unsafe_url",
+        )
+    if _robots_response_is_missing(fetched):
+        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+    return None if _robots_response_is_ok(fetched) else _robots_unavailable_policy(fetched)
+
+
+def _robots_response_is_missing(fetched: FetchResult) -> bool:
+    return fetched.status == "fetch_error" and fetched.message in {"http_404", "http_410"}
+
+
+def _robots_response_is_ok(fetched: FetchResult) -> bool:
+    return fetched.status == "ok" and fetched.body is not None
+
+
+def _robots_unavailable_policy(fetched: FetchResult) -> _RobotsPolicy:
+    return _RobotsPolicy(
+        None,
+        error_status="fetch_error",
+        final_url=fetched.final_url,
+        message="robots_unavailable",
+    )
+
+
+def _parse_robots_policy(robots_url: str, body: bytes) -> _RobotsPolicy:
+    """Parse one bounded robots response, allowing malformed policy on error."""
+    parser = urllib.robotparser.RobotFileParser(robots_url)
+    try:
+        parser.parse(body.decode(errors="replace").splitlines())
+    except Exception:  # noqa: BLE001 - malformed robots text is treated as no rules
+        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+    crawl_delay, valid = _robots_crawl_delay(parser)
+    if not valid:
+        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+    return _RobotsPolicy(parser, crawl_delay=crawl_delay)
+
+
+def _robots_crawl_delay(
+    parser: urllib.robotparser.RobotFileParser,
+) -> tuple[float | None, bool]:
+    """Return a finite nonnegative delay and whether parsing it succeeded."""
+    try:
+        value = parser.crawl_delay(USER_AGENT)
+        if value is None:
+            return None, True
+        delay = float(value)
+    except Exception:  # noqa: BLE001 - malformed crawl delay is treated as no rules
+        return None, False
+    if not math.isfinite(delay) or delay < 0:
+        return None, True
+    return delay, True
+
+
+def _allow_all_robots_parser(robots_url: str) -> urllib.robotparser.RobotFileParser:
+    """Return a parser marked as checked with no blocking rules."""
+    parser = urllib.robotparser.RobotFileParser(robots_url)
+    vars(parser)["allow_all"] = True
+    return parser
 
 
 def _fetch_step(
@@ -233,8 +554,6 @@ def _fetch_step(
     resolver: Resolver,
     timeout_seconds: float,
     max_bytes: int,
-    redirect_number: int,
-    max_redirects: int,
 ) -> tuple[str | None, FetchResult | None]:
     """Validate, request, and classify one redirect-loop iteration."""
     response_or_error = _safe_request(
@@ -244,7 +563,7 @@ def _fetch_step(
         return None, response_or_error
     response = response_or_error
     if 300 <= response.status_code < 400:
-        return _redirect_step(response, current, requested, redirect_number, max_redirects)
+        return _redirect_step(response, current, requested)
     return None, _terminal_response(response, current, requested, max_bytes)
 
 
@@ -265,7 +584,7 @@ def _safe_request(
         return transport(current, timeout_seconds, max_bytes)
     except UnsafeUrlError:
         return FetchResult("unsafe_url", requested, final_url=current, message="unsafe_url")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any transport failure becomes a fetch_error result
         return FetchResult("fetch_error", requested, final_url=current, message=type(exc).__name__)
 
 
@@ -273,18 +592,12 @@ def _redirect_step(
     response: HttpResponse,
     current: str,
     requested: str,
-    redirect_number: int,
-    max_redirects: int,
 ) -> tuple[str | None, FetchResult | None]:
     """Resolve one redirect response or return its terminal error."""
     location = _header(response.headers, "location")
     if location is None:
         return None, FetchResult(
             "fetch_error", requested, final_url=current, message="redirect_without_location"
-        )
-    if redirect_number == max_redirects:
-        return None, FetchResult(
-            "fetch_error", requested, final_url=current, message="redirect_limit"
         )
     try:
         return normalize_http_url(urllib.parse.urljoin(current, location)), None
@@ -301,56 +614,70 @@ def _terminal_response(
     max_bytes: int,
 ) -> FetchResult:
     """Classify a non-redirect response and enforce body/content limits."""
-    for checker in (_status_error, _size_error, _content_type_error):
-        error = checker(response, current, requested, max_bytes)
-        if error is not None:
-            return error
-    return FetchResult("ok", requested, final_url=current, body=response.body)
+    message = _response_error(response, max_bytes)
+    if message is not None:
+        return FetchResult("fetch_error", requested, final_url=current, message=message)
+    return FetchResult(
+        "ok",
+        requested,
+        final_url=current,
+        body=response.body,
+        charset=_header_charset(response.headers),
+        media_type=_header_media_type(response.headers),
+    )
 
 
-def _status_error(
-    response: HttpResponse,
-    current: str,
-    requested: str,
-    _max_bytes: int,
-) -> FetchResult | None:
-    """Return an error for non-2xx responses."""
+def _response_error(response: HttpResponse, max_bytes: int) -> str | None:
+    """Name why a non-redirect response is unusable, checking status, size, then type.
+
+    Everything but the body length is decided from the headers alone, so the
+    transport can refuse a page before downloading it.
+    """
     if not 200 <= response.status_code < 300:
-        return FetchResult(
-            "fetch_error", requested, final_url=current, message=f"http_{response.status_code}"
-        )
+        return f"http_{response.status_code}"
+    if _too_large(response, max_bytes):
+        return "response_too_large"
+    if not _media_type_allowed(response.headers):
+        return "unsupported_content_type"
     return None
 
 
-def _size_error(
-    response: HttpResponse,
-    current: str,
-    requested: str,
-    max_bytes: int,
-) -> FetchResult | None:
-    """Return an error when the response body exceeds the configured limit."""
-    if len(response.body) > max_bytes:
-        return FetchResult(
-            "fetch_error", requested, final_url=current, message="response_too_large"
-        )
-    return None
+def _too_large(response: HttpResponse, max_bytes: int) -> bool:
+    """Whether the body, or the length the server announced, exceeds the limit."""
+    declared = _declared_length(response.headers)
+    return len(response.body) > max_bytes or (declared is not None and declared > max_bytes)
 
 
-def _content_type_error(
-    response: HttpResponse,
-    current: str,
-    requested: str,
-    _max_bytes: int,
-) -> FetchResult | None:
-    """Return an error for non-document content types."""
-    content_type = (_header(response.headers, "content-type") or "").lower()
-    if content_type and not any(
-        allowed in content_type for allowed in ("text/html", "application/xhtml+xml", "text/plain")
-    ):
-        return FetchResult(
-            "fetch_error", requested, final_url=current, message="unsupported_content_type"
-        )
-    return None
+def _declared_length(headers: Mapping[str, str]) -> int | None:
+    """Return the Content-Length header as an integer, ignoring malformed values."""
+    value = _header(headers, _CONTENT_LENGTH)
+    return int(value) if value is not None and value.strip().isdecimal() else None
+
+
+def _media_type_allowed(headers: Mapping[str, str]) -> bool:
+    """Require a declared Content-Type that is an accepted document type."""
+    declared = _header_media_type(headers)
+    return declared in _DOCUMENT_TYPES
+
+
+_CONTENT_TYPE = "content-type"
+# Header names are literals here, not inline, because ``_header`` matches them
+# case-insensitively and urllib normalises the case of request headers: a
+# differently-cased spelling inline is a mutant no test could tell apart.
+_CONTENT_LENGTH = "content-length"
+_RETRY_AFTER = "retry-after"
+_USER_AGENT_HEADER = "User-Agent"
+_DOCUMENT_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
+
+
+def _header_charset(headers: Mapping[str, str]) -> str | None:
+    """Return the ``charset=`` parameter of the Content-Type header, if any."""
+    return charset_parameter(str(_header(headers, _CONTENT_TYPE)))
+
+
+def _header_media_type(headers: Mapping[str, str]) -> str | None:
+    value = _header(headers, _CONTENT_TYPE)
+    return None if value is None else media_type(value)
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
@@ -364,12 +691,12 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
-        req: urllib.request.Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
+        req: urllib.request.Request,  # noqa: ARG002 - urllib's override signature
+        fp: Any,  # noqa: ARG002
+        code: int,  # noqa: ARG002
+        msg: str,  # noqa: ARG002
+        headers: Any,  # noqa: ARG002
+        newurl: str,  # noqa: ARG002
     ) -> None:
         return None
 
@@ -412,18 +739,23 @@ class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
         return self.do_open(_PublicHTTPSConnection, req)
 
 
-def _read_before_deadline(response: Any, limit: int, deadline: float) -> bytes:
+def _read_before_deadline(
+    response: Any, limit: int, deadline: float, clock: Callable[[], float] = time.monotonic
+) -> bytes:
     """Read at most ``limit`` bytes, failing once the whole-request deadline passes.
 
     The socket timeout bounds each blocking read, not the request; a server
     trickling one byte per timeout window would otherwise hold a worker for hours.
+    ``read1`` returns after one underlying read; ``read`` would block until the
+    whole chunk arrived, so the deadline would only be checked once a dripping
+    server had finished.
     """
     chunks: list[bytes] = []
     remaining = limit
     while remaining > 0:
-        if time.monotonic() >= deadline:
+        if clock() >= deadline:
             raise TimeoutError("request deadline exceeded")
-        chunk = response.read(min(READ_CHUNK_BYTES, remaining))
+        chunk = response.read1(min(READ_CHUNK_BYTES, remaining))
         if not chunk:
             break
         chunks.append(chunk)
@@ -440,7 +772,7 @@ def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResp
         _PublicHTTPSHandler(),
     )
     # The caller has normalized and validated HTTP(S) immediately before this call.
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
+    request = urllib.request.Request(url, headers={_USER_AGENT_HEADER: USER_AGENT})  # noqa: S310
     try:
         response = opener.open(request, timeout=timeout_seconds)
     except urllib.error.HTTPError as exc:
@@ -450,11 +782,24 @@ def _download_once(url: str, timeout_seconds: float, max_bytes: int) -> HttpResp
             raise exc.reason from exc
         raise
     with response:
+        head = _response_head(response)
+        # A redirect, an error page, a video or an oversized file is refused
+        # from its headers; downloading it first wastes up to max_bytes each.
+        if not _worth_reading(head, max_bytes):
+            return head
         body = _read_before_deadline(response, max_bytes + 1, deadline)
-        status = response.status
-        if status is None:
-            status = 0
-        return HttpResponse(int(status), dict(response.headers.items()), body)
+        return HttpResponse(head.status_code, dict(head.headers), body)
+
+
+def _response_head(response: Any) -> HttpResponse:
+    """The status and headers of a urllib response, with an empty body."""
+    status = response.status
+    return HttpResponse(0 if status is None else int(status), dict(response.headers.items()), b"")
+
+
+def _worth_reading(head: HttpResponse, max_bytes: int) -> bool:
+    """Only a 2xx response whose headers pass every check has a body we keep."""
+    return _response_error(head, max_bytes) is None
 
 
 __all__ = [
@@ -462,6 +807,7 @@ __all__ = [
     "HttpResponse",
     "UnsafeUrlError",
     "fetch_html",
+    "make_polite_fetcher",
     "normalize_http_url",
     "validate_public_http_url",
 ]

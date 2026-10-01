@@ -9,6 +9,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.polygon_shards import polygon_row
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.reporting import geometry_stats
@@ -58,45 +59,26 @@ def _public_row(
     area_m2: float = 50.0,
     osm_primary_tag: str = "building",
 ) -> dict[str, Any]:
-    """Return one current-schema public polygon row."""
-    return {
-        "polygon_id": polygon_id,
-        "region": "monaco",
-        "source_pbf": "monaco-latest.osm.pbf",
-        "osm_type": "way",
-        "osm_id": 1,
-        "osm_version": 1,
-        "osm_timestamp": pa.scalar(0, type=pa.timestamp("us", tz="UTC")).as_py(),
-        "name": None,
-        "website": "https://example.org",
-        "contact_website": None,
-        "has_website": True,
-        "has_contact_website": False,
-        "has_any_website": True,
-        "website_class": "absolute_url",
-        "contact_website_class": None,
-        "website_hostname": "example.org",
-        "contact_website_hostname": None,
-        "tags": "{}",
-        "tag_keys": "[]",
-        "tag_count": 0,
-        "osm_primary_tag": osm_primary_tag,
-        "geometry": json.dumps(_SQUARE if geometry is None else geometry),
-        "centroid": json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
-        "centroid_kind": "lambert_azimuthal_equal_area",
-        "lat": 0.0,
-        "lon": 0.0,
-        "bbox": json.dumps(_SQUARE_BBOX if bbox is None else bbox),
-        "area_m2": area_m2,
-        "area_bucket": "10-100m2",
-        "schema_version": "v1.3",
-        "website_text": None,
-        "website_word_count": None,
-        "website_text_status": "absent",
-        "contact_website_text": None,
-        "contact_website_word_count": None,
-        "contact_website_text_status": "absent",
-    }
+    """Return a v1.3 polygon row with geometry-statistics-specific values."""
+    return polygon_row(
+        "v1.3",
+        polygon_id=polygon_id,
+        region="monaco",
+        source_pbf="monaco-latest.osm.pbf",
+        contact_website=None,
+        osm_primary_tag=osm_primary_tag,
+        geometry=json.dumps(_SQUARE if geometry is None else geometry),
+        centroid=json.dumps({"type": "Point", "coordinates": [0.0, 0.0]}),
+        bbox=json.dumps(_SQUARE_BBOX if bbox is None else bbox),
+        area_m2=area_m2,
+        area_bucket="10-100m2",
+        website_text=None,
+        website_word_count=None,
+        website_text_status="absent",
+        contact_website_text=None,
+        contact_website_word_count=None,
+        contact_website_text_status="absent",
+    )
 
 
 def _write_shard(run_dir: Path, stem: str, rows: list[dict[str, Any]]) -> Path:
@@ -557,7 +539,7 @@ def test_accumulate_batch_spills_every_row_under_its_schema_names() -> None:
         accumulator,
         batch,
         source_pbf="a.osm.pbf",
-        store=store,  # type: ignore
+        store=store,  # ty: ignore[invalid-argument-type]
     )
 
     [rows] = spilled
@@ -626,7 +608,7 @@ def test_shard_accumulation_reads_only_the_geometry_columns(monkeypatch, tmp_pat
 
     monkeypatch.setattr(geometry_stats.pq, "ParquetFile", _Parquet)
 
-    geometry_stats._accumulate_shard(tmp_path / "a.parquet", _Accumulator(), object())  # type: ignore
+    geometry_stats._accumulate_shard(tmp_path / "a.parquet", _Accumulator(), object())  # ty: ignore[invalid-argument-type]
 
     assert reads == [list(geometry_stats.GEOMETRY_STATS_COLUMNS)]
 

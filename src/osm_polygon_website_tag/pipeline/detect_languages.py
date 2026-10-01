@@ -25,10 +25,14 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, TEXT_UNFINISHED_STATUSES
 from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
 from osm_polygon_website_tag.pipeline.glotlid import LanguageDetector, LanguagePrediction
-from osm_polygon_website_tag.pipeline.grid5000_bundle import validate_positive_grid_time
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
     load_language_checkpoint,
+)
+from osm_polygon_website_tag.pipeline.time_budget import (
+    deadline_reached,
+    start_deadline,
+    validate_batch_options,
 )
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -93,7 +97,7 @@ def detect_language_shard(
     """Detect languages in bounded batches and atomically promote the result."""
     validate_language_detection_options(batch_rows, time_budget_seconds)
     clock_function = clock if clock is not None else monotonic
-    deadline = _detection_deadline(time_budget_seconds, clock_function)
+    deadline = start_deadline(time_budget_seconds, clock_function)
     shard = Path(shard_path)
     context = _prepare_detection_context(shard, detector)
     if context is None:
@@ -127,20 +131,7 @@ def detect_language_shard(
 
 def validate_language_detection_options(batch_rows: int, time_budget_seconds: float | None) -> None:
     """Validate shared CLI and shard settings before reading run artifacts."""
-    if batch_rows < 1:
-        raise ValueError("batch_rows must be positive")
-    if time_budget_seconds is not None:
-        validate_positive_grid_time(time_budget_seconds)
-
-
-def _detection_deadline(
-    time_budget_seconds: float | None,
-    clock: Callable[[], float],
-) -> float | None:
-    """Return a monotonic deadline for a bounded invocation."""
-    if time_budget_seconds is None:
-        return None
-    return clock() + time_budget_seconds
+    validate_batch_options(batch_rows, time_budget_seconds)
 
 
 def _unchanged_detection_result(shard: Path) -> LanguageDetectionResult:
@@ -347,7 +338,7 @@ def _process_detection_batches_with_progress(
         originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
         if not originals:
             continue
-        if _deadline_reached(deadline, clock):
+        if deadline_reached(deadline, clock):
             return _DetectionProgress(processed_rows, max_batch_rows, completed=False)
         detected_rows = _detect_batch(originals, detector)
         store.write_part(
@@ -362,11 +353,6 @@ def _process_detection_batches_with_progress(
     if processed_rows != source_row_count:
         raise ValueError("language detection row count changed")
     return _DetectionProgress(processed_rows, max_batch_rows, completed=True)
-
-
-def _deadline_reached(deadline: float | None, clock: Callable[[], float]) -> bool:
-    """Return whether the next detector batch would exceed its budget."""
-    return deadline is not None and clock() >= deadline
 
 
 def _skip_checkpointed_rows(

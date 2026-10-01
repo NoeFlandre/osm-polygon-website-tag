@@ -426,6 +426,51 @@ def test_status_selects_the_card_release_and_receipt_contracts(
     assert ("completion receipt has no artifact list" in errors) is receipt_checked
 
 
+@pytest.mark.parametrize("status", ["extracted", "card_built", "verified", "complete"])
+@pytest.mark.parametrize("include_receipt", [False, True])
+@pytest.mark.parametrize("preserve_card_sections", [None, False, True])
+def test_status_artifact_dispatch_uses_the_exact_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: str,
+    include_receipt: bool,
+    preserve_card_sections: bool | None,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_analysis_and_card",
+        lambda _root, errors: calls.append(("card", errors)),
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_release_analysis_and_card",
+        lambda _root, errors: calls.append(("release-card", errors)),
+    )
+    monkeypatch.setattr(
+        verify_module,
+        "_verify_receipt",
+        lambda _root, errors: calls.append(("receipt", errors)),
+    )
+    errors: list[str] = []
+
+    dispatch_options = (
+        {} if preserve_card_sections is None else {"preserve_card_sections": preserve_card_sections}
+    )
+    verify_module._verify_status_artifacts(
+        tmp_path, status, include_receipt, errors, **dispatch_options
+    )
+
+    expected_card = status in {"card_built", "verified", "complete"}
+    expected_calls = []
+    if expected_card:
+        use_release_card = preserve_card_sections is True
+        expected_calls.append(("release-card" if use_release_card else "card", errors))
+    if status == "complete" and include_receipt:
+        expected_calls.append(("receipt", errors))
+    assert calls == expected_calls
+
+
 def test_verify_results_reports_the_empty_sources_manifest_exactly(tmp_path: Path) -> None:
     run_dir, _ = initialise_run(tmp_path, run_id="r")
 

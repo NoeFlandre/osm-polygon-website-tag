@@ -9,6 +9,7 @@ from typing import ClassVar
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from tests.fixtures.call_recording import recording_stub
 
 from osm_polygon_website_tag.pipeline.analyze import LANGUAGE_TABLE_SCHEMA, SENTENCE_TABLE_SCHEMA
 from osm_polygon_website_tag.reporting import card_stats
@@ -220,6 +221,12 @@ def test_only_the_exact_lowercase_empty_status_counts_as_empty() -> None:
     assert stats.contact_website_text_empty_count == 1
     # The two mis-cased values are unknown statuses, so they are failures.
     assert stats.website_text_failure_count == 2
+
+
+def test_robots_disallowed_is_included_in_failure_counts() -> None:
+    statuses = _status(["robots_disallowed"])
+
+    assert card_stats._count_invalid_statuses(statuses) == 1
 
 
 def test_invalid_statuses_count_everything_outside_the_known_set() -> None:
@@ -495,23 +502,23 @@ def test_text_stats_skip_a_shard_without_the_text_columns(monkeypatch) -> None:
 
 def _stub_card_pipeline(monkeypatch, analysis_dir: Path) -> list[tuple[str, tuple, dict]]:
     calls: list[tuple[str, tuple, dict]] = []
-
-    def record(name: str, result: object = None):
-        def stub(*args: object, **kwargs: object) -> object:
-            calls.append((name, args, kwargs))
-            return result
-
-        return stub
-
-    monkeypatch.setattr(card_stats, "_read_snapshot_status", record("snapshot", "complete"))
-    monkeypatch.setattr(card_stats, "_set_density_stats", record("density"))
-    monkeypatch.setattr(card_stats, "_artifact_paths", record("paths", ([], [], [], analysis_dir)))
-    monkeypatch.setattr(card_stats, "_set_shard_counts", record("counts"))
-    monkeypatch.setattr(card_stats, "_expected_source_count", record("expected", 0))
-    monkeypatch.setattr(card_stats, "_add_public_shard_stats", record("public"))
-    monkeypatch.setattr(card_stats, "compute_text_population_summary", record("population", "pop"))
-    monkeypatch.setattr(card_stats, "_set_text_population_stats", record("text"))
-    monkeypatch.setattr(card_stats, "_add_analysis_stats", record("analysis"))
+    monkeypatch.setattr(
+        card_stats, "_read_snapshot_status", recording_stub(calls, "snapshot", "complete")
+    )
+    monkeypatch.setattr(card_stats, "_set_density_stats", recording_stub(calls, "density"))
+    monkeypatch.setattr(
+        card_stats, "_artifact_paths", recording_stub(calls, "paths", ([], [], [], analysis_dir))
+    )
+    monkeypatch.setattr(card_stats, "_set_shard_counts", recording_stub(calls, "counts"))
+    monkeypatch.setattr(card_stats, "_expected_source_count", recording_stub(calls, "expected", 0))
+    monkeypatch.setattr(card_stats, "_add_public_shard_stats", recording_stub(calls, "public"))
+    monkeypatch.setattr(
+        card_stats,
+        "compute_text_population_summary",
+        recording_stub(calls, "population", "pop"),
+    )
+    monkeypatch.setattr(card_stats, "_set_text_population_stats", recording_stub(calls, "text"))
+    monkeypatch.setattr(card_stats, "_add_analysis_stats", recording_stub(calls, "analysis"))
     return calls
 
 
@@ -525,7 +532,7 @@ def test_card_stats_scope_text_and_density_to_the_selected_sources(
     calls = _stub_card_pipeline(monkeypatch, tmp_path)
     summary = object()
 
-    card_stats.compute_card_stats(tmp_path, summary=summary, source_names=["a"])  # type: ignore
+    card_stats.compute_card_stats(tmp_path, summary=summary, source_names=["a"])  # ty: ignore[invalid-argument-type]
 
     [(_args, density)] = _named(calls, "density")
     assert density == {"summary": summary, "source_names": ["a"]}
@@ -547,7 +554,7 @@ def test_card_stats_hand_the_computed_population_to_the_analysis_tables(
 def test_card_stats_skip_a_missing_analysis_directory(tmp_path: Path, monkeypatch) -> None:
     calls = _stub_card_pipeline(monkeypatch, tmp_path / "absent")
 
-    card_stats.compute_card_stats(tmp_path, text_population="given")  # type: ignore
+    card_stats.compute_card_stats(tmp_path, text_population="given")  # ty: ignore[invalid-argument-type]
 
     assert _named(calls, "population") == []
     assert _named(calls, "analysis") == []
@@ -597,7 +604,7 @@ def test_analysis_stats_leave_languages_to_a_given_text_population(
 ) -> None:
     calls = _stub_analysis_tables(monkeypatch)
 
-    card_stats._add_analysis_stats(CardStats(), tmp_path, text_population=object())  # type: ignore
+    card_stats._add_analysis_stats(CardStats(), tmp_path, text_population=object())  # ty: ignore[invalid-argument-type]
 
     assert [name for name, _path in calls] == ["cells", "hosts", "sentences"]
 
@@ -668,9 +675,9 @@ def test_retryable_status_reads_only_the_two_status_columns(monkeypatch) -> None
     _SchemaParquet.reads = []
     monkeypatch.setattr(card_stats, "status_has_retryable_value", lambda _column: False)
     parquet = _SchemaParquet([])
-    parquet.iter_batches = lambda *, columns, batch_size: _SchemaParquet.reads.append(columns) or []  # type: ignore
+    parquet.iter_batches = lambda *, columns, batch_size: _SchemaParquet.reads.append(columns) or []  # ty: ignore[invalid-assignment]
 
-    assert card_stats._has_retryable_text_status(parquet) is False  # type: ignore
+    assert card_stats._has_retryable_text_status(parquet) is False  # ty: ignore[invalid-argument-type]
     assert _SchemaParquet.reads == [["website_text_status", "contact_website_text_status"]]
 
 

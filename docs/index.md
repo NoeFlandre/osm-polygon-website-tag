@@ -31,7 +31,7 @@ may be newer, partial, or unreviewed.
 ## Safety model
 
 The production PBF directory is a read-only input. Run artifacts go to a
-separate output root, normally on the Seagate data volume. `run-all` records
+separate output root, normally under the data root (`OSM_POLY_DATA_DIR`). `run-all` records
 the source inventory, checks it again on resume, and keeps successful
 enrichment and upload checkpoints. `publish` is a dry run unless `--apply` is
 present; both commands re-verify before publication.

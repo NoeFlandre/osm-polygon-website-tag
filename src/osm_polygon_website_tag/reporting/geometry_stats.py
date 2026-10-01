@@ -41,6 +41,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyproj
 
+from osm_polygon_website_tag.reporting.artifact_inventory import source_scoped_parquet_paths
 from osm_polygon_website_tag.reporting.text_population import (
     TextPopulationSummary,
     compute_text_population_summary,
@@ -194,7 +195,7 @@ def compute_geometry_stats(
     accumulator = _Accumulator()
     store = _GeometryValueStore(root)
     try:
-        selected_shards = _selected_shards(directory, source_names)
+        selected_shards = source_scoped_parquet_paths(directory, source_names)
         source_pbf_names = [f"{shard.stem}.osm.pbf" for shard in selected_shards]
         for shard in selected_shards:
             _accumulate_shard(shard, accumulator, store)
@@ -213,13 +214,18 @@ def render_geometry_stats(stats: GeometryStats) -> str:
     return json.dumps(asdict(stats), indent=2, sort_keys=True) + "\n"
 
 
-def _selected_shards(directory: Path, source_names: Collection[str] | None) -> list[Path]:
-    """Return the sorted public shards a card or report covers."""
-    paths = sorted(directory.glob("*.parquet"))
-    if source_names is None:
-        return paths
-    stems = {name.removesuffix(".osm.pbf") for name in source_names}
-    return [path for path in paths if path.stem in stems]
+def stage_geometry_stats(
+    staged: Path,
+    run_dir: Path,
+    geometry: GeometryStats,
+) -> list[tuple[Path, Path]]:
+    """Stage canonical stats JSON only when its bytes differ from the target."""
+    target = run_dir / GEOMETRY_STATS_FILENAME
+    rendered = render_geometry_stats(geometry)
+    if target.is_file() and target.read_text(encoding="utf-8") == rendered:
+        return []
+    staged.write_text(rendered, encoding="utf-8")
+    return [(staged, target)]
 
 
 _SPILL_SCHEMA = pa.schema(
@@ -734,4 +740,5 @@ __all__ = [
     "SourceAreaStats",
     "compute_geometry_stats",
     "render_geometry_stats",
+    "stage_geometry_stats",
 ]

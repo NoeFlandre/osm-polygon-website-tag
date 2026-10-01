@@ -5,6 +5,35 @@ The installed command is `osm-polygon-website-tag`. Run
 Typer. `run-all` is the normal entry point; the phase commands are useful for
 development, recovery, and inspection of an existing run.
 
+## Global options
+
+They go before the command, for example `osm-polygon-website-tag -q run-all ...`:
+
+| Option | Effect |
+| --- | --- |
+| `--version` | Print the package version and exit 0. |
+| `-v`, `--verbose` | Log on stderr: `-v` shows INFO, `-vv` DEBUG (such as whether a custom or default data root is in use). |
+| `-q`, `--quiet` | Only errors on stderr, and no progress output; stdout keeps the JSON result. |
+| `--debug` | Show full tracebacks instead of one-line errors (also `OSM_PWT_DEBUG=1`). |
+
+`-v` and `-q` cannot be combined. Logs never go to stdout.
+
+## Exit codes and errors
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. |
+| `1` | A check failed (`verify-results`, `finalize-*`). |
+| `2` | Usage error: unknown command or option, missing value. |
+| `3` | Invalid input or state: a bad value, a missing or unreadable file, a corrupt manifest. |
+| `4` | Remote failure: a Hugging Face Hub HTTP or authentication error. |
+| `5` | A required optional package is missing (`publish-trackio` without `trackio`). |
+| `130` | Interrupted with Ctrl-C. |
+
+Errors print one `error: ...` line on stderr, never a traceback. Pass
+`--debug` before the command (`osm-polygon-website-tag --debug run-all ...`)
+or set `OSM_PWT_DEBUG=1` to get the full traceback instead.
+
 ## Commands
 
 | Command | Purpose |
@@ -20,7 +49,7 @@ development, recovery, and inspection of an existing run.
 | `publish-plan` | Show the receipt-bound files that would be uploaded. |
 | `publish` | Dry-run publication, or upload with explicit `--apply`. |
 | `release-stats` | Recompute and publish only the dataset card and the statistics report. |
-| `create-repo` | Explicitly create a public Hugging Face dataset repository. |
+| `create-repo` | Report whether a Hugging Face dataset repository exists; `--apply` creates it. |
 | `card-stats` | Recompute and print card statistics for a run. |
 | `geometry-stats` | Recompute and print the polygon geometry statistics of a run. |
 | `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
@@ -65,7 +94,12 @@ apply-mode upload.
 | `--area-workers` | 4 | Bounded geometry workers per PBF. |
 | `--max-in-flight-areas` | 32 | Maximum queued geometry payloads per PBF. |
 | `--fetch-workers` | 8 | Bounded concurrent URL fetch workers per enrichment batch. |
+| `--host-concurrency` | 2 | Maximum simultaneous requests to one website host (`OSM_PWT_HOST_CONCURRENCY`). |
+| `--host-delay-seconds` | 0.2 | Minimum seconds between request starts to one host (`OSM_PWT_HOST_DELAY_SECONDS`). |
 | `--detect-languages` | off | Load the pinned GlotLID model and add schema-v1.4 language fields. |
+
+A `429` or `503` reply with a `Retry-After` of at most 30 seconds pauses that host and
+is retried once; a longer or missing `Retry-After` stays a retryable `http_429` / `http_503`.
 
 For a manually staged run, the phase sequence is:
 
@@ -79,11 +113,11 @@ it after text enrichment, or run it separately on an enriched run:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
 ```
 
-The standalone command loads one pinned GlotLID V3 model from the Seagate
-cache, processes public shards in sorted order, and changes the run from
+The standalone command loads one pinned GlotLID V3 model from the data-root
+cache (`<data root>/models/glotlid`), processes public shards in sorted order, and changes the run from
 `enriching` to `enriched` after all shard promotions succeed. If the run was
 already analyzed or card-built, rerun `analyze-results`, `build-card`,
 `verify-results`, and `finalize-run` afterward. The model is never loaded when
@@ -95,9 +129,9 @@ synchronization explicit:
 
 ```bash
 uv run --locked osm-polygon-website-tag grid5000-prepare \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>' \
-  --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
-  --model-path '/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/<snapshot>/model_v3.bin' \
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>" \
+  --bundle-dir "${OSM_POLY_DATA_DIR:-./data}/grid5000/<bundle-id>" \
+  --model-path "${OSM_POLY_DATA_DIR:-./data}/models/glotlid/<snapshot>/model_v3.bin" \
   --commit "$(git rev-parse HEAD)"
 
 uv run --locked --offline osm-polygon-website-tag grid5000-run \
@@ -105,12 +139,12 @@ uv run --locked --offline osm-polygon-website-tag grid5000-run \
   --time-budget-seconds 1500 --batch-rows 256
 
 uv run --locked osm-polygon-website-tag grid5000-sync \
-  --bundle-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>' \
-  --run-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
+  --bundle-dir "${OSM_POLY_DATA_DIR:-./data}/grid5000/<bundle-id>" \
+  --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
 ```
 
-`grid5000-prepare` and `grid5000-sync` reject paths outside the Seagate data
-root. `grid5000-run` accepts only a staged bundle and never calls Hugging Face
+`grid5000-prepare` and `grid5000-sync` reject paths outside the data root
+(`OSM_POLY_DATA_DIR`, default `./data`). `grid5000-run` accepts only a staged bundle and never calls Hugging Face
 or the website-fetching code. The reserved-node shell wrapper invokes a
 dependency-light module entry point so it does not import extraction-only
 native libraries. It defaults to 256-row checkpoint batches. The shell
@@ -148,8 +182,8 @@ uv run --locked osm-polygon-website-tag publish \
 
 `publish` is read-only unless `--apply` is present. Apply mode requires a
 Hugging Face credential supplied through the environment or local `hf auth
-login`; the CLI never accepts a token flag. `create-repo` is separate and
-explicit, and `--ensure-repo` is rejected unless `run-all` is also in apply
+login`; the CLI never accepts a token flag. `create-repo` is separate and,
+like `publish`, only reports what it would do until `--apply` is added; and `--ensure-repo` is rejected unless `run-all` is also in apply
 mode.
 
 ### Releasing the card and statistics report

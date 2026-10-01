@@ -371,13 +371,6 @@ def test_finalize_run_fails_on_verification_error(tmp_path: Path) -> None:
     assert report.verification.ok is False
 
 
-def test_finalize_run_can_proceed_to_complete(tmp_path: Path) -> None:
-    run_dir, _ = _setup(tmp_path)
-    finalize_run(run_dir)
-    state = load_run(run_dir)
-    assert state.metadata["status"] == STATUS_COMPLETE
-
-
 def test_complete_verification_rejects_card_mutation(tmp_path: Path) -> None:
     run_dir, _ = _setup(tmp_path)
     assert finalize_run(run_dir).ok

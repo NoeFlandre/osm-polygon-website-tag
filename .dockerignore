@@ -15,9 +15,8 @@ dist/
 build/
 *.egg-info/
 
-# Local agent notes and unrelated presentation artifacts
-docs/superpowers/
-slides/
+# Build output
+site/
 
 # Credentials and local configuration
 .env
@@ -31,3 +30,4 @@ slides/
 *.geojsonl
 data/
 runs/
+.hypothesis/

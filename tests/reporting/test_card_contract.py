@@ -24,6 +24,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
     POLYGON_PUBLIC_SCHEMA_V1_4,
 )
+from osm_polygon_website_tag.reporting import geometry_stats
 from osm_polygon_website_tag.reporting.card import (
     build_card,
     update_card_with_geometry,
@@ -54,18 +55,18 @@ def test_geometry_report_is_staged_only_when_its_bytes_change(tmp_path: Path) ->
     staged = tmp_path / ".stats.json.building"
     target = tmp_path / "stats.json"
 
-    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
+    assert geometry_stats.stage_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
     assert staged.read_text(encoding="utf-8") == render_geometry_stats(geometry)
 
     target.write_text(render_geometry_stats(geometry), encoding="utf-8")
     staged.unlink()
 
-    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == []
+    assert geometry_stats.stage_geometry_stats(staged, tmp_path, geometry) == []
     assert not staged.exists()
 
     target.write_text("stale\n", encoding="utf-8")
 
-    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
+    assert geometry_stats.stage_geometry_stats(staged, tmp_path, geometry) == [(staged, target)]
 
 
 def test_geometry_renderers_have_stable_numeric_and_newline_contracts() -> None:
@@ -469,7 +470,7 @@ def test_update_card_with_geometry_promotes_only_changed_staged_files_and_cleans
         staged.write_text("stats", encoding="utf-8")
         return [(staged, root / "stats.json")]
 
-    monkeypatch.setattr(card_module, "_staged_geometry_stats", stage)
+    monkeypatch.setattr(card_module, "stage_geometry_stats", stage)
     monkeypatch.setattr(card_module, "atomic_promote_bundle", promoted.append)
 
     assert update_card_with_geometry(tmp_path, source_names=source_names) == readme
@@ -527,7 +528,7 @@ def test_staged_geometry_stats_requires_explicit_utf8_for_existing_reports(
         return original_read_text(path, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", read_text)
-    assert card_module._staged_geometry_stats(staged, tmp_path, geometry) == []
+    assert geometry_stats.stage_geometry_stats(staged, tmp_path, geometry) == []
     assert encodings == ["utf-8"]
     assert not staged.exists()
 

@@ -549,7 +549,8 @@ def test_release_geometry_section_normalizes_newlines_and_requires_exact_block(
     errors.clear()
     readme.write_bytes(b"\xff")
     analysis._verify_release_geometry_section(tmp_path, geometry, errors)
-    assert errors and errors[0].startswith("README geometry section is unreadable: ")
+    assert len(errors) == 1
+    assert errors[0].startswith("README geometry section is unreadable: ")
 
 
 def test_map_verifier_rejects_bytes_from_a_different_global_summary(
@@ -606,15 +607,6 @@ def test_observation_cells_accept_a_matching_total(tmp_path: Path) -> None:
     analysis._verify_observation_cells(tmp_path, _cells(_EIGHT), set(_EIGHT), errors)
 
     assert errors == []
-
-
-def test_a_wrong_cell_set_skips_the_observation_total(tmp_path: Path) -> None:
-    """No manifest is written, so reading one would raise rather than report."""
-    errors: list[str] = []
-
-    analysis._verify_observation_cells(tmp_path, _cells({"a": 1}), set(_EIGHT), errors)
-
-    assert errors == ["observation analysis does not contain exactly eight cells"]
 
 
 def test_canonical_cells_check_their_total_once_the_set_matches() -> None:

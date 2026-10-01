@@ -28,13 +28,7 @@ def _is_equal_or_inside(candidate: Path, boundary: Path) -> bool:
     """Return ``True`` iff ``candidate`` equals ``boundary`` or is nested under it."""
     candidate = normalize_path(candidate)
     boundary = normalize_path(boundary)
-    if candidate == boundary:
-        return True
-    try:
-        candidate.relative_to(boundary)
-        return True
-    except ValueError:
-        return False
+    return candidate.is_relative_to(boundary)
 
 
 def assert_path_safe_against(candidate: str | Path, forbidden: str | Path) -> Path:

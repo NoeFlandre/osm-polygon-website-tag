@@ -60,7 +60,7 @@ def __getattr__(name: str) -> Any:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
 
 
-def atomic_save_png(fig, output_path: Path) -> None:
+def atomic_save_png(fig: Any, output_path: Path) -> None:
     """Save a figure through a same-directory temporary file and replace."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(

@@ -1,8 +1,8 @@
 """Typed runtime configuration.
 
 Reads from environment variables and ``.env`` (via ``pydantic-settings``).
-All values are documented in ``.env.example``. Import the singleton ``settings``
-to read configuration from anywhere in the codebase.
+All values are documented in ``.env.example``. Construct ``Settings()`` where
+a value is needed, so a test's environment is always honoured.
 """
 
 from __future__ import annotations
@@ -10,15 +10,12 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from osm_polygon_website_tag.runtime.paths import data_root
-
 # Default remote destinations, captured here so they live in one obvious place.
 DEFAULT_GITHUB_REPO = "https://github.com/NoeFlandre/osm-polygon-website-tag.git"
 DEFAULT_HF_DATASET = "NoeFlandre/osm-polygon-website-tag"
 DEFAULT_TRACKIO_PROJECT = "osm-polygon-website-tag"
 DEFAULT_TRACKIO_SPACE = "NoeFlandre/osm-polygon-website-tag-metrics"
 TRACKIO_SPACE_URL = f"https://huggingface.co/spaces/{DEFAULT_TRACKIO_SPACE}"
-TRACKIO_DASHBOARD_URL = TRACKIO_SPACE_URL
 
 
 class Settings(BaseSettings):
@@ -31,17 +28,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Local data root (see osm_polygon_website_tag.runtime.paths for resolution rules).
+    # Local data root; runtime.paths.resolve_data_root applies the default.
     osm_poly_data_dir: str = Field(default="", description="Local data root override.")
 
     # Remote destinations.
     github_repo: str = Field(default=DEFAULT_GITHUB_REPO, description="GitHub repo URL.")
     hf_dataset_repo: str = Field(default=DEFAULT_HF_DATASET, description="HF dataset slug.")
-
-    def resolved_data_root(self) -> str:
-        """Absolute path to the local data root, after resolution."""
-        return str(data_root())
-
-
-# Module-level singleton; cheap to import, recreated only if tests override it.
-settings = Settings()

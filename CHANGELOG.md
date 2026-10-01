@@ -1,0 +1,44 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version is
+defined once, in `pyproject.toml`; `CITATION.cff` and the README's BibTeX must
+match it.
+
+## [Unreleased]
+
+### Added
+
+- `--version`, `-v`/`-vv` and `-q` global options (#69).
+- Distinct exit codes (3 invalid input, 4 remote, 130 Ctrl-C), one-line
+  errors, and `--debug` / `OSM_PWT_DEBUG=1` for tracebacks (#68).
+- `CONTRIBUTING.md`, `SECURITY.md`, issue forms and a pull request template (#88).
+- This changelog and a tag-driven release workflow (#87).
+- CI: `ci-ok` is the one check to require; pull requests build the docs and audit
+  `uv.lock` with `pip-audit` (`just audit`); every job has a timeout; mutation
+  shards start beside the gate and run on pull requests only (#74, #75).
+
+### Changed
+
+- Pages are decoded with the HTTP charset, then the HTML `<meta>` prescan, as
+  browsers do, instead of always as UTF-8 (#83).
+- The data root comes from `OSM_POLY_DATA_DIR` (environment or `.env`) and
+  defaults to `./data`; no machine-specific paths remain (#81, #79, #80).
+- The User-Agent carries the full package version.
+- Trafilatura loads on first extraction, not at import: every command starts
+  about 2 s faster (#95).
+- Fetching refuses a redirect, an error page, an unsupported media type or a
+  declared `Content-Length` over the limit from the headers alone, without
+  downloading the body; media types are matched exactly (#84).
+- Per-host politeness: `--host-concurrency` (default 2) and `--host-delay-seconds`
+  (default 0.2) cap and space requests to one website, and a short `Retry-After`
+  on 429/503 is honoured with one retry (#85).
+- A charset label containing a NUL byte no longer aborts extraction, and a host
+  made only of dots is rejected as `missing_hostname`; both found by the new
+  property tests (#89).
+- `publish-trackio` without the `trackio` package exits 5 with one clear line.
+
+## [0.1.0]
+
+First published snapshot of the dataset and pipeline.

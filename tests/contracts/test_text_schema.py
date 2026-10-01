@@ -40,6 +40,7 @@ def test_status_vocabulary_is_frozen() -> None:
                 "empty",
                 "invalid_url",
                 "unsafe_url",
+                "robots_disallowed",
                 "fetch_error",
                 "extract_error",
             }
@@ -64,7 +65,9 @@ def test_status_priority_categories_cover_nonterminal_statuses() -> None:
     assert TEXT_NULL_STATUS == "__null__"
     assert frozenset({"pending", TEXT_NULL_STATUS}) == TEXT_UNFINISHED_STATUSES
     assert frozenset({"empty", "fetch_error", "extract_error"}) == TEXT_TRANSIENT_STATUSES
-    assert frozenset({"invalid_url", "unsafe_url"}) == TEXT_DETERMINISTIC_STATUSES
+    assert frozenset({"invalid_url", "unsafe_url", "robots_disallowed"}) == (
+        TEXT_DETERMINISTIC_STATUSES
+    )
     categories = (
         (TEXT_UNFINISHED_STATUSES - {TEXT_NULL_STATUS})
         | TEXT_TRANSIENT_STATUSES

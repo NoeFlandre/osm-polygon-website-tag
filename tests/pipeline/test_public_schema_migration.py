@@ -89,6 +89,7 @@ def test_migrate_v1_2_projects_only_removed_columns_and_preserves_text(tmp_path:
     assert row["website_word_count"] == 3
     assert row["schema_version"] == "v1.3"
     assert result.changed is True
+    assert result.shard_path == shard
     assert result.row_count == 1
     assert result.max_batch_rows == 1
     assert result.shard_sha256 == hash_shard(shard)
@@ -115,6 +116,7 @@ def test_migrate_current_shard_is_idempotent(tmp_path: Path) -> None:
     result = migrate_public_shard(shard)
 
     assert result.changed is False
+    assert (result.shard_path, result.row_count, result.max_batch_rows) == (shard, 1, 0)
     assert result.shard_sha256 == before
     assert hash_shard(shard) == before
 

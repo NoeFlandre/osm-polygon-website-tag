@@ -326,7 +326,7 @@ def test_generated_shard_with_no_mutants_uses_a_distinct_exit_status(monkeypatch
             "run",
             "--max-children",
             "4",
-            "osm_polygon_website_tag.application.cli.x_refresh_card_command__mutmut_*",
+            "osm_polygon_website_tag.application.cli.verify.x_refresh_card_command__mutmut_*",
         ],
     )
     monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda _names: ())
@@ -380,7 +380,7 @@ def test_scoped_mutation_config_limits_generation_to_selected_source_modules() -
     ]
 
 
-def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
+def test_scoped_mutation_config_expands_root_package_filter_to_all_sources() -> None:
     config = SimpleNamespace(only_mutate=[])
 
     source_paths = mutation_runner._configure_source_scope(
@@ -388,11 +388,13 @@ def test_scoped_mutation_config_maps_package_filter_to_init_source() -> None:
         config=config,
     )
 
-    assert source_paths == (Path("src/osm_polygon_website_tag/__init__.py"),)
-    assert config.only_mutate == ["src/osm_polygon_website_tag/__init__.py"]
+    expected = tuple(sorted(Path("src/osm_polygon_website_tag").rglob("*.py")))
+    assert source_paths == expected
+    assert "src/osm_polygon_website_tag/web/web_fetch.py" in config.only_mutate
+    assert "src/osm_polygon_website_tag/pipeline/enrich.py" in config.only_mutate
 
 
-def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> None:
+def test_scoped_mutation_config_expands_nested_package_filter_to_all_sources() -> None:
     config = SimpleNamespace(only_mutate=[])
 
     source_paths = mutation_runner._configure_source_scope(
@@ -400,10 +402,9 @@ def test_scoped_mutation_config_maps_nested_package_filter_to_init_source() -> N
         config=config,
     )
 
-    assert source_paths == (Path("src/osm_polygon_website_tag/reporting/geographic/__init__.py"),)
-    assert config.only_mutate == [
-        "src/osm_polygon_website_tag/reporting/geographic/__init__.py",
-    ]
+    package = Path("src/osm_polygon_website_tag/reporting/geographic")
+    assert source_paths == tuple(sorted(package.rglob("*.py")))
+    assert "src/osm_polygon_website_tag/reporting/geographic/aggregation.py" in config.only_mutate
 
 
 def test_scoped_mutation_config_rejects_unqualified_filters() -> None:
@@ -411,3 +412,29 @@ def test_scoped_mutation_config_rejects_unqualified_filters() -> None:
 
     with pytest.raises(ValueError, match="fully qualified package filter"):
         mutation_runner._configure_source_scope(["reporting.card.*"], config=config)
+
+
+def test_concrete_mutant_filter_resolves_to_its_source_module() -> None:
+    assert mutation_runner._source_path_for_mutant_name(
+        "osm_polygon_website_tag.reporting.card.x_render__mutmut_3"
+    ) == Path("src/osm_polygon_website_tag/reporting/card.py")
+
+
+def test_stats_child_arguments_require_a_string_list(tmp_path: Path) -> None:
+    output = tmp_path / "stats.json"
+    assert mutation_runner._stats_child_arguments(
+        ["runner", "--stats-child", str(output), '["tests/test_one.py"]']
+    ) == (output, ["tests/test_one.py"])
+    assert mutation_runner._stats_child_arguments(["runner", "run"]) is None
+    for payload in ("{}", '["tests/test_one.py", 1]'):
+        with pytest.raises(ValueError, match="JSON array of strings"):
+            mutation_runner._stats_child_arguments(
+                ["runner", "--stats-child", str(output), payload]
+            )
+
+
+def test_mutant_cli_filter_parser_skips_option_values() -> None:
+    assert mutation_runner._mutant_names_from_cli(
+        ["run", "--max-children", "4", "--profile=fast", "package.module.*"]
+    ) == ("package.module.*",)
+    assert mutation_runner._mutant_names_from_cli(["results", "package.module.*"]) == ()

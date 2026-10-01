@@ -23,6 +23,28 @@ permissions:
   contents: read
 
 jobs:
+  # Property tests get a large example budget here, where nobody is waiting.
+  properties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HYPOTHESIS_PROFILE: nightly
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Run the property tests
+        run: uv run --locked pytest -q -n auto $(find tests -name 'test_*properties.py')
+
   area:
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -47,6 +69,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Sync locked environment
         run: uv sync --locked
@@ -74,6 +97,7 @@ jobs:
     needs: area
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -82,6 +106,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Sync locked environment
         run: uv sync --locked
@@ -93,15 +118,34 @@ jobs:
           pattern: mutation-results-*
           merge-multiple: true
 
-      - name: Merge the areas into one baseline
+      - name: Require a result artifact from every area
         run: |
+          set -euo pipefail
+          areas=(pipeline reporting application publishing domain contracts runtime web storage)
+          for area in "${areas[@]}"; do
+            artifact="areas/results-${area}.txt"
+            if [[ ! -f "$artifact" ]]; then
+              echo "mutation area $area produced no result artifact: $artifact" >&2
+              exit 1
+            fi
+          done
+
+      # The recorded baseline is never rewritten upward by the sweep: a new
+      # survivor fails this job, and the regenerated file is only an artifact
+      # to review and commit deliberately.
+      - name: Merge the areas into a candidate baseline
+        run: |
+          set -euo pipefail
           cat areas/results-*.txt > merged.txt
           uv run --locked python scripts/quality/mutation_baseline.py \
-            --results merged.txt --baseline docs/quality/mutation-baseline.txt
-          cat docs/quality/mutation-baseline.txt | head -20
+            --results merged.txt --baseline docs/quality/mutation-baseline.txt \
+            --output mutation-baseline-candidate.txt --fail-on-growth
+          head -20 mutation-baseline-candidate.txt
 
-      - name: Upload the merged baseline
+      - name: Upload the candidate baseline
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mutation-baseline
-          path: docs/quality/mutation-baseline.txt
+          name: mutation-baseline-candidate
+          path: mutation-baseline-candidate.txt
+          if-no-files-found: ignore

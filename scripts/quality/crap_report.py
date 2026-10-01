@@ -2,8 +2,9 @@
 """Report CRAP scores for selected Python modules.
 
 The report joins Radon's cyclomatic complexity with function-level coverage
-from a Coverage JSON report.  A function absent from the coverage report is
-treated as uncovered, which keeps the gate conservative.  The command is
+from a Coverage JSON report.  A function, or a whole file, missing from the
+coverage report is an error rather than 0% coverage: a silent zero would either
+hide a broken join or blame code the tests do run.  The command is
 deliberately read-only: it parses existing files and never runs application
 code or touches generated data.
 """
@@ -49,15 +50,9 @@ def _coverage_functions(coverage: dict[str, Any]) -> dict[str, dict[int, float]]
     """Index coverage percentages by normalized file path and start line."""
     indexed: dict[str, dict[int, float]] = {}
     for raw_path, file_data in coverage.get("files", {}).items():
-        functions = file_data.get("functions", {})
-        entries: dict[int, float] = {}
-        for function_data in functions.values():
-            start_line = function_data.get("start_line")
-            summary = function_data.get("summary", {})
-            if isinstance(start_line, int) and isinstance(
-                summary.get("percent_covered"), (int, float)
-            ):
-                entries[start_line] = float(summary["percent_covered"])
+        if "functions" not in file_data:
+            continue
+        entries = _function_coverage_entries(file_data["functions"])
         raw = Path(raw_path)
         candidates = {_path_key(raw), _path_key(Path.cwd() / raw)}
         for candidate in candidates:
@@ -65,15 +60,22 @@ def _coverage_functions(coverage: dict[str, Any]) -> dict[str, dict[int, float]]
     return indexed
 
 
+def _function_coverage_entries(functions: dict[str, Any]) -> dict[int, float]:
+    """Index usable function summaries from one Coverage JSON file record."""
+    entries: dict[int, float] = {}
+    for function_data in functions.values():
+        start_line = function_data.get("start_line")
+        summary = function_data.get("summary", {})
+        covered = summary.get("percent_covered")
+        if isinstance(start_line, int) and isinstance(covered, (int, float)):
+            entries[start_line] = float(covered)
+    return entries
+
+
 def _blocks(blocks: Iterable[Any]) -> Iterable[Any]:
-    """Yield each function or method block once, excluding class aggregates."""
+    """Yield each function, method and nested closure once, excluding class aggregates."""
     seen: set[tuple[str, int]] = set()
-    for block in blocks:
-        # ``cc_visit`` returns class aggregates and their methods as separate
-        # blocks.  Classes are not callable units and their methods are already
-        # present at the top level, so scoring both would double-count methods.
-        if block.__class__.__name__ == "Class":
-            continue
+    for block in _walk(blocks):
         key = (str(block.name), int(block.lineno))
         if key in seen:
             continue
@@ -81,21 +83,68 @@ def _blocks(blocks: Iterable[Any]) -> Iterable[Any]:
         yield block
 
 
-def _expand_paths(paths: Sequence[Path]) -> list[Path]:
-    """Expand directory inputs into deterministic Python source paths."""
-    expanded: list[Path] = []
-    seen: set[Path] = set()
+def _walk(blocks: Iterable[Any]) -> Iterable[Any]:
+    """Depth-first over ``cc_visit`` blocks: a class yields its methods, a function its closures.
+
+    Radon 6 lists methods both at the top level and under their class, and
+    closures only under their function; deduplication by name and line makes
+    either layout score each callable once.
+    """
+    for block in blocks:
+        if block.__class__.__name__ == "Class":
+            yield from _walk(getattr(block, "methods", ()))
+            continue
+        yield block
+        yield from _walk(getattr(block, "closures", ()))
+
+
+def _path_candidates(paths: Sequence[Path]) -> Iterable[Path]:
+    """Yield source files from each input in stable directory order."""
     for path in paths:
         candidates = sorted(path.rglob("*.py")) if path.is_dir() else [path]
-        for candidate in candidates:
-            if not candidate.is_file():
-                continue
-            resolved = candidate.resolve()
-            if resolved in seen:
-                continue
+        yield from candidates
+
+
+def _expand_paths(paths: Sequence[Path]) -> list[Path]:
+    """Expand directory inputs into deterministic, existing Python paths."""
+    expanded: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in _path_candidates(paths):
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        if resolved not in seen:
             seen.add(resolved)
             expanded.append(candidate)
     return expanded
+
+
+class CoverageJoinError(ValueError):
+    """Raised when a scanned file or function has no coverage entry to join."""
+
+
+def _file_coverage(path: Path, coverage_by_file: dict[str, dict[int, float]]) -> dict[int, float]:
+    """Return the per-line function coverage for ``path``, or fail if it is absent."""
+    by_line = coverage_by_file.get(_path_key(path))
+    if by_line is None:
+        raise CoverageJoinError(
+            f"{path} is missing from the coverage report (or the report has no per-function "
+            "data; coverage 7.5 or newer is required)"
+        )
+    return by_line
+
+
+def _score(path: Path, block: Any, by_line: dict[int, float]) -> FunctionScore:
+    line = int(block.lineno)
+    if line not in by_line:
+        raise CoverageJoinError(f"{path}:{line} {block.name} has no coverage entry at that line")
+    return FunctionScore(
+        path=path,
+        name=str(block.name),
+        line=line,
+        complexity=int(block.complexity),
+        coverage_percent=by_line[line],
+    )
 
 
 def score_paths(paths: Sequence[Path], coverage: dict[str, Any]) -> list[FunctionScore]:
@@ -103,20 +152,9 @@ def score_paths(paths: Sequence[Path], coverage: dict[str, Any]) -> list[Functio
     coverage_by_file = _coverage_functions(coverage)
     scores: list[FunctionScore] = []
     for path in _expand_paths(paths):
-        resolved = path.resolve()
-        by_line = coverage_by_file.get(_path_key(resolved), {})
-        for block in _blocks(cc_visit(path.read_text(encoding="utf-8"))):
-            if not hasattr(block, "complexity") or not hasattr(block, "lineno"):
-                continue
-            scores.append(
-                FunctionScore(
-                    path=path,
-                    name=str(block.name),
-                    line=int(block.lineno),
-                    complexity=int(block.complexity),
-                    coverage_percent=by_line.get(int(block.lineno), 0.0),
-                )
-            )
+        by_line = _file_coverage(path, coverage_by_file)
+        blocks = _blocks(cc_visit(path.read_text(encoding="utf-8")))
+        scores.extend(_score(path, block, by_line) for block in blocks)
     return sorted(scores, key=lambda score: (-score.crap, str(score.path), score.line, score.name))
 
 
@@ -131,12 +169,28 @@ def _parser() -> argparse.ArgumentParser:
 def _render(scores: Sequence[FunctionScore]) -> str:
     lines = ["Path:line  Function  Complexity  Coverage  CRAP"]
     lines.append("-" * 58)
-    for score in scores:
-        lines.append(
-            f"{score.path}:{score.line}  {score.name}  {score.complexity:11d}"
-            f"  {score.coverage_percent:7.1f}%  {score.crap:5.2f}"
-        )
+    lines.extend(
+        f"{score.path}:{score.line}  {score.name}  {score.complexity:11d}"
+        f"  {score.coverage_percent:7.1f}%  {score.crap:5.2f}"
+        for score in scores
+    )
     return "\n".join(lines)
+
+
+def _report_scores(scores: Sequence[FunctionScore], max_crap: float) -> int:
+    """Print scores and enforce the exclusive CRAP threshold."""
+    if not scores:
+        print("unable to build CRAP report: no functions found", file=sys.stderr)
+        return 2
+    print(_render(scores))
+    failures = [score for score in scores if score.crap >= max_crap]
+    if failures:
+        print(
+            f"{len(failures)} function(s) are at or above the CRAP threshold {max_crap:.2f}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -145,22 +199,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         coverage = json.loads(args.coverage_json.read_text(encoding="utf-8"))
         scores = score_paths(args.path, coverage)
-    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:  # CoverageJoinError too
         print(f"unable to build CRAP report: {exc}", file=sys.stderr)
         return 2
-    if not scores:
-        print("unable to build CRAP report: no functions found", file=sys.stderr)
-        return 2
-
-    print(_render(scores))
-    failures = [score for score in scores if score.crap >= args.max_crap]
-    if failures:
-        print(
-            f"{len(failures)} function(s) are at or above the CRAP threshold {args.max_crap:.2f}",
-            file=sys.stderr,
-        )
-        return 1
-    return 0
+    return _report_scores(scores, args.max_crap)
 
 
 if __name__ == "__main__":

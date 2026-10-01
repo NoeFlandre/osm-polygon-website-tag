@@ -51,17 +51,17 @@ def _preflight_legacy_refresh(run_dir: Path | str) -> PreflightReport:
 
 def _missing_refresh_files(root: Path) -> list[str]:
     """Return missing manifest and card prerequisites."""
-    errors: list[str] = []
-    for relative in (
-        "manifests/run.json",
-        "manifests/sources.json",
-        "manifests/expected_sources.json",
-        "README.md",
-        "dataset.yaml",
-    ):
-        if not (root / relative).is_file():
-            errors.append(f"missing refresh prerequisite: {relative}")
-    return errors
+    return [
+        f"missing refresh prerequisite: {relative}"
+        for relative in (
+            "manifests/run.json",
+            "manifests/sources.json",
+            "manifests/expected_sources.json",
+            "README.md",
+            "dataset.yaml",
+        )
+        if not (root / relative).is_file()
+    ]
 
 
 def _missing_refresh_directories(root: Path) -> list[str]:
@@ -79,7 +79,7 @@ def _unreadable_refresh_shards(root: Path) -> list[str]:
     for path in root.glob("polygons/*.parquet"):
         try:
             pq.ParquetFile(path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a verifier reports any failure as a finding
             errors.append(f"unreadable public shard {path}: {exc}")
     return errors
 

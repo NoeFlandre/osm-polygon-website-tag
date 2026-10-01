@@ -9,6 +9,7 @@ from typing import Any, cast
 import pytest
 
 import osm_polygon_website_tag.publishing.card_artifacts as card_artifacts
+from osm_polygon_website_tag.reporting import geometry_stats
 
 
 class _EncodingProbe(str):
@@ -19,7 +20,7 @@ class _EncodingProbe(str):
         return super().encode(encoding, errors)
 
 
-def _patch_existing_refresh_dependencies(
+def _patch_existing_refresh_dependencies(  # noqa: C901 - too long or branchy; TODO(#76) split with the fixture work
     monkeypatch: pytest.MonkeyPatch,
     *,
     text_population: object,
@@ -491,7 +492,7 @@ def test_release_card_promotions_preserves_helper_order_and_arguments(
     monkeypatch.setattr(card_artifacts, "_stage_readme_promotion", stage_readme)
     monkeypatch.setattr(card_artifacts, "_stage_yaml_promotion", stage_yaml)
     monkeypatch.setattr(card_artifacts, "_stage_release_map", stage_map)
-    monkeypatch.setattr(card_artifacts, "_stage_geometry_stats", stage_stats)
+    monkeypatch.setattr(card_artifacts, "stage_geometry_stats", stage_stats)
 
     result = card_artifacts._release_card_promotions(
         root,
@@ -689,7 +690,7 @@ class _FakeRunDir:
         self.target = target
 
     def __truediv__(self, name: str) -> _FakeTarget:
-        assert name == card_artifacts.GEOMETRY_STATS_FILENAME
+        assert name == geometry_stats.GEOMETRY_STATS_FILENAME
         return self.target
 
 
@@ -708,10 +709,10 @@ def test_stage_geometry_stats_skips_identical_utf8_content(
     target = _FakeTarget(existing=True, content="rendered")
     staged = _FakeStaged()
     geometry = object()
-    monkeypatch.setattr(card_artifacts, "render_geometry_stats", lambda received: "rendered")
+    monkeypatch.setattr(geometry_stats, "render_geometry_stats", lambda received: "rendered")
 
     assert (
-        card_artifacts._stage_geometry_stats(
+        geometry_stats.stage_geometry_stats(
             cast(Any, staged),
             cast(Any, _FakeRunDir(target)),
             cast(Any, geometry),
@@ -728,9 +729,9 @@ def test_stage_geometry_stats_writes_changed_utf8_content(
     target = _FakeTarget(existing=False)
     staged = _FakeStaged()
     geometry = object()
-    monkeypatch.setattr(card_artifacts, "render_geometry_stats", lambda received: "rendered")
+    monkeypatch.setattr(geometry_stats, "render_geometry_stats", lambda received: "rendered")
 
-    assert card_artifacts._stage_geometry_stats(
+    assert geometry_stats.stage_geometry_stats(
         cast(Any, staged),
         cast(Any, _FakeRunDir(target)),
         cast(Any, geometry),

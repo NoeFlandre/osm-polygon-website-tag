@@ -16,10 +16,14 @@ permissions:
   contents: read
 
 jobs:
-  quality:
+  # The mutation matrix is resolved by a small job of its own, so the shards
+  # start beside the tiered gate instead of waiting for its whole run.
+  scope:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       mutation_filters: ${{ steps.mutation-scope.outputs.filters }}
+      source_changed: ${{ steps.mutation-scope.outputs.source_changed }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -31,11 +35,7 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
-
-      - name: Install Just
-        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
-        with:
-          just-version: "1.50.0"
+          cache-dependency-glob: uv.lock
 
       - name: Sync locked environment
         run: uv sync --locked
@@ -53,28 +53,28 @@ jobs:
       - name: Resolve the mutation scope
         id: mutation-scope
         run: |
+          set -euo pipefail
           filters="$(uv run --locked python scripts/quality/mutation_scope.py \
             --base "${{ steps.mutation-base.outputs.ref }}" --json)"
           printf 'filters=%s\n' "$filters" >> "$GITHUB_OUTPUT"
           printf 'Mutation matrix: %s\n' "$filters"
+          base_ref="${{ steps.mutation-base.outputs.ref }}"
+          if git diff --quiet "${base_ref}...HEAD" -- src/; then
+            source_changed=false
+          else
+            diff_status=$?
+            if [[ "$diff_status" -ne 1 ]]; then
+              exit "$diff_status"
+            fi
+            source_changed=true
+          fi
+          printf 'source_changed=%s\n' "$source_changed" >> "$GITHUB_OUTPUT"
 
-      # The container gate lives in the Docker workflow, which runs beside this
-      # one; building the image here too would pay for it twice per commit.
-      - name: Run the tiered gate
-        run: just qa-pr
-
-  mutation:
-    name: Mutation / ${{ matrix.shard.name }}
-    needs: quality
-    if: needs.quality.result == 'success' && needs.quality.outputs.mutation_filters != '[]'
+  quality:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      # Shards are now per-function groups, so there are more of them and
-      # each is smaller; let more run at once or the fan-out buys nothing.
-      max-parallel: 24
-      matrix:
-        shard: ${{ fromJSON(needs.quality.outputs.mutation_filters) }}
+    timeout-minutes: 30
+    env:
+      HYPOTHESIS_PROFILE: ci
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -83,6 +83,141 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+        with:
+          just-version: "1.50.0"
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Run the tiered gate
+        run: just qa-pr
+
+  # The benchmark result is advisory, but its own check remains visible.
+  # Only source changes pay for the same-runner base/head comparison.
+  benchmarks:
+    needs: scope
+    if: >-
+      github.event_name == 'pull_request'
+      && needs.scope.outputs.source_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Just
+        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+        with:
+          just-version: "1.50.0"
+
+      - name: Time the base
+        run: |
+          uv sync --locked
+          git checkout "${{ github.event.pull_request.head.sha }}" -- tests/benchmarks
+          # The base lockfile predates pytest-benchmark, so add it for this run only.
+          # A base far behind the head (for example main) lacks APIs some head
+          # benchmarks use; those tests cannot run there, so they have no baseline
+          # and are skipped by the comparison. Missing results for every test still fail.
+          uv run --locked --with "pytest-benchmark>=5.3,<6" pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov \
+            -p no:cacheprovider -q --benchmark-save=base \
+            --benchmark-json=/tmp/osm-polygon-website-tag-base-benchmarks.json \
+            || test -s /tmp/osm-polygon-website-tag-base-benchmarks.json
+
+      - name: Time the head against it
+        run: |
+          git checkout --force "${{ github.event.pull_request.head.sha }}"
+          uv sync --locked
+          just bench-compare
+
+  # A broken docs page used to surface only after the merge, on the Pages build.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Build documentation
+        run: uv run --locked mkdocs build --strict --site-dir site
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build immutable runtime image
+        run: docker build --pull --target runtime --tag osm-polygon-website-tag:ci .
+
+      - name: Run safe CLI smoke test
+        run: >-
+          docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m
+          osm-polygon-website-tag:ci --help
+
+      - name: Run a real subcommand's help
+        run: docker run --rm --read-only osm-polygon-website-tag:ci run-all --help
+
+      - name: Validate the compose file and run through it
+        run: |
+          docker compose config --quiet
+          docker compose run --rm --build pipeline run-all --help
+
+      - name: Require a non-root runtime user
+        run: |
+          uid="$(docker run --rm --entrypoint id osm-polygon-website-tag:ci -u)"
+          test "$uid" != "0"
+
+  # The mutation matrix runs on pull requests only: a merged pull request
+  # already passed it, and the nightly sweep covers main.
+  mutation:
+    name: Mutation / ${{ matrix.shard.name }}
+    needs: scope
+    if: >-
+      github.event_name == 'pull_request'
+      && needs.scope.outputs.mutation_filters != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HYPOTHESIS_PROFILE: mutation
+    strategy:
+      fail-fast: false
+      # Shards are now per-function groups, so there are more of them and
+      # each is smaller; let more run at once or the fan-out buys nothing.
+      max-parallel: 24
+      matrix:
+        shard: ${{ fromJSON(needs.scope.outputs.mutation_filters) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install Just
         uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
@@ -96,3 +231,25 @@ jobs:
         env:
           MUTATION_FILTERS: ${{ matrix.shard.filters }}
         run: just mutation-module "$MUTATION_FILTERS"
+
+  # The one check to require in branch protection: its name never changes, while
+  # the mutation shards' names differ with every pull request. A skipped job
+  # (no mutation scope, or a push to main) is fine; a failed or cancelled one is not.
+  ci-ok:
+    if: always()
+    needs: [scope, quality, docs, docker, mutation, benchmarks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every gate to have passed or been skipped
+        env:
+          RESULTS: >-
+            ${{ needs.scope.result }} ${{ needs.quality.result }} ${{ needs.docs.result }}
+            ${{ needs.docker.result }} ${{ needs.mutation.result }}
+        run: |
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "a required job ended as: $result" >&2; exit 1 ;;
+            esac
+          done

@@ -67,6 +67,40 @@ def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
     return sorted(_git_diff(f"{base}...HEAD", cwd=cwd) | _git_diff("HEAD", cwd=cwd))
 
 
+def _changed_test_target(path: Path, raw: str, exists: Predicate) -> str | None:
+    """Return a changed test file itself when it exists in the checkout."""
+    if raw.startswith(f"{TESTS_ROOT.as_posix()}/"):
+        return raw if exists(path) else None
+    return None
+
+
+def _source_test_target(path: Path, raw: str, is_dir: Predicate) -> str | None:
+    """Map quality scripts and package sources to their owning test package."""
+    if raw.startswith("scripts/"):
+        return "tests/quality"
+    if raw.startswith(f"{PACKAGE_ROOT.as_posix()}/"):
+        mirrored = _mirrored_test_dir(path, is_dir)
+        return mirrored.as_posix() if mirrored is not None else None
+    return None
+
+
+def _test_target(raw: str, *, exists: Predicate, is_dir: Predicate) -> str | None:
+    """Map one Python source or test path to its narrow pytest target."""
+    path = Path(raw)
+    if path.suffix != ".py":
+        return None
+    target = _changed_test_target(path, raw, exists)
+    return target if target is not None else _source_test_target(path, raw, is_dir)
+
+
+def _selected_targets(paths: Sequence[str], exists: Predicate, is_dir: Predicate) -> set[str]:
+    return {
+        target
+        for raw in paths
+        if (target := _test_target(raw, exists=exists, is_dir=is_dir)) is not None
+    }
+
+
 def _mirrored_test_dir(module: Path, is_dir: Predicate) -> Path | None:
     """Return the nearest existing test package mirroring one source module."""
     candidate = TESTS_ROOT / module.relative_to(PACKAGE_ROOT).parent
@@ -91,20 +125,7 @@ def select(
     """
     if any(path in BROAD_PATHS for path in paths):
         return [BROAD_SENTINEL]
-    targets: set[str] = set()
-    for raw in paths:
-        path = Path(raw)
-        if path.suffix != ".py":
-            continue
-        if raw.startswith(f"{TESTS_ROOT.as_posix()}/"):
-            if exists(path):
-                targets.add(raw)
-        elif raw.startswith("scripts/"):
-            targets.add("tests/quality")
-        elif raw.startswith(f"{PACKAGE_ROOT.as_posix()}/"):
-            mirrored = _mirrored_test_dir(path, is_dir)
-            if mirrored is not None:
-                targets.add(mirrored.as_posix())
+    targets = _selected_targets(paths, exists, is_dir)
     if not targets:
         return []
     return sorted({*targets, *ALWAYS})
