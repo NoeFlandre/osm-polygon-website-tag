@@ -31,7 +31,7 @@ UNVERIFIED_VERDICTS = (
     "timeout",
     "suspicious",
     "segfault",
-    "check was interrupted",
+    "check was interrupted by user",
 )
 _RESULT_LINE = re.compile(rf"^\s*(?P<name>\S+):\s*(?P<verdict>{'|'.join(UNVERIFIED_VERDICTS)})\s*$")
 _KILLED_LINE = re.compile(r"^\s*(?P<name>\S+):\s*killed\s*$")
