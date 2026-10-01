@@ -47,7 +47,7 @@ def test_every_documented_verdict_counts_as_unverified() -> None:
         "timeout",
         "suspicious",
         "segfault",
-        "check was interrupted",
+        "check was interrupted by user",
     )
 
 
@@ -383,3 +383,49 @@ def test_growth_is_allowed_without_the_flag_and_rewrites_the_baseline(tmp_path: 
 
     assert mutation_baseline.main(["--results", str(results), "--baseline", str(baseline)]) == 0
     assert mutation_gate.read_baseline(baseline) == {"a.x_f__mutmut_1", "a.x_g__mutmut_2"}
+
+
+def test_kill_ratio_counts_checked_mutants_in_scope_only() -> None:
+    lines = _RESULTS.splitlines()
+
+    assert mutation_gate.kill_ratio(lines, []) == (1, 5)
+    assert mutation_gate.kill_ratio(lines, ["osm_polygon_website_tag.web.*"]) == (0, 1)
+    assert mutation_gate.kill_ratio(lines, ["osm_polygon_website_tag.pipeline.sat.*"]) == (1, 1)
+    assert mutation_gate.kill_ratio(["    a.x_f__mutmut_1: not checked"], []) == (0, 0)
+
+
+def test_the_gate_reports_the_ratio_without_changing_its_verdict(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    recorded = "\n".join(mutation_gate.unverified_mutants(_RESULTS.splitlines()))
+    results, baseline_path = _write(tmp_path, baseline=recorded)
+
+    code = mutation_gate.main(["--results", str(results), "--baseline", str(baseline_path)])
+
+    expected = "Mutation kill ratio (observation only, no floor): 1 of 5 (20.00%)"
+    assert code == 0
+    assert expected in capsys.readouterr().out
+    assert summary.read_text(encoding="utf-8") == expected + "\n"
+
+
+def test_an_interrupted_mutant_counts_as_unverified_and_in_the_ratio(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    lines = [
+        "    pkg.mod.x_a__mutmut_1: killed",
+        "    pkg.mod.x_a__mutmut_2: check was interrupted by user",
+    ]
+
+    assert mutation_gate.unverified_mutants(lines) == ["pkg.mod.x_a__mutmut_2"]
+    assert mutation_gate.kill_ratio(lines, []) == (1, 2)
+
+    results, baseline_path = _write(tmp_path, results="\n".join(lines) + "\n")
+    code = mutation_gate.main(["--results", str(results), "--baseline", str(baseline_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "1 of 2 (50.00%)" in captured.out
+    assert "pkg.mod.x_a__mutmut_2" in captured.err

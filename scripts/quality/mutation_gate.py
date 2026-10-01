@@ -18,6 +18,7 @@ failure, so the baseline can only ever get smaller.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from collections.abc import Iterable, Sequence
@@ -30,7 +31,7 @@ UNVERIFIED_VERDICTS = (
     "timeout",
     "suspicious",
     "segfault",
-    "check was interrupted",
+    "check was interrupted by user",
 )
 _RESULT_LINE = re.compile(rf"^\s*(?P<name>\S+):\s*(?P<verdict>{'|'.join(UNVERIFIED_VERDICTS)})\s*$")
 _KILLED_LINE = re.compile(r"^\s*(?P<name>\S+):\s*killed\s*$")
@@ -73,6 +74,31 @@ def in_scope(name: str, scopes: Sequence[str]) -> bool:
     if not scopes:
         return True
     return any(name.startswith(scope.removesuffix("*")) for scope in scopes)
+
+
+def kill_ratio(lines: Iterable[str], scopes: Sequence[str]) -> tuple[int, int]:
+    """Return ``(killed, checked)`` for one scope; unchecked mutants do not count.
+
+    The ratio is recorded for review only. No percentage floor is approved, so
+    nothing in the gate compares it with a threshold.
+    """
+    collected = list(lines)
+    killed = len(_scoped_set(killed_mutants(collected), scopes))
+    unverified = len(_scoped_list(unverified_mutants(collected), scopes))
+    return killed, killed + unverified
+
+
+def _report_ratio(lines: Iterable[str], scopes: Sequence[str]) -> None:
+    killed, checked = kill_ratio(lines, scopes)
+    percent = 100.0 * killed / checked  # the gate fails closed before this when none exist
+    message = (
+        f"Mutation kill ratio (observation only, no floor): {killed} of {checked} ({percent:.2f}%)"
+    )
+    print(message)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a", encoding="utf-8") as handle:
+            handle.write(f"{message}\n")
 
 
 def read_baseline(path: Path) -> set[str]:
@@ -185,6 +211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     findings = _findings(lines, baseline, args.scope)
     if _report_missing_verdicts(args.scope, findings):
         return 1
+    _report_ratio(lines, args.scope)
     if _report_healed(findings, args.baseline, strict=args.strict_baseline):
         return 1
     if _report_regressions(findings.regressions):

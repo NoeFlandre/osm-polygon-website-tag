@@ -83,7 +83,7 @@ jobs:
       - name: Collect the area's unverified mutants
         run: |
           uv run --locked mutmut results --all true \
-            | grep -E ': (survived|no tests|timeout|suspicious|segfault|check was interrupted)$' \
+            | grep -E ': (survived|no tests|timeout|suspicious|segfault|check was interrupted by user)$' \
             > "results-${{ matrix.area }}.txt" || true
           wc -l < "results-${{ matrix.area }}.txt"
 
