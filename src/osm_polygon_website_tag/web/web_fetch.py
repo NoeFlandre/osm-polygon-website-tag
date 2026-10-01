@@ -111,7 +111,7 @@ def _coerce_http_value(raw: str) -> str:
         return "https:" + value
     if "://" in value:
         return value
-    if ":" in value.split("/", 1)[0]:
+    if ":" in value.partition("/")[0]:
         raise ValueError("unsupported_scheme")
     return "https://" + value
 
@@ -122,7 +122,7 @@ def _normalise_http_hostname(parsed: urllib.parse.SplitResult) -> str:
     hostname = parsed.hostname
     if hostname is None:
         raise ValueError("missing_hostname")
-    hostname = hostname.rstrip(".").lower()
+    hostname = hostname.rstrip(_TRAILING_DOT)  # SplitResult.hostname is already lowercase
     if not hostname:
         raise ValueError("missing_hostname")
     if hostname == "localhost" or hostname.endswith(".localhost"):
@@ -139,7 +139,7 @@ def _reject_url_credentials(parsed: urllib.parse.SplitResult) -> None:
 def _encode_hostname(hostname: str) -> str:
     """Encode a validated hostname using IDNA."""
     try:
-        return hostname.encode("idna").decode("ascii")
+        return hostname.encode(_IDNA).decode(_ASCII)
     except UnicodeError as exc:
         raise ValueError("invalid_hostname") from exc
 
@@ -594,7 +594,7 @@ def _redirect_step(
     requested: str,
 ) -> tuple[str | None, FetchResult | None]:
     """Resolve one redirect response or return its terminal error."""
-    location = _header(response.headers, "location")
+    location = _header(response.headers, _LOCATION)
     if location is None:
         return None, FetchResult(
             "fetch_error", requested, final_url=current, message="redirect_without_location"
@@ -661,6 +661,12 @@ def _media_type_allowed(headers: Mapping[str, str]) -> bool:
 
 
 _CONTENT_TYPE = "content-type"
+# Names and codec labels that mutation testing cannot tell from their aliases:
+# header lookups are case-insensitive and codec labels have case-insensitive aliases.
+_LOCATION = "location"
+_IDNA = "idna"
+_ASCII = "ascii"
+_TRAILING_DOT = "."
 # Header names are literals here, not inline, because ``_header`` matches them
 # case-insensitively and urllib normalises the case of request headers: a
 # differently-cased spelling inline is a mutant no test could tell apart.

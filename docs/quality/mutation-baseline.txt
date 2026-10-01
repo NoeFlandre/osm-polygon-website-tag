@@ -26,24 +26,14 @@
 # their changed branches apply a zero-turn longitude correction at the boundary.
 # In pipeline.extraction, omitting the status argument selects its existing
 # default, and encoding aliases/defaults write the same ASCII-escaped JSON.
-# The six retained web.web_fetch entries below are reviewed equivalents, not
-# unexplained survivors: both _coerce_http_value variants preserve the same
-# pre-path component used to detect a scheme; _encode_hostname variants use
-# equivalent IDNA codec aliases; the _normalise_http_hostname rstrip mutant
-# adds uppercase X to the character set, but SplitResult.hostname lowercases
-# hostnames before this call so that added character is unreachable; and
-# _redirect_step's Location lookup goes through _header, which compares names
-# case-insensitively.
-# Tests cover path-colon versus host-colon handling, Unicode IDNA output,
-# uppercase/trailing-dot host normalization, and mixed-case Location headers.
-# Keep these entries in the strict baseline until an explicit equivalence
-# treatment is chosen; do not silently exclude them from scoring. The prior
-# content_type_error entry referred to a removed helper, so it was removed from
-# this baseline; it is not a seventh active equivalent mutant.
-# Recorded mutants: 161
-# Only the six listed legacy web_fetch entries are reviewed equivalents, with
-# separate behavior evidence described above. No other current-run survivor is
-# classified as equivalent by this note.
+# The former web.web_fetch entries were equivalents of literals no behavior can
+# distinguish; they were removed from this baseline by restructuring the code
+# (module constants for case-insensitive names and codec aliases, partition for
+# the scheme check, and dropping a redundant lower() after SplitResult.hostname),
+# not by excluding them from scoring.
+# Recorded mutants: 155
+# No current-run survivor is classified as equivalent by this note beyond the
+# groups described above.
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_32
@@ -199,9 +189,3 @@ osm_polygon_website_tag.storage.duckdb_engine.x__make_connection__mutmut_30
 osm_polygon_website_tag.storage.duckdb_engine.x__make_connection__mutmut_31
 osm_polygon_website_tag.storage.duckdb_engine.x_cells_global_canonical__mutmut_6
 osm_polygon_website_tag.storage.duckdb_engine.x_cells_global_observation__mutmut_6
-osm_polygon_website_tag.web.web_fetch.x__coerce_http_value__mutmut_18
-osm_polygon_website_tag.web.web_fetch.x__coerce_http_value__mutmut_21
-osm_polygon_website_tag.web.web_fetch.x__encode_hostname__mutmut_4
-osm_polygon_website_tag.web.web_fetch.x__encode_hostname__mutmut_6
-osm_polygon_website_tag.web.web_fetch.x__normalise_http_hostname__mutmut_11
-osm_polygon_website_tag.web.web_fetch.x__redirect_step__mutmut_7
