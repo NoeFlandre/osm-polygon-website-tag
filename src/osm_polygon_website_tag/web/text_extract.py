@@ -305,10 +305,10 @@ def _decode_with_declarations(html: bytes, header: str | None, media_type: str |
         _ascii_lookalike(header, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
         _ascii_lookalike(meta, _SEVEN_BIT_PREFIXES + _MULTIBYTE_PREFIXES),
     ]
-    decoded = _first_decoding(html, [*lookalikes, _UTF8, header])
+    decoded = _first_decoding(html, [*lookalikes, _UTF8])
     if decoded is not None:
         return decoded
-    if header is not None:  # the HTTP charset outranks meta
+    if header is not None:  # the HTTP charset outranks meta; bad bytes become U+FFFD
         return str(html, header, "replace")
     return _decode_by_meta(html, meta)
 

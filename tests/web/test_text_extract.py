@@ -1108,3 +1108,102 @@ def test_meta_parser_records_charset_from_a_tag_and_none_without_start_text() ->
     fresh = text_extract._MetaCharsetParser()
     fresh._record([("charset", "latin-1")])
     assert fresh.declared == ["latin-1"]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("utf-8", "utf-8"),
+        ("UTF8", "utf-8"),
+        ("latin-1", "iso8859-1"),
+        ("utf_16", "utf-16"),
+        ("base64", None),  # bytes-to-bytes transform
+        ("rot13", None),  # str-to-str transform
+        ("zlib", None),
+        ("punycode", None),  # cannot decode arbitrary bytes
+        ("undefined", None),
+        ("no-such-codec", None),
+        ("", None),
+    ],
+)
+def test_text_codec_accepts_only_real_text_encodings(name: str, expected: str | None) -> None:
+    assert text_extract._text_codec(name) == expected
+
+
+def test_text_codec_rejects_a_codec_that_decodes_to_non_text() -> None:
+    def encode(text: str, errors: str = "strict") -> tuple[bytes, int]:
+        return b"x", len(text)
+
+    def decode(data: Any, errors: str = "strict") -> Any:
+        return b"not text", len(data)
+
+    def search(name: str) -> codecs.CodecInfo | None:
+        if name != "osm_non_text_probe":
+            return None
+        return codecs.CodecInfo(encode, decode, name="osm_non_text_probe")
+
+    codecs.register(search)
+    try:
+        assert text_extract._text_codec("osm_non_text_probe") is None
+    finally:
+        codecs.unregister(search)
+
+
+@pytest.mark.parametrize(
+    ("html", "media_type", "header", "declared", "expected"),
+    [
+        (b"caf\xe9", "application/xhtml+xml", None, "cp1252", "café"),
+        (b"\xff", "application/xhtml+xml", None, "utf-8", "�"),
+        ("<a/>".encode("utf-16-le"), "application/xhtml+xml", None, "utf-16-le", "<a/>"),
+        (b"caf\xe9", "application/xhtml+xml", "utf-8", "cp1252", None),
+        (b"caf\xe9", "application/xhtml+xml", None, None, None),
+        (b"caf\xe9", "text/html", None, "cp1252", None),
+        (b"caf\xe9", None, None, "cp1252", None),
+    ],
+)
+def test_xml_declared_decoding_applies_only_to_headerless_xhtml(
+    html: bytes, media_type: str | None, header: str | None, declared: str | None, expected: str
+) -> None:
+    decoded = text_extract._xml_declared_decoding(html, media_type, header, declared)
+
+    assert decoded == expected
+
+
+def test_http_charset_that_cannot_decode_replaces_bad_bytes_instead_of_using_meta() -> None:
+    html = b'<meta charset="cp1252">caf\xe9'
+
+    assert decode_html(html, "euc-jp") == '<meta charset="cp1252">caf\ufffd'
+
+
+def test_declared_multibyte_meta_beats_utf8_for_valid_looking_text() -> None:
+    page = '<meta charset="gbk"><p>专业</p>'
+
+    assert decode_html(page.encode("gb18030")) == page
+    assert decode_html(page.encode("gb18030"), "utf-8") == page
+
+
+def test_text_codec_probe_decodes_exactly_a_lone_invalid_byte() -> None:
+    def encode(text: str, errors: str = "strict") -> tuple[bytes, int]:
+        return b"x", len(text)
+
+    def decode(data: Any, errors: str = "strict") -> tuple[str, int]:
+        if bytes(data) != b"\xff":
+            raise ValueError("probe input changed")
+        return "ok", 1
+
+    def broken_encode(text: str, errors: str = "strict") -> tuple[bytes, int]:
+        raise TypeError("cannot encode")
+
+    def search(name: str) -> codecs.CodecInfo | None:
+        if name == "osm_exact_probe":
+            return codecs.CodecInfo(encode, decode, name=name)
+        if name == "osm_type_error_probe":
+            return codecs.CodecInfo(broken_encode, decode, name=name)
+        return None
+
+    codecs.register(search)
+    try:
+        assert text_extract._text_codec("osm_exact_probe") == "osm_exact_probe"
+        assert text_extract._text_codec("osm_type_error_probe") is None
+    finally:
+        codecs.unregister(search)
