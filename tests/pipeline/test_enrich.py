@@ -551,7 +551,7 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
     assert deferred[url].result() == expected
     assert submitted == [(_extract_default_fetch, url, successful, "run")]
 
-    failed = FetchResult("fetch_error", url, message="http_503")
+    failed = FetchResult("fetch_error", url, body=b"error response", message="http_503")
     failure = CachedText(url, "fetch_error", None, None, None, "http_503", 0, "", None, "run")
     monkeypatch.setattr(enrich_module, "_extract_fetched", lambda *_args, **_kwargs: failure)
     _dispatch_extraction(
@@ -585,19 +585,27 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
 
 def test_drain_interrupted_fetches_caches_only_completed_results() -> None:
     completed_url = "https://example.org/completed"
+    completed_error_url = "https://example.org/completed-error"
     failed_url = "https://example.org/failed"
     cancelled_url = "https://example.org/cancelled"
-    rows = {url: {} for url in (completed_url, failed_url, cancelled_url)}
+    rows = {url: {} for url in (completed_url, completed_error_url, failed_url, cancelled_url)}
     pending = {url: [(row, "website")] for url, row in rows.items()}
     completed: Future[FetchResult] = Future()
     completed.set_result(
         FetchResult("ok", completed_url, final_url=completed_url, body=b"durable result")
     )
+    completed_error: Future[FetchResult] = Future()
+    completed_error.set_result(FetchResult("fetch_error", completed_error_url, message="http_503"))
     failed: Future[FetchResult] = Future()
     failed.set_exception(RuntimeError("fetch worker failed"))
     cancelled: Future[FetchResult] = Future()
     assert cancelled.cancel()
-    futures = {completed_url: completed, failed_url: failed, cancelled_url: cancelled}
+    futures = {
+        completed_url: completed,
+        completed_error_url: completed_error,
+        failed_url: failed,
+        cancelled_url: cancelled,
+    }
     cache = RecordingTextCache()
 
     _drain_interrupted_fetches(
@@ -608,13 +616,21 @@ def test_drain_interrupted_fetches_caches_only_completed_results() -> None:
         extractor=_extract,
     )
 
-    assert [(value.url, invocation) for value, invocation in cache.records] == [
-        (completed_url, "interrupted-run")
+    assert [
+        (value.url, value.status, value.message, invocation) for value, invocation in cache.records
+    ] == [
+        (completed_url, "success", None, "interrupted-run"),
+        (completed_error_url, "fetch_error", "http_503", "interrupted-run"),
     ]
     assert rows[completed_url] == {
         "website_text": "durable result",
         "website_word_count": 2,
         "website_text_status": "success",
+    }
+    assert rows[completed_error_url] == {
+        "website_text": None,
+        "website_word_count": None,
+        "website_text_status": "fetch_error",
     }
     assert rows[failed_url] == {}
     assert rows[cancelled_url] == {}
@@ -849,6 +865,14 @@ def test_default_process_pool_extractor_entry_point() -> None:
             FetchResult("ok", fetched.requested_url, final_url=fetched.requested_url, body=None),
             invocation_id="process-pool-test",
         )
+
+
+def test_default_process_pool_extractor_rejects_success_without_body() -> None:
+    url = "https://example.org/empty"
+    fetched = FetchResult("ok", url, final_url=url, body=None)
+
+    with pytest.raises(ValueError, match="successful fetch has no body"):
+        _extract_default_fetch(url, fetched, invocation_id="empty-body-run")
 
 
 @pytest.mark.parametrize(

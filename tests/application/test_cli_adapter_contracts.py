@@ -15,8 +15,9 @@ from osm_polygon_website_tag.application.cli import languages, publish, run, sen
 from osm_polygon_website_tag.web.politeness import HostPolicy
 
 
+@pytest.mark.parametrize("inventory_matches", [True, False], ids=["complete", "partial"])
 def test_extract_adapter_validates_inventory_and_forwards_worker_limits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inventory_matches: bool
 ) -> None:
     run_dir = tmp_path / "run"
     state_file = run_dir / "manifests" / "run.json"
@@ -53,11 +54,11 @@ def test_extract_adapter_validates_inventory_and_forwards_worker_limits(
         "extract_pbf",
         lambda *args, **kwargs: events.append(("extract", *args, kwargs)),
     )
-    monkeypatch.setattr(run, "source_inventory_matches", lambda path: True)
+    monkeypatch.setattr(run, "source_inventory_matches", lambda _path: inventory_matches)
 
     assert run.extract_command(source, run_dir, area_workers=3, max_in_flight_areas=11) == 0
 
-    assert events == [
+    expected_events = [
         ("load", run_dir),
         ("fingerprint", source),
         ("inventory", run_dir),
@@ -68,8 +69,10 @@ def test_extract_adapter_validates_inventory_and_forwards_worker_limits(
             run_dir,
             {"run_state": state, "area_workers": 3, "max_in_flight_areas": 11},
         ),
-        ("status", "extracted"),
     ]
+    if inventory_matches:
+        expected_events.append(("status", "extracted"))
+    assert events == expected_events
 
 
 def test_init_rejects_expected_sources_outside_the_declared_root(
@@ -102,6 +105,27 @@ def test_init_rejects_expected_sources_outside_the_declared_root(
     )
     assert "expected source is outside source root" in capsys.readouterr().err
     assert not output_root.exists()
+
+
+def test_init_records_normalized_source_root_and_expected_inventory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "places.osm.pbf"
+    source.write_bytes(b"pbf fixture")
+    output_root = tmp_path / "runs"
+
+    assert run.init_command(output_root, source_root, [source], run_id="run-1") == 0
+
+    run_dir = output_root / "run-1"
+    state = run.load_run(run_dir)
+    stat = source.stat()
+    assert state.metadata["source_root"] == str(source_root.resolve())
+    assert run.expected_source_inventory(run_dir) == [
+        {"filename": source.name, "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    ]
+    assert capsys.readouterr().out == f"{run_dir}\n"
 
 
 def test_run_all_adapter_forwards_every_option_and_serializes_result(
@@ -167,11 +191,14 @@ def test_run_all_adapter_forwards_every_option_and_serializes_result(
             "detect_languages": True,
         }
     ]
-    assert json.loads(capsys.readouterr().out) == {
+    expected = {
         "complete": True,
         "run_dir": str(output_root / "run-1"),
         "sources": 2,
     }
+    output = capsys.readouterr().out
+    assert output == json.dumps(expected, indent=2, sort_keys=True) + "\n"
+    assert json.loads(output) == expected
 
 
 def test_run_all_closes_progress_as_incomplete_when_backend_raises(

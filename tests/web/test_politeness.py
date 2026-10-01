@@ -165,6 +165,22 @@ def test_back_off_holds_the_host_and_never_shortens_a_longer_hold() -> None:
     assert clock.sleeps == [7.0]
 
 
+def test_host_delay_never_shortens_an_existing_retry_backoff() -> None:
+    clock = _Clock()
+    limiter = _limiter(clock, concurrency=1, delay_seconds=0.0)
+    starts: list[float] = []
+
+    with limiter.slot("a.example"):
+        starts.append(clock.now)
+    limiter.back_off("a.example", 30.0)
+    limiter.set_host_delay("a.example", 5.0)
+    with limiter.slot("a.example"):
+        starts.append(clock.now)
+
+    assert starts == [100.0, 130.0]
+    assert clock.sleeps == [30.0]
+
+
 def test_back_off_on_an_unseen_host_sets_the_hold() -> None:
     clock = _Clock()
     limiter = _limiter(clock, concurrency=1, delay_seconds=0.0)
