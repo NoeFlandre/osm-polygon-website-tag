@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       mutation_filters: ${{ steps.mutation-scope.outputs.filters }}
+      source_changed: ${{ steps.mutation-scope.outputs.source_changed }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -52,10 +53,22 @@ jobs:
       - name: Resolve the mutation scope
         id: mutation-scope
         run: |
+          set -euo pipefail
           filters="$(uv run --locked python scripts/quality/mutation_scope.py \
             --base "${{ steps.mutation-base.outputs.ref }}" --json)"
           printf 'filters=%s\n' "$filters" >> "$GITHUB_OUTPUT"
           printf 'Mutation matrix: %s\n' "$filters"
+          base_ref="${{ steps.mutation-base.outputs.ref }}"
+          if git diff --quiet "${base_ref}...HEAD" -- src/; then
+            source_changed=false
+          else
+            diff_status=$?
+            if [[ "$diff_status" -ne 1 ]]; then
+              exit "$diff_status"
+            fi
+            source_changed=true
+          fi
+          printf 'source_changed=%s\n' "$source_changed" >> "$GITHUB_OUTPUT"
 
   quality:
     runs-on: ubuntu-latest
@@ -83,10 +96,13 @@ jobs:
       - name: Run the tiered gate
         run: just qa-pr
 
-  # The job reports its own regression failures but is not part of ci-ok.
-  # It times the base and the head on the same runner.
+  # The benchmark result is advisory, but its own check remains visible.
+  # Only source changes pay for the same-runner base/head comparison.
   benchmarks:
-    if: github.event_name == 'pull_request'
+    needs: scope
+    if: >-
+      github.event_name == 'pull_request'
+      && needs.scope.outputs.source_changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -110,9 +126,9 @@ jobs:
       - name: Time the base
         run: |
           uv sync --locked
-          git checkout "${{ github.event.pull_request.head.sha }}" -- benchmarks
+          git checkout "${{ github.event.pull_request.head.sha }}" -- tests/benchmarks
           # The base lockfile predates pytest-benchmark, so add it for this run only.
-          uv run --locked --with "pytest-benchmark>=5.3,<6" pytest benchmarks --no-cov \
+          uv run --locked --with "pytest-benchmark>=5.3,<6" pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov \
             -p no:cacheprovider -q --benchmark-save=base \
             --benchmark-json=/tmp/osm-polygon-website-tag-base-benchmarks.json
 

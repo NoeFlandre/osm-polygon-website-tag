@@ -184,6 +184,12 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
+    "-m",
+    "not benchmark and not benchmark_stress",
+]
+markers = [
+    "benchmark: opt-in performance benchmarks; excluded from ordinary test runs",
+    "benchmark_stress: additional 1,024-row performance acceptance cases",
 ]
 
 [tool.mutmut]

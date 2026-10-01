@@ -12,11 +12,25 @@ from osm_polygon_website_tag.web.text_extract import extract_main_text
 from osm_polygon_website_tag.web.web_fetch import normalize_http_url, validate_public_http_url
 
 _PARAGRAPH = "<p>Le musée est ouvert tous les jours, de neuf heures à dix-sept heures.</p>"
+_EXTRACTION_OPEN = b"<html><body><main><article>"
+_EXTRACTION_CLOSE = b"</article></main></body></html>"
+_EXTRACTION_BLOCK = _PARAGRAPH.encode()
+_EXTRACTION_PAGE_BYTES = 110 * 1024
+
+pytestmark = pytest.mark.benchmark
 
 
 def _page(paragraphs: int) -> bytes:
     body = _PARAGRAPH * paragraphs
     return f"<html><head><title>Musée</title></head><body><article>{body}</article></body></html>".encode()
+
+
+def _fixed_110kb_page() -> bytes:
+    payload_bytes = _EXTRACTION_PAGE_BYTES - len(_EXTRACTION_OPEN) - len(_EXTRACTION_CLOSE)
+    repetitions, remainder = divmod(payload_bytes, len(_EXTRACTION_BLOCK))
+    page = _EXTRACTION_OPEN + _EXTRACTION_BLOCK * repetitions + b" " * remainder + _EXTRACTION_CLOSE
+    assert len(page) == _EXTRACTION_PAGE_BYTES
+    return page
 
 
 def _public_resolver(*_: object, **__: object) -> list[tuple[int, int, int, str, tuple[str, int]]]:
@@ -32,6 +46,26 @@ def test_extract_main_text(benchmark: BenchmarkFixture, paragraphs: int) -> None
     result = benchmark(extract_main_text, html, url="https://example.org/")
 
     assert result.status == "success"
+
+
+def test_extract_main_text_fixed_110kb_page(benchmark: BenchmarkFixture) -> None:
+    """Keep standalone extraction measured on the issue's fixed-size page."""
+    html = _fixed_110kb_page()
+    url = "https://example.org/benchmark-110kb"
+    extract_main_text(html, url=url)
+
+    result = benchmark.pedantic(
+        extract_main_text,
+        args=(html,),
+        kwargs={"url": url},
+        rounds=5,
+        iterations=1,
+        warmup_rounds=1,
+    )
+
+    benchmark.extra_info["payload_bytes"] = len(html)
+    assert result.status == "success"
+    assert result.text
 
 
 def test_normalize_http_url(benchmark: BenchmarkFixture) -> None:

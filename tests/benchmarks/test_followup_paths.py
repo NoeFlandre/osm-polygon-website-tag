@@ -11,12 +11,8 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from pytest_benchmark.fixture import BenchmarkFixture
-from tests.fixtures.polygon_shards import (
-    legacy_polygon_row,
-    polygon_row,
-    write_legacy_polygon_shard,
-)
 
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
 from osm_polygon_website_tag.pipeline.detect_languages import detect_language_shard
@@ -24,22 +20,21 @@ from osm_polygon_website_tag.pipeline.enrich import enrich_polygon_shard
 from osm_polygon_website_tag.pipeline.glotlid import LanguagePrediction, ModelIdentity
 from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
 from osm_polygon_website_tag.web.web_fetch import FetchResult
+from tests.fixtures.polygon_shards import (
+    legacy_polygon_row,
+    polygon_row,
+    write_legacy_polygon_shard,
+)
 
-_ARTICLE = (
-    "<html><head><title>Benchmark</title></head><body><nav>"
-    + "".join(f'<a href="/nav/{index}">Navigation {index}</a>' for index in range(200))
-    + "</nav><article>"
-    + "".join(
-        "<p>Benchmark pages contain useful public information about places, services, "
-        "opening times, local history, and ways to contact the organization.</p>"
-        for _ in range(60)
-    )
-    + "</article></body></html>"
-).encode()
 _ARTICLE_PARAGRAPH = (
     "Benchmark pages contain useful public information about places, services, opening times, "
     "local history, and ways to contact the organization. " * 12
 )
+_ARTICLE = (
+    "<html><head><title>Benchmark</title></head><body><article>"
+    + "".join(f"<p>{_ARTICLE_PARAGRAPH}</p>" for _ in range(4))
+    + "</article></body></html>"
+).encode()
 _LARGE_ARTICLE = (
     "<html><head><title>Benchmark</title></head><body><nav>"
     + "".join(f'<a href="/nav/{index}">Navigation {index}</a>' for index in range(200))
@@ -90,6 +85,7 @@ def _fetch_with_tail_latency(url: str) -> FetchResult:
     )
 
 
+@pytest.mark.benchmark
 def test_enrichment_throughput(benchmark: BenchmarkFixture, tmp_path: Path) -> None:
     """Time bounded fetch, real text extraction, and atomic shard promotion."""
     sequence = 0
@@ -120,6 +116,10 @@ def test_enrichment_throughput(benchmark: BenchmarkFixture, tmp_path: Path) -> N
         )
 
     benchmark.pedantic(run_once, rounds=2, iterations=1, warmup_rounds=0)
+
+    stats = benchmark.stats
+    assert stats is not None
+    assert stats.stats.median <= 5.0
 
     assert last_shard is not None
     assert pq.read_table(last_shard).num_rows == 256
@@ -169,7 +169,7 @@ def _benchmark_large_enrichment(
     result = benchmark.pedantic(
         run_once,
         setup=setup,
-        rounds=2,
+        rounds=5,
         iterations=1,
         warmup_rounds=0,
     )
@@ -179,9 +179,12 @@ def _benchmark_large_enrichment(
     assert pq.read_table(last_shard).num_rows == 1024
     benchmark.extra_info["acceptance_limit_seconds"] = limit_seconds
     if os.environ.get("OSM_POLY_BENCHMARK_ACCEPTANCE") == "1":
-        assert benchmark.stats.stats.median <= limit_seconds
+        stats = benchmark.stats
+        assert stats is not None
+        assert stats.stats.median <= limit_seconds
 
 
+@pytest.mark.benchmark_stress
 def test_enrichment_1024_flat_latency_acceptance(
     benchmark: BenchmarkFixture, tmp_path: Path
 ) -> None:
@@ -194,6 +197,7 @@ def test_enrichment_1024_flat_latency_acceptance(
     )
 
 
+@pytest.mark.benchmark_stress
 def test_enrichment_1024_tail_latency_acceptance(
     benchmark: BenchmarkFixture, tmp_path: Path
 ) -> None:
@@ -215,6 +219,7 @@ class _BenchmarkDetector:
         return [LanguagePrediction("eng_Latn", 0.99) for _ in texts]
 
 
+@pytest.mark.benchmark
 def test_language_detection_batch_overhead(benchmark: BenchmarkFixture, tmp_path: Path) -> None:
     """Time Arrow batching and checkpoint promotion with a stub detector."""
     sequence = 0
@@ -250,6 +255,7 @@ def test_language_detection_batch_overhead(benchmark: BenchmarkFixture, tmp_path
     assert pq.read_table(last_shard).column("website_language")[0].as_py() == "eng_Latn"
 
 
+@pytest.mark.benchmark
 def test_cli_import_startup(benchmark: BenchmarkFixture) -> None:
     """Time a fresh CLI import and guard the lazy Trafilatura boundary."""
 
@@ -273,6 +279,7 @@ def test_cli_import_startup(benchmark: BenchmarkFixture) -> None:
     assert result == "False"
 
 
+@pytest.mark.benchmark
 def test_text_cache_batch_lookup(benchmark: BenchmarkFixture, tmp_path: Path) -> None:
     """Time bounded lookup of ten thousand successful URL results."""
     cache = TextCache(tmp_path / "lookup.sqlite3")

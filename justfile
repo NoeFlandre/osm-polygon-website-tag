@@ -53,16 +53,16 @@ test:
 unit:
     uv run --locked pytest -n auto tests --ignore=tests/acceptance --ignore=tests/architecture
 
-# Time the per-page hot paths (benchmarks/ is not part of the normal test run).
+# Run the opt-in performance suite separately from the ordinary test run.
 bench:
-    uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q
+    uv run --locked pytest -m benchmark tests/benchmarks --no-cov -p no:cacheprovider -q
 
 # Save a baseline, then fail if a later median is >25% slower.
 bench-save name="base":
-    uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q --benchmark-save={{name}}
+    uv run --locked pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov -p no:cacheprovider -q --benchmark-save={{name}}
 
 bench-compare name="base":
-    OSM_POLY_BENCHMARK_ACCEPTANCE=1 uv run --locked pytest benchmarks --no-cov -p no:cacheprovider -q \
+    OSM_POLY_BENCHMARK_ACCEPTANCE=1 uv run --locked pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov -p no:cacheprovider -q \
         --benchmark-compare --benchmark-compare-fail=median:25% \
         --benchmark-json=/tmp/osm-polygon-website-tag-benchmarks.json
 
