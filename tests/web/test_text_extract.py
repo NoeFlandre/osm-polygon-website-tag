@@ -1020,3 +1020,91 @@ def test_byte_pattern_decoding_only_applies_to_xhtml(media_type: str | None) -> 
     html = "<html>x</html>".encode("utf-16-le")
 
     assert text_extract._decode_xml_byte_pattern(html, media_type) is None
+
+
+def test_raw_meta_attributes_reads_every_value_form_without_expanding_references() -> None:
+    tag = '<meta CHARSET=\'a&amp;b\' Content=c&d Name="e&f" flag NAME=ignored empty="">'
+
+    assert text_extract._raw_meta_attributes(tag) == {
+        "charset": "a&amp;b",
+        "content": "c&d",
+        "name": "e&f",
+        "flag": "",
+        "empty": "",
+    }
+
+
+def test_raw_meta_attributes_keeps_the_first_of_repeated_attributes() -> None:
+    attributes = text_extract._raw_meta_attributes('<meta charset="first" CHARSET="second">')
+
+    assert attributes == {"charset": "first"}
+
+
+def test_raw_meta_attributes_ignores_text_that_is_not_an_attribute() -> None:
+    assert text_extract._raw_meta_attributes("<meta>") == {}
+    assert text_extract._raw_meta_attributes("<meta/>") == {}
+    assert text_extract._raw_meta_attributes("") == {}
+
+
+@pytest.mark.parametrize(
+    ("raw", "attributes", "expected"),
+    [
+        # A truthy charset attribute decides alone, whatever content says.
+        ({"charset": "gb&#50;312"}, {"charset": "gb2312"}, True),
+        ({"charset": "gb2312"}, {"charset": "gb2312"}, False),
+        ({}, {"charset": "gb2312"}, False),
+        (
+            {"charset": "gb2312", "content": "text/html; charset=x&y"},
+            {"charset": "gb2312", "http-equiv": "content-type", "content": "x"},
+            False,
+        ),
+        # Without one, only an http-equiv content-type charset parameter counts.
+        (
+            {"content": "text/html; charset=gb&#50;312"},
+            {"http-equiv": "Content-Type", "content": "text/html; charset=gb2312"},
+            True,
+        ),
+        (
+            {"content": "text/html; charset=gb2312"},
+            {"http-equiv": "Content-Type", "content": "text/html; charset=gb2312"},
+            False,
+        ),
+        (
+            {"charset": "gb&#50;312", "content": "text/html; charset=gb2312"},
+            {"charset": "", "http-equiv": "content-type", "content": "text/html; charset=gb2312"},
+            False,
+        ),
+        (
+            {"content": "text/html&amp;; charset=gb2312"},
+            {"http-equiv": "content-type", "content": "text/html&; charset=gb2312"},
+            False,
+        ),
+        (
+            {"content": "text/html; charset=gb&#50;312"},
+            {"http-equiv": "refresh", "content": "text/html; charset=gb2312"},
+            False,
+        ),
+        (
+            {"content": "text/html; charset=gb&#50;312"},
+            {"content": "text/html; charset=gb2312"},
+            False,
+        ),
+        ({}, {"http-equiv": "content-type", "content": "text/html; charset=gb2312"}, False),
+        ({"content": "text/html"}, {"http-equiv": "content-type", "content": "text/html"}, False),
+        ({}, {}, False),
+    ],
+)
+def test_meta_charset_reference_check_follows_html_precedence(
+    raw: dict[str, str], attributes: dict[str, str], expected: bool
+) -> None:
+    assert text_extract._meta_charset_contains_reference(raw, attributes) is expected
+
+
+def test_meta_parser_records_charset_from_a_tag_and_none_without_start_text() -> None:
+    parser = text_extract._MetaCharsetParser()
+    parser.feed('<meta charset="utf-8"><meta name="x"><meta http-equiv="content-type">')
+    assert parser.declared == ["utf-8"]
+
+    fresh = text_extract._MetaCharsetParser()
+    fresh._record([("charset", "latin-1")])
+    assert fresh.declared == ["latin-1"]
