@@ -375,7 +375,31 @@ assembly. Run #313 subsequently passed all seven web-fetch shards and the
 politeness shard. The next forward-only PR head still requires its own full
 hosted run; these local results do not waive the gate.
 
-### Full backlog ledger: issues #65 and #68–#96
+### Current status (2026-10-01, after the merges)
+
+PR #99 merged the combined delta of PRs #97 and #98 (merge commit
+`f0a55a52f95fb66eff1a5a4ccdbbbd167ee87f8c`) after Quality run #327 passed all
+122 jobs on head `2577d30`; PR #103 (merge commit
+`d4f9ad9c245756ea1b9d823ed5e7dd8fd376bd02`) followed after run #334. Push runs
+on `main` passed (Quality #328 and #335, Documentation #133 and #134) and did not
+re-run the mutation matrix. PRs #97 and #98 were closed as superseded by #99.
+
+| Issue | State | What remains |
+| --- | --- | --- |
+| #65, #68–#74, #76–#81, #83–#85, #87–#89, #92 | Closed by the #99 merge | Nothing, except that #88's private vulnerability-reporting repository setting is an owner/admin action and is not enabled by this change. |
+| #82, #86, #90, #94, #95, #96 | Closed after verifying their acceptance criteria on `main` | #86 closes the prospective robots policy only; retroactive treatment of cached text remains an owner decision. |
+| #93 | Closed by the #103 merge | Nothing. |
+| #91 | Open | The fixed nightly Mutation sweep must run on `main` to confirm baseline-growth failure and the recorded kill ratio. No percentage floor is approved. |
+| #75 | Open | Three consecutive green scheduled sweeps and PR Quality p90 under 15 minutes across 20 runs. Both need future runs. |
+
+The `web.web_fetch` mutation baseline is empty: its six reviewed equivalents were
+removed by restructuring the code, and the baseline holds 155 entries.
+
+### Historical backlog ledger (pre-merge snapshot): issues #65 and #68–#96
+
+The sections below record the state before PRs #99 and #103 merged and are kept
+for provenance; the current status is above.
+
 
 A fresh GitHub connector read on 2026-10-01 found all 30 requested issues still
 open. None has been merged or closed. The live PR #97 body lists 21 issues
@@ -441,6 +465,12 @@ The only future owner decision is whether a percentage floor would add value
 after the nightly and PR observation windows establish a stable denominator;
 that decision is not a prerequisite for the current code work.
 ## Branch hygiene snapshot (2026-10-01)
+
+Update after the merges: PRs #97 and #98 are closed and #99 and #103 are merged.
+Their branches (`claude/repo-access-issues-review-5kjzx6`,
+`codex/remaining-followups`, `codex/web-fetch-baseline-and-ratio`) and the two
+older merged-PR branches below are kept until the owner approves deleting them.
+The text below is the earlier snapshot.
 
 The live GitHub branch listing contains the active branches
 `claude/repo-access-issues-review-5kjzx6` (PR #97 head and PR #98 base) and
