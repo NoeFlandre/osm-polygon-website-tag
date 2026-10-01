@@ -128,9 +128,13 @@ jobs:
           uv sync --locked
           git checkout "${{ github.event.pull_request.head.sha }}" -- tests/benchmarks
           # The base lockfile predates pytest-benchmark, so add it for this run only.
+          # A base far behind the head (for example main) lacks APIs some head
+          # benchmarks use; those tests cannot run there, so they have no baseline
+          # and are skipped by the comparison. Missing results for every test still fail.
           uv run --locked --with "pytest-benchmark>=5.3,<6" pytest -m "benchmark or benchmark_stress" tests/benchmarks --no-cov \
             -p no:cacheprovider -q --benchmark-save=base \
-            --benchmark-json=/tmp/osm-polygon-website-tag-base-benchmarks.json
+            --benchmark-json=/tmp/osm-polygon-website-tag-base-benchmarks.json \
+            || test -s /tmp/osm-polygon-website-tag-base-benchmarks.json
 
       - name: Time the head against it
         run: |
