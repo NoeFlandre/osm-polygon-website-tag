@@ -226,6 +226,25 @@ mutation sets at the two heads:
 | `web.web_fetch [5/7]` | 1 | 1 |
 | **Total** | **134** | **128** |
 
+The complete paginated job list for run #309 contains 78 jobs: 62 succeeded,
+15 mutation shards failed, and the dependent `ci-ok` failed. The run's additional
+reporting, politeness, and web-fetch failures are reconciled below against the
+later mutation replays and hosted results; the failed historical run itself
+remains red.
+
+| Run #309 shard | Exact unverified identities | Current evidence and limit |
+| --- | --- | --- |
+| `reporting.verify [1/2]` | `x__verify_status_artifacts__mutmut_1` | The same identity failed in #311. The omitted-argument case is now exercised by `test_status_artifact_dispatch_uses_the_exact_contract` (`preserve_card_sections=None`); its local replay killed the reporting survivor, and the shard passed in runs #312–#314. |
+| `web.politeness` | `HostLimiter.set_host_delay__mutmut_{4,5,7,23,24,26,27}`; `HostLimiter._wait_for_start__mutmut_{13,15,25}` | All except `set_host_delay__mutmut_23` also failed in #311. Current behavior tests cover default and small crawl delays, the first request, spacing, invalid delays, and preservation of retry backoff. The strict current-source politeness shard passed in runs #312–#314. The historical `_23` variant was not individually reapplied after the source refactor, so it is not classified equivalent. |
+| `web.web_fetch [3/7]` | `x__follow_redirects__mutmut_5`; `x__apply_robots_policy__mutmut_3` | Exact identities also failed in #311; the current-source replay killed both. See the web-fetch table below for behavior-to-test mapping. |
+| `web.web_fetch [4/7]` | `x__robots_policy__mutmut_{8,9,12}`; `x__fetch_robots_policy__mutmut_{25,31}`; `x__robots_fetch_failure__mutmut_17`; `x__parse_robots_policy__mutmut_{2,6,9,12,13}` | These 11 exact identities also failed in #311; the current-source replay killed all 11. See the web-fetch table below. |
+| `web.web_fetch [5/7]` | `x__allow_all_robots_parser__mutmut_4` | The exact identity also failed in #311; the current-source replay killed it. See the web-fetch table below. |
+
+The current local regression command was rerun against the focused CLI,
+enrichment, reporting, politeness, robots, and web-fetch tests: **535 passed in
+9.12 seconds**. This is behavior-suite evidence; it does not replace the
+current-head hosted mutation matrix or close any issue by itself.
+
 Run #312, on the prior PR98 head
 `f44de41ae33e667a6d38044b1c731d16688eb0f7`, completed at 07:29 UTC with
 overall conclusion `cancelled`: 74 of 78 jobs succeeded; the two enrichment
@@ -319,15 +338,16 @@ PR head is still required.
 
 The latest targeted regression command covered CLI, enrichment, reporting
 verification, politeness, robots policy, and web fetching; all 535 tests passed
-in 10.20 seconds. This local regression run does not replace a full mutation
+in 9.12 seconds. This local regression run does not replace a full mutation
 matrix on the next published PR head.
 
 The current policy has no percentage-floor decision awaiting implementation.
 The strict ratchet remains in effect, and the next policy review should follow
 healthy main-branch observation; passing PR run #313 does not establish the
-nightly denominator or observation window. The earlier 80% and 90% suggestions
-were proposals only; WorldCover's threshold and timeout handling do not
-transfer to this repository.
+nightly denominator or observation window. The earlier 80% and 90% floor
+suggestions were not adopted and are not current targets; do not add a
+percentage floor. WorldCover's threshold and timeout handling do not transfer
+to this repository.
 
 Seven web-fetch mutants surfaced during review, separate from run #311's 14
 new web-fetch survivors. Six are explicitly recorded in the strict baseline;
@@ -358,7 +378,9 @@ hosted run; these local results do not waive the gate.
 ### Full backlog ledger: issues #65 and #68–#96
 
 A fresh GitHub connector read on 2026-10-01 found all 30 requested issues still
-open. None has been merged or closed. PR #97 lists 20 as “Closes on merge”; its
+open. None has been merged or closed. The live PR #97 body lists 21 issues
+under “Closes on merge”; the nine not listed there are #75, #82, #86, #90,
+#91, #93, #94, #95, and #96, which remain open follow-ups. Its
 current head is `44e25972d5bfe046a06610deee7fdd2a2d977dc4`, and run #298 passed
 77 of 88 jobs while 10 mutation shards and `ci-ok` failed. PR #98 is a draft
 stacked on PR #97 at remote head `576183a9eba2b1881809a18e1251cba090d25726`.
