@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import typer
 
 from osm_polygon_website_tag.pipeline.analyze import analyze_results
@@ -36,7 +38,7 @@ def refresh_card_command(run_dir: RunDir) -> int:
 
 def geometry_stats_command(run_dir: RunDir) -> int:
     """Recompute and print polygon geometry statistics for a run."""
-    typer.echo(render_geometry_stats(compute_geometry_stats(run_dir)), nl=False)
+    sys.stdout.write(render_geometry_stats(compute_geometry_stats(run_dir)))
     return 0
 
 

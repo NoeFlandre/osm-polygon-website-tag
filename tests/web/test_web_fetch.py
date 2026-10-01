@@ -183,25 +183,14 @@ def test_private_fetch_classifiers_and_redirect_helpers_are_deterministic() -> N
         HttpResponse(302, {"location": "/next"}, b""),
         "https://example.org",
         "requested",
-        0,
-        2,
     )
     assert next_url == "https://example.org/next"
     assert terminal is None
     _, no_location = web_fetch_module._redirect_step(
-        HttpResponse(302, {}, b""), "https://example.org", "requested", 0, 2
+        HttpResponse(302, {}, b""), "https://example.org", "requested"
     )
     assert isinstance(no_location, FetchResult)
     assert no_location.message == "redirect_without_location"
-    _, limit = web_fetch_module._redirect_step(
-        HttpResponse(302, {"location": "/next"}, b""),
-        "https://example.org",
-        "requested",
-        2,
-        2,
-    )
-    assert isinstance(limit, FetchResult)
-    assert limit.message == "redirect_limit"
     assert (
         web_fetch_module._terminal_response(response, "https://example.org", "requested", 10).status
         == "ok"
@@ -342,6 +331,30 @@ def test_follow_redirects_can_skip_robots_for_the_policy_request() -> None:
         "ok", requested, final_url=requested, body=b"page", media_type="text/html"
     )
     assert seen == [requested]
+
+
+def test_follow_redirects_enforces_the_redirect_limit_without_robots() -> None:
+    requested = "https://example.org/start"
+    seen: list[str] = []
+
+    def request(url: str, _timeout: float, _max_bytes: int) -> HttpResponse:
+        seen.append(url)
+        return HttpResponse(307, {"location": f"/r{len(seen)}"}, b"")
+
+    result = web_fetch_module._follow_redirects(
+        requested,
+        request,
+        _public_resolver,
+        3.0,
+        16,
+        1,
+        check_robots=False,
+    )
+
+    assert result == FetchResult(
+        "fetch_error", requested, final_url="https://example.org/r1", message="redirect_limit"
+    )
+    assert seen == [requested, "https://example.org/r1"]
 
 
 def test_module_constants_are_pinned() -> None:
@@ -680,15 +693,15 @@ def test_redirect_to_invalid_url_exact() -> None:
 
 def test_redirect_step_results_exact() -> None:
     step = web_fetch_module._redirect_step
-    assert step(HttpResponse(302, {"Location": "b?q"}, b""), "https://e.org/a/", "req", 0, 1) == (
+    assert step(HttpResponse(302, {"Location": "b?q"}, b""), "https://e.org/a/", "req") == (
         "https://e.org/a/b?q",
         None,
     )
-    assert step(HttpResponse(302, {"location": "/n"}, b""), "https://e.org", "req", 1, 1) == (
+    assert step(HttpResponse(302, {"location": "/n"}, b""), "https://e.org", "req") == (
+        "https://e.org/n",
         None,
-        FetchResult("fetch_error", "req", final_url="https://e.org", message="redirect_limit"),
     )
-    assert step(HttpResponse(302, {}, b""), "https://e.org", "req", 1, 1) == (
+    assert step(HttpResponse(302, {}, b""), "https://e.org", "req") == (
         None,
         FetchResult(
             "fetch_error", "req", final_url="https://e.org", message="redirect_without_location"

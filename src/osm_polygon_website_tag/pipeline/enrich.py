@@ -146,7 +146,6 @@ def enrich_polygon_shard(
             changed=context.changed,
             batch_rows=batch_rows,
             source_row_count=context.source_row_count,
-            max_batch_rows=max_batch_rows,
         )
         shutil.rmtree(context.checkpoint.directory)
     except BaseException:
@@ -392,7 +391,6 @@ def _prepare_enrichment_batch(
     states, pending, lookup_urls = _prepare_batch(
         originals,
         source_schema=source_schema,
-        invocation_id=invocation_id,
     )
     unresolved = _apply_cached_results(
         pending,
@@ -471,18 +469,14 @@ def _skip_checkpointed_rows(
     rows_to_skip: int,
 ) -> tuple[list[dict[str, object]], int]:
     """Drop the durable prefix from one Arrow batch."""
-    if rows_to_skip >= len(originals):
-        return [], rows_to_skip - len(originals)
-    if rows_to_skip:
-        return originals[rows_to_skip:], 0
-    return originals, 0
+    skipped = min(rows_to_skip, len(originals))
+    return originals[skipped:], rows_to_skip - skipped
 
 
 def _prepare_batch(
     originals: list[dict[str, object]],
     *,
     source_schema: pa.Schema,
-    invocation_id: str,
 ) -> tuple[list[_RowState], _PendingReferences, set[str]]:
     """Prepare row states and normalized URL references for one batch."""
     states: list[_RowState] = []
@@ -507,7 +501,6 @@ def _prepare_batch(
                 row,
                 value_column=value_column,
                 field_prefix=field_prefix,
-                invocation_id=invocation_id,
                 pending=pending,
                 lookup_urls=lookup_urls,
             )
@@ -557,23 +550,20 @@ def _promote_enriched_shard(
     changed: bool,
     batch_rows: int,
     source_row_count: int,
-    max_batch_rows: int,
-) -> int:
+) -> None:
     """Assemble checkpoint parts and atomically promote the enriched shard."""
-    assembled_max_batch_rows = store.assemble(
+    store.assemble(
         store.parts(checkpoint_directory),
         staged,
         batch_rows=batch_rows,
         row_count=source_row_count,
     )
-    max_batch_rows = max(max_batch_rows, assembled_max_batch_rows)
     if not changed:
-        staged.unlink(missing_ok=True)
-        return max_batch_rows
+        staged.unlink()
+        return
     if not schema_matches(pq.read_schema(staged), store.schema):
         raise ValueError("enriched shard schema mismatch")
     atomic_promote_bundle([(staged, shard)])
-    return max_batch_rows
 
 
 def _enrichment_contract(source_schema: pa.Schema) -> tuple[pa.Schema, str]:
@@ -588,7 +578,6 @@ def _queue_tag(
     *,
     value_column: str,
     field_prefix: str,
-    invocation_id: str,
     pending: dict[str, list[tuple[dict[str, object], str]]],
     lookup_urls: set[str],
 ) -> None:
@@ -602,7 +591,7 @@ def _queue_tag(
     try:
         normalized = normalize_http_url(value)
     except ValueError:
-        _mark_invalid_url(row, field_prefix, value, invocation_id)
+        _mark_invalid_url(row, field_prefix)
         return
     lookup_urls.add(normalized)
     pending.setdefault(normalized, []).append((row, field_prefix))
@@ -624,20 +613,11 @@ def _has_complete_text(row: dict[str, object], field_prefix: str) -> bool:
     )
 
 
-def _mark_invalid_url(
-    row: dict[str, object],
-    field_prefix: str,
-    value: str,
-    invocation_id: str,
-) -> None:
+def _mark_invalid_url(row: dict[str, object], field_prefix: str) -> None:
     """Apply the deterministic invalid-URL result without a network call."""
-    _apply_result(
-        row,
-        field_prefix,
-        CachedText(
-            value, "invalid_url", None, None, None, "invalid_url", 0, "", None, invocation_id
-        ),
-    )
+    row[f"{field_prefix}_text"] = None
+    row[f"{field_prefix}_word_count"] = None
+    row[f"{field_prefix}_text_status"] = "invalid_url"
 
 
 def _resolve_pending(

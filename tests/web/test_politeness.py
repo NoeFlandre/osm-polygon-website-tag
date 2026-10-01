@@ -27,6 +27,8 @@ class _Clock:
         return self.now
 
     def sleep(self, seconds: float) -> None:
+        if not 0 < seconds <= 30.0:
+            pytest.fail(f"unexpected host wait: {seconds}")
         self.sleeps.append(seconds)
         self.now += seconds
 
@@ -88,6 +90,20 @@ def test_requests_to_one_host_are_spaced_by_the_delay() -> None:
     assert clock.sleeps == [2.0, 2.0]
 
 
+def test_first_request_never_sleeps_before_a_host_deadline_exists() -> None:
+    def unexpected_sleep(seconds: float) -> None:
+        pytest.fail(f"first request slept for {seconds} seconds")
+
+    limiter = HostLimiter(
+        HostPolicy(concurrency=1, delay_seconds=0),
+        clock=lambda: 100.0,
+        sleep=unexpected_sleep,
+    )
+
+    with limiter.slot("a.example"):
+        pass
+
+
 def test_different_hosts_do_not_wait_for_each_other() -> None:
     clock = _Clock()
     limiter = _limiter(clock, concurrency=1, delay_seconds=5.0)
@@ -112,6 +128,19 @@ def test_a_request_after_the_delay_has_passed_does_not_wait() -> None:
     assert clock.sleeps == []
 
 
+def test_unconfigured_host_does_not_receive_a_default_delay() -> None:
+    clock = _Clock()
+    limiter = _limiter(clock, concurrency=1, delay_seconds=0.0)
+    starts: list[float] = []
+
+    for _ in range(2):
+        with limiter.slot("a.example"):
+            starts.append(clock.now)
+
+    assert starts == [100.0, 100.0]
+    assert clock.sleeps == []
+
+
 @pytest.mark.parametrize(("host_delay", "expected_wait"), [(5.0, 5.0), (1.0, 2.0)])
 def test_host_delay_after_a_request_keeps_the_stronger_spacing(
     host_delay: float,
@@ -127,6 +156,21 @@ def test_host_delay_after_a_request_keeps_the_stronger_spacing(
         pass
 
     assert clock.sleeps == [expected_wait]
+
+
+@pytest.mark.parametrize("host_delay", [0.0, 0.5])
+def test_small_nonnegative_host_delays_are_applied(host_delay: float) -> None:
+    clock = _Clock()
+    limiter = _limiter(clock, concurrency=1, delay_seconds=0.0)
+    limiter.set_host_delay("a.example", host_delay)
+    starts: list[float] = []
+
+    for _ in range(2):
+        with limiter.slot("a.example"):
+            starts.append(clock.now)
+
+    assert starts == [100.0, 100.0 + host_delay]
+    assert clock.sleeps == ([host_delay] if host_delay else [])
 
 
 def test_host_delay_configured_before_first_request_controls_later_spacing() -> None:
@@ -147,7 +191,7 @@ def test_host_delay_configured_before_first_request_controls_later_spacing() -> 
 def test_invalid_host_delay_is_rejected(seconds: float) -> None:
     limiter = HostLimiter(HostPolicy())
 
-    with pytest.raises(ValueError, match="host delay"):
+    with pytest.raises(ValueError, match=r"^host delay must be finite and non-negative$"):
         limiter.set_host_delay("a.example", seconds)
 
 

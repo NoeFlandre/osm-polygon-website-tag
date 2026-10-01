@@ -428,13 +428,13 @@ def test_status_selects_the_card_release_and_receipt_contracts(
 
 @pytest.mark.parametrize("status", ["extracted", "card_built", "verified", "complete"])
 @pytest.mark.parametrize("include_receipt", [False, True])
-@pytest.mark.parametrize("preserve_card_sections", [False, True])
+@pytest.mark.parametrize("preserve_card_sections", [None, False, True])
 def test_status_artifact_dispatch_uses_the_exact_contract(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     status: str,
     include_receipt: bool,
-    preserve_card_sections: bool,
+    preserve_card_sections: bool | None,
 ) -> None:
     calls: list[tuple[str, object]] = []
     monkeypatch.setattr(
@@ -454,18 +454,18 @@ def test_status_artifact_dispatch_uses_the_exact_contract(
     )
     errors: list[str] = []
 
+    dispatch_options = (
+        {} if preserve_card_sections is None else {"preserve_card_sections": preserve_card_sections}
+    )
     verify_module._verify_status_artifacts(
-        tmp_path,
-        status,
-        include_receipt,
-        errors,
-        preserve_card_sections=preserve_card_sections,
+        tmp_path, status, include_receipt, errors, **dispatch_options
     )
 
     expected_card = status in {"card_built", "verified", "complete"}
     expected_calls = []
     if expected_card:
-        expected_calls.append(("release-card" if preserve_card_sections else "card", errors))
+        use_release_card = preserve_card_sections is True
+        expected_calls.append(("release-card" if use_release_card else "card", errors))
     if status == "complete" and include_receipt:
         expected_calls.append(("receipt", errors))
     assert calls == expected_calls

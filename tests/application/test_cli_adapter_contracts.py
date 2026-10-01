@@ -75,6 +75,32 @@ def test_extract_adapter_validates_inventory_and_forwards_worker_limits(
     assert events == expected_events
 
 
+def test_extract_rejects_a_source_missing_from_the_expected_inventory_with_its_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "run"
+    state_file = run_dir / "manifests" / "run.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text("{}", encoding="utf-8")
+    source = tmp_path / "missing-from-inventory.osm.pbf"
+    state = SimpleNamespace(metadata={"status": "initialized"})
+    fingerprint = SimpleNamespace(filename=source.name, size_bytes=4, mtime_ns=17)
+    monkeypatch.setattr(run, "load_run", lambda _path: state)
+    monkeypatch.setattr(run, "snapshot_source_fingerprint", lambda _path: fingerprint)
+    monkeypatch.setattr(run, "expected_source_inventory", lambda _path: [])
+    monkeypatch.setattr(
+        run,
+        "extract_pbf",
+        lambda *_args, **_kwargs: pytest.fail("an unlisted source must not be extracted"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"^source is not in exact expected inventory: missing-from-inventory\.osm\.pbf$",
+    ):
+        run.extract_command(source, run_dir)
+
+
 def test_init_rejects_expected_sources_outside_the_declared_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -152,7 +178,9 @@ def test_run_all_adapter_forwards_every_option_and_serializes_result(
 
     def backend(**kwargs: object) -> SimpleNamespace:
         calls.append(kwargs)
-        return SimpleNamespace(complete=True, run_dir=output_root / "run-1", sources=2)
+        # Deliberately put keys out of alphabetical order so this asserts the
+        # command's stable JSON ordering rather than insertion order.
+        return SimpleNamespace(sources=2, complete=True, run_dir=output_root / "run-1")
 
     monkeypatch.setattr(run, "run_all", backend)
 
@@ -213,7 +241,9 @@ def test_run_all_closes_progress_as_incomplete_when_backend_raises(
         def close(self, *, completed: bool) -> None:
             closed.append(completed)
 
-    def fail(**_kwargs: object) -> None:
+    def fail(**kwargs: object) -> None:
+        assert kwargs["apply"] is False
+        assert kwargs["detect_languages"] is False
         raise RuntimeError("run stopped")
 
     monkeypatch.setattr(run, "ProgressReporter", Reporter)
@@ -237,7 +267,7 @@ def test_run_all_requires_apply_before_ensuring_remote_repository(
         lambda **_kwargs: pytest.fail("invalid options must be rejected first"),
     )
 
-    with pytest.raises(ValueError, match="--ensure-repo requires --apply"):
+    with pytest.raises(ValueError, match=r"^--ensure-repo requires --apply$"):
         run.run_all_command(
             source_root=tmp_path / "source",
             output_root=tmp_path / "runs",
@@ -257,7 +287,12 @@ def test_language_command_skips_model_loading_when_all_shards_are_complete(
     shard.touch()
     state = SimpleNamespace(metadata={"status": "enriched"}, sources={"site.osm.pbf": {}})
     loaded: list[Path] = []
-    monkeypatch.setattr(languages, "require_under_data_root", lambda path, **_kwargs: path)
+
+    def require_run_root(path: Path, *, label: str) -> Path:
+        assert label == "run directory"
+        return path
+
+    monkeypatch.setattr(languages, "require_under_data_root", require_run_root)
     monkeypatch.setattr(languages, "load_run", lambda path: loaded.append(path) or state)
     monkeypatch.setattr(languages, "shard_needs_language_detection", lambda _path: False)
     monkeypatch.setattr(
@@ -269,12 +304,19 @@ def test_language_command_skips_model_loading_when_all_shards_are_complete(
     assert languages.detect_languages_command(run_dir, time_budget_seconds=10.0) == 0
 
     assert loaded == [run_dir]
-    assert json.loads(capsys.readouterr().out) == {
-        "changed_shards": 0,
-        "completed": True,
-        "processed_rows": 0,
-        "run_dir": str(run_dir),
-    }
+    assert capsys.readouterr().out == (
+        json.dumps(
+            {
+                "changed_shards": 0,
+                "completed": True,
+                "processed_rows": 0,
+                "run_dir": str(run_dir),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def test_language_command_rejects_shards_outside_the_source_manifest_before_model_loading(
@@ -296,6 +338,41 @@ def test_language_command_rejects_shards_outside_the_source_manifest_before_mode
 
     with pytest.raises(ValueError, match="language shard is not in the source manifest"):
         languages.detect_languages_command(run_dir)
+
+
+def test_language_command_reports_actual_bounded_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_dir = tmp_path / "data" / "runs" / "run-1"
+    shard = run_dir / "polygons" / "site.parquet"
+    shard.parent.mkdir(parents=True)
+    shard.touch()
+    state = SimpleNamespace(metadata={"status": "enriched"}, sources={"site.osm.pbf": {}})
+    detector = object()
+    monkeypatch.setattr(languages, "require_under_data_root", lambda path, **_kwargs: path)
+    monkeypatch.setattr(languages, "load_run", lambda _path: state)
+    monkeypatch.setattr(languages, "shard_needs_language_detection", lambda _path: True)
+    monkeypatch.setattr(languages, "load_glotlid_detector", lambda _path: detector)
+    monkeypatch.setattr(
+        languages,
+        "_run_language_shards",
+        lambda paths, **kwargs: (
+            pytest.fail("the detector and shard selection must be forwarded")
+            if kwargs["detector"] is not detector or paths != [shard]
+            else languages._LanguageRunProgress(2, 7, completed=False)
+        ),
+    )
+
+    assert languages.detect_languages_command(run_dir, time_budget_seconds=1.0) == 0
+    expected = {
+        "changed_shards": 2,
+        "completed": False,
+        "processed_rows": 7,
+        "run_dir": str(run_dir),
+    }
+    assert capsys.readouterr().out == json.dumps(expected, indent=2, sort_keys=True) + "\n"
 
 
 def test_sentence_command_forwards_model_and_budget_and_reports_partial_work(
@@ -370,12 +447,126 @@ def test_sentence_command_forwards_model_and_budget_and_reports_partial_work(
     result = object()
     callback(shard, result)
     assert recorded == [(state, shard, result)]
-    assert json.loads(capsys.readouterr().out) == {
-        "changed_shards": 1,
-        "completed": False,
-        "processed_rows": 5,
-        "run_dir": str(run_dir),
-    }
+    assert (
+        capsys.readouterr().out
+        == json.dumps(
+            {
+                "changed_shards": 1,
+                "completed": False,
+                "processed_rows": 5,
+                "run_dir": str(run_dir),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def test_sentence_command_selects_sorted_unfinished_shards_and_records_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_dir = tmp_path / "data" / "runs" / "run-1"
+    polygon_dir = run_dir / "polygons"
+    polygon_dir.mkdir(parents=True)
+    shards = [polygon_dir / f"{name}.parquet" for name in ("zeta", "alpha", "beta")]
+    for shard in shards:
+        shard.touch()
+    state = SimpleNamespace(
+        metadata={"status": "enriched"},
+        sources={f"{shard.stem}.osm.pbf": {} for shard in shards},
+    )
+    model_dir = tmp_path / "data" / "models" / "sat"
+    splitter = object()
+    calls: list[tuple[list[Path], dict[str, object]]] = []
+    records: list[tuple[object, Path, object]] = []
+
+    monkeypatch.setattr(sentences, "require_under_data_root", lambda path, **_kwargs: path)
+    monkeypatch.setattr(sentences, "load_run", lambda _path: state)
+    monkeypatch.setattr(
+        sentences,
+        "shard_needs_sentence_segmentation",
+        lambda shard: shard.name != "beta.parquet",
+    )
+    monkeypatch.setattr(
+        sentences,
+        "load_sat_splitter_from_path",
+        lambda path, *, revision: splitter,
+    )
+    monkeypatch.setattr(
+        sentences,
+        "_record_completed_language_shard",
+        lambda current, shard, result: records.append((current, shard, result)),
+    )
+
+    def run_shards(paths: list[Path], **kwargs: object) -> SimpleNamespace:
+        calls.append((paths, kwargs))
+        return SimpleNamespace(changed_shards=2, completed=True, processed_rows=7)
+
+    monkeypatch.setattr(sentences, "run_sentence_shards", run_shards)
+
+    assert (
+        sentences.segment_sentences_command(
+            run_dir,
+            model_dir=model_dir,
+            model_revision="revision-8",
+            time_budget_seconds=12.0,
+        )
+        == 0
+    )
+
+    assert len(calls) == 1
+    paths, kwargs = calls[0]
+    assert paths == [polygon_dir / "alpha.parquet", polygon_dir / "zeta.parquet"]
+    assert kwargs["splitter"] is splitter
+    assert kwargs["batch_rows"] == sentences.DEFAULT_SENTENCE_BATCH_ROWS
+    assert kwargs["time_budget_seconds"] == 12.0
+    assert kwargs.keys() == {"splitter", "record", "batch_rows", "time_budget_seconds"}
+    callback = cast(Callable[[Path, object], object], kwargs["record"])
+    result = object()
+    callback(paths[0], result)
+    assert records == [(state, paths[0], result)]
+    assert (
+        capsys.readouterr().out
+        == json.dumps(
+            {
+                "changed_shards": 2,
+                "completed": True,
+                "processed_rows": 7,
+                "run_dir": str(run_dir),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def test_sentence_command_rejects_shards_outside_the_source_manifest_before_model_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "data" / "runs" / "run-1"
+    shard = run_dir / "polygons" / "outside.parquet"
+    shard.parent.mkdir(parents=True)
+    shard.touch()
+    state = SimpleNamespace(metadata={"status": "enriched"}, sources={})
+    monkeypatch.setattr(sentences, "require_under_data_root", lambda path, **_kwargs: path)
+    monkeypatch.setattr(sentences, "load_run", lambda _path: state)
+    monkeypatch.setattr(
+        sentences,
+        "load_sat_splitter_from_path",
+        lambda *_args, **_kwargs: pytest.fail("unlisted shards must be rejected first"),
+    )
+
+    with pytest.raises(ValueError, match="language shard is not in the source manifest"):
+        sentences.segment_sentences_command(
+            run_dir,
+            model_dir=tmp_path / "data" / "models" / "sat",
+            model_revision="revision-1",
+        )
 
 
 def test_sentence_command_validates_options_before_reading_the_run(tmp_path: Path) -> None:
@@ -385,6 +576,68 @@ def test_sentence_command_validates_options_before_reading_the_run(tmp_path: Pat
             model_dir=tmp_path / "missing-model",
             model_revision="revision-1",
             batch_rows=0,
+        )
+
+
+def test_sentence_command_skips_model_loading_when_all_shards_are_complete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_dir = tmp_path / "data" / "runs" / "run-1"
+    shard = run_dir / "polygons" / "site.parquet"
+    shard.parent.mkdir(parents=True)
+    shard.touch()
+    state = SimpleNamespace(metadata={"status": "enriched"}, sources={"site.osm.pbf": {}})
+    monkeypatch.setattr(sentences, "require_under_data_root", lambda path, **_kwargs: path)
+    monkeypatch.setattr(sentences, "load_run", lambda _path: state)
+    monkeypatch.setattr(sentences, "shard_needs_sentence_segmentation", lambda _path: False)
+    monkeypatch.setattr(
+        sentences,
+        "load_sat_splitter_from_path",
+        lambda *_args, **_kwargs: pytest.fail("completed shards must not load SaT"),
+    )
+
+    assert (
+        sentences.segment_sentences_command(
+            run_dir,
+            model_dir=tmp_path / "sat-model",
+            model_revision="revision-1",
+            time_budget_seconds=10.0,
+        )
+        == 0
+    )
+    expected = {
+        "changed_shards": 0,
+        "completed": True,
+        "processed_rows": 0,
+        "run_dir": str(run_dir),
+    }
+    assert capsys.readouterr().out == json.dumps(expected, indent=2, sort_keys=True) + "\n"
+
+
+@pytest.mark.parametrize(
+    "time_budget_seconds",
+    [0.0, -1.0, float("nan"), float("inf")],
+    ids=["zero", "negative", "nan", "infinity"],
+)
+def test_sentence_command_validates_time_budget_before_reading_the_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    time_budget_seconds: float,
+) -> None:
+    monkeypatch.setattr(
+        sentences,
+        "require_under_data_root",
+        lambda *_args, **_kwargs: pytest.fail("invalid time budget must be rejected first"),
+    )
+
+    with pytest.raises(ValueError, match="time_budget_seconds must be positive"):
+        sentences.segment_sentences_command(
+            tmp_path / "missing-run",
+            model_dir=tmp_path / "missing-model",
+            model_revision="revision-1",
+            time_budget_seconds=time_budget_seconds,
         )
 
 
@@ -475,7 +728,11 @@ def test_publish_plan_reports_resolved_artifact_count_and_readme(
     readme = run_dir / "README.md"
     readme_path = readme if has_readme else None
     calls: list[tuple[Path, str | None]] = []
-    monkeypatch.setattr(publish, "_configured_hf_dataset_repo", lambda repo_id: "owner/configured")
+
+    def resolve_repo(repo_id: str | None) -> str:
+        return "owner/configured" if repo_id is None else f"resolved/{repo_id}"
+
+    monkeypatch.setattr(publish, "_configured_hf_dataset_repo", resolve_repo)
     monkeypatch.setattr(
         publish,
         "build_publish_plan",
@@ -485,11 +742,11 @@ def test_publish_plan_reports_resolved_artifact_count_and_readme(
         ),
     )
 
-    assert publish.publish_plan_command(run_dir) == 0
+    assert publish.publish_plan_command(run_dir, repo_id="owner/requested") == 0
 
-    assert calls == [(run_dir, "owner/configured")]
+    assert calls == [(run_dir, "resolved/owner/requested")]
     expected = {
-        "repo_id": None,
+        "repo_id": "owner/requested",
         "artifact_count": 2,
         "readme": str(readme) if has_readme else None,
     }
@@ -498,7 +755,7 @@ def test_publish_plan_reports_resolved_artifact_count_and_readme(
     assert json.loads(output) == expected
 
 
-def test_create_repo_adapter_keeps_preview_read_only_and_forwards_apply(
+def test_create_repo_adapter_keeps_preview_read_only_and_forwards_defaults(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -523,12 +780,12 @@ def test_create_repo_adapter_keeps_preview_read_only_and_forwards_apply(
     assert json.loads(output) == preview
     assert calls == [("exists", "owner/dataset")]
 
-    assert publish.create_repo_command(repo_id="owner/dataset", exist_ok=True, apply=True) == 0
+    assert publish.create_repo_command(repo_id="owner/dataset", apply=True) == 0
 
     assert capsys.readouterr().out == "owner/dataset\n"
     assert calls == [
         ("exists", "owner/dataset"),
-        ("create", "owner/dataset", True),
+        ("create", "owner/dataset", False),
     ]
 
 
@@ -558,7 +815,7 @@ def test_trackio_adapter_previews_resolved_snapshot_without_publishing(
         lambda *_args, **_kwargs: pytest.fail("preview must not publish"),
     )
 
-    assert publish.publish_trackio_command(run_dir, apply=False) == 0
+    assert publish.publish_trackio_command(run_dir) == 0
 
     assert calls == [(run_dir, "configured/dataset")]
     expected = {
@@ -650,7 +907,6 @@ def test_release_stats_adapter_forwards_confirmation_and_serializes_report(
             tmp_path / "run",
             confirm_repo="owner/dataset",
             repo_id="owner/dataset",
-            apply=False,
         )
         == 0
     )

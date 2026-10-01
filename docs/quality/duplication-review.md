@@ -1,6 +1,6 @@
 # Duplication review
 
-Reviewed on 2026-09-30 for production logic and test setup in this repository.
+Reviewed on 2026-10-01 for production logic and test setup in this repository.
 
 ## Scan method and limits
 
@@ -9,7 +9,7 @@ A one-off Python AST scan covered `src/osm_polygon_website_tag/**/*.py`,
 source locations, consistently renamed identifiers, parameters, nested
 definition names, and keyword labels within each body, then grouped identical
 normalized trees containing at least 24 AST nodes. It counted 1,370
-production and 2,961 test function bodies; 1,076 and 2,132, respectively, met
+production and 3,006 test function bodies; 1,076 and 2,161, respectively, met
 the size cutoff. Among those, it found three repeated production-body groups
 (seven bodies) and five repeated test-body groups (10 bodies). Nested and
 asynchronous function bodies are counted separately. This scan normalizes
@@ -86,17 +86,18 @@ Issue #82 proposed sharing Website's fetcher and `storage/atomic.py` with
 `osm-polygon-description-tag` and `osm-polygon-wikidata-only`. A read-only
 source audit inspected Description at `61a053d`, Wikidata at `fd3ff315`, and
 Website at `8e36215`. The Website audit pin predates the current PR98 head
-`4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`. Direct blob comparisons at
-`8e36215` and earlier PR98 head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`
-confirmed byte-identical audited files: `web/web_fetch.py` (`b599af46`),
-`storage/atomic.py` (`07eb805b`), `runtime/run_state.py` (`d01b0a96`), and
-`tests/web/test_web_fetch.py` (`7e79d67f`). A GitHub compare from `004e7e8`
-through current head `4c0b1c2` lists only five changed files:
-`docs/quality/duplication-review.md`, `docs/quality/mutation-baseline.txt`,
-`tests/application/test_cli_adapter_contracts.py`, `tests/pipeline/test_enrich.py`,
-and `tests/web/test_politeness.py`. None of the four audited files changed,
-so the source-audit findings carry forward through current PR98 head `4c0b1c2`.
-The sibling audit pins were not refreshed.
+`4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`. A direct blob comparison at the
+audit pin and earlier PR98 head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`
+confirmed that the relevant files were unchanged:
+`web/web_fetch.py` (`b599af46`), `storage/atomic.py` (`07eb805b`),
+`runtime/run_state.py` (`d01b0a96`), and `tests/web/test_web_fetch.py`
+(`7e79d67f`). A GitHub compare of `004e7e8` through current head `4c0b1c2`
+shows one commit touching only `docs/quality/duplication-review.md`,
+`docs/quality/mutation-baseline.txt`, `tests/application/test_cli_adapter_contracts.py`,
+`tests/pipeline/test_enrich.py`, and `tests/web/test_politeness.py`. None of the
+four audited files changed, so their byte-identity evidence and the source
+audit findings carry forward through current PR98 head `4c0b1c2`. The sibling
+audit pins were not refreshed.
 
 The audit found no generic untrusted-URL fetcher to consolidate. Website owns
 the SSRF-safe per-hop and peer validation path. Wikidata's configured
@@ -130,51 +131,176 @@ This review did not modify `osm-polygon-description-tag`,
   `61a053d`, Wikidata `fd3ff315`, and Website `8e36215`. That Website pin
   predates current PR98 head `4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`.
   The four relevant files were byte-identical at the earlier PR98 head
-  `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`, and a GitHub comparison through
+  `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`, and a commit comparison through
   `4c0b1c2` confirms none changed since. The sibling pins were not refreshed.
 
 ### Issue #91 mutation policy and run ledger
 
-The repository keeps its strict per-scope baseline ratchet: new
-outside-baseline unverified mutants, timeouts, missing verdicts, and no-test
-mutants remain failures. The baseline has 161 explicitly recorded entries.
-There is no aggregate or per-area percentage floor. Recommendation: retain this
-policy and do not add a 90% floor. Revisit an aggregate or per-area floor only
-after healthy scheduled main sweeps establish a stable denominator and the
-owner decides one is useful. This preserves the ratchet without inferring a
-100% requirement.
+The repository keeps the strict per-scope baseline ratchet: new outside-baseline
+unverified mutants, timeouts, missing verdicts, and no-test mutants remain
+failures. The current local baseline contains 161 explicitly recorded mutant
+names. There is no aggregate or per-area percentage floor. Recommendation:
+retain the ratchet; do not add a 90% floor or infer a 100% requirement. Revisit
+a percentage floor only after healthy scheduled main sweeps establish a stable
+denominator and the owner decides whether a floor is useful.
 
-Quality run #309 on PR98 head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460` is
-terminal: 62 of 78 jobs succeeded; 15 of 72 mutation shards and `ci-ok` failed.
-The shard logs report 134 outside-baseline unverified mutants:
+The latest available aggregate score remains run #308's 97.81% (9,621/9,836).
+Run #309 on head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460` is a separate
+terminal run: 62 of 78 jobs succeeded, 15 mutation shards plus `ci-ok` failed,
+and its shard logs recorded 134 outside-baseline unverified mutants. Run #310
+on `4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304` was cancelled before a complete
+mutation result; no score is inferred. Run #311 is terminal on PR98's current
+remote head `f94da44a6b9e61884bc4564df8ed7ca3588cf38f`: 62 of 78 jobs
+succeeded; 15 mutation shards and `ci-ok` failed. Its 128 outside-baseline
+unverified mutants are distributed as follows:
 
 | Mutation shard | Mutants |
 | --- | ---: |
+| `application.cli.publish` | 4 |
 | `application.cli.verify` | 3 |
+| `application.cli.run` | 6 |
 | `application.cli.languages [1/2]` | 12 |
 | `application.cli.sentences` | 8 |
-| `application.cli.run` | 11 |
-| `application.cli.publish` | 4 |
-| `pipeline.enrich [1/5]` | 25 |
-| `pipeline.enrich [2/5]` | 23 |
-| `pipeline.enrich [3/5]` | 18 |
-| `pipeline.enrich [4/5]` | 4 |
+| `pipeline.enrich [1/5]` | 23 |
+| `pipeline.enrich [2/5]` | 4 |
+| `pipeline.enrich [3/5]` | 25 |
+| `pipeline.enrich [4/5]` | 18 |
 | `pipeline.enrich [5/5]` | 1 |
 | `reporting.verify [1/2]` | 1 |
-| `web.politeness` | 10 |
+| `web.politeness` | 9 |
 | `web.web_fetch [3/7]` | 2 |
 | `web.web_fetch [4/7]` | 11 |
 | `web.web_fetch [5/7]` | 1 |
+| **Total** | **128** |
 
-No new baseline entries or equivalence classifications were added. The last
-available aggregate score remains run #308's 97.81%; this ledger does not infer
-a #309 aggregate score from its shard failures.
+The current local replay evidence is narrower than a fresh hosted green run.
+Focused replays killed all 33 CLI survivors and the single reporting survivor
+from #311. Six currently generated politeness survivors were killed; three
+#311 politeness variants no longer exist after source changes. For enrichment,
+the replay of the 71 #311 filters initially found 14 local survivors among 115
+generated variants. Focused reruns and new behavior tests now kill 13 of those;
+the last `missing_ok=True` form was replaced with `staged.unlink()` because
+`CheckpointStore.assemble` always creates and validates the staged Parquet file
+before returning. A full replay of all 71 filters after that final source edit
+remains pending.
 
-Noé's explicit policy decision about whether to add an aggregate or per-area
-floor remains open for later review after the scheduled main sweeps have a
-healthy, stable denominator. WorldCover's 80% floor and timeout treatment do
-not transfer to this repository.
+Two focused current-source web mutation replays were completed. The redirect
+replay ran 168 selected mutations: 167 were killed and one survived; it had no
+`no tests` or timeout verdicts. That survivor is the exact existing baseline
+entry `osm_polygon_website_tag.web.web_fetch.x__redirect_step__mutmut_7`, which
+changes the `Location` lookup spelling to `LOCATION`. `_header` compares header
+names case-insensitively, and `test_redirect_step_results_exact` covers both
+`Location` and `location`; the mutant therefore preserves behavior. The
+baseline entry was already present and was not broadened.
 
-Manifest generation and stable artifact writing look similar across
-`osm-worldcover`, but their schemas and atomic-write contracts differ. No
-shared runtime helper is justified without an owner-approved contract.
+A second replay covered 200 selected variants across redirect, policy-cache,
+robots-fetch, parser, and allow-all helpers; all 200 were killed. Its scoped
+strict mutation gate passed. Each of the 14 exact web-fetch mutant identities
+reported by run #311 was killed by the current-source replay, with these
+specific mutation shapes and evidence:
+
+| Run #311 shard | Exact hosted mutant identities | Current-source evidence |
+| --- | --- | --- |
+| `web.web_fetch [3/7]` | `follow_redirects__mutmut_5`; `apply_robots_policy__mutmut_3` | The first changes the redirect loop bound to `None`; redirect-limit boundary tests fail it. The second loses the current redirect URL in a policy error; `test_robots_policy_error_falls_back_to_the_current_redirect_url` fails it. |
+| `web.web_fetch [4/7]` | `robots_policy__mutmut_8`, `robots_policy__mutmut_9`, `robots_policy__mutmut_12`; `fetch_robots_policy__mutmut_25`, `fetch_robots_policy__mutmut_31`; `robots_fetch_failure__mutmut_17`; `parse_robots_policy__mutmut_2`, `parse_robots_policy__mutmut_6`, `parse_robots_policy__mutmut_9`, `parse_robots_policy__mutmut_12`, `parse_robots_policy__mutmut_13` | Per-origin cache, lock isolation, and concurrent-load tests catch cache/key/lock changes. Exact robots URL assertions catch `None` passed through missing-file and parse-failure paths. Rules, invalid UTF-8, and valid crawl-delay tests catch parser and policy changes. |
+| `web.web_fetch [5/7]` | `allow_all_robots_parser__mutmut_4` | `test_allow_all_robots_parser_allows_every_user_agent_and_path` and the missing/malformed-policy fallback tests fail the mutated parser initialization. |
+
+The earlier loop refactor also removed the previously observed unreachable
+extra-iteration mutation shape. The updated focused web behavior suite passes
+255 tests, and the full suite passes 3,150 tests. These local results do not
+change or waive run #311's hosted status; a fresh full mutation run on the next
+PR head is still required.
+
+The current policy has no percentage-floor decision awaiting implementation.
+The strict ratchet remains in effect, and the next policy review should follow
+healthy main-branch observation rather than this failed PR run. The earlier
+80% and 90% suggestions were proposals only; WorldCover's threshold and timeout
+handling do not transfer to this repository.
+
+Seven web-fetch mutants surfaced during review, separate from run #311's 14
+new web-fetch survivors. Six are explicitly recorded in the strict baseline;
+the seventh was not added. Their evidence and status are specific to each
+mutation:
+
+| Mutation and status | Classification and evidence |
+| --- | --- |
+| `_coerce_http_value` 18 and 21 (baseline) | Both preserve the host-side scheme check before the first path slash. The tests reject a `mailto:` value while accepting a colon in a path (`test_coerce_http_value_rejects_a_colon_only_in_the_host_part` and `test_coerce_http_value_adds_a_lowercase_https_scheme`). |
+| `_encode_hostname` 4 and 6 (baseline) | The two codec spellings produce the same IDNA ASCII form for valid hosts. Normalization tests pin `bücher.example` to its punycode form; the invalid-label test pins the wrapped error (`test_normalize_http_url_exact`, `test_encode_hostname_wraps_unicode_error`). |
+| `_normalise_http_hostname` 11 (baseline) | The added uppercase `X` in the `rstrip` character set is unreachable because `SplitResult.hostname` lowercases the host before this call. Normalization tests exercise an uppercase scheme/host and a trailing dot (`test_normalize_http_url_exact`). |
+| `_redirect_step` 7 (baseline) | Header lookup is case-insensitive, so the changed `Location` spelling resolves the same header. The exact redirect-step test covers both `Location` and `location` (`test_redirect_step_results_exact`). The current scoped replay regenerated this exact pre-existing baseline survivor; it was not reclassified or added again. |
+| `_follow_redirects` 5 (removed by refactor; not baselined) | The mutation added a redundant `range` iteration that could not be reached after `_fetch_step` returned the redirect-limit result. The loop now increments only after a followable redirect; `test_redirect_limit_exceeded_exact` asserts the request count stops at the limit. This name is absent from the baseline. |
+
+No run #311 survivor was added to the baseline. The most recent focused web
+behavior run passed 255 tests; its scoped mutation replay killed 167 of 168
+selected mutants, with the single survivor matching the existing, specifically
+documented case-insensitive-header baseline entry above. The enrichment replay
+using only `tests/pipeline/test_enrich.py` produced `no tests` verdicts for
+mutants covered outside that test file, so it is not a complete replay of the
+71 hosted survivors. Focused enrichment checks killed 13 of the 14 first-pass
+local survivors; the last mutation shape no longer exists after replacing
+`unlink(missing_ok=True)` with `unlink()` following validated checkpoint
+assembly. A fresh hosted run is still required to verify the updated web
+shards. These local results do not change the failed hosted status or relax the
+gate.
+
+### Full backlog ledger: issues #65 and #68–#96
+
+A fresh GitHub connector read on 2026-10-01 found all 30 requested issues still
+open. None has been merged or closed. PR #97 lists 20 as “Closes on merge”; its
+current head is `44e25972d5bfe046a06610deee7fdd2a2d977dc4`, and run #298 passed
+77 of 88 jobs while 10 mutation shards and `ci-ok` failed. PR #98 is a draft
+stacked on PR #97 at remote head `f94da44a6b9e61884bc4564df8ed7ca3588cf38f`;
+run #311 passed 62 of 78 jobs with the 15 mutation-shard failures listed
+above. PRs #97 and #98 are unmerged, so no issue is treated as completed on
+main.
+
+| Issue | Current disposition and remaining acceptance |
+| --- | --- |
+| #65 | Partially addressed by shared test-fixture work in PRs #97/#98. Finish adopting the versioned row builders and tightening the exact weak assertions; the PR itself still lists this as a follow-up. |
+| #68 | CLI error handling and exit-code work is in PR #97. Close only after its checks pass and the change is merged. |
+| #69 | Global version and verbosity options are in PR #97; help and CLI acceptance remain unmerged. |
+| #70 | Read-only `create-repo` preview, explicit apply behavior, option help, and examples are in PR #97; remote-write behavior remains unmerged. |
+| #71 | Dependency bounds and update automation are in PR #97; verify the locked audit on the final merge candidate. |
+| #72 | Narrower exception handling and error visibility are in PR #97; verify the targeted behavior on the final merge candidate. |
+| #73 | The anti-pattern Ruff families are enabled in PR #97 and local lint is green; hosted mutation failures still block the PR. |
+| #74 | PR docs, timeouts, audits, and aggregate CI changes are in PR #97; all hosted required checks must pass. |
+| #75 | Workflow caching/artifact safeguards and parallel mutation work are in PR #98. The three-green-night sweep window and 20-run p90-under-15-minute window have not elapsed and cannot be claimed until the fix reaches main. |
+| #76 | Complexity/API-shape lint ratchets are in PR #97; final verification and merge remain pending. |
+| #77 | Behavioral Docker/docs/MkDocs contract tests are in PR #97; final verification and merge remain pending. |
+| #78 | Compose, portable volume/environment conventions, and model support are in PR #97; Docker check passed on run #298, but merge remains pending. |
+| #79 | Machine-independent README outputs/schema/citation updates are in PR #97; docs check passed on run #298, but merge remains pending. |
+| #80 | Public-doc cleanup and contributor-only AGENTS guidance are in PR #97; docs check passed on run #298, but merge remains pending. |
+| #81 | Runtime path cleanup and portable data-root changes are in PR #97; merge remains pending. |
+| #82 | Stage-specific CLI modules and help snapshots are implemented in PR #98; the largest current CLI module is 248 lines. The sibling audit found no compatible shared fetcher or atomic writer, so cross-repository extraction is deferred. Verify after merge on main. |
+| #83 | Declared/BOM/meta charset handling is in PR #97; verify hosted web mutation shards before merging. |
+| #84 | Status/header/type checks before body reads are in PR #97; verify hosted web mutation shards before merging. |
+| #85 | Per-host concurrency/rate controls and bounded `Retry-After` handling are in PR #97; its hosted politeness mutation shard failed. |
+| #86 | Prospective robots checks, schema/status handling, and docs are in PR #98. Retroactive treatment of existing cached text remains an owner policy decision; no cache was deleted or reprocessed. Recommendation: retain prospective-only behavior. |
+| #87 | Version single-sourcing and release notes/process are in PR #97; final verification and merge remain pending. |
+| #88 | Contributor/security docs and templates are in PR #97. Private vulnerability-reporting repository settings were not changed; that separate setting requires owner/admin action if it is part of the acceptance contract. |
+| #89 | URL, SSRF, and extraction property tests/profiles are in PR #97; verify the final required checks before merge. |
+| #90 | All five local HTTP acceptance scenarios exist in PR #98: extraction, unusable pages, cache hit, interrupted resume, and language population. Verify the zero-outbound-socket guard and full acceptance suite on the final PR head. |
+| #91 | The strict ratchet and baseline workflow are in PR #98; run #311 still has the failures above. Keep the current strict policy; no percentage floor is approved. |
+| #92 | CRAP-report hardening is in PR #97. The fresh full measured report for this candidate covered 1,368 functions at 97.12% coverage; highest CRAP was 5.93 (`domain/geometry.py:_check_antimeridian`), with zero functions at or above 6. The strict CRAP gate passed; rerun on the final merged candidate. |
+| #93 | Loopback behavior tests are in PR #98. The focused web suite passes 255 tests and the full suite passes 3,150. The current-source redirect replay killed 167/168, with its sole survivor matching the already-baselined case-insensitive `Location` header spelling mutant; the separate 200-variant replay killed every one of run #311's 14 exact web-fetch survivors. The previously observed range-loop mutant was removed by a behavior-preserving refactor. A fresh full hosted run is still required. |
+| #94 | Bounded prefetch/process extraction is in PR #98. Recorded strict benchmark medians are 6.9203 s flat and 13.9131 s tail against 8 s/15 s targets; hosted enrichment mutation shards still fail. |
+| #95 | Lazy Trafilatura loading is in PR #98; five import-time samples recorded a 0.727 s cumulative median with Trafilatura absent after CLI import. Recheck final hosted quality and merge. |
+| #96 | PR #97 marks this issue for closure on merge, but also lists it as a follow-up; reconcile that description before merge. The benchmark suite/regression comparison is implemented and benchmark jobs passed on runs #298 and #311. |
+
+For #86, the owner-facing choices and consequences are:
+
+- **Prospective-only (recommended, current behavior):** robots rules govern new
+  fetch requests; successful cached text remains eligible in later builds.
+  This preserves existing snapshot rows and avoids recrawling or deleting data.
+- **Soft-exclude existing cached text:** retain the bytes but omit matching text
+  from rebuilt outputs. This changes dataset rows and card statistics and
+  requires defining how current robots responses map to historical crawls.
+- **Retroactive refetch or quarantine/deletion:** recrawl every still-allowed
+  origin or remove/quarantine text that is now disallowed. This changes dataset
+  eligibility and reproducibility, requires network work, and deletion needs a
+  separate explicit approval. No data has been deleted.
+
+For #91, retain the strict per-scope baseline ratchet. Do not add a 90% floor.
+The only future owner decision is whether a percentage floor would add value
+after the nightly and PR observation windows establish a stable denominator;
+that decision is not a prerequisite for the current code work.

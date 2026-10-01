@@ -14,7 +14,7 @@ import urllib.request
 import urllib.robotparser
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.web.content_type import charset_parameter, media_type
@@ -306,26 +306,64 @@ def _follow_redirects(
     check_robots: bool = True,
 ) -> FetchResult:
     """Fetch a normalized URL while validating each redirect target."""
+    if max_redirects < 0:
+        raise AssertionError("redirect loop exhausted")
     current = requested
-    for redirect_number in range(max_redirects + 1):
-        if check_robots:
-            robots_result = _check_robots(current, requested, transport, resolver, limiter)
-            if robots_result is not None:
-                return robots_result
-        next_url, result = _fetch_step(
+    for _ in range(max_redirects):
+        outcome = _request_redirect_hop(
             current,
             requested,
             transport,
             resolver,
             timeout_seconds,
             max_bytes,
-            redirect_number,
-            max_redirects,
+            limiter,
+            check_robots=check_robots,
         )
-        if result is not None:
-            return result
-        current = _require_redirect_url(next_url)
-    raise AssertionError("redirect loop exhausted")  # pragma: no cover
+        if isinstance(outcome, FetchResult):
+            return outcome
+        current = outcome
+
+    outcome = _request_redirect_hop(
+        current,
+        requested,
+        transport,
+        resolver,
+        timeout_seconds,
+        max_bytes,
+        limiter,
+        check_robots=check_robots,
+    )
+    if isinstance(outcome, FetchResult):
+        return outcome
+    return FetchResult("fetch_error", requested, final_url=current, message="redirect_limit")
+
+
+def _request_redirect_hop(
+    current: str,
+    requested: str,
+    transport: RequestOnce,
+    resolver: Resolver,
+    timeout_seconds: float,
+    max_bytes: int,
+    limiter: HostLimiter | None,
+    *,
+    check_robots: bool,
+) -> FetchResult | str:
+    """Check policy and execute one bounded redirect hop."""
+    if check_robots:
+        robots_result = _check_robots(current, requested, transport, resolver, limiter)
+        if robots_result is not None:
+            return robots_result
+    next_url, result = _fetch_step(
+        current,
+        requested,
+        transport,
+        resolver,
+        timeout_seconds,
+        max_bytes,
+    )
+    return result if result is not None else _require_redirect_url(next_url)
 
 
 def _check_robots(
@@ -477,7 +515,7 @@ def _parse_robots_policy(robots_url: str, body: bytes) -> _RobotsPolicy:
     """Parse one bounded robots response, allowing malformed policy on error."""
     parser = urllib.robotparser.RobotFileParser(robots_url)
     try:
-        parser.parse(body.decode("utf-8", errors="replace").splitlines())
+        parser.parse(body.decode(errors="replace").splitlines())
     except Exception:  # noqa: BLE001 - malformed robots text is treated as no rules
         return _RobotsPolicy(_allow_all_robots_parser(robots_url))
     crawl_delay, valid = _robots_crawl_delay(parser)
@@ -505,7 +543,7 @@ def _robots_crawl_delay(
 def _allow_all_robots_parser(robots_url: str) -> urllib.robotparser.RobotFileParser:
     """Return a parser marked as checked with no blocking rules."""
     parser = urllib.robotparser.RobotFileParser(robots_url)
-    cast(Any, parser).allow_all = True
+    vars(parser)["allow_all"] = True
     return parser
 
 
@@ -516,8 +554,6 @@ def _fetch_step(
     resolver: Resolver,
     timeout_seconds: float,
     max_bytes: int,
-    redirect_number: int,
-    max_redirects: int,
 ) -> tuple[str | None, FetchResult | None]:
     """Validate, request, and classify one redirect-loop iteration."""
     response_or_error = _safe_request(
@@ -527,7 +563,7 @@ def _fetch_step(
         return None, response_or_error
     response = response_or_error
     if 300 <= response.status_code < 400:
-        return _redirect_step(response, current, requested, redirect_number, max_redirects)
+        return _redirect_step(response, current, requested)
     return None, _terminal_response(response, current, requested, max_bytes)
 
 
@@ -556,18 +592,12 @@ def _redirect_step(
     response: HttpResponse,
     current: str,
     requested: str,
-    redirect_number: int,
-    max_redirects: int,
 ) -> tuple[str | None, FetchResult | None]:
     """Resolve one redirect response or return its terminal error."""
     location = _header(response.headers, "location")
     if location is None:
         return None, FetchResult(
             "fetch_error", requested, final_url=current, message="redirect_without_location"
-        )
-    if redirect_number == max_redirects:
-        return None, FetchResult(
-            "fetch_error", requested, final_url=current, message="redirect_limit"
         )
     try:
         return normalize_http_url(urllib.parse.urljoin(current, location)), None

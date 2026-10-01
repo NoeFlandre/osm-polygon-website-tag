@@ -1193,7 +1193,7 @@ def test_verify_cli_commands_refuse_the_wrong_run_state(
         verify, backend_name, lambda _path: pytest.fail("invalid state reached work")
     )
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match=f"^{message}$"):
         getattr(verify, command_name)(run_dir)
 
 

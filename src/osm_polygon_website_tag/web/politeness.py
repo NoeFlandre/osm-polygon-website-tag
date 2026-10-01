@@ -69,9 +69,7 @@ class HostLimiter:
             last_start = self._last_start.get(host)
             if last_start is not None:
                 delay = max(self.policy.delay_seconds, seconds)
-                self._next_start[host] = max(
-                    self._next_start.get(host, last_start + delay), last_start + delay
-                )
+                self._next_start[host] = max(self._next_start[host], last_start + delay)
 
     @contextmanager
     def slot(self, host: str) -> Iterator[None]:
