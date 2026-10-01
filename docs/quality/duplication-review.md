@@ -85,13 +85,18 @@ implementation. No shared package is proposed in this review.
 Issue #82 proposed sharing Website's fetcher and `storage/atomic.py` with
 `osm-polygon-description-tag` and `osm-polygon-wikidata-only`. A read-only
 source audit inspected Description at `61a053d`, Wikidata at `fd3ff315`, and
-Website at `8e36215`. The Website audit pin predates PR98 head
-`004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`; a direct blob comparison at those
-two Website commits confirmed that the relevant files are unchanged:
-`web/web_fetch.py` (`b599af46`), `storage/atomic.py` (`07eb805b`),
-`runtime/run_state.py` (`d01b0a96`), and `tests/web/test_web_fetch.py`
-(`7e79d67f`). This supports carrying the transport and atomic-writer findings
-forward to PR98 while keeping the older audit pin explicit.
+Website at `8e36215`. The Website audit pin predates the current PR98 head
+`4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`. Direct blob comparisons at
+`8e36215` and earlier PR98 head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`
+confirmed byte-identical audited files: `web/web_fetch.py` (`b599af46`),
+`storage/atomic.py` (`07eb805b`), `runtime/run_state.py` (`d01b0a96`), and
+`tests/web/test_web_fetch.py` (`7e79d67f`). A GitHub compare from `004e7e8`
+through current head `4c0b1c2` lists only five changed files:
+`docs/quality/duplication-review.md`, `docs/quality/mutation-baseline.txt`,
+`tests/application/test_cli_adapter_contracts.py`, `tests/pipeline/test_enrich.py`,
+and `tests/web/test_politeness.py`. None of the four audited files changed,
+so the source-audit findings carry forward through current PR98 head `4c0b1c2`.
+The sibling audit pins were not refreshed.
 
 The audit found no generic untrusted-URL fetcher to consolidate. Website owns
 the SSRF-safe per-hop and peer validation path. Wikidata's configured
@@ -122,10 +127,11 @@ This review did not modify `osm-polygon-description-tag`,
   no extraction work remains justified under the current contracts. Revisit
   only if owners establish a real shared contract and maintainer.
 - **Current evidence boundary:** the sibling findings use Description
-  `61a053d`, Wikidata `fd3ff315`, and Website `8e36215`. The Website
-  transport/writer files listed above are byte-identical at current PR98 head
-  `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`; the sibling pins were not
-  refreshed by this review.
+  `61a053d`, Wikidata `fd3ff315`, and Website `8e36215`. That Website pin
+  predates current PR98 head `4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`.
+  The four relevant files were byte-identical at the earlier PR98 head
+  `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`, and a GitHub comparison through
+  `4c0b1c2` confirms none changed since. The sibling pins were not refreshed.
 
 ### Issue #91 mutation policy and run ledger
 
