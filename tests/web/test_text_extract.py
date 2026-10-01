@@ -1207,3 +1207,13 @@ def test_text_codec_probe_decodes_exactly_a_lone_invalid_byte() -> None:
         assert text_extract._text_codec("osm_type_error_probe") is None
     finally:
         codecs.unregister(search)
+
+
+def test_http_charset_outranks_an_xhtml_xml_declaration() -> None:
+    html = b'<?xml version="1.0" encoding="cp1252"?><p>caf\xe9</p>'
+
+    with_header = decode_html(html, "utf-8", media_type="application/xhtml+xml")
+    without_header = decode_html(html, media_type="application/xhtml+xml")
+
+    assert with_header == '<?xml version="1.0" encoding="cp1252"?><p>caf\ufffd</p>'
+    assert without_header == '<?xml version="1.0" encoding="cp1252"?><p>café</p>'

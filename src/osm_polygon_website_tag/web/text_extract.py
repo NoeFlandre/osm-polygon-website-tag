@@ -46,6 +46,8 @@ _WINDOWS_1252 = "cp1252"
 _REPLACEMENT = "\ufffd"
 # Encoding this proves a codec is a text encoding; only bytes-to-bytes codecs refuse.
 _PROBE_TEXT = ""
+# Lone invalid byte that every text codec must decode with a replacement character.
+_PROBE_BYTES = b"\xff"
 # Codec name prefixes: UTF-16/32 (only trusted from HTTP; a <meta> naming them
 # is read as UTF-8 by HTML) and 7-bit stateful encodings.
 _WIDE_PREFIXES = ("utf-16", "utf-32")
@@ -264,7 +266,7 @@ def _text_codec(name: str) -> str | None:
     try:
         codec = codecs.lookup(name).name
         _PROBE_TEXT.encode(codec)  # bytes-to-bytes codecs (base64, zlib) are not text encodings
-        decoded = codecs.decode(b"\xff", codec, "replace")
+        decoded = codecs.decode(_PROBE_BYTES, codec, "replace")
         if not isinstance(decoded, str):  # transform codecs may return bytes or other objects
             return None
     except (LookupError, TypeError, ValueError):  # transform codec or invalid label/Unicode
