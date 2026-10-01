@@ -86,18 +86,19 @@ Issue #82 proposed sharing Website's fetcher and `storage/atomic.py` with
 `osm-polygon-description-tag` and `osm-polygon-wikidata-only`. A read-only
 source audit inspected Description at `61a053d`, Wikidata at `fd3ff315`, and
 Website at `8e36215`. The Website audit pin predates the current PR98 head
-`4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`. A direct blob comparison at the
-audit pin and earlier PR98 head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`
-confirmed that the relevant files were unchanged:
-`web/web_fetch.py` (`b599af46`), `storage/atomic.py` (`07eb805b`),
-`runtime/run_state.py` (`d01b0a96`), and `tests/web/test_web_fetch.py`
-(`7e79d67f`). A GitHub compare of `004e7e8` through current head `4c0b1c2`
-shows one commit touching only `docs/quality/duplication-review.md`,
-`docs/quality/mutation-baseline.txt`, `tests/application/test_cli_adapter_contracts.py`,
-`tests/pipeline/test_enrich.py`, and `tests/web/test_politeness.py`. None of the
-four audited files changed, so their byte-identity evidence and the source
-audit findings carry forward through current PR98 head `4c0b1c2`. The sibling
-audit pins were not refreshed.
+`f44de41ae33e667a6d38044b1c731d16688eb0f7`. The current-source comparison
+shows `web/web_fetch.py` and `tests/web/test_web_fetch.py` changed after the
+audit pin, while `storage/atomic.py` and `runtime/run_state.py` remain
+byte-identical (`07eb805b` and `d01b0a96`). The fetcher changed from blob
+`b599af46` to `057f7bac`; its tests changed from `7e79d67f` to `17c60d20`.
+The PR98 change adds robots checks around the redirect loop. The current
+implementation still validates every request hop with
+`validate_public_http_url`, and its HTTP transport checks the connected peer
+address before sending request bytes. Robots retrieval goes through the same
+bounded redirect and public-address path with recursive robots checks disabled
+for that policy request. Thus the changed Website path retains its local SSRF
+contract, but is not byte-identical to the audited pin. The sibling audit pins
+were not refreshed.
 
 The audit found no generic untrusted-URL fetcher to consolidate. Website owns
 the SSRF-safe per-hop and peer validation path. Wikidata's configured
@@ -129,10 +130,12 @@ This review did not modify `osm-polygon-description-tag`,
   only if owners establish a real shared contract and maintainer.
 - **Current evidence boundary:** the sibling findings use Description
   `61a053d`, Wikidata `fd3ff315`, and Website `8e36215`. That Website pin
-  predates current PR98 head `4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304`.
-  The four relevant files were byte-identical at the earlier PR98 head
-  `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`, and a commit comparison through
-  `4c0b1c2` confirms none changed since. The sibling pins were not refreshed.
+  predates current PR98 head `f44de41ae33e667a6d38044b1c731d16688eb0f7`.
+  `web/web_fetch.py` and its tests changed after the audit pin; the current
+  source was checked for per-hop URL validation, connected-peer validation,
+  and robots-request recursion control. `storage/atomic.py` and
+  `runtime/run_state.py` remain byte-identical. The sibling repository pins
+  were not refreshed.
 
 ### Issue #91 mutation policy and run ledger
 
@@ -145,33 +148,68 @@ a percentage floor only after healthy scheduled main sweeps establish a stable
 denominator and the owner decides whether a floor is useful.
 
 The latest available aggregate score remains run #308's 97.81% (9,621/9,836).
-Run #309 on head `004e7e8f85c83120d4a5dc02b8f2c30f0cae1460` is a separate
-terminal run: 62 of 78 jobs succeeded, 15 mutation shards plus `ci-ok` failed,
-and its shard logs recorded 134 outside-baseline unverified mutants. Run #310
-on `4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304` was cancelled before a complete
-mutation result; no score is inferred. Run #311 is terminal on PR98's current
-remote head `f94da44a6b9e61884bc4564df8ed7ca3588cf38f`: 62 of 78 jobs
-succeeded; 15 mutation shards and `ci-ok` failed. Its 128 outside-baseline
-unverified mutants are distributed as follows:
+Run #309 is the terminal 62/78 result on head
+`004e7e8f85c83120d4a5dc02b8f2c30f0cae1460`: 15 mutation shards plus `ci-ok`
+failed, with 134 outside-baseline unverified mutants. Run #310 on
+`4c0b1c2e9bc5fc352aa7e69560baf66a78b9c304` was cancelled before a complete
+mutation result; no score is inferred. Run #311 is a separate terminal 62/78
+result on head `f94da44a6b9e61884bc4564df8ed7ca3588cf38f`; it had the same 15
+failing shard names plus `ci-ok`, with 128 outside-baseline unverified
+mutants. The per-shard inventories differ as mutmut generated different
+mutation sets at the two heads:
 
-| Mutation shard | Mutants |
+| Mutation shard | Run #309 (`004e7e8`) | Run #311 (`f94da44`) |
+| --- | ---: | ---: |
+| `application.cli.publish` | 4 | 4 |
+| `application.cli.verify` | 3 | 3 |
+| `application.cli.run` | 11 | 6 |
+| `application.cli.languages [1/2]` | 12 | 12 |
+| `application.cli.sentences` | 8 | 8 |
+| `pipeline.enrich [1/5]` | 25 | 23 |
+| `pipeline.enrich [2/5]` | 23 | 4 |
+| `pipeline.enrich [3/5]` | 18 | 25 |
+| `pipeline.enrich [4/5]` | 4 | 18 |
+| `pipeline.enrich [5/5]` | 1 | 1 |
+| `reporting.verify [1/2]` | 1 | 1 |
+| `web.politeness` | 10 | 9 |
+| `web.web_fetch [3/7]` | 2 | 2 |
+| `web.web_fetch [4/7]` | 11 | 11 |
+| `web.web_fetch [5/7]` | 1 | 1 |
+| **Total** | **134** | **128** |
+
+Run #312 is the current hosted run on PR98 head
+`f44de41ae33e667a6d38044b1c731d16688eb0f7`. It completed at 07:29 UTC with
+overall conclusion `cancelled`: 74 of 78 jobs succeeded; the two enrichment
+mutation shards failed, the docs job was cancelled, and `ci-ok` failed because
+a required job was cancelled. The docs log says the operation was cancelled
+during `uv sync --locked`; the documentation build was skipped and the log
+contains no specific cancellation reason. Both `reporting.verify` shards, all
+seven `web.web_fetch` shards, and `web.politeness` passed, so the historical
+run #309 reporting and web failures do not recur on this head.
+
+Run #312's complete mutation inventory had two outside-baseline survivors:
+
+| Failed shard | Unverified mutants |
 | --- | ---: |
-| `application.cli.publish` | 4 |
-| `application.cli.verify` | 3 |
-| `application.cli.run` | 6 |
-| `application.cli.languages [1/2]` | 12 |
-| `application.cli.sentences` | 8 |
-| `pipeline.enrich [1/5]` | 23 |
-| `pipeline.enrich [2/5]` | 4 |
-| `pipeline.enrich [3/5]` | 25 |
-| `pipeline.enrich [4/5]` | 18 |
-| `pipeline.enrich [5/5]` | 1 |
-| `reporting.verify [1/2]` | 1 |
-| `web.politeness` | 9 |
-| `web.web_fetch [3/7]` | 2 |
-| `web.web_fetch [4/7]` | 11 |
-| `web.web_fetch [5/7]` | 1 |
-| **Total** | **128** |
+| `pipeline.enrich [1/5]` | 1 |
+| `pipeline.enrich [3/5]` | 1 |
+| **Total** | **2** |
+
+`ci-ok` failed because the required docs job was cancelled; it is not a third
+mutation failure. The latest aggregate mutation score remains the prior
+complete result from run #308.
+
+The two exact hosted mutants are
+`x__resolve_pending__mutmut_12` and
+`x_enrich_polygon_shard__mutmut_60`. Local tests now assert custom-extractor
+use without a process pool and the returned shard path; both focused tests
+pass, and the strict scoped mutation gate passes with zero baseline hits. These
+mutants change `_record_fetches` to receive `extractor=None` and the result
+object to receive `shard_path=None`, respectively. The first test asserts the
+injected custom extractor's output; the second asserts the returned path equals
+the input shard. These local tests are not present on hosted head `f44de41`.
+They kill both exact run #312 survivors in the local strict scoped gate, but do
+not alter the terminal hosted result or produce an aggregate score.
 
 The current local replay evidence is narrower than a fresh hosted green run.
 Focused replays killed all 33 CLI survivors and the single reporting survivor
@@ -207,8 +245,8 @@ specific mutation shapes and evidence:
 
 The earlier loop refactor also removed the previously observed unreachable
 extra-iteration mutation shape. The updated focused web behavior suite passes
-255 tests, and the full suite passes 3,150 tests. These local results do not
-change or waive run #311's hosted status; a fresh full mutation run on the next
+255 tests, and the full suite passes 3,151 tests. These local results do not
+change or waive the hosted run statuses; a fresh full mutation run on the next
 PR head is still required.
 
 The current policy has no percentage-floor decision awaiting implementation.
@@ -249,10 +287,10 @@ A fresh GitHub connector read on 2026-10-01 found all 30 requested issues still
 open. None has been merged or closed. PR #97 lists 20 as “Closes on merge”; its
 current head is `44e25972d5bfe046a06610deee7fdd2a2d977dc4`, and run #298 passed
 77 of 88 jobs while 10 mutation shards and `ci-ok` failed. PR #98 is a draft
-stacked on PR #97 at remote head `f94da44a6b9e61884bc4564df8ed7ca3588cf38f`;
-run #311 passed 62 of 78 jobs with the 15 mutation-shard failures listed
-above. PRs #97 and #98 are unmerged, so no issue is treated as completed on
-main.
+stacked on PR #97 at remote head `f44de41ae33e667a6d38044b1c731d16688eb0f7`.
+Run #312 completed with a cancelled overall conclusion, two enrichment
+mutation failures, a cancelled docs job, and failed `ci-ok`. PRs #97 and #98
+are unmerged, so no issue is treated as completed on main.
 
 | Issue | Current disposition and remaining acceptance |
 | --- | --- |
@@ -274,18 +312,18 @@ main.
 | #82 | Stage-specific CLI modules and help snapshots are implemented in PR #98; the largest current CLI module is 248 lines. The sibling audit found no compatible shared fetcher or atomic writer, so cross-repository extraction is deferred. Verify after merge on main. |
 | #83 | Declared/BOM/meta charset handling is in PR #97; verify hosted web mutation shards before merging. |
 | #84 | Status/header/type checks before body reads are in PR #97; verify hosted web mutation shards before merging. |
-| #85 | Per-host concurrency/rate controls and bounded `Retry-After` handling are in PR #97; its hosted politeness mutation shard failed. |
+| #85 | Per-host concurrency/rate controls and bounded `Retry-After` handling are in PR #97; the prior politeness shard failed, while the run #312 politeness mutation shard passed. |
 | #86 | Prospective robots checks, schema/status handling, and docs are in PR #98. Retroactive treatment of existing cached text remains an owner policy decision; no cache was deleted or reprocessed. Recommendation: retain prospective-only behavior. |
 | #87 | Version single-sourcing and release notes/process are in PR #97; final verification and merge remain pending. |
 | #88 | Contributor/security docs and templates are in PR #97. Private vulnerability-reporting repository settings were not changed; that separate setting requires owner/admin action if it is part of the acceptance contract. |
 | #89 | URL, SSRF, and extraction property tests/profiles are in PR #97; verify the final required checks before merge. |
 | #90 | All five local HTTP acceptance scenarios exist in PR #98: extraction, unusable pages, cache hit, interrupted resume, and language population. Verify the zero-outbound-socket guard and full acceptance suite on the final PR head. |
-| #91 | The strict ratchet and baseline workflow are in PR #98; run #311 still has the failures above. Keep the current strict policy; no percentage floor is approved. |
+| #91 | The strict ratchet and baseline workflow are in PR #98; terminal run #312 has two failed enrichment mutation shards and no aggregate mutation score. Keep the current strict policy; no percentage floor is approved. |
 | #92 | CRAP-report hardening is in PR #97. The fresh full measured report for this candidate covered 1,368 functions at 97.12% coverage; highest CRAP was 5.93 (`domain/geometry.py:_check_antimeridian`), with zero functions at or above 6. The strict CRAP gate passed; rerun on the final merged candidate. |
-| #93 | Loopback behavior tests are in PR #98. The focused web suite passes 255 tests and the full suite passes 3,150. The current-source redirect replay killed 167/168, with its sole survivor matching the already-baselined case-insensitive `Location` header spelling mutant; the separate 200-variant replay killed every one of run #311's 14 exact web-fetch survivors. The previously observed range-loop mutant was removed by a behavior-preserving refactor. A fresh full hosted run is still required. |
-| #94 | Bounded prefetch/process extraction is in PR #98. Recorded strict benchmark medians are 6.9203 s flat and 13.9131 s tail against 8 s/15 s targets; hosted enrichment mutation shards still fail. |
+| #93 | Loopback behavior tests are in PR #98. The focused web suite passes 255 tests and the full suite passes 3,151. The current-source redirect replay killed 167/168, with its sole survivor matching the already-baselined case-insensitive `Location` header spelling mutant; the separate 200-variant replay killed every one of run #311's 14 exact web-fetch survivors. The previously observed range-loop mutant was removed by a behavior-preserving refactor. All seven run #312 web-fetch shards passed. |
+| #94 | Bounded prefetch/process extraction is in PR #98. Recorded strict benchmark medians are 6.9203 s flat and 13.9131 s tail against 8 s/15 s targets; run #312's benchmark job passed. Its two enrichment mutation survivors have local behavior tests and a passing strict scoped gate, but require a new hosted run. |
 | #95 | Lazy Trafilatura loading is in PR #98; five import-time samples recorded a 0.727 s cumulative median with Trafilatura absent after CLI import. Recheck final hosted quality and merge. |
-| #96 | PR #97 marks this issue for closure on merge, but also lists it as a follow-up; reconcile that description before merge. The benchmark suite/regression comparison is implemented and benchmark jobs passed on runs #298 and #311. |
+| #96 | PR #97 marks this issue for closure on merge, but also lists it as a follow-up; reconcile that description before merge. The benchmark suite/regression comparison is implemented and benchmark jobs passed on runs #298, #311, and #312. |
 
 For #86, the owner-facing choices and consequences are:
 

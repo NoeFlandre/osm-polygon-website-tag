@@ -571,6 +571,32 @@ def test_resolve_pending_fetches_a_miss_and_records_its_cache_value() -> None:
     }
 
 
+def test_resolve_pending_uses_custom_extractor_without_process_pool() -> None:
+    url = "https://example.org/page"
+    row: dict[str, object] = {}
+    cache = RecordingTextCache()
+
+    def fetch(value: str) -> FetchResult:
+        return FetchResult("ok", value, final_url=value, body=b"custom extracted text")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        _resolve_pending(
+            {url: [(row, "website")]},
+            cache=cast(TextCache, cache),
+            invocation_id="custom-extractor-run",
+            fetcher=fetch,
+            extractor=_extract,
+            fetch_pool=pool,
+        )
+
+    assert row == {
+        "website_text": "custom extracted text",
+        "website_word_count": 3,
+        "website_text_status": "success",
+    }
+    assert cache.records[0][0].text == "custom extracted text"
+
+
 def test_record_one_fetch_preserves_failure_metadata_for_all_references() -> None:
     url = "https://example.org/page"
     first_row: dict[str, object] = {}
@@ -1210,6 +1236,7 @@ def test_legacy_shard_migrates_both_tags_without_pbf_access(tmp_path: Path) -> N
     assert set(fetched) == {"https://example.org", "https://contact.example.org"}
     assert result.changed
     assert result.max_batch_rows == 1
+    assert result.shard_path == shard
 
 
 def test_duplicate_url_across_both_tags_fetches_once(tmp_path: Path) -> None:
