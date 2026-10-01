@@ -430,6 +430,20 @@ def test_extract_preserves_original_trimmed_values(
     assert observations["wikidata"][0].as_py() == "Q42"
 
 
+def test_extract_persists_region_from_source_filename(
+    synthetic_source_simple: Path, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    extract_pbf(synthetic_source_simple, run_dir)
+
+    polygons = pq.read_table(run_dir / "polygons" / "monaco-latest.parquet")
+    observations = pq.read_table(run_dir / "analysis_observations" / "monaco-latest.parquet")
+    assert polygons["region"].to_pylist() == ["monaco"]
+    assert observations["region"].to_pylist() == ["monaco"]
+
+
 def test_extract_writes_to_run_owned_dir(synthetic_source_simple: Path, tmp_path: Path) -> None:
     run_dir = tmp_path / "my-run-id"
     run_dir.mkdir()

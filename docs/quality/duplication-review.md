@@ -85,25 +85,28 @@ implementation. No shared package is proposed in this review.
 Issue #82 proposed sharing Website's fetcher and `storage/atomic.py` with
 `osm-polygon-description-tag` and `osm-polygon-wikidata-only`. A read-only
 source audit inspected Description at `61a053d`, Wikidata at `fd3ff315`, and
-Website at `8e36215`. The Website audit pin predates the current PR98 head
-`f44de41ae33e667a6d38044b1c731d16688eb0f7`. The current-source comparison
-shows `web/web_fetch.py` and `tests/web/test_web_fetch.py` changed after the
-audit pin, while `storage/atomic.py` and `runtime/run_state.py` remain
-byte-identical (`07eb805b` and `d01b0a96`). The fetcher changed from blob
-`b599af46` to `057f7bac`; its tests changed from `7e79d67f` to `17c60d20`.
-The PR98 change adds robots checks around the redirect loop. The current
-implementation still validates every request hop with
-`validate_public_http_url`, and its HTTP transport checks the connected peer
-address before sending request bytes. Robots retrieval goes through the same
-bounded redirect and public-address path with recursive robots checks disabled
-for that policy request. Thus the changed Website path retains its local SSRF
-contract, but is not byte-identical to the audited pin. The sibling audit pins
-were not refreshed.
+Website at `8e36215`. The sibling audit pins are historical. In particular,
+the Website pin predates current draft PR98 head
+`8fb0891a91d642e4129e6208e576b1ef447857d0`. A GitHub source comparison from
+`8e36215` to that head spans five commits and 13 changed paths. Within the
+reviewed files, `web/web_fetch.py` changed from blob `b599af46` to
+`057f7bac44bd54fbc4a519f6bc0d589c1ec5f9f9`, and
+`tests/web/test_web_fetch.py` changed from `7e79d67f` to
+`17c60d2073e0487776a27f87ef52e988fa6b8cfd`. Direct current-source checks
+confirm the fetcher still validates each request hop with
+`validate_public_http_url` and its HTTP transport checks the connected peer
+address before sending request bytes. Robots retrieval uses the bounded,
+public-address-checked redirect path with recursive robots checks disabled for
+that policy request. `storage/atomic.py` and `runtime/run_state.py` remain
+byte-identical to the audit pin (`07eb805b` and `d01b0a96`). The current
+Website fetcher therefore retains its local SSRF contract, but is not
+byte-identical to the audited pin. The Description and Wikidata pins were not
+refreshed.
 
 The audit found no generic untrusted-URL fetcher to consolidate. Website owns
-the SSRF-safe per-hop and peer validation path. Wikidata's configured
-MediaWiki API transport has different trust, error, and retry contracts;
-Description has no equivalent fetcher. The atomic writers overlap
+the SSRF-safe per-hop URL and connected-peer validation path. Wikidata's
+configured MediaWiki API transport has different trust, error, and retry
+contracts; Description has no equivalent fetcher. The atomic writers overlap
 conceptually but have different guarantees: Description fsyncs the file and
 parent directory; Wikidata fsyncs text and copy files but not their parent
 directory, with different Parquet behavior; Website promotes staged files
@@ -124,18 +127,20 @@ This review did not modify `osm-polygon-description-tag`,
   snapshots are implemented in draft PR98. They remain unmerged, so issue #82
   stays open until the PR is merged and the acceptance checks are verified on
   the resulting main branch.
-- **Shared fetcher/atomic package:** deferred. The pinned sibling audit found no
-  compatible generic fetcher and materially different atomic-write guarantees;
-  no extraction work remains justified under the current contracts. Revisit
-  only if owners establish a real shared contract and maintainer.
+- **Shared fetcher/atomic package:** deferred. The sibling audit found no
+  generic fetcher to consolidate and materially different atomic-write
+  guarantees. No shared package, cross-repository wrapper, or sibling code
+  change is justified under these contracts. Revisit only if the owners agree
+  on a concrete shared contract, contract tests, and a named maintainer.
 - **Current evidence boundary:** the sibling findings use Description
-  `61a053d`, Wikidata `fd3ff315`, and Website `8e36215`. That Website pin
-  predates current PR98 head `f44de41ae33e667a6d38044b1c731d16688eb0f7`.
-  `web/web_fetch.py` and its tests changed after the audit pin; the current
-  source was checked for per-hop URL validation, connected-peer validation,
-  and robots-request recursion control. `storage/atomic.py` and
-  `runtime/run_state.py` remain byte-identical. The sibling repository pins
-  were not refreshed.
+  `61a053d`, Wikidata `fd3ff315`, and Website `8e36215`. The Website pin is
+  older than current PR98 head `8fb0891a91d642e4129e6208e576b1ef447857d0`.
+  Comparing the pin to that head confirms `web/web_fetch.py` and its tests
+  changed, while `storage/atomic.py` and `runtime/run_state.py` are
+  byte-identical. The current fetcher was checked for per-hop URL validation,
+  connected-peer validation, and robots-request recursion control. The
+  sibling pins were not refreshed; their findings remain scoped to the audited
+  commits.
 
 ### Issue #91 mutation policy and run ledger
 
@@ -177,8 +182,8 @@ mutation sets at the two heads:
 | `web.web_fetch [5/7]` | 1 | 1 |
 | **Total** | **134** | **128** |
 
-Run #312 is the current hosted run on PR98 head
-`f44de41ae33e667a6d38044b1c731d16688eb0f7`. It completed at 07:29 UTC with
+Run #312, on the prior PR98 head
+`f44de41ae33e667a6d38044b1c731d16688eb0f7`, completed at 07:29 UTC with
 overall conclusion `cancelled`: 74 of 78 jobs succeeded; the two enrichment
 mutation shards failed, the docs job was cancelled, and `ci-ok` failed because
 a required job was cancelled. The docs log says the operation was cancelled
@@ -198,6 +203,25 @@ Run #312's complete mutation inventory had two outside-baseline survivors:
 `ci-ok` failed because the required docs job was cancelled; it is not a third
 mutation failure. The latest aggregate mutation score remains the prior
 complete result from run #308.
+
+Run #313 on PR98 head `8fb0891a91d642e4129e6208e576b1ef447857d0` passed on
+attempt 2: all 78 jobs succeeded, including all 72 mutation shards and
+`ci-ok`. Its first attempt had 76/78 jobs pass; `reporting.geometry_stats
+[4/5]` timed out downloading `matplotlib==3.11.1` during `uv sync --locked`,
+before the mutation gate ran, and `ci-ok` failed while that shard was failed.
+Only that geometry-statistics job was retried. The retry passed, reported no
+mutation survivors, and did not restart the other successful jobs. Run #313
+does not publish an aggregate mutation score artifact; the latest measured
+aggregate remains run #308 at 97.81% (9,621/9,836).
+
+A separate extraction replay reproduced the earlier PR97 run #298 survivor
+`osm_polygon_website_tag.pipeline.extraction.x_extract_pbf__mutmut_20`: it
+replaces the PBF-derived region argument with `None`. The new
+`test_extract_persists_region_from_source_filename` asserts the inferred
+region in both public and analysis observation shards. The focused test passed
+and the exact strict mutation replay killed the mutant. It was absent from both
+pull request heads when audited; this follow-up adds it to PR #98. No baseline
+entry or equivalence classification was added.
 
 The two exact hosted mutants are
 `x__resolve_pending__mutmut_12` and
@@ -251,9 +275,10 @@ PR head is still required.
 
 The current policy has no percentage-floor decision awaiting implementation.
 The strict ratchet remains in effect, and the next policy review should follow
-healthy main-branch observation rather than this failed PR run. The earlier
-80% and 90% suggestions were proposals only; WorldCover's threshold and timeout
-handling do not transfer to this repository.
+healthy main-branch observation; passing PR run #313 does not establish the
+nightly denominator or observation window. The earlier 80% and 90% suggestions
+were proposals only; WorldCover's threshold and timeout handling do not
+transfer to this repository.
 
 Seven web-fetch mutants surfaced during review, separate from run #311's 14
 new web-fetch survivors. Six are explicitly recorded in the strict baseline;
@@ -277,9 +302,9 @@ mutants covered outside that test file, so it is not a complete replay of the
 71 hosted survivors. Focused enrichment checks killed 13 of the 14 first-pass
 local survivors; the last mutation shape no longer exists after replacing
 `unlink(missing_ok=True)` with `unlink()` following validated checkpoint
-assembly. A fresh hosted run is still required to verify the updated web
-shards. These local results do not change the failed hosted status or relax the
-gate.
+assembly. Run #313 subsequently passed all seven web-fetch shards and the
+politeness shard. The next forward-only PR head still requires its own full
+hosted run; these local results do not waive the gate.
 
 ### Full backlog ledger: issues #65 and #68–#96
 
@@ -287,14 +312,14 @@ A fresh GitHub connector read on 2026-10-01 found all 30 requested issues still
 open. None has been merged or closed. PR #97 lists 20 as “Closes on merge”; its
 current head is `44e25972d5bfe046a06610deee7fdd2a2d977dc4`, and run #298 passed
 77 of 88 jobs while 10 mutation shards and `ci-ok` failed. PR #98 is a draft
-stacked on PR #97 at remote head `f44de41ae33e667a6d38044b1c731d16688eb0f7`.
-Run #312 completed with a cancelled overall conclusion, two enrichment
-mutation failures, a cancelled docs job, and failed `ci-ok`. PRs #97 and #98
-are unmerged, so no issue is treated as completed on main.
+stacked on PR #97 at remote head `8fb0891a91d642e4129e6208e576b1ef447857d0`.
+Its latest quality run, #313, passed all 78 jobs after retrying only the
+dependency-download failure in `reporting.geometry_stats [4/5]`. PRs #97 and
+#98 are unmerged, so no issue is treated as completed on main.
 
 | Issue | Current disposition and remaining acceptance |
 | --- | --- |
-| #65 | Partially addressed by shared test-fixture work in PRs #97/#98. Finish adopting the versioned row builders and tightening the exact weak assertions; the PR itself still lists this as a follow-up. |
+| #65 | Verified complete in the PR #97 candidate at `44e2597`: no test defines `def _row`, and the cited bare-truthiness assertions are exact. Run #298's quality job passed, and the current full local coverage suite passes 3,151 tests. PR #97 now lists #65 under closes-on-merge; keep the issue open until that PR is merged. |
 | #68 | CLI error handling and exit-code work is in PR #97. Close only after its checks pass and the change is merged. |
 | #69 | Global version and verbosity options are in PR #97; help and CLI acceptance remain unmerged. |
 | #70 | Read-only `create-repo` preview, explicit apply behavior, option help, and examples are in PR #97; remote-write behavior remains unmerged. |
@@ -302,28 +327,28 @@ are unmerged, so no issue is treated as completed on main.
 | #72 | Narrower exception handling and error visibility are in PR #97; verify the targeted behavior on the final merge candidate. |
 | #73 | The anti-pattern Ruff families are enabled in PR #97 and local lint is green; hosted mutation failures still block the PR. |
 | #74 | PR docs, timeouts, audits, and aggregate CI changes are in PR #97; all hosted required checks must pass. |
-| #75 | Workflow caching/artifact safeguards and parallel mutation work are in PR #98. The three-green-night sweep window and 20-run p90-under-15-minute window have not elapsed and cannot be claimed until the fix reaches main. |
+| #75 | Workflow caching/artifact safeguards and parallel mutation work are in PR #98; run #313 passed after one targeted environment retry. The three-green-night sweep window and 20-run p90-under-15-minute window have not elapsed and cannot be claimed until the fix reaches main. |
 | #76 | Complexity/API-shape lint ratchets are in PR #97; final verification and merge remain pending. |
 | #77 | Behavioral Docker/docs/MkDocs contract tests are in PR #97; final verification and merge remain pending. |
 | #78 | Compose, portable volume/environment conventions, and model support are in PR #97; Docker check passed on run #298, but merge remains pending. |
 | #79 | Machine-independent README outputs/schema/citation updates are in PR #97; docs check passed on run #298, but merge remains pending. |
 | #80 | Public-doc cleanup and contributor-only AGENTS guidance are in PR #97; docs check passed on run #298, but merge remains pending. |
 | #81 | Runtime path cleanup and portable data-root changes are in PR #97; merge remains pending. |
-| #82 | Stage-specific CLI modules and help snapshots are implemented in PR #98; the largest current CLI module is 248 lines. The sibling audit found no compatible shared fetcher or atomic writer, so cross-repository extraction is deferred. Verify after merge on main. |
+| #82 | The stage-specific CLI package, shared options, and help snapshots are implemented in draft PR #98. At remote head `8fb0891`, all eight Python CLI modules are 248 lines or shorter (largest: `__init__.py`, 248 lines). Keep open until hosted checks pass and the help/module acceptance is verified on main after merge. Cross-repository extraction is deferred because the pinned audit found no generic fetcher to consolidate and materially different atomic-writer guarantees. |
 | #83 | Declared/BOM/meta charset handling is in PR #97; verify hosted web mutation shards before merging. |
 | #84 | Status/header/type checks before body reads are in PR #97; verify hosted web mutation shards before merging. |
-| #85 | Per-host concurrency/rate controls and bounded `Retry-After` handling are in PR #97; the prior politeness shard failed, while the run #312 politeness mutation shard passed. |
+| #85 | Per-host concurrency/rate controls and bounded `Retry-After` handling are in PR #97. The politeness shard passed in runs #312 and #313; run #309's earlier failure remains historical. |
 | #86 | Prospective robots checks, schema/status handling, and docs are in PR #98. Retroactive treatment of existing cached text remains an owner policy decision; no cache was deleted or reprocessed. Recommendation: retain prospective-only behavior. |
 | #87 | Version single-sourcing and release notes/process are in PR #97; final verification and merge remain pending. |
 | #88 | Contributor/security docs and templates are in PR #97. Private vulnerability-reporting repository settings were not changed; that separate setting requires owner/admin action if it is part of the acceptance contract. |
 | #89 | URL, SSRF, and extraction property tests/profiles are in PR #97; verify the final required checks before merge. |
 | #90 | All five local HTTP acceptance scenarios exist in PR #98: extraction, unusable pages, cache hit, interrupted resume, and language population. Verify the zero-outbound-socket guard and full acceptance suite on the final PR head. |
-| #91 | The strict ratchet and baseline workflow are in PR #98; terminal run #312 has two failed enrichment mutation shards and no aggregate mutation score. Keep the current strict policy; no percentage floor is approved. |
+| #91 | The strict ratchet and baseline workflow are in PR #98. All 72 mutation shards and `ci-ok` passed in run #313 attempt 2 after one targeted dependency-download retry; the first attempt's failed setup did not execute mutation tests. No aggregate score artifact was produced, so the latest measured score remains run #308's 97.81% (9,621/9,836). Keep the strict per-scope ratchet; no percentage floor is approved. |
 | #92 | CRAP-report hardening is in PR #97. The fresh full measured report for this candidate covered 1,368 functions at 97.12% coverage; highest CRAP was 5.93 (`domain/geometry.py:_check_antimeridian`), with zero functions at or above 6. The strict CRAP gate passed; rerun on the final merged candidate. |
-| #93 | Loopback behavior tests are in PR #98. The focused web suite passes 255 tests and the full suite passes 3,151. The current-source redirect replay killed 167/168, with its sole survivor matching the already-baselined case-insensitive `Location` header spelling mutant; the separate 200-variant replay killed every one of run #311's 14 exact web-fetch survivors. The previously observed range-loop mutant was removed by a behavior-preserving refactor. All seven run #312 web-fetch shards passed. |
-| #94 | Bounded prefetch/process extraction is in PR #98. Recorded strict benchmark medians are 6.9203 s flat and 13.9131 s tail against 8 s/15 s targets; run #312's benchmark job passed. Its two enrichment mutation survivors have local behavior tests and a passing strict scoped gate, but require a new hosted run. |
+| #93 | Loopback behavior tests are in PR #98. The focused web suite passes 255 tests and the full suite passes 3,151. The current-source redirect replay killed 167/168, with its sole survivor matching the already-baselined case-insensitive `Location` header spelling mutant; the separate 200-variant replay killed every one of run #311's 14 exact web-fetch survivors. The previously observed range-loop mutant was removed by a behavior-preserving refactor. All seven run #312 web-fetch shards and all web shards in run #313 passed. |
+| #94 | Bounded prefetch/process extraction is in PR #98. Recorded strict benchmark medians are 6.9203 s flat and 13.9131 s tail against 8 s/15 s targets; benchmark jobs in runs #312 and #313 passed. Its two run #312 enrichment survivors have local behavior tests and a passing strict scoped gate; all five enrichment shards passed on run #313. |
 | #95 | Lazy Trafilatura loading is in PR #98; five import-time samples recorded a 0.727 s cumulative median with Trafilatura absent after CLI import. Recheck final hosted quality and merge. |
-| #96 | PR #97 marks this issue for closure on merge, but also lists it as a follow-up; reconcile that description before merge. The benchmark suite/regression comparison is implemented and benchmark jobs passed on runs #298, #311, and #312. |
+| #96 | PR #97's title no longer claims #96; its body keeps the issue as a follow-up, so #96 remains open. The current benchmark suite has four cases (two extraction sizes, URL normalization, URL validation) and only covers extraction and URL helpers. PR #97's benchmark job passed on run #298 using a same-runner comparison with a mean 50% threshold; PR #98 changes this to a median 25% threshold. Enrichment throughput, language-detection overhead, CLI import time, and text-cache lookups remain unimplemented, and the requested five-category under-60-second acceptance is not yet demonstrated. |
 
 For #86, the owner-facing choices and consequences are:
 
@@ -342,3 +367,37 @@ For #91, retain the strict per-scope baseline ratchet. Do not add a 90% floor.
 The only future owner decision is whether a percentage floor would add value
 after the nightly and PR observation windows establish a stable denominator;
 that decision is not a prerequisite for the current code work.
+## Branch hygiene snapshot (2026-10-01)
+
+The live GitHub branch listing contains the active branches
+`claude/repo-access-issues-review-5kjzx6` (PR #97 head and PR #98 base) and
+`codex/remaining-followups` (PR #98 head), plus `main`. Keep all three: both
+pull requests remain open and unmerged, and PR #98 is stacked on PR #97. The
+only local worktree is `/workspace/osm-polygon-website-tag` on
+`codex/remaining-followups`.
+
+Two live branches are cleanup candidates pending the parent bundling explicit
+user approval for branch deletion:
+
+- `claude/codebase-quality-audit-jz5aox` at
+  `1b4fd8355b9c3c94d81309b3fcf53aa2b2364004`. PRs #66 and #67 are merged; the
+  branch tip is exactly PR #67's head. Its tree equals both the PR #67 merge
+  commit `b14f8c638f02488691851fd34560cce0fc666425` and `origin/main` at tree
+  `3903f3ebe7149850b3fe2f6cd2cd891b03475177`. There is no open PR or worktree
+  reference. The commit graph shows 20 branch-only commits because PR #67 was
+  squash-merged, but the complete branch tree is present in main.
+- `claude/test-suite-cleanup-vxzbu6` at
+  `dca81468af212ef2aacef040490ca5eabb1429eb`. PRs #55, #56, and #57 are merged;
+  the branch tip is exactly PR #57's head and its tree equals PR #57 merge
+  commit `f72ef6ff310fe2a16d2c8c7710ac213313edb37f` at tree
+  `337f8c6bbfbdb304a38e4c17a68088e426972b3f`. There is no open PR or worktree
+  reference. It is three main commits behind; its merged contents remain
+  recoverable from the merge commit.
+
+The local refs `origin/pr98`, `origin/pr98-latest`,
+`origin/pr98-verify-4c0b1c2e`, and `target/pr98` do not appear in the live
+GitHub branch listing and have no open PR references. Their tips
+`01c59fe7654d`, `4fdd5ad921db`, and `4c0b1c2e9bc5` compare as ancestors of the
+active PR #98 head `8fb0891a91d642e4129e6208e576b1ef447857d0` (9, 8, and 3
+commits ahead, respectively). They remain local recovery refs; no ref or
+remote branch was deleted or pruned.
