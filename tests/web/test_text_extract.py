@@ -980,3 +980,43 @@ def test_an_xml_declaration_after_leading_whitespace_is_still_honoured() -> None
     body = ('\n  <?xml version="1.0" encoding="GBK"?>' + text).encode("gbk")
 
     assert decode_html(body, media_type="application/xhtml+xml").endswith(text)
+
+
+@pytest.mark.parametrize(
+    ("prefix", "codec"),
+    [
+        (b"\x00\x00\x00<", "utf-32-be"),
+        (b"<\x00\x00\x00", "utf-32-le"),
+        (b"\x00<", "utf-16-be"),
+        (b"<\x00", "utf-16-le"),
+        (b"<?xml", None),
+        (b"", None),
+    ],
+)
+def test_xml_byte_pattern_names_the_exact_codec(prefix: bytes, codec: str | None) -> None:
+    # Exact names matter: codec lookup ignores case, so only equality pins them.
+    assert text_extract._xml_byte_pattern_codec(prefix + b"rest") == codec
+
+
+@pytest.mark.parametrize("encoding", ["utf-32-be", "utf-32-le", "utf-16-be", "utf-16-le"])
+def test_xhtml_byte_pattern_decodes_every_bomless_wide_encoding(encoding: str) -> None:
+    document = "<html><body>Привет</body></html>"
+
+    decoded = decode_html(document.encode(encoding), media_type="application/xhtml+xml")
+
+    assert decoded == document
+
+
+def test_xhtml_byte_pattern_replaces_truncated_wide_text() -> None:
+    document = "<html>ok</html>".encode("utf-16-le") + b"\x3c"
+
+    decoded = text_extract._decode_xml_byte_pattern(document, "application/xhtml+xml")
+
+    assert decoded == "<html>ok</html>�"
+
+
+@pytest.mark.parametrize("media_type", [None, "text/html", "application/xml"])
+def test_byte_pattern_decoding_only_applies_to_xhtml(media_type: str | None) -> None:
+    html = "<html>x</html>".encode("utf-16-le")
+
+    assert text_extract._decode_xml_byte_pattern(html, media_type) is None
