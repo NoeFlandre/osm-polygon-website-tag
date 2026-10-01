@@ -1106,8 +1106,8 @@ def test_meta_parser_records_charset_from_a_tag_and_none_without_start_text() ->
     assert parser.declared == ["utf-8"]
 
     fresh = text_extract._MetaCharsetParser()
-    fresh._record([("charset", "latin-1")])
-    assert fresh.declared == ["latin-1"]
+    fresh._record([("charset", "latin-1")])  # no start tag has been parsed
+    assert fresh.declared == []
 
 
 @pytest.mark.parametrize(

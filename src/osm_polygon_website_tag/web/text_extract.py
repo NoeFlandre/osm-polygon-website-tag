@@ -5,6 +5,7 @@ from __future__ import annotations
 import codecs
 import re
 import threading
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -141,7 +142,10 @@ class _MetaCharsetParser(HTMLParser):
             self._text_only = None
 
     def _record(self, attrs: list[tuple[str, str | None]]) -> None:
-        declared = _raw_declared_meta_charset(self.get_starttag_text() or "", attrs)
+        start_tag = self.get_starttag_text()
+        if start_tag is None:
+            return
+        declared = _raw_declared_meta_charset(start_tag, attrs)
         if declared:
             self.declared.append(declared)
 
@@ -160,12 +164,13 @@ def _meta_charset_contains_reference(
     raw_attributes: dict[str, str], attributes: dict[str, str]
 ) -> bool:
     """Reject references only in the charset field selected by HTML precedence."""
+    raw = defaultdict(str, raw_attributes)  # a field absent from the raw tag has no reference
     if attributes.get("charset"):
-        return "&" in raw_attributes.get("charset", "")
+        return "&" in raw["charset"]
     if _http_equiv_charset(attributes) is None:
         return False
-    raw_content_charset = charset_parameter(raw_attributes.get("content", "")) or ""
-    return "&" in raw_content_charset
+    parameter = charset_parameter(raw["content"])
+    return parameter is not None and "&" in parameter
 
 
 def _raw_meta_attributes(start_tag: str) -> dict[str, str]:
