@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from multiprocessing.context import BaseContext
 from pathlib import Path
 from typing import cast
@@ -39,6 +39,7 @@ from osm_polygon_website_tag.pipeline.enrich import (
     _drain_interrupted_fetches,
     _extract_default_fetch,
     _extract_fetched,
+    _ExtractPool,
     _fetch,
     _finalize_batch,
     _has_complete_text,
@@ -529,8 +530,8 @@ def test_resolve_pending_fetches_a_miss_and_records_its_cache_value() -> None:
     fetched = FetchResult("ok", url, final_url=url, body=b"page text")
 
     class ExtractPool:
-        def submit(self, function: object, *args: object) -> Future[CachedText]:
-            submitted.append((function, *args))
+        def submit(self, url: str, fetched: FetchResult, invocation_id: str) -> Future[CachedText]:
+            submitted.append((url, fetched, invocation_id))
             future: Future[CachedText] = Future()
             future.set_result(
                 CachedText(url, "success", "page text", 2, url, None, 0, "", "2.1.0", "resolve-run")
@@ -551,7 +552,7 @@ def test_resolve_pending_fetches_a_miss_and_records_its_cache_value() -> None:
             fetcher=fetch,
             extractor=_extract,
             fetch_pool=pool,
-            extract_pool=cast(ProcessPoolExecutor, extract_pool),
+            extract_pool=cast(_ExtractPool, extract_pool),
         )
 
     assert fetched_urls == [url]
@@ -560,7 +561,7 @@ def test_resolve_pending_fetches_a_miss_and_records_its_cache_value() -> None:
     ]
     assert cache.records[0][1] == "resolve-run"
     assert cache.records[0][0].invocation_id == "resolve-run"
-    assert submitted == [(_extract_default_fetch, url, fetched, "resolve-run")]
+    assert submitted == [(url, fetched, "resolve-run")]
     assert row == {
         "website_text": "page text",
         "website_word_count": 2,
@@ -680,8 +681,8 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
     submitted: list[tuple[object, ...]] = []
 
     class ExtractPool:
-        def submit(self, function: object, *args: object) -> Future[CachedText]:
-            submitted.append((function, *args))
+        def submit(self, url: str, fetched: FetchResult, invocation_id: str) -> Future[CachedText]:
+            submitted.append((url, fetched, invocation_id))
             future: Future[CachedText] = Future()
             future.set_result(expected)
             return future
@@ -694,13 +695,13 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
         successful,
         invocation_id="run",
         extractor=_extract,
-        extract_pool=cast(ProcessPoolExecutor, pool),
+        extract_pool=cast(_ExtractPool, pool),
         extracted=extracted,
         deferred_extractions=deferred,
     )
     assert extracted == {}
     assert deferred[url].result() == expected
-    assert submitted == [(_extract_default_fetch, url, successful, "run")]
+    assert submitted == [(url, successful, "run")]
 
     failed = FetchResult("fetch_error", url, body=b"error response", message="http_503")
     failure = CachedText(url, "fetch_error", None, None, None, "http_503", 0, "", None, "run")
@@ -710,7 +711,7 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
         failed,
         invocation_id="run",
         extractor=_extract,
-        extract_pool=cast(ProcessPoolExecutor, pool),
+        extract_pool=cast(_ExtractPool, pool),
         extracted=extracted,
         deferred_extractions=deferred,
     )
@@ -726,7 +727,7 @@ def test_dispatch_extraction_defers_only_successful_bodies(monkeypatch: pytest.M
         no_body,
         invocation_id="run",
         extractor=_extract,
-        extract_pool=cast(ProcessPoolExecutor, pool),
+        extract_pool=cast(_ExtractPool, pool),
         extracted=extracted,
         deferred_extractions=deferred,
     )
@@ -1422,13 +1423,19 @@ def test_default_extraction_uses_bounded_process_pool_and_keeps_invocation_id(
     submitted: list[tuple[Callable[..., CachedText], tuple[object, ...]]] = []
 
     class InlineProcessPool:
-        def __init__(self, *, max_workers: int, mp_context: BaseContext) -> None:
+        def __init__(
+            self, *, max_workers: int, mp_context: BaseContext, initializer: Callable[[], None]
+        ) -> None:
+            assert initializer is enrich_module._import_extractor
             pool_settings.append((max_workers, mp_context.get_start_method()))
 
         def __enter__(self) -> InlineProcessPool:
             return self
 
         def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def shutdown(self) -> None:
             return None
 
         def submit(self, function: Callable[..., CachedText], *args: object) -> Future[CachedText]:
@@ -1438,6 +1445,7 @@ def test_default_extraction_uses_bounded_process_pool_and_keeps_invocation_id(
             return future
 
     monkeypatch.setattr(enrich_module, "ProcessPoolExecutor", InlineProcessPool)
+    monkeypatch.setattr(enrich_module, "POOL_START_BYTES", 0)
 
     enrich_polygon_shard(
         shard,
@@ -1450,6 +1458,9 @@ def test_default_extraction_uses_bounded_process_pool_and_keeps_invocation_id(
 
     rows = pq.read_table(shard).to_pylist()
     assert pool_settings == [(2, "spawn")]
+    warmups = [item for item in submitted if item[0] is enrich_module._import_extractor]
+    submitted = [item for item in submitted if item not in warmups]
+    assert len(warmups) == 2
     assert len(submitted) == 2
     assert all(function is _extract_default_fetch for function, _args in submitted)
     assert {args[0] for _function, args in submitted} == {
@@ -1750,3 +1761,48 @@ def test_v1_4_enrichment_preserves_language_fields(
     assert result["schema_version"] == LANGUAGE_SCHEMA_VERSION
     assert result["website_language"] == "eng_Latn"
     assert result["website_language_probability"] == 0.93
+
+
+def test_extract_pool_stays_inline_until_html_repays_worker_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: list[int] = []
+
+    class RecordingPool:
+        def __init__(self, *, max_workers: int, **_options: object) -> None:
+            started.append(max_workers)
+
+        def submit(self, function: Callable[..., CachedText], *args: object) -> Future[CachedText]:
+            future: Future[CachedText] = Future()
+            future.set_result(function(*args))
+            return future
+
+        def shutdown(self) -> None:
+            started.append(-1)
+
+    monkeypatch.setattr(enrich_module, "ProcessPoolExecutor", RecordingPool)
+    monkeypatch.setattr(enrich_module, "POOL_START_BYTES", 10)
+    calls: list[str] = []
+
+    def extract(url: str, fetched: FetchResult, invocation_id: str) -> CachedText:
+        calls.append(url)
+        if fetched.body == b"boom":
+            raise ValueError("bad page")
+        return CachedText(url, "success", "t", 1, url, None, 0, "", "v", invocation_id)
+
+    monkeypatch.setattr(enrich_module, "_extract_default_fetch", extract)
+    small = FetchResult("ok", "u", final_url="u", body=b"12345")
+    with _ExtractPool(3) as pool:
+        assert pool.submit("a", small, "run").result().url == "a"
+        assert pool.submit("b", small, "run").result().url == "b"  # 10 bytes: still inline
+        assert started == []
+        assert pool.submit("c", small, "run").result().url == "c"  # 15 bytes: spawns
+        assert started == [3]
+        failing = FetchResult("ok", "u", final_url="u", body=b"boom")
+        with pytest.raises(ValueError, match="bad page"):
+            pool.submit("d", failing, "run").result()
+    assert started == [3, -1]
+    assert calls == ["a", "b", "c", "d"]
+    with _ExtractPool(3) as idle, pytest.raises(ValueError, match="bad page"):
+        idle.submit("e", failing, "run").result()
+    assert started == [3, -1]

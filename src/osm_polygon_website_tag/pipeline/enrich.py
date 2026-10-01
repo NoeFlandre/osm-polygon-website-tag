@@ -39,6 +39,8 @@ DEFAULT_BATCH_ROWS = 512
 DEFAULT_FETCH_WORKERS = 8
 MAX_FETCH_WORKERS = 32
 MAX_EXTRACT_WORKERS = 4
+# About 0.7 s of worker startup is repaid by roughly this much HTML (about 1 ms per 7 KiB page).
+POOL_START_BYTES = 2 * 1024 * 1024
 MAX_PREFETCH_BATCHES = 2
 Fetcher = Callable[[str], FetchResult]
 Extractor = Callable[..., TextExtraction]
@@ -283,7 +285,7 @@ def _run_enrichment_batches(
     fetcher: Fetcher,
     extractor: Extractor,
     fetch_pool: ThreadPoolExecutor,
-    extract_pool: ProcessPoolExecutor | None,
+    extract_pool: _ExtractPool | None,
 ) -> None:
     """Prefetch bounded batches and commit their results in source order."""
     for batch in parquet.iter_batches(batch_size=batch_rows):
@@ -335,7 +337,7 @@ def _checkpoint_next_prepared_batch(
     cache: TextCache,
     invocation_id: str,
     extractor: Extractor,
-    extract_pool: ProcessPoolExecutor | None,
+    extract_pool: _ExtractPool | None,
     store: CheckpointStore,
     checkpoint: Checkpoint,
     progress: _EnrichmentProgress,
@@ -409,7 +411,7 @@ def _checkpoint_prepared_batch(
     cache: TextCache,
     invocation_id: str,
     extractor: Extractor,
-    extract_pool: ProcessPoolExecutor | None,
+    extract_pool: _ExtractPool | None,
     store: CheckpointStore,
     checkpoint: Checkpoint,
     part_index: int,
@@ -452,16 +454,72 @@ def _checkpoint_prepared_batch(
     return batch_changed, len(enriched_rows)
 
 
-def _extract_pool_context(
-    extractor: Extractor, workers: int
-) -> ProcessPoolExecutor | nullcontext[None]:
+def _extract_pool_context(extractor: Extractor, workers: int) -> _ExtractPool | nullcontext[None]:
     """Run only the built-in native extractor in isolated worker processes."""
     if extractor is not extract_main_text:
         return nullcontext(None)
-    return ProcessPoolExecutor(
-        max_workers=min(workers, MAX_EXTRACT_WORKERS),
+    return _ExtractPool(min(workers, MAX_EXTRACT_WORKERS))
+
+
+class _ExtractPool:
+    """Extract inline until enough HTML has arrived to repay spawning workers.
+
+    Starting spawn-context workers costs about 0.7 s (interpreter plus Trafilatura
+    import), more than extracting a small shard of ordinary pages inline.
+    """
+
+    def __init__(self, max_workers: int) -> None:
+        self._max_workers = max_workers
+        self._pool: ProcessPoolExecutor | None = None
+        self._inline_bytes = 0
+
+    def __enter__(self) -> _ExtractPool:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._pool is not None:
+            self._pool.shutdown()
+
+    def submit(self, url: str, fetched: FetchResult, invocation_id: str) -> Future[CachedText]:
+        """Schedule one page, spawning the workers once inline work passes the threshold."""
+        if self._pool is None:
+            self._inline_bytes += len(fetched.body or b"")
+            if self._inline_bytes <= POOL_START_BYTES:
+                return _completed_future(_extract_default_fetch, url, fetched, invocation_id)
+            self._pool = _start_extract_workers(self._max_workers)
+        return self._pool.submit(_extract_default_fetch, url, fetched, invocation_id)
+
+
+def _start_extract_workers(max_workers: int) -> ProcessPoolExecutor:
+    """Spawn every worker at once so imports overlap the next fetches."""
+    pool = ProcessPoolExecutor(
+        max_workers=max_workers,
         mp_context=multiprocessing.get_context("spawn"),
+        initializer=_import_extractor,
     )
+    for _ in range(max_workers):
+        pool.submit(_import_extractor)
+    return pool
+
+
+def _import_extractor() -> None:
+    """Pay Trafilatura's import cost in the worker before the first page arrives."""
+    import trafilatura  # noqa: F401
+
+
+def _completed_future(
+    function: Callable[[str, FetchResult, str], CachedText],
+    url: str,
+    fetched: FetchResult,
+    invocation_id: str,
+) -> Future[CachedText]:
+    """Run ``function`` now and return its outcome as a finished future."""
+    future: Future[CachedText] = Future()
+    try:
+        future.set_result(function(url, fetched, invocation_id))
+    except Exception as error:  # noqa: BLE001 - the caller re-raises from result()
+        future.set_exception(error)
+    return future
 
 
 def _skip_checkpointed_rows(
@@ -628,7 +686,7 @@ def _resolve_pending(
     fetcher: Fetcher,
     extractor: Extractor,
     fetch_pool: ThreadPoolExecutor,
-    extract_pool: ProcessPoolExecutor | None = None,
+    extract_pool: _ExtractPool | None = None,
 ) -> None:
     """Fetch cache misses concurrently, then record results on the caller thread.
 
@@ -680,7 +738,7 @@ def _record_fetches(
     cache: TextCache,
     invocation_id: str,
     extractor: Extractor,
-    extract_pool: ProcessPoolExecutor | None = None,
+    extract_pool: _ExtractPool | None = None,
 ) -> None:
     """Extract as fetches finish, then record and apply them in URL order.
 
@@ -711,7 +769,7 @@ def _extract_completed_fetches(
     urls_by_future: dict[Future[FetchResult], str],
     invocation_id: str,
     extractor: Extractor,
-    extract_pool: ProcessPoolExecutor | None,
+    extract_pool: _ExtractPool | None,
 ) -> tuple[dict[str, CachedText], dict[str, Future[CachedText]]]:
     """Consume network results promptly and dispatch native parsing separately."""
     extracted: dict[str, CachedText] = {}
@@ -737,15 +795,13 @@ def _dispatch_extraction(
     *,
     invocation_id: str,
     extractor: Extractor,
-    extract_pool: ProcessPoolExecutor | None,
+    extract_pool: _ExtractPool | None,
     extracted: dict[str, CachedText],
     deferred_extractions: dict[str, Future[CachedText]],
 ) -> None:
     """Schedule native parsing or extract one result on the caller thread."""
     if extract_pool is not None and fetched.status == "ok" and fetched.body is not None:
-        deferred_extractions[url] = extract_pool.submit(
-            _extract_default_fetch, url, fetched, invocation_id
-        )
+        deferred_extractions[url] = extract_pool.submit(url, fetched, invocation_id)
     else:
         extracted[url] = _extract_fetched(
             url, fetched, invocation_id=invocation_id, extractor=extractor
