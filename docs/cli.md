@@ -1,22 +1,19 @@
 # CLI reference
 
-The installed command is `osm-polygon-website-tag`. Run
-`uv run --locked osm-polygon-website-tag --help` for the same list shown by
-Typer. `run-all` is the normal entry point; the phase commands are useful for
-development, recovery, and inspection of an existing run.
+The installed command is `osm-polygon-website-tag`. To show the same list that Typer shows, run `uv run --locked osm-polygon-website-tag --help`. `run-all` is the normal entry point. The phase commands help with development, recovery, and inspection of an existing run.
 
 ## Global options
 
-They go before the command, for example `osm-polygon-website-tag -q run-all ...`:
+Put them before the command. For example: `osm-polygon-website-tag -q run-all ...`.
 
 | Option | Effect |
 | --- | --- |
-| `--version` | Print the package version and exit 0. |
-| `-v`, `--verbose` | Log on stderr: `-v` shows INFO, `-vv` DEBUG (such as whether a custom or default data root is in use). |
-| `-q`, `--quiet` | Only errors on stderr, and no progress output; stdout keeps the JSON result. |
-| `--debug` | Show full tracebacks instead of one-line errors (also `OSM_PWT_DEBUG=1`). |
+| `--version` | Prints the package version and exits with code 0. |
+| `-v`, `--verbose` | Logs on stderr. `-v` shows INFO. `-vv` shows DEBUG (for example, whether a custom data root or the default data root is in use). |
+| `-q`, `--quiet` | Shows only errors on stderr and no progress output. stdout keeps the JSON result. |
+| `--debug` | Shows full tracebacks, not one-line errors (also `OSM_PWT_DEBUG=1`). |
 
-`-v` and `-q` cannot be combined. Logs never go to stdout.
+You cannot combine `-v` and `-q`. Logs never go to stdout.
 
 ## Exit codes and errors
 
@@ -30,46 +27,42 @@ They go before the command, for example `osm-polygon-website-tag -q run-all ...`
 | `5` | A required optional package is missing (`publish-trackio` without `trackio`). |
 | `130` | Interrupted with Ctrl-C. |
 
-Errors print one `error: ...` line on stderr, never a traceback. Pass
-`--debug` before the command (`osm-polygon-website-tag --debug run-all ...`)
-or set `OSM_PWT_DEBUG=1` to get the full traceback instead.
+An error prints one `error: ...` line on stderr. It never prints a traceback. To get the full traceback, pass `--debug` before the command (`osm-polygon-website-tag --debug run-all ...`). Or set `OSM_PWT_DEBUG=1`.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `init` | Create a run and record its exact expected PBF inventory. |
-| `extract` | Extract one inventoried PBF into the run-owned shards. |
-| `analyze-results` | Build external-memory analysis tables after enrichment. |
-| `build-card` | Recompute `README.md`, `dataset.yaml`, and `stats.json` from the artifacts. |
-| `verify-results` | Check schemas, counts, hashes, and required artifacts without changing the run. |
-| `refresh-card` | Rebuild the local map/card and refresh the completion receipt for an older run. |
-| `finalize-run` | Verify a card-built run and write its completion receipt. |
-| `finalize-snapshot` | Finish an explicitly frozen snapshot without retrying website enrichment. |
-| `publish-plan` | Show the receipt-bound files that would be uploaded. |
-| `publish` | Dry-run publication, or upload with explicit `--apply`. |
-| `release-stats` | Recompute and publish only the dataset card and the statistics report. |
-| `create-repo` | Report whether a Hugging Face dataset repository exists; `--apply` creates it. |
-| `card-stats` | Recompute and print card statistics for a run. |
-| `geometry-stats` | Recompute and print the polygon geometry statistics of a run. |
-| `publish-trackio` | Preview or publish metrics for one finalized snapshot to the public Trackio Space. |
-| `detect-languages` | Add resumable GlotLID language results to public polygon shards. |
-| `grid5000-prepare` | Stage one unfinished shard, checkpoint, and pinned model for an offline job. |
-| `grid5000-run` | Detect one staged bundle on a reserved node without network access. |
-| `grid5000-sync` | Validate and synchronize one paused or completed bundle into the canonical run. |
-| `segment-sentences` | Segment website text into sentences for every language-complete shard. |
-| `grid5000-prepare-sentences` | Stage one offline Grid'5000 sentence-segmentation bundle. |
-| `grid5000-run-sentences` | Segment one staged sentence bundle on a reserved node without network access. |
-| `grid5000-sync-sentences` | Validate and synchronize one sentence bundle receipt into the canonical run. |
-| `run-all` | Discover, extract, enrich, analyze, verify, and resume a complete inventory. |
+| `init` | Creates a run and records its exact expected PBF inventory. |
+| `extract` | Extracts one inventoried PBF into the run-owned shards. |
+| `analyze-results` | Builds external-memory analysis tables after enrichment. |
+| `build-card` | Computes `README.md`, `dataset.yaml`, and `stats.json` again from the artifacts. |
+| `verify-results` | Checks schemas, counts, hashes, and required artifacts. It does not change the run. |
+| `refresh-card` | Rebuilds the local map and card. Refreshes the completion receipt of an older run. |
+| `finalize-run` | Verifies a card-built run and writes its completion receipt. |
+| `finalize-snapshot` | Finishes an explicitly frozen snapshot. It does not retry website enrichment. |
+| `publish-plan` | Shows the receipt-bound files that the command would upload. |
+| `publish` | Makes a dry-run publication. Uploads only with explicit `--apply`. |
+| `release-stats` | Computes again and publishes only the dataset card and the statistics report. |
+| `create-repo` | Reports if a Hugging Face dataset repository exists. `--apply` creates it. |
+| `card-stats` | Computes again and prints the card statistics of a run. |
+| `geometry-stats` | Computes again and prints the polygon geometry statistics of a run. |
+| `publish-trackio` | Previews or publishes the metrics of one finalized snapshot to the public Trackio Space. |
+| `detect-languages` | Adds resumable GlotLID language results to public polygon shards. |
+| `grid5000-prepare` | Stages one unfinished shard, its checkpoint, and the pinned model for an offline job. |
+| `grid5000-run` | Detects languages in one staged bundle on a reserved node without network access. |
+| `grid5000-sync` | Validates one paused or completed bundle and synchronizes it into the canonical run. |
+| `segment-sentences` | Segments website text into sentences for each language-complete shard. |
+| `grid5000-prepare-sentences` | Stages one offline Grid'5000 sentence-segmentation bundle. |
+| `grid5000-run-sentences` | Segments one staged sentence bundle on a reserved node without network access. |
+| `grid5000-sync-sentences` | Validates one sentence bundle receipt and synchronizes it into the canonical run. |
+| `run-all` | Discovers, extracts, enriches, analyzes, verifies, and resumes a complete inventory. |
 
-All `--run-dir` values point to an existing run directory. The commands that
-take `--source-root` and `--output-root` require those paths explicitly; this
-keeps immutable inputs and generated output separate.
+Each `--run-dir` value points to an existing run directory. The commands that take `--source-root` and `--output-root` need these paths explicitly. This keeps the immutable inputs and the generated output separate.
 
 ## Recommended workflow
 
-For a local, non-publishing run:
+For a local run that does not publish:
 
 ```bash
 uv run --locked osm-polygon-website-tag run-all \
@@ -78,54 +71,40 @@ uv run --locked osm-polygon-website-tag run-all \
   --run-id 'website-v1'
 ```
 
-Publication is a dry run by default: without `--apply`, the command still
-performs local extraction, enrichment, analysis, and verification but does not
-upload to Hugging Face. Repeat the same command to resume; see
-[Operations and resume](operations.md) for the checkpoint and source-integrity
-rules. `--repo-id` only changes the Hugging Face destination used by a later
-apply-mode upload.
+Publication is a dry run by default. Without `--apply`, the command still does local extraction, enrichment, analysis, and verification. It does not upload to Hugging Face. To resume, repeat the same command. Read [Operations and resume](operations.md) for the checkpoint rules and the source-integrity rules. `--repo-id` changes only the Hugging Face destination that a later upload in apply mode uses.
 
 `run-all` accepts these optional controls:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--apply` | off | Upload each completed shard and the final receipt-bound bundle. |
-| `--ensure-repo` | off | Create the dataset repository when needed; valid only with `--apply`. |
-| `--area-workers` | 4 | Bounded geometry workers per PBF. |
-| `--max-in-flight-areas` | 32 | Maximum queued geometry payloads per PBF. |
-| `--fetch-workers` | 8 | Bounded concurrent URL fetch workers per enrichment batch. |
-| `--host-concurrency` | 2 | Maximum simultaneous requests to one website host (`OSM_PWT_HOST_CONCURRENCY`). |
+| `--apply` | off | Uploads each completed shard and the final receipt-bound bundle. |
+| `--ensure-repo` | off | Creates the dataset repository when it is necessary. Valid only with `--apply`. |
+| `--area-workers` | 4 | Bounded geometry workers for each PBF. |
+| `--max-in-flight-areas` | 32 | Maximum number of queued geometry payloads for each PBF. |
+| `--fetch-workers` | 8 | Bounded concurrent URL fetch workers for each enrichment batch. |
+| `--host-concurrency` | 2 | Maximum number of simultaneous requests to one website host (`OSM_PWT_HOST_CONCURRENCY`). |
 | `--host-delay-seconds` | 0.2 | Minimum seconds between request starts to one host (`OSM_PWT_HOST_DELAY_SECONDS`). |
-| `--detect-languages` | off | Load the pinned GlotLID model and add schema-v1.4 language fields. |
+| `--detect-languages` | off | Loads the pinned GlotLID model and adds the schema-v1.4 language fields. |
 
-A `429` or `503` reply with a `Retry-After` of at most 30 seconds pauses that host and
-is retried once; a longer or missing `Retry-After` stays a retryable `http_429` / `http_503`.
+A `429` or `503` reply can have a `Retry-After` of 30 seconds or less. In this case, the host pauses and the fetcher retries one time. A longer `Retry-After`, or no `Retry-After`, stays a retryable `http_429` / `http_503`.
 
-For a manually staged run, the phase sequence is:
+For a run that you stage by hand, the sequence of phases is:
 
 ```text
 init -> extract -> run-all-owned enrichment -> analyze-results
      -> build-card -> verify-results -> finalize-run -> publish
 ```
 
-Language detection is optional. Add `--detect-languages` to `run-all` to run
-it after text enrichment, or run it separately on an enriched run:
+Language detection is optional. To run it after text enrichment, add `--detect-languages` to `run-all`. Or run it separately on an enriched run:
 
 ```bash
 uv run --locked osm-polygon-website-tag detect-languages \
   --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
 ```
 
-The standalone command loads one pinned GlotLID V3 model from the data-root
-cache (`<data root>/models/glotlid`), processes public shards in sorted order, and changes the run from
-`enriching` to `enriched` after all shard promotions succeed. If the run was
-already analyzed or card-built, rerun `analyze-results`, `build-card`,
-`verify-results`, and `finalize-run` afterward. The model is never loaded when
-there are no unfinished language shards. A frozen snapshot is rejected before
-the model cache is opened.
+The standalone command loads one pinned GlotLID V3 model from the data-root cache (`<data root>/models/glotlid`). It processes the public shards in sorted order. After all shard promotions succeed, it changes the run from `enriching` to `enriched`. If the run was already analyzed or card-built, run `analyze-results`, `build-card`, `verify-results`, and `finalize-run` again afterward. The command never loads the model when no language shard is unfinished. The command rejects a frozen snapshot before it opens the model cache.
 
-For Grid'5000, the three bundle commands keep staging, execution, and
-synchronization explicit:
+For Grid'5000, three bundle commands keep the staging, the execution, and the synchronization explicit:
 
 ```bash
 uv run --locked osm-polygon-website-tag grid5000-prepare \
@@ -143,32 +122,20 @@ uv run --locked osm-polygon-website-tag grid5000-sync \
   --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/<run-id>"
 ```
 
-`grid5000-prepare` and `grid5000-sync` reject paths outside the data root
-(`OSM_POLY_DATA_DIR`, default `./data`). `grid5000-run` accepts only a staged bundle and never calls Hugging Face
-or the website-fetching code. The reserved-node shell wrapper invokes a
-dependency-light module entry point so it does not import extraction-only
-native libraries. It defaults to 256-row checkpoint batches. The shell
-wrappers add the OAR resource request and policy checks; see [Operations and
-resume](operations.md).
+`grid5000-prepare` and `grid5000-sync` reject paths outside the data root (`OSM_POLY_DATA_DIR`, default `./data`). `grid5000-run` accepts only a staged bundle. It never calls Hugging Face or the website-fetching code. The shell wrapper for the reserved node calls a module entry point with few dependencies. This way, it does not import native libraries that only extraction needs. The default is checkpoint batches of 256 rows. The shell wrappers add the OAR resource request and the policy checks. Read [Operations and resume](operations.md).
 
-`extract` also accepts `--area-workers` and `--max-in-flight-areas`. The
-enrichment phase is intentionally owned by `run-all`, because it coordinates
-the URL cache, retryable statuses, durable batch checkpoints, and per-source
-upload acknowledgements.
+`extract` also accepts `--area-workers` and `--max-in-flight-areas`. `run-all` owns the enrichment phase on purpose. It coordinates the URL cache, the retryable statuses, the durable batch checkpoints, and the upload acknowledgements for each source.
 
-If the owner has decided to stop retrying URL failures, first set
-`snapshot_status` to `done` in the run metadata through the reviewed project
-workflow, then use `finalize-snapshot`. It reuses the existing Parquet shards,
-requires that no text status is still `pending`, builds analysis/card/map
-artifacts, verifies them, and writes the receipt. It preserves recorded
-`fetch_error`, `empty`, `unsafe_url`, and other outcomes; it never calls the
-enrichment or web-fetch stages.
-Once that receipt exists, resuming `run-all` for the same run is an intentional
-no-op: the frozen snapshot is not reopened and no retry or upload is attempted.
+The owner can decide to stop the retries of URL failures. In this case, do these steps:
+
+1. Set `snapshot_status` to `done` in the run metadata. Use the reviewed project workflow.
+2. Run `finalize-snapshot`.
+
+`finalize-snapshot` reuses the existing Parquet shards. It requires that no text status is still `pending`. It builds the analysis, card, and map artifacts. It verifies them and writes the receipt. It keeps the recorded outcomes `fetch_error`, `empty`, `unsafe_url`, and the other outcomes. It never calls the enrichment stages or the web-fetch stages. After the receipt exists, a resume of `run-all` for the same run does nothing, on purpose. The command does not reopen the frozen snapshot. It does not retry or upload.
 
 ## Publication commands
 
-Inspect a complete run without network writes:
+Inspect a complete run. These commands make no network writes:
 
 ```bash
 uv run --locked osm-polygon-website-tag verify-results --run-dir '<run-dir>'
@@ -180,19 +147,11 @@ uv run --locked osm-polygon-website-tag publish \
   --repo-id 'NoeFlandre/osm-polygon-website-tag'
 ```
 
-`publish` is read-only unless `--apply` is present. Apply mode requires a
-Hugging Face credential supplied through the environment or local `hf auth
-login`; the CLI never accepts a token flag. `create-repo` is separate and,
-like `publish`, only reports what it would do until `--apply` is added; and `--ensure-repo` is rejected unless `run-all` is also in apply
-mode.
+`publish` is read-only, unless `--apply` is present. Apply mode needs a Hugging Face credential. Supply it through the environment or through the local `hf auth login`. The CLI never accepts a token flag. `create-repo` is separate. Like `publish`, it only reports what it would do, until you add `--apply`. The CLI rejects `--ensure-repo`, unless `run-all` is also in apply mode.
 
-### Releasing the card and statistics report
+### Release the card and the statistics report
 
-`release-stats` is the statistics release wrapper. It verifies the complete
-published run, recomputes `README.md` and `stats.json` from every published
-row, and uploads those files together with the regenerated completion receipt
-to the exact dataset as one metadata commit. Polygon shards and unrelated Hub
-files are never touched.
+`release-stats` is the wrapper for the statistics release. It verifies the complete published run. It computes `README.md` and `stats.json` again from each published row. It uploads these files, with the regenerated completion receipt, to the exact dataset as one metadata commit. It never touches the polygon shards or unrelated Hub files.
 
 ```bash
 # 1. Dry run: verify, recompute, and print the exact plan. No network writes.
@@ -207,32 +166,20 @@ uv run --locked osm-polygon-website-tag release-stats \
   --apply
 ```
 
-The release is bound to the canonical `NoeFlandre/osm-polygon-website-tag`
-dataset. Any `--repo-id` override is refused, and `--confirm-repo` must match
-that canonical value before any network call. A complete run and its completion
-receipt are required. The JSON report records the deterministic source/data
-manifest digest, the verified remote revision, every released file with its
-SHA-256 and size, and whether apply mode uploaded or found an exact remote
-no-op. Recomputation rewrites `stats.json` only when its bytes change, so a
-second apply over an unchanged remote is a no-op.
+The release is bound to the canonical `NoeFlandre/osm-polygon-website-tag` dataset. The command refuses any `--repo-id` override. `--confirm-repo` must match the canonical value before any network call. The command needs a complete run and its completion receipt. The JSON report records these items: the deterministic source and data manifest digest, the verified remote revision, each released file with its SHA-256 and size, and whether apply mode uploaded or found an exact remote no-op. The command writes `stats.json` again only when its bytes change. So a second apply over an unchanged remote is a no-op.
 
-Equivalent recipes: `just release-stats-dry-run '<run-dir>'` and
-`just release-stats '<run-dir>'`.
+Equivalent recipes: `just release-stats-dry-run '<run-dir>'` and `just release-stats '<run-dir>'`.
 
 ## Trackio metrics dashboard
 
-The generated dataset card links to the public
-[Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics).
-Metrics are derived from the same finalized Parquets as the card. The command
-is dry-run by default and does not require Trackio to be installed:
+The generated dataset card links to the public [Trackio dashboard](https://huggingface.co/spaces/NoeFlandre/osm-polygon-website-tag-metrics). The metrics come from the same finalized Parquets as the card. The command is a dry run by default. It does not need Trackio to be installed:
 
 ```bash
 uv run --locked osm-polygon-website-tag publish-trackio \
   --run-dir '<complete-run-dir>'
 ```
 
-After separately reviewing the JSON metrics, install the optional Trackio
-client for the explicit remote action and rerun with `--apply`:
+First, review the JSON metrics separately. Then install the optional Trackio client for the explicit remote action. Run the command again with `--apply`:
 
 ```bash
 uv run --with trackio osm-polygon-website-tag publish-trackio \
@@ -241,8 +188,4 @@ uv run --with trackio osm-polygon-website-tag publish-trackio \
   --apply
 ```
 
-Apply mode creates or refreshes a public, read-only static Space if needed,
-using Trackio's static SDK. It logs one stable receipt-derived run and sends
-only numeric dataset metrics plus a non-sensitive dataset revision digest.
-Credentials come from Trackio's normal Hugging Face environment/local
-credential resolution; no token flag exists.
+In apply mode, the command creates or refreshes a public, read-only static Space if necessary. It uses the static SDK of Trackio. It logs one stable run that comes from the receipt. It sends only numeric dataset metrics and a non-sensitive dataset revision digest. The credentials come from the normal Hugging Face environment or local credential resolution of Trackio. No token flag exists.
