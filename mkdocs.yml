@@ -33,6 +33,7 @@ nav:
   - Operations and resume: operations.md
   - Architecture: architecture.md
   - Data and remotes: data-and-remotes.md
+  - Glossary: glossary.md
   - Quality:
       - Duplication review: quality/duplication-review.md
   - Archive:
