@@ -1,39 +1,26 @@
 # AGENTS.md
 
-Conventions for automated coding agents working in this repository. Human
-contributors: [CONTRIBUTING.md](CONTRIBUTING.md) has the same gates in short.
+This file gives the conventions for automated coding agents in this repository. Human contributors: [CONTRIBUTING.md](CONTRIBUTING.md) has the same gates in short form.
 
 ## Ground rules
 
-1. **YAGNI.** Do not add abstractions, modules, dependencies, or config keys
-   for features that are not yet needed. When in doubt, leave it out.
-2. **Modular.** Each module has one clear purpose and a small public surface.
-   Prefer pure functions over classes unless stateful behaviour is required.
-3. **Typed.** All new code must pass `uv run ty check src tests`. Add
-   type hints to every signature (parameters and return).
-4. **Tested.** New behaviour ships with a pytest test. Keep tests fast and
-   hermetic; no real network calls, no real disk writes outside `tmp_path`.
-5. **Documented.** Anything a future agent or human would not immediately
-   understand from reading the code must live in this file, `docs/`, or a
-   docstring.
-6. **Untrusted URLs.** OSM website values must pass `web_fetch.py`; never
-   bypass its scheme, redirect, DNS/IP, timeout, or response-size checks.
+1. **YAGNI.** Do not add abstractions, modules, dependencies, or config keys for features that nobody needs now. If you are not sure, do not add it.
+2. **Modular.** Each module has one clear purpose and a small public surface. Use pure functions. Use a class only when the behaviour needs state.
+3. **Typed.** All new code must pass `uv run ty check src tests`. Add type hints to each signature (parameters and return).
+4. **Tested.** New behaviour comes with a pytest test. Keep the tests fast and hermetic. Make no real network calls. Do not write to the disk outside `tmp_path`.
+5. **Documented.** A future agent or human must understand the code. If the code alone does not show something, write it in this file, in `docs/`, or in a docstring.
+6. **Untrusted URLs.** Send each OSM website value through `web_fetch.py`. Do not bypass its checks for scheme, redirect, DNS/IP, timeout, or response size.
 
 ## Environment
 
-- Python is managed exclusively by `uv`. Never invoke `pip` directly.
-- The project uses a `src/` layout; tests import the installed package
-  (`osm_polygon_website_tag`), not relative paths from `src/`.
-- Use the root Just recipes as the canonical command interface. Recipes invoke
-  Python tools through `uv run --locked`, so the locked `.venv` is always used.
-- Generated runs, model caches and bundles live under the data root
-  (`OSM_POLY_DATA_DIR`, default `./data`). Production PBFs are immutable
-  read-only inputs supplied explicitly by `--source-root`; never use that
-  source tree as an output location.
+- Only `uv` manages Python. Do not call `pip` directly.
+- The project uses a `src/` layout. The tests import the installed package (`osm_polygon_website_tag`). They do not use relative paths from `src/`.
+- Use the root Just recipes as the standard command interface. The recipes call Python tools through `uv run --locked`. This way, the locked `.venv` is always in use.
+- Generated runs, model caches and bundles stay under the data root (`OSM_POLY_DATA_DIR`, default `./data`). The production PBFs are immutable read-only inputs. The operator supplies them with `--source-root`. Do not use that source tree as an output location.
 
 ## Quality gates
 
-Before declaring work done, an agent MUST run and pass:
+Before you report that the work is done, you MUST run these commands. They MUST pass.
 
 ```bash
 just check
@@ -41,41 +28,30 @@ just pre-commit
 just pre-push
 ```
 
-The underlying gates remain Ruff lint/format, ty, pytest, and `uv build`.
-GitHub Actions runs `just qa-pr` (baseline, Ruff, ty, the instrumented
-pytest suite with coverage, the CRAP gate, `uv build`, and `pip-audit`) plus the
-scoped mutation matrix, the docs build and the container smoke test; `ci-ok` is
-the single check that summarizes them. If a check is intentionally
-skipped, call it out explicitly in the final report.
+The underlying gates are Ruff lint/format, ty, pytest, and `uv build`. GitHub Actions runs `just qa-pr` (baseline, Ruff, ty, the instrumented pytest suite with coverage, the CRAP gate, `uv build`, and `pip-audit`). It also runs the scoped mutation matrix, the docs build and the container smoke test. `ci-ok` is the one check that summarizes them. If you skip a check on purpose, say so in the final report.
 
 ## Style
 
-- Line length: 100 (configured in `pyproject.toml`).
+- Line length: 100 (set in `pyproject.toml`).
 - Quotes: double quotes. Indent: 4 spaces.
-- Imports: sorted by `ruff` (isort profile).
-- One public concern per module. If a module's name does not describe its
-  single responsibility, split it.
+- Imports: `ruff` sorts them (isort profile).
+- Give each module one public concern. If the name of a module does not describe its one responsibility, split the module.
 
-## Adding a dependency
+## Add a dependency
 
-1. Add it to the appropriate section in `pyproject.toml`
-   (runtime → `[project.dependencies]`, dev → `[dependency-groups].dev`).
+1. Add the dependency to the correct section in `pyproject.toml` (runtime: `[project.dependencies]`, dev: `[dependency-groups].dev`).
 2. Run `uv sync` to refresh `uv.lock`.
-3. Mention it in `README.md` only if a human user needs to install something
-   extra system-wide.
+3. Write the dependency in `README.md` only if a human user must install extra software on the whole system.
 
-## Adding a module
+## Add a module
 
-1. Place it in the subpackage whose documented responsibility it serves.
+1. Put the module in the subpackage that has the matching documented responsibility.
 2. Add tests in the mirrored test directory.
-3. Respect the dependency boundaries enforced by
-   `tests/architecture/test_boundaries.py`.
-4. Update that subpackage's README when its responsibility or entry points
-   change.
+3. Obey the dependency boundaries that `tests/architecture/test_boundaries.py` enforces.
+4. When the responsibility or the entry points of the subpackage change, update the README of the subpackage.
 
 ## Secrets
 
-- Never commit a populated `.env`. The committed template is `.env.example`.
-- Never log or print `HF_TOKEN` or any value from `Settings`.
-- If you need to add a credential, route it through `config.Settings` so it
-  is loaded from the environment, not hard-coded.
+- Do not commit a populated `.env`. The committed template is `.env.example`.
+- Do not log or print `HF_TOKEN` or any value from `Settings`.
+- To add a credential, send it through `config.Settings`. This way, the code loads it from the environment. Do not hard-code it.

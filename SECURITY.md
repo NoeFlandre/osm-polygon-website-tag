@@ -1,19 +1,23 @@
 # Security policy
 
-## Reporting a vulnerability
+## Report a vulnerability
 
-Please report vulnerabilities privately through GitHub's
-[private vulnerability reporting](https://github.com/NoeFlandre/osm-polygon-website-tag/security/advisories/new),
-not in a public issue or pull request.
+Report a vulnerability in private. Use GitHub
+[private vulnerability reporting](https://github.com/NoeFlandre/osm-polygon-website-tag/security/advisories/new).
+Do not use a public issue or a pull request.
 
-Include what is affected (CLI command, fetcher, workflow, published dataset),
-how to reproduce it, and the impact you expect. In scope, among others:
+In your report, include these items:
 
-- bypassing the fetcher's SSRF defences (`web/web_fetch.py`): scheme, redirect,
-  DNS and IP checks, timeouts and response-size limits;
-- exposure of the Hugging Face token;
-- anything that could alter the published dataset.
+- What is affected (CLI command, fetcher, workflow, or published dataset).
+- How to reproduce the problem.
+- The impact that you expect.
+
+These items are in scope:
+
+- A bypass of the SSRF defences of the fetcher (`web/web_fetch.py`). The defences are the scheme, redirect, DNS and IP checks, the timeouts, and the response-size limits.
+- An exposure of the Hugging Face token.
+- Any change that can alter the published dataset.
 
 ## Supported versions
 
-Only the latest code on `main` and the latest published dataset receive fixes.
+The latest code on `main` and the latest published dataset get fixes. No other version gets fixes.

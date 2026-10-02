@@ -1,14 +1,25 @@
 # GlotLID Language Detection Implementation Plan
 
-> **Status: completed — historical record.** Every module in the file map below
-> has shipped. The checkboxes were never ticked and are not a to-do list. Test
-> files named here were later split: `tests/reporting/test_card.py` into
-> `tests/reporting/test_card_*.py`, and `tests/application/test_workflow.py`
-> into `tests/application/test_workflow_*.py`.
+> **Status: completed. This file is a historical record.** Every module in the
+> file map below is in the product. Nobody ticked the checkboxes. The
+> checkboxes are not a to-do list. Later, the test files named here were
+> split: `tests/reporting/test_card.py` became `tests/reporting/test_card_*.py`,
+> and `tests/application/test_workflow.py` became
+> `tests/application/test_workflow_*.py`.
 
-**Goal:** Add an opt-in, resumable, stoppable GlotLID V3 stage that records the language and top-1 probability for every successfully extracted website text value while leaving extraction-only runs unchanged.
+**Goal:** Add a GlotLID V3 stage that the operator must switch on. The stage
+can resume and can stop. It records the language and the top-1 probability for
+each website text value that the extraction stage got successfully. Runs that
+only extract text do not change.
 
-**Architecture:** Keep URL fetching and language inference as separate stages. A small GlotLID adapter owns model download, hashing, and FastText output normalization; a shard pipeline owns bounded row batches, source/model-bound checkpoint parts, and atomic promotion to schema v1.4. Existing v1.3 shards remain the default output, while `detect-languages` and `run-all --detect-languages` explicitly upgrade public shards to v1.4.
+**Architecture:** Keep URL fetching and language inference as separate stages.
+A small GlotLID adapter does these tasks: model download, hashing, and
+normalization of the FastText output. A shard pipeline owns these items:
+bounded row batches, checkpoint parts that are tied to the source and the
+model, and atomic promotion to schema v1.4. The v1.3 shards stay the default
+output. The `detect-languages` command and `run-all --detect-languages`
+upgrade public shards to v1.4. The operator must request this upgrade
+explicitly.
 
 **Tech Stack:** Python 3.12, `uv`, FastText, `huggingface_hub`, PyArrow/Parquet, DuckDB, Typer, pytest, Ruff, ty, mutmut, and radon CRAP.
 
@@ -16,33 +27,33 @@
 
 ## File map
 
-Create these focused modules and mirrored tests:
+Create these focused modules and the tests that mirror them:
 
-- `src/osm_polygon_website_tag/contracts/language_schema.py` — v1.4 language field names and Arrow fields.
-- `src/osm_polygon_website_tag/pipeline/glotlid.py` — model identity, detector protocol, FastText adapter, and explicit-cache loader.
-- `src/osm_polygon_website_tag/pipeline/language_detection_checkpoint.py` — source/model-bound language checkpoint metadata, parts, and assembly.
-- `src/osm_polygon_website_tag/pipeline/detect_languages.py` — bounded per-shard language detection and atomic promotion.
-- `src/osm_polygon_website_tag/reporting/verification/language.py` — v1.4 language-field invariants.
+- `src/osm_polygon_website_tag/contracts/language_schema.py` - the v1.4 language field names and the Arrow fields.
+- `src/osm_polygon_website_tag/pipeline/glotlid.py` - the model identity, the detector protocol, the FastText adapter, and the loader for an explicit cache.
+- `src/osm_polygon_website_tag/pipeline/language_detection_checkpoint.py` - the language checkpoint metadata (tied to the source and the model), the parts, and the assembly.
+- `src/osm_polygon_website_tag/pipeline/detect_languages.py` - bounded language detection for each shard, and atomic promotion.
+- `src/osm_polygon_website_tag/reporting/verification/language.py` - the v1.4 language-field invariants.
 - `tests/contracts/test_language_schema.py`.
 - `tests/pipeline/test_glotlid.py`.
 - `tests/pipeline/test_language_detection_checkpoint.py`.
 - `tests/pipeline/test_detect_languages.py`.
 - `tests/reporting/test_language_verification.py`.
 
-Modify only the following existing responsibilities:
+Change only these responsibilities in existing files:
 
-- `contracts/polygon_schema.py` — expose v1.3/v1.4 schemas and language-column documentation without changing the default `POLYGON_PUBLIC_SCHEMA`.
-- `runtime/paths.py` — expose the Seagate GlotLID cache path and a production-path assertion.
-- `pipeline/enrichment_checkpoint.py` and `pipeline/enrich.py` — allow an existing v1.4 shard to retain language columns if a later URL retry is required; all old call signatures keep their v1.3 defaults.
-- `storage/duckdb_engine.py`, `pipeline/deduplicate.py`, `reporting/card.py`, `reporting/verification/shards.py`, and `reporting/verify.py` — consume v1.3/v1.4 public shards and tolerate a bounded mixed-schema transition.
-- `application/workflow.py` — add the opt-in model resource, per-source language stage, resume detection, and publication-change tracking.
-- `application/cli.py` — add `detect-languages` and `run-all --detect-languages`.
-- `pyproject.toml`, `uv.lock`, and `Dockerfile` — pin the runtime dependency and make the builder able to compile it without copying build tools into the runtime image.
-- `README.md`, `docs/operations.md`, `docs/architecture.md`, `src/osm_polygon_website_tag/contracts/README.md`, and `src/osm_polygon_website_tag/pipeline/README.md` — document the opt-in operation, v1.4 fields, checkpoint behavior, and Seagate-only model/run boundary.
+- `contracts/polygon_schema.py` - show the v1.3 and v1.4 schemas and the language-column documentation. Do not change the default `POLYGON_PUBLIC_SCHEMA`.
+- `runtime/paths.py` - show the Seagate GlotLID cache path and a check for the production path.
+- `pipeline/enrichment_checkpoint.py` and `pipeline/enrich.py` - let an existing v1.4 shard keep its language columns if a later URL retry is necessary. All old call signatures keep their v1.3 defaults.
+- `storage/duckdb_engine.py`, `pipeline/deduplicate.py`, `reporting/card.py`, `reporting/verification/shards.py`, and `reporting/verify.py` - read v1.3 and v1.4 public shards, and accept a bounded transition with mixed schemas.
+- `application/workflow.py` - add the optional model resource, the language stage for each source, the resume detection, and the tracking of publication changes.
+- `application/cli.py` - add `detect-languages` and `run-all --detect-languages`.
+- `pyproject.toml`, `uv.lock`, and `Dockerfile` - pin the runtime dependency. Let the builder compile it. Do not copy build tools into the runtime image.
+- `README.md`, `docs/operations.md`, `docs/architecture.md`, `src/osm_polygon_website_tag/contracts/README.md`, and `src/osm_polygon_website_tag/pipeline/README.md` - document the optional operation, the v1.4 fields, the checkpoint behavior, and the boundary of the model and the run (Seagate only).
 
-All tests use `tmp_path` and injected fakes. No test downloads GlotLID or writes to `/Volumes/Seagate M3`.
+All tests use `tmp_path` and injected fakes. No test downloads GlotLID. No test writes to `/Volumes/Seagate M3`.
 
-### Task 1: Add the v1.4 language contract without changing default extraction
+### Task 1: Add the v1.4 language contract without a change to the default extraction
 
 **Files:**
 - Create: `src/osm_polygon_website_tag/contracts/language_schema.py`
@@ -52,7 +63,7 @@ All tests use `tmp_path` and injected fakes. No test downloads GlotLID or writes
 
 - [ ] **Step 1: Write the failing schema tests.**
 
-Add tests for exact order, nullable types, the v1.4 marker, supported-schema recognition, and the unchanged default schema:
+Add tests for these items: the exact order, the nullable types, the v1.4 marker, the recognition of supported schemas, and the unchanged default schema.
 
 ```python
 from osm_polygon_website_tag.contracts.language_schema import (
@@ -93,7 +104,7 @@ def test_v1_4_extends_v1_3_and_default_schema_stays_v1_3() -> None:
     assert is_supported_public_polygon_schema(POLYGON_PUBLIC_SCHEMA_V1_4)
 ```
 
-- [ ] **Step 2: Run the focused tests and verify RED.**
+- [ ] **Step 2: Run the focused tests. They must fail (RED).**
 
 Run:
 
@@ -101,13 +112,13 @@ Run:
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/contracts/test_language_schema.py tests/contracts/test_polygon_schema.py -q
 ```
 
-Expected: collection or assertion failures because the language contract and v1.4 schema do not yet exist.
+Expected result: collection errors or assertion failures. The language contract and the v1.4 schema do not exist yet.
 
-- [ ] **Step 3: Implement the minimal contract.**
+- [ ] **Step 3: Write the minimal contract.**
 
-Define the four nullable fields in `language_schema.py`, retain the current v1.3 schema as `POLYGON_PUBLIC_SCHEMA_V1_3` and the existing `POLYGON_PUBLIC_SCHEMA`, then append `LANGUAGE_FIELDS` to create `POLYGON_PUBLIC_SCHEMA_V1_4`. Add `is_current_public_polygon_schema` for exactly v1.3/v1.4, keep `is_supported_public_polygon_schema` inclusive of v1.1 through v1.4, and add four `column_doc` entries. Do not change `SCHEMA_VERSION` or any extraction row builder.
+In `language_schema.py`, define the four nullable fields. Keep the current v1.3 schema as `POLYGON_PUBLIC_SCHEMA_V1_3` and as the existing `POLYGON_PUBLIC_SCHEMA`. Then add `LANGUAGE_FIELDS` to it to make `POLYGON_PUBLIC_SCHEMA_V1_4`. Add `is_current_public_polygon_schema`. It must accept exactly v1.3 and v1.4. Keep `is_supported_public_polygon_schema` open to v1.1 through v1.4. Add four `column_doc` entries. Do not change `SCHEMA_VERSION`. Do not change a row builder for extraction.
 
-The relevant schema construction must remain equivalent to:
+The schema construction must stay equivalent to this code:
 
 ```python
 POLYGON_PUBLIC_SCHEMA_V1_3: pa.Schema = pa.schema(
@@ -117,9 +128,9 @@ POLYGON_PUBLIC_SCHEMA = POLYGON_PUBLIC_SCHEMA_V1_3
 POLYGON_PUBLIC_SCHEMA_V1_4: pa.Schema = pa.schema([*POLYGON_PUBLIC_SCHEMA_V1_3, *LANGUAGE_FIELDS])
 ```
 
-- [ ] **Step 4: Run the schema tests and verify GREEN.**
+- [ ] **Step 4: Run the schema tests. They must pass (GREEN).**
 
-Run the same focused command. Expected: all focused schema tests pass, including every pre-existing polygon-schema test.
+Run the same focused command. Expected result: all focused schema tests pass. This includes each polygon-schema test that existed before.
 
 - [ ] **Step 5: Commit the contract.**
 
@@ -128,7 +139,7 @@ git add src/osm_polygon_website_tag/contracts/language_schema.py src/osm_polygon
 git commit -m "feat: add v1.4 language schema"
 ```
 
-### Task 2: Add the Seagate-bound GlotLID adapter
+### Task 2: Add the GlotLID adapter that is tied to Seagate
 
 **Files:**
 - Modify: `src/osm_polygon_website_tag/runtime/paths.py`
@@ -139,9 +150,9 @@ git commit -m "feat: add v1.4 language schema"
 - Create: `tests/pipeline/test_glotlid.py`
 - Modify: `tests/runtime/test_paths.py`
 
-- [ ] **Step 1: Write RED tests for path safety and model-output normalization.**
+- [ ] **Step 1: Write RED tests for path safety and for the normalization of the model output.**
 
-Use a fake FastText object and monkeypatch `huggingface_hub.hf_hub_download`; assert that the explicit `cache_dir`, repository, filename, and revision are passed, that the binary is hashed, that `__label__` is removed, and that newline-containing text is normalized before prediction:
+Use a fake FastText object. Use monkeypatch on `huggingface_hub.hf_hub_download`. The tests must check these items: the call passes the explicit `cache_dir`, the repository, the filename, and the revision; the code hashes the binary; the code removes `__label__`; and the code normalizes text that contains newlines before the prediction.
 
 ```python
 def test_loader_downloads_only_the_pinned_model_into_the_requested_cache(
@@ -180,7 +191,7 @@ def test_detector_returns_one_prediction_per_input_in_order() -> None:
     ]
 ```
 
-The test module defines the complete fake backend used above:
+The test module defines the complete fake backend that the tests above use:
 
 ```python
 class FakeFastText:
@@ -192,9 +203,9 @@ class FakeFastText:
         )
 ```
 
-Add path tests asserting `assert_seagate_path(tmp_path, label="model cache")` raises and the default cache equals `DEFAULT_DATA_ROOT / "models" / "glotlid"` without creating test data outside `tmp_path`.
+Add path tests. One test must assert that `assert_seagate_path(tmp_path, label="model cache")` raises an error. Another test must assert that the default cache is `DEFAULT_DATA_ROOT / "models" / "glotlid"`. The tests must not create test data outside `tmp_path`.
 
-- [ ] **Step 2: Run the adapter tests and verify RED.**
+- [ ] **Step 2: Run the adapter tests. They must fail (RED).**
 
 Run:
 
@@ -202,11 +213,11 @@ Run:
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_glotlid.py tests/runtime/test_paths.py -q
 ```
 
-Expected: missing adapter symbols and path helpers.
+Expected result: the adapter symbols and the path helpers are missing.
 
-- [ ] **Step 3: Add the dependency and implement the adapter.**
+- [ ] **Step 3: Add the dependency and write the adapter.**
 
-Add `fasttext>=0.9.3,<1` to runtime dependencies and run `uv lock`; add `build-essential` only in the Docker builder stage, leaving the final runtime stage based on the existing dependency-only image. Implement these typed interfaces:
+Add `fasttext>=0.9.3,<1` to the runtime dependencies. Run `uv lock`. Add `build-essential` only in the Docker builder stage. The final runtime stage stays on the existing image that has only dependencies. Write these typed interfaces:
 
 ```python
 @dataclass(frozen=True)
@@ -232,7 +243,7 @@ class LanguageDetector(Protocol):
 def load_glotlid_detector(cache_dir: Path) -> GlotLIDDetector: ...
 ```
 
-Pin `MODEL_REPOSITORY = "cis-lmu/glotlid"`, `MODEL_FILENAME = "model_v3.bin"`, and `MODEL_REVISION = "85cd671"`. Call `hf_hub_download(..., cache_dir=str(cache_dir))`, hash the returned file in bounded chunks, load it once with `fasttext.load_model`, and normalize FastText labels by removing the `__label__` prefix. Convert newline and carriage-return characters to spaces before prediction, preserve input order, require exactly one label/probability pair per text, and reject non-finite or out-of-range probabilities.
+Pin `MODEL_REPOSITORY = "cis-lmu/glotlid"`, `MODEL_FILENAME = "model_v3.bin"`, and `MODEL_REVISION = "85cd671"`. Call `hf_hub_download(..., cache_dir=str(cache_dir))`. Hash the returned file in bounded chunks. Load the file one time with `fasttext.load_model`. Normalize the FastText labels: remove the `__label__` prefix. Change each newline and carriage-return character to a space before the prediction. Keep the order of the inputs. Require exactly one label/probability pair for each text. Reject probabilities that are not finite or that are out of range.
 
 In `runtime/paths.py`, add:
 
@@ -259,16 +270,16 @@ UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytes
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked ty check src/osm_polygon_website_tag/pipeline/glotlid.py src/osm_polygon_website_tag/runtime/paths.py tests/pipeline/test_glotlid.py tests/runtime/test_paths.py
 ```
 
-Expected: focused tests pass and ty reports no errors.
+Expected result: the focused tests pass and ty reports no errors.
 
-- [ ] **Step 5: Commit the adapter and dependency boundary.**
+- [ ] **Step 5: Commit the adapter and the dependency boundary.**
 
 ```bash
 git add src/osm_polygon_website_tag/pipeline/glotlid.py src/osm_polygon_website_tag/runtime/paths.py tests/pipeline/test_glotlid.py tests/runtime/test_paths.py pyproject.toml uv.lock Dockerfile
 git commit -m "feat: add Seagate-bound GlotLID adapter"
 ```
 
-### Task 3: Implement source/model-bound language checkpoints
+### Task 3: Write the language checkpoints that are tied to the source and the model
 
 **Files:**
 - Create: `src/osm_polygon_website_tag/pipeline/language_detection_checkpoint.py`
@@ -276,7 +287,7 @@ git commit -m "feat: add Seagate-bound GlotLID adapter"
 
 - [ ] **Step 1: Write RED checkpoint tests.**
 
-Test that metadata records the exact source row count/hash plus all model identity fields, that a changed source or model fails closed, that parts are sequential and v1.4-shaped, and that the final assembly preserves part order:
+Test these items. The metadata records the exact source row count and hash, and all the model identity fields. A changed source or a changed model fails closed. The parts are sequential and have the v1.4 shape. The final assembly keeps the order of the parts.
 
 ```python
 def test_checkpoint_metadata_binds_source_and_model(tmp_path: Path) -> None:
@@ -311,17 +322,17 @@ def test_checkpoint_rejects_model_drift(tmp_path: Path) -> None:
         )
 ```
 
-- [ ] **Step 2: Run the checkpoint tests and verify RED.**
+- [ ] **Step 2: Run the checkpoint tests. They must fail (RED).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_language_detection_checkpoint.py -q
 ```
 
-Expected: the new checkpoint module and functions are missing.
+Expected result: the new checkpoint module and its functions are missing.
 
-- [ ] **Step 3: Implement the checkpoint module.**
+- [ ] **Step 3: Write the checkpoint module.**
 
-Use `.language.parts` beside each source shard, `checkpoint.json`, and `part-00000000.parquet` naming. Implement these typed entry points:
+Use the directory `.language.parts` beside each source shard. Use the file `checkpoint.json`. Use part names such as `part-00000000.parquet`. Write these typed entry points:
 
 ```python
 @dataclass(frozen=True)
@@ -353,15 +364,15 @@ def assemble_language_checkpoint(
 ) -> int: ...
 ```
 
-Write each part through `BatchParquetSink` using `POLYGON_PUBLIC_SCHEMA_V1_4`, validate its exact schema and positive/expected row count, and atomically promote it. Validate known temporary files only, reject gaps/unknown files, stream batches during assembly, and delete the staged file on any `BaseException` while leaving durable parts intact.
+Write each part through `BatchParquetSink` with `POLYGON_PUBLIC_SCHEMA_V1_4`. Check that the part has the exact schema and a positive row count that is the expected count. Then promote the part atomically. Accept only known temporary files. Reject gaps and unknown files. Stream the batches during assembly. On any `BaseException`, delete the staged file and leave the durable parts in place.
 
-- [ ] **Step 4: Run checkpoint tests and the existing checkpoint regression tests.**
+- [ ] **Step 4: Run the checkpoint tests and the existing checkpoint regression tests.**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_language_detection_checkpoint.py tests/pipeline/test_enrichment_checkpoint.py -q
 ```
 
-Expected: new checkpoint tests and all existing v1.3 checkpoint tests pass.
+Expected result: the new checkpoint tests and all existing v1.3 checkpoint tests pass.
 
 - [ ] **Step 5: Commit the checkpoint implementation.**
 
@@ -370,7 +381,7 @@ git add src/osm_polygon_website_tag/pipeline/language_detection_checkpoint.py te
 git commit -m "feat: add resumable language checkpoints"
 ```
 
-### Task 4: Build the bounded, atomic per-shard detection pipeline
+### Task 4: Build the bounded, atomic detection pipeline for each shard
 
 **Files:**
 - Create: `src/osm_polygon_website_tag/pipeline/detect_languages.py`
@@ -378,7 +389,7 @@ git commit -m "feat: add resumable language checkpoints"
 
 - [ ] **Step 1: Write RED tests with an injected fake detector.**
 
-Create v1.3 test shards with successful and absent website/contact text, then assert independent prediction calls, exact labels/probabilities, nulls for absent values, v1.4 schema, row-order preservation, bounded batch behavior, and no model call on a completed v1.4 shard:
+Make v1.3 test shards that have text values that succeeded and text values that are absent. Then assert these items: independent prediction calls, exact labels and probabilities, nulls for absent values, the v1.4 schema, the order of the rows, the bounded batch behavior, and no model call on a v1.4 shard that is complete.
 
 ```python
 class FakeDetector:
@@ -508,19 +519,19 @@ def test_interrupt_leaves_original_and_resumes_only_after_durable_prefix(tmp_pat
     assert pq.read_table(shard)["website_language"].to_pylist() == ["eng_Latn", "eng_Latn"]
 ```
 
-Also test that a changed source hash, unfinished or unknown text status, malformed successful text, a missing model prediction, or a non-finite probability raises before promotion and leaves the original shard valid. Resolved non-success statuses such as `fetch_error` are preserved with null language fields.
+Also write tests for the failure cases. Each of these items must raise an error before the promotion and must leave the original shard valid: a changed source hash, a text status that is not finished or is unknown, text that is malformed but marked successful, a missing model prediction, or a probability that is not finite. The pipeline keeps resolved statuses that are not successful, such as `fetch_error`. For these statuses, the language fields stay null.
 
-- [ ] **Step 2: Run the detection tests and verify RED.**
+- [ ] **Step 2: Run the detection tests. They must fail (RED).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_detect_languages.py -q
 ```
 
-Expected: missing pipeline symbols and failed assertions.
+Expected result: the pipeline symbols are missing and assertions fail.
 
-- [ ] **Step 3: Implement the minimal pipeline.**
+- [ ] **Step 3: Write the minimal pipeline.**
 
-Implement these typed entry points:
+Write these typed entry points:
 
 ```python
 @dataclass(frozen=True)
@@ -543,24 +554,24 @@ def detect_language_shard(
 ) -> LanguageDetectionResult: ...
 ```
 
-The pipeline must:
+The pipeline must do these steps:
 
-1. Accept only exact v1.3 or v1.4 public schemas, require both text-status columns, and require every text status to be a known resolved outcome before processing a shard. `pending`, null, and unknown values are rejected; resolved non-success outcomes are preserved with null language fields.
-2. Read `batch_rows` source rows at a time and skip exactly the durable checkpoint prefix.
-3. Set `schema_version` to `"v1.4"`; for `success`, send website and contact text values as separate ordered detector calls; for every resolved non-success status, keep both language fields null.
-4. Preserve already-complete v1.4 language pairs, detect only missing pairs, and reject incomplete pairs rather than silently keeping one half.
-5. Flush one v1.4 checkpoint part after every completed input batch, assemble in source order, validate exact v1.4 schema and row count, then atomically replace the shard.
-6. Remove the language checkpoint directory only after successful promotion. On `KeyboardInterrupt` or ordinary exceptions, remove only known staged files and retain the original shard plus durable parts.
+1. Accept only the exact v1.3 or v1.4 public schemas. Require both text-status columns. Before it processes a shard, require that each text status is a known resolved outcome. Reject `pending`, null, and unknown values. Keep the resolved outcomes that are not successful, and keep their language fields null.
+2. Read `batch_rows` source rows at a time. Skip exactly the durable prefix of the checkpoint.
+3. Set `schema_version` to `"v1.4"`. For `success`, send the website text values and the contact text values as separate detector calls, in order. For each resolved status that is not successful, keep both language fields null.
+4. Keep language pairs that are already complete in v1.4. Detect only the pairs that are missing. Reject an incomplete pair. Do not keep one half of a pair silently.
+5. After each input batch is complete, write one v1.4 checkpoint part. Assemble the parts in source order. Check the exact v1.4 schema and the row count. Then replace the shard atomically.
+6. After a successful promotion only, remove the language checkpoint directory. On `KeyboardInterrupt` or on a normal exception, remove only the known staged files. Keep the original shard and the durable parts.
 
-Use `detector.identity` in checkpoint metadata, `hash_shard` for the source identity, and `shutil.rmtree` only on the exact checkpoint directory owned by this shard after success.
+Use `detector.identity` in the checkpoint metadata. Use `hash_shard` for the source identity. Use `shutil.rmtree` only on the exact checkpoint directory that this shard owns, and only after success.
 
-- [ ] **Step 4: Run focused detection tests and verify the resource bound.**
+- [ ] **Step 4: Run the focused detection tests and check the resource bound.**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_detect_languages.py tests/pipeline/test_language_detection_checkpoint.py -q
 ```
 
-Expected: all detection and checkpoint tests pass, with no network calls and no writes outside `tmp_path`.
+Expected result: all detection tests and checkpoint tests pass. There are no network calls. Nothing is written outside `tmp_path`.
 
 - [ ] **Step 5: Commit the shard pipeline.**
 
@@ -569,7 +580,7 @@ git add src/osm_polygon_website_tag/pipeline/detect_languages.py tests/pipeline/
 git commit -m "feat: detect GlotLID languages by shard"
 ```
 
-### Task 5: Preserve v1.4 through existing readers, retries, and verification
+### Task 5: Keep v1.4 in the existing readers, retries, and verification
 
 **Files:**
 - Modify: `src/osm_polygon_website_tag/pipeline/enrichment_checkpoint.py`
@@ -589,15 +600,15 @@ git commit -m "feat: detect GlotLID languages by shard"
 
 - [ ] **Step 1: Write RED compatibility tests.**
 
-Add tests that:
+Add tests for these cases:
 
-- URL enrichment on a v1.4 shard retains all four language fields and writes a v1.4 checkpoint part.
-- DuckDB analysis accepts a directory containing one v1.3 and one v1.4 public shard.
-- Deduplication preserves language fields and emits v1.4 when any input is v1.4.
-- A v1.4 card lists the language columns while a v1.3 card remains byte-compatible with its current schema section.
-- The verifier accepts v1.3 and v1.4 output schemas but rejects a successful v1.4 text row with a missing language or an out-of-range probability.
+- URL enrichment on a v1.4 shard keeps all four language fields. It writes a v1.4 checkpoint part.
+- DuckDB analysis accepts a directory that has one v1.3 public shard and one v1.4 public shard.
+- Deduplication keeps the language fields. It writes v1.4 when one or more inputs are v1.4.
+- A v1.4 card lists the language columns. A v1.3 card stays byte-compatible with its current schema section.
+- The verifier accepts the v1.3 and v1.4 output schemas. It rejects a v1.4 text row that has status success and a missing language, and it rejects a probability that is out of range.
 
-Example language verification RED test:
+This is an example of the RED test for language verification:
 
 ```python
 def test_verify_rejects_success_without_language_probability(tmp_path: Path) -> None:
@@ -607,21 +618,21 @@ def test_verify_rejects_success_without_language_probability(tmp_path: Path) -> 
     assert any("language probability" in error for error in report.errors)
 ```
 
-- [ ] **Step 2: Run the compatibility tests and verify RED.**
+- [ ] **Step 2: Run the compatibility tests. They must fail (RED).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_enrich.py tests/pipeline/test_deduplicate.py tests/pipeline/test_analyze.py tests/reporting/test_card.py tests/reporting/test_verify.py tests/reporting/test_language_verification.py -q
 ```
 
-Expected: v1.4 preservation/verification tests fail while all existing tests remain the regression baseline.
+Expected result: the tests for the v1.4 preservation and verification fail. All existing tests are the regression baseline.
 
-- [ ] **Step 3: Implement compatibility without changing v1.3 defaults.**
+- [ ] **Step 3: Write the compatibility code. Do not change the v1.3 defaults.**
 
-Parameterize existing URL checkpoint helpers with optional `schema` and `schema_version` keyword arguments whose defaults remain `POLYGON_PUBLIC_SCHEMA` and `SCHEMA_VERSION`. Select v1.4 as the target only when the input shard is v1.4, so later URL retries cannot drop language columns.
+Give the existing URL checkpoint helpers the optional keyword arguments `schema` and `schema_version`. Their defaults stay `POLYGON_PUBLIC_SCHEMA` and `SCHEMA_VERSION`. Choose v1.4 as the target only when the input shard is v1.4. In this way, a later URL retry cannot drop the language columns.
 
-Register DuckDB public files with `read_parquet(..., union_by_name=true)` and add nullable language columns to its empty public view. In deduplication, select v1.4 when any input is v1.4, use the same union-by-name read, and cast/materialize every output shard to that selected schema.
+Register the DuckDB public files with `read_parquet(..., union_by_name=true)`. Add the nullable language columns to the empty public view. In deduplication, choose v1.4 when one or more inputs are v1.4. Use the same union-by-name read. Cast and materialize each output shard to the chosen schema.
 
-Render the card schema from the run: return v1.4 when any public shard is v1.4, otherwise retain the current v1.3 rows. Add `verify_language_invariants` that skips v1.3 files, then enforces this contract for v1.4 rows:
+Make the card schema depend on the run. Return v1.4 when one or more public shards are v1.4. Otherwise keep the current v1.3 rows. Add `verify_language_invariants`. It skips v1.3 files. For v1.4 rows, it enforces this contract:
 
 ```python
 if text_status == "success":
@@ -631,25 +642,25 @@ elif language is not None or language_probability is not None:
     errors.append(f"{label} non-success text must have null language fields")
 ```
 
-Use `is_current_public_polygon_schema` in final public-shard verification so v1.3 and v1.4 are accepted, while v1.1/v1.2 remain migration inputs rather than finalized output schemas.
+In the final verification of public shards, use `is_current_public_polygon_schema`. Then v1.3 and v1.4 are accepted. The schemas v1.1 and v1.2 stay as inputs for migration. They are not final output schemas.
 
-- [ ] **Step 4: Run the compatibility tests and full non-quality regression tests.**
+- [ ] **Step 4: Run the compatibility tests and the full regression tests (without the quality tests).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/pipeline/test_enrich.py tests/pipeline/test_deduplicate.py tests/pipeline/test_analyze.py tests/reporting/test_card.py tests/reporting/test_verify.py tests/reporting/test_language_verification.py -q
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest --ignore=tests/architecture -q
 ```
 
-Expected: compatibility tests and the complete existing suite pass.
+Expected result: the compatibility tests and the complete existing suite pass.
 
-- [ ] **Step 5: Commit compatibility support.**
+- [ ] **Step 5: Commit the compatibility support.**
 
 ```bash
 git add src/osm_polygon_website_tag/pipeline/enrichment_checkpoint.py src/osm_polygon_website_tag/pipeline/enrich.py src/osm_polygon_website_tag/storage/duckdb_engine.py src/osm_polygon_website_tag/pipeline/deduplicate.py src/osm_polygon_website_tag/reporting/card.py src/osm_polygon_website_tag/reporting/verification/shards.py src/osm_polygon_website_tag/reporting/verification/language.py src/osm_polygon_website_tag/reporting/verify.py tests/pipeline/test_enrich.py tests/pipeline/test_deduplicate.py tests/pipeline/test_analyze.py tests/reporting/test_card.py tests/reporting/test_verify.py tests/reporting/test_language_verification.py
 git commit -m "feat: preserve language columns across readers"
 ```
 
-### Task 6: Integrate opt-in detection into the resumable workflow
+### Task 6: Add the optional detection to the resumable workflow
 
 **Files:**
 - Modify: `src/osm_polygon_website_tag/application/workflow.py`
@@ -657,15 +668,15 @@ git commit -m "feat: preserve language columns across readers"
 
 - [ ] **Step 1: Write RED workflow tests.**
 
-Add tests using a fake detector proving that:
+Use a fake detector. The tests must prove these items:
 
-- `run_all` with its default arguments never constructs or calls a model loader and still emits v1.3 shards.
-- `run_all(..., detect_languages=True, language_detector=fake)` detects language after URL text enrichment, updates public-shard hashes, and publishes the changed shard/card path when apply mode is mocked.
-- A rerun after an interrupted shard calls the detector only for the uncheckpointed suffix.
-- An existing v1.3 run can be resumed with `detect_languages=True` and an existing v1.4 run is not downgraded.
-- A changed source/model identity raises before mixed output is promoted.
+- `run_all` with its default arguments never builds a model loader and never calls one. It still writes v1.3 shards.
+- `run_all(..., detect_languages=True, language_detector=fake)` detects the language after the URL text enrichment. It updates the public-shard hashes. When apply mode is mocked, it publishes the changed shard and the changed card path.
+- A rerun after an interrupted shard calls the detector only for the suffix that has no checkpoint.
+- A run that exists in v1.3 can resume with `detect_languages=True`. A run that exists in v1.4 is not downgraded.
+- A changed source or model identity raises an error before the code promotes mixed output.
 
-The default-path assertion should be explicit:
+The assertion for the default path must be explicit:
 
 ```python
 def test_run_all_default_does_not_load_language_model(
@@ -688,19 +699,19 @@ def test_run_all_default_does_not_load_language_model(
     )
 ```
 
-- [ ] **Step 2: Run workflow tests and verify RED.**
+- [ ] **Step 2: Run the workflow tests. They must fail (RED).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/application/test_workflow.py -q
 ```
 
-Expected: `run_all` has no language option and the new tests fail.
+Expected result: `run_all` has no language option and the new tests fail.
 
-- [ ] **Step 3: Implement the opt-in workflow resource and stage.**
+- [ ] **Step 3: Write the optional workflow resource and stage.**
 
-Extend `run_all` with `detect_languages: bool = False` and an optional typed `language_detector` injection used only by hermetic tests. When no detector is injected and detection is requested, assert the run directory and `glotlid_model_cache_dir()` are under the Seagate root, then load one detector before source processing. The default branch must not import or load model resources beyond normal module imports.
+Add `detect_languages: bool = False` to `run_all`. Add an optional typed `language_detector` argument. Only the hermetic tests use it. When the operator requests detection and no detector is injected, check that the run directory and `glotlid_model_cache_dir()` are under the Seagate root. Then load one detector before the source processing. The default branch must not import or load model resources, except for the normal module imports.
 
-Extend `_SourceRunContext` with the opt-in flag and detector. After `_enrich_source_shard_if_needed`, call a new `_detect_source_shard_if_needed` only when the flag is true:
+Add the flag and the detector to `_SourceRunContext`. After `_enrich_source_shard_if_needed`, call a new function `_detect_source_shard_if_needed`. Call it only when the flag is true:
 
 ```python
 def _detect_source_shard_if_needed(
@@ -722,24 +733,24 @@ def _detect_source_shard_if_needed(
     return result.changed
 ```
 
-Pass `language_changed` through `_publish_source_if_needed`, `_source_upload_is_current_for_context`, and `_source_requires_publication` so language-only changes invalidate upload acknowledgements. Extend enrichment-phase entry logic to reopen `ANALYZED`, `CARD_BUILT`, or unfrozen `COMPLETE` runs when the opt-in flag finds v1.3/incomplete language shards. Treat v1.4 as current for URL-enrichment schema checks.
+Pass `language_changed` through `_publish_source_if_needed`, `_source_upload_is_current_for_context`, and `_source_requires_publication`. A change in language only must make the upload acknowledgements invalid. Change the logic at the start of the enrichment phase. It must reopen runs that are `ANALYZED`, `CARD_BUILT`, or `COMPLETE` and not frozen, when the optional flag finds shards that are v1.3 or that have incomplete language data. Treat v1.4 as current in the schema checks for URL enrichment.
 
-- [ ] **Step 4: Run workflow tests and verify GREEN.**
+- [ ] **Step 4: Run the workflow tests. They must pass (GREEN).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/application/test_workflow.py -q
 ```
 
-Expected: all workflow tests pass, including the default no-model regression test and opt-in resume tests.
+Expected result: all workflow tests pass. This includes the default regression test that loads no model and the resume tests for the optional stage.
 
-- [ ] **Step 5: Commit workflow integration.**
+- [ ] **Step 5: Commit the workflow integration.**
 
 ```bash
 git add src/osm_polygon_website_tag/application/workflow.py tests/application/test_workflow.py
 git commit -m "feat: integrate opt-in language detection"
 ```
 
-### Task 7: Add the standalone CLI command and operator documentation
+### Task 7: Add the standalone CLI command and the operator documentation
 
 **Files:**
 - Modify: `src/osm_polygon_website_tag/application/cli.py`
@@ -752,26 +763,26 @@ git commit -m "feat: integrate opt-in language detection"
 
 - [ ] **Step 1: Write RED CLI tests.**
 
-Test command registration, fake detector injection at the workflow boundary, Seagate rejection before model loading, and resume state behavior. The command contract is:
+Test these items: the registration of the command, the injection of a fake detector at the workflow boundary, the rejection of a path that is not on Seagate before the model loads, and the behavior of the resume state. The command contract is:
 
 ```text
 osm-polygon-website-tag detect-languages --run-dir <Seagate run directory>
 osm-polygon-website-tag run-all --detect-languages ...
 ```
 
-The standalone command must load the model once, process public shards in sorted order, update each source manifest hash, transition a non-frozen analyzed/card-built/complete run to `enriching` before work and to `enriched` after all shards finish, and leave `enriching` plus durable parts on interruption. A frozen `snapshot_status=done` run is rejected without touching the model cache.
+The standalone command must do these steps. Load the model one time. Process the public shards in sorted order. Update the hash of each source manifest. Move a run that is not frozen and is analyzed, card-built, or complete to `enriching` before the work, and to `enriched` after all shards finish. On an interruption, leave the run in `enriching` and keep the durable parts. Reject a frozen run with `snapshot_status=done` and do not touch the model cache.
 
-- [ ] **Step 2: Run CLI tests and verify RED.**
+- [ ] **Step 2: Run the CLI tests. They must fail (RED).**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/application/test_cli.py -q
 ```
 
-Expected: the command and `--detect-languages` option are not registered.
+Expected result: the command and the `--detect-languages` option are not registered.
 
-- [ ] **Step 3: Implement the CLI surface.**
+- [ ] **Step 3: Write the CLI surface.**
 
-Import `STATUS_COMPLETE` and `glotlid_model_cache_dir`, add `--detect-languages` to `run-all`, and add:
+Import `STATUS_COMPLETE` and `glotlid_model_cache_dir`. Add `--detect-languages` to `run-all`. Add this command:
 
 ```python
 @app.command("detect-languages")
@@ -821,39 +832,39 @@ def _finish_language_command_state(state: RunState) -> None:
         transition_status(state, STATUS_ENRICHED)
 ```
 
-The actual implementation must validate source-manifest membership and known resolved text statuses before each shard, reject a frozen snapshot, and keep the model cache under the Seagate root. `run-all --detect-languages` must pass the same stage and model resource, not a second implementation.
+The real implementation must do these checks before each shard: that the source belongs to the manifest, and that the text statuses are known and resolved. It must reject a frozen snapshot. It must keep the model cache under the Seagate root. `run-all --detect-languages` must pass the same stage and the same model resource. It must not use a second implementation.
 
-- [ ] **Step 4: Run CLI tests and documentation build checks.**
+- [ ] **Step 4: Run the CLI tests and the documentation build checks.**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked pytest tests/application/test_cli.py -q
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache uv run --locked mkdocs build --strict
 ```
 
-Expected: CLI tests pass and the documentation build is clean.
+Expected result: the CLI tests pass and the documentation build has no errors.
 
 - [ ] **Step 5: Document the operator contract.**
 
-Document that production files are kept at:
+Document that the production files are at:
 
 ```text
 /Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/
 /Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>/
 ```
 
-Document the pinned [GlotLID model card](https://huggingface.co/cis-lmu/glotlid), the four nullable v1.4 fields, exact raw labels such as `eng_Latn`, top-1 probabilities, `Ctrl-C`/rerun behavior, the known-resolved text precondition, and the need to run the existing analysis/card/finalization commands after a standalone language stage changes an already analyzed run. State explicitly that the default `run-all` path remains v1.3 and does not load the model.
+Document these items: the pinned [GlotLID model card](https://huggingface.co/cis-lmu/glotlid); the four nullable v1.4 fields; the exact raw labels, for example `eng_Latn`; the top-1 probabilities; the behavior of `Ctrl-C` and of a rerun; the precondition that the text is known and resolved; and the need to run the existing commands for analysis, card, and finalization after a standalone language stage changes a run that is already analyzed. State clearly that the default `run-all` path stays v1.3 and does not load the model.
 
-- [ ] **Step 6: Commit the CLI and documentation.**
+- [ ] **Step 6: Commit the CLI and the documentation.**
 
 ```bash
 git add src/osm_polygon_website_tag/application/cli.py tests/application/test_cli.py README.md docs/operations.md docs/architecture.md src/osm_polygon_website_tag/contracts/README.md src/osm_polygon_website_tag/pipeline/README.md
 git commit -m "docs: operate the GlotLID language stage"
 ```
 
-### Task 8: Run the complete quality gates and mutation/CRAP checks
+### Task 8: Run the complete quality gates and the mutation and CRAP checks
 
 **Files:**
-- Modify only files required by formatter, lockfile, or quality-report output; do not stage unrelated work.
+- Modify only the files that the formatter, the lockfile, or the quality-report output require. Do not stage unrelated work.
 
 - [ ] **Step 1: Run the complete repository checks.**
 
@@ -863,23 +874,23 @@ UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache just pre-commit
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache just pre-push
 ```
 
-Expected: lock validation, Ruff, format, `ty check src tests scripts`, all tests, and `uv build` pass.
+Expected result: lock validation, Ruff, format, `ty check src tests scripts`, all tests, and `uv build` pass.
 
-- [ ] **Step 2: Run the CRAP gate and inspect the threshold.**
+- [ ] **Step 2: Run the CRAP gate and examine the threshold.**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache just crap
 ```
 
-Expected: the command succeeds and every changed production function has CRAP below 6.
+Expected result: the command succeeds. Each changed production function has a CRAP score below 6.
 
-- [ ] **Step 3: Run mutation testing and inspect every result.**
+- [ ] **Step 3: Run mutation testing and examine each result.**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/osm-polygon-website-tag-uv-cache just mutation
 ```
 
-Expected: no `survived`, `no tests`, `timeout`, `suspicious`, `segfault`, or interrupted mutants remain.
+Expected result: no mutant has the verdict `survived`, `no tests`, `timeout`, `suspicious`, `segfault`, or interrupted.
 
 - [ ] **Step 4: Run the final feature regression suite.**
 
@@ -890,8 +901,8 @@ git status --short --branch
 git diff --check HEAD
 ```
 
-Expected: all tests pass, the package builds, whitespace checks pass, and only the intentional feature commits/files are present in the isolated worktree.
+Expected result: all tests pass, the package builds, the whitespace checks pass, and the isolated worktree has only the intended feature commits and files.
 
 - [ ] **Step 5: Record the final evidence.**
 
-Record the exact test count, CRAP result, mutation result, and any environmental limitation in the handoff. Do not claim a real model download or production inference was run unless it was performed using the Seagate cache and run roots. Do not stage generated reports or unrelated worktree files.
+Record these items in the handoff: the exact test count, the CRAP result, the mutation result, and each limit of the environment. Do not say that a real model download or a production inference ran, unless it ran with the Seagate cache and run roots. Do not stage generated reports or unrelated worktree files.
