@@ -1,129 +1,84 @@
 # GlotLID language detection
 
-**Status:** Implemented (public schema v1.4). Kept as the design record; the
-later sentence stage (v1.5) is described in the README and `docs/operations.md`.
+**Status:** Implemented (public schema v1.4). This page is the design record. The README and `docs/operations.md` describe the later sentence stage (v1.5).
 
 ## Goal
 
-Add a resumable, stoppable language-detection stage for every successfully
-extracted `website_text` and `contact_website_text` value. The stage uses the
-GlotLID V3 FastText model and stores the result in the same public polygon row,
-while preserving the existing text-fetching workflow when language detection
-is not requested.
+Add a language-detection stage that you can stop and resume. The stage processes each successfully extracted `website_text` and `contact_website_text` value. It uses the GlotLID V3 FastText model. It stores the result in the same public polygon row. When you do not request language detection, the existing text-fetching workflow does not change.
 
 ## Public data contract
 
-Language detection introduces public schema version `v1.4`, extending the
-current `v1.3` polygon row with four nullable fields:
+Language detection introduces public schema version `v1.4`. It extends the current `v1.3` polygon row with four nullable fields:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `website_language` | nullable string | The exact GlotLID label, such as `eng_Latn`. |
-| `website_language_probability` | nullable float64 | GlotLID's top-1 probability for that label. |
+| `website_language_probability` | nullable float64 | The top-1 probability of GlotLID for that label. |
 | `contact_website_language` | nullable string | The exact GlotLID label for `contact_website_text`. |
-| `contact_website_language_probability` | nullable float64 | GlotLID's top-1 probability for that label. |
+| `contact_website_language_probability` | nullable float64 | The top-1 probability of GlotLID for that label. |
 
-The raw script-aware model label is retained; the pipeline does not collapse
-it to a two-letter language code. Both fields for a text source are null when
-that source has no successful extracted text. Successful text receives one
-top-1 label and one probability; no arbitrary confidence threshold is applied.
+The pipeline keeps the raw script-aware model label. It does not reduce it to a two-letter language code. Both fields for a text source are null when that source has no successful extracted text. Successful text gets one top-1 label and one probability. The pipeline applies no arbitrary confidence threshold.
 
-Existing `v1.1`, `v1.2`, and `v1.3` shards remain readable and accepted as
-inputs for migration. A language run upgrades public shards atomically to
-`v1.4`; the normal `run-all` workflow remains unchanged unless its explicit
-language-detection option is used.
+The pipeline still reads and accepts the existing `v1.1`, `v1.2`, and `v1.3` shards as inputs for migration. A language run upgrades the public shards to `v1.4` in an atomic step. The normal `run-all` workflow does not change, unless you use its explicit language-detection option.
 
 ## Execution model
 
-The implementation has one focused model adapter and one focused shard
-pipeline:
+The implementation has one focused model adapter and one focused shard pipeline:
 
-1. `detect-languages --run-dir <run>` discovers public polygon shards and
-   validates that their text statuses are known and resolved before starting a
-   shard. Successful text is detected; resolved non-success outcomes remain
-   null because there is no text to detect.
-2. `run-all --detect-languages` invokes the same stage after text extraction
-   and before incremental publication.
-3. A single process loads one GlotLID model and predicts a bounded list of
-   text values at a time. Language prediction is serial and deterministic;
-   there is no model copy per worker.
-4. Text sources are detected independently, so a row with both website fields
-   produces two predictions and a row with one field produces one.
-5. A completed shard updates its source manifest hash and remains ready for the
-   existing analysis, card, verification, and publication phases.
+1. `detect-languages --run-dir <run>` discovers the public polygon shards. Before it starts a shard, it validates that the text statuses are known and resolved. It detects the language of successful text. A resolved outcome that is not a success stays null, because there is no text to detect.
+2. `run-all --detect-languages` calls the same stage after text extraction and before incremental publication.
+3. A single process loads one GlotLID model. It predicts a bounded list of text values at one time. The language prediction is serial and deterministic. There is no model copy for each worker.
+4. The stage detects the text sources independently. A row with both website fields produces two predictions. A row with one field produces one prediction.
+5. A completed shard updates its source manifest hash. It stays ready for the existing analysis, card, verification, and publication phases.
 
-The default `run-all` path does not download or load a language model. This
-keeps existing extraction-only runs compatible and makes the new model cost an
-explicit operator choice.
+The default `run-all` path does not download or load a language model. This keeps existing extraction-only runs compatible. The operator decides explicitly to pay the cost of the new model.
 
 ## Model and storage boundary
 
-GlotLID is loaded through `fasttext` and `huggingface_hub`, using only the
-versioned `model_v3.bin` file from `cis-lmu/glotlid` at Hub revision
-`85cd671`. The resolved model file is hashed once and that hash, repository,
-filename, and revision are recorded in the language checkpoint metadata.
+The stage loads GlotLID through `fasttext` and `huggingface_hub`. It uses only the versioned `model_v3.bin` file from `cis-lmu/glotlid` at Hub revision `85cd671`. The stage hashes the resolved model file one time. It records that hash, the repository, the filename, and the revision in the metadata of the language checkpoint.
 
-Production model-cache and run paths are on the mounted Seagate volume:
+The production model-cache path and the run paths are on the mounted Seagate volume:
 
 ```text
 /Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/
 /Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>/
 ```
 
-The CLI supplies the Seagate model-cache default explicitly to
-`hf_hub_download`, so Hugging Face's default Mac home cache is not used for
-the production model. Production language commands reject a model cache or
-run path outside the mounted Seagate volume. Tests may use `tmp_path` and an
-injected fake detector; they never download the model.
+The CLI supplies the Seagate model-cache default explicitly to `hf_hub_download`. So the production model does not use the default Mac home cache of Hugging Face. The production language commands reject a model cache or a run path outside the mounted Seagate volume. The tests can use `tmp_path` and an injected fake detector. They never download the model.
 
-The model binary is local operational state. It is not copied into Git, the
-run receipt, or the public dataset.
+The model binary is local operational state. Nobody copies it into Git, into the run receipt, or into the public dataset.
 
 ## Resume and interruption contract
 
-Each public shard has a language checkpoint directory containing:
+Each public shard has a language checkpoint directory. It contains these items:
 
-- source row count and source-shard SHA-256;
-- target schema version;
-- model repository, filename, Hub revision, and model SHA-256;
-- sequential, atomically promoted Parquet parts containing completed rows.
+- The source row count and the source-shard SHA-256.
+- The target schema version.
+- The model repository, the filename, the Hub revision, and the model SHA-256.
+- Sequential Parquet parts that contain completed rows. The pipeline promotes each part in an atomic step.
 
-The pipeline reads source rows in bounded batches. After each batch it flushes
-the checkpoint part before continuing. The source shard is not replaced until
-all source rows have been detected, the assembled output has the expected row
-count and exact `v1.4` schema, and the staged file is atomically promoted.
+The pipeline reads the source rows in bounded batches. After each batch, it flushes the checkpoint part before it continues. The pipeline does not replace the source shard until these conditions are true: it detected all source rows, the assembled output has the expected row count and the exact `v1.4` schema, and it promoted the staged file in an atomic step.
 
-`Ctrl-C` and ordinary exceptions leave the original shard valid and retain
-completed checkpoint parts. A rerun verifies the source and model identity,
-skips the durable prefix, and continues at the first unfinished batch. A
-changed source or model fails closed instead of mixing predictions from
-different inputs. Known temporary files are cleaned without deleting unrelated
-run artifacts.
+`Ctrl-C` and ordinary exceptions leave the original shard valid. They keep the completed checkpoint parts. When you run the command again, it verifies the identity of the source and of the model. It skips the durable prefix. It continues at the first unfinished batch. A changed source or a changed model fails closed. The pipeline does not mix predictions from different inputs. The pipeline cleans known temporary files. It does not delete unrelated run artifacts.
 
-## Testing and quality gates
+## Tests and quality gates
 
-Implementation follows a visible RED → GREEN → REFACTOR cycle for each
-behavior:
+The implementation follows a visible RED, GREEN, REFACTOR cycle for each behavior:
 
-- exact schema and nullability contract;
-- GlotLID label/probability conversion;
-- independent detection of both website text fields;
-- model-path and Seagate-path safety;
-- source/model-bound checkpoint validation;
-- atomic completion and row-order preservation;
-- interruption and resume without reprocessing completed batches;
-- CLI/workflow integration without changing the default path.
+- The exact schema and nullability contract.
+- The conversion of the GlotLID label and probability.
+- The independent detection of both website text fields.
+- The safety of the model path and the Seagate path.
+- The validation of checkpoints that are bound to the source and to the model.
+- The atomic completion and the preservation of the row order.
+- The interruption and the resume without reprocessing of completed batches.
+- The CLI and workflow integration without a change to the default path.
 
-The tests inject a small fake detector and use `tmp_path`; no network, model
-download, or production disk is used. Before handoff, `just check`,
-`just pre-commit`, `just pre-push`, `just crap`, and `just mutation` must pass,
-with the CRAP report below 6 and no surviving, unverified, timed-out, or
-interrupted mutants.
+The tests inject a small fake detector and use `tmp_path`. They use no network, no model download, and no production disk. Before the handoff, `just check`, `just pre-commit`, `just pre-push`, `just crap`, and `just mutation` must pass. The CRAP report must be below 6. No mutant can be surviving, unverified, timed out, or interrupted.
 
 ## Non-goals
 
-- No language translation or normalization to a single ISO-639 representation.
-- No HTML `<html lang>` parsing or domain/region heuristic fallback.
-- No model fine-tuning or remote inference endpoint.
-- No changes to URL safety, fetching, Trafilatura extraction, or text-cache
-  semantics.
+- No language translation. No normalization to a single ISO-639 representation.
+- No parsing of the HTML `<html lang>` attribute. No fallback with domain or region heuristics.
+- No model fine-tuning. No remote inference endpoint.
+- No change to URL safety, fetching, Trafilatura extraction, or the semantics of the text cache.
