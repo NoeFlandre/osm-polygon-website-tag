@@ -215,3 +215,7 @@ unchanged; the checkpoint mechanics themselves are `checkpoint_storage`'s,
 shared with enrichment and language detection. A time budget pauses between
 batches and leaves the source shard and its durable prefix intact, which is
 what makes a walltime-bounded reservation resumable.
+
+`sat_capabilities` loads the local, digest-pinned shared SaT capability reference.
+The reference owns model-language codes; `sentence_languages` keeps local GlotLID
+aliases and admission rules. See [the update procedure](../../../docs/sat-capabilities.md).

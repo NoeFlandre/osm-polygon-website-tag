@@ -27,6 +27,7 @@ markdown_extensions:
   - pymdownx.superfences
 
 nav:
+  - Shared SaT capabilities: sat-capabilities.md
   - Home: index.md
   - Getting started: setup.md
   - CLI reference: cli.md
