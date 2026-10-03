@@ -343,6 +343,9 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
     class StatsCollector:
         def pytest_runtest_logstart(self, nodeid: str, location: Any) -> None:
             del location
+            # Collection-time imports do not belong to the first arbitrary test.
+            # Setup, body, and teardown calls are still recorded for each test.
+            mutmut._stats.clear()
             mutmut.duration_by_test[nodeid] = 0.0
 
         def pytest_runtest_teardown(self, item: Any, nextitem: Any) -> None:

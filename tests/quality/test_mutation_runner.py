@@ -438,3 +438,37 @@ def test_mutant_cli_filter_parser_skips_option_values() -> None:
         ["run", "--max-children", "4", "--profile=fast", "package.module.*"]
     ) == ("package.module.*",)
     assert mutation_runner._mutant_names_from_cli(["results", "package.module.*"]) == ()
+
+
+def test_stats_do_not_attribute_collection_imports_to_the_first_test(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import mutmut
+    import mutmut.__main__ as mutmut_main
+
+    class FakeRunner:
+        def _pytest_args_regular_run(self, tests):
+            return [*tests]
+
+        def execute_pytest(self, params, **kwargs):
+            collector = kwargs["plugins"][0]
+            item = SimpleNamespace(nodeid=params[0], _nodeid=params[0])
+            mutmut._stats.add("collection_only")
+            collector.pytest_runtest_logstart(params[0], None)
+            assert not mutmut._stats
+            mutmut._stats.update({"setup_call", "body_call", "teardown_call"})
+            collector.pytest_runtest_makereport(item, SimpleNamespace(duration=0.25))
+            collector.pytest_runtest_teardown(item, None)
+            assert not mutmut._stats
+            return 0
+
+    monkeypatch.setattr(mutmut_main, "PytestRunner", FakeRunner)
+    output = tmp_path / "stats.json"
+    assert mutation_runner._run_stats_child(output, ["tests/test_one.py::test_one"]) == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["tests_by_mangled_function_name"] == {
+        "setup_call": ["tests/test_one.py::test_one"],
+        "body_call": ["tests/test_one.py::test_one"],
+        "teardown_call": ["tests/test_one.py::test_one"],
+    }
+    assert payload["duration_by_test"] == {"tests/test_one.py::test_one": 0.25}
