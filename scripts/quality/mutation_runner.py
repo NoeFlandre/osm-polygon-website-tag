@@ -348,11 +348,11 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
             mutmut._stats.clear()
             mutmut.duration_by_test[nodeid] = 0.0
 
-        def pytest_runtest_teardown(self, item: Any, nextitem: Any) -> None:
-            del nextitem
+        def pytest_runtest_logfinish(self, nodeid: str, location: Any) -> None:
+            del location
             for function in mutmut._stats:
                 mutmut.tests_by_mangled_function_name[function].add(
-                    strip_prefix(item._nodeid, prefix="mutants/")
+                    strip_prefix(nodeid, prefix="mutants/")
                 )
             mutmut._stats.clear()
 
