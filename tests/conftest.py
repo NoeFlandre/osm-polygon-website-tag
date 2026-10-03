@@ -10,9 +10,6 @@ import osmium.osm
 import pytest
 from hypothesis import settings
 
-from osm_polygon_website_tag.application import source_processing as source_processing_module
-from osm_polygon_website_tag.publishing import incremental as incremental_module
-from osm_polygon_website_tag.publishing import publish as publish_module
 from osm_polygon_website_tag.web import web_fetch
 from tests.fixtures.memory_http import MemoryHTTPFixture
 
@@ -45,6 +42,12 @@ def _never_reach_hugging_face(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def refuse(*_args: object, **_kwargs: object) -> object:
         raise AssertionError(_UPLOAD_ATTEMPT)
+
+    # Import during fixture setup, so fail-closed resource errors are test failures
+    # rather than conftest collection errors. No uploader can run before this fixture.
+    from osm_polygon_website_tag.application import source_processing as source_processing_module
+    from osm_polygon_website_tag.publishing import incremental as incremental_module
+    from osm_polygon_website_tag.publishing import publish as publish_module
 
     # Each module binds the uploader at import time, so every binding is closed.
     for module in (publish_module, incremental_module, source_processing_module):

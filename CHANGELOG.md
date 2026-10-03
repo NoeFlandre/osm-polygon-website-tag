@@ -4,6 +4,9 @@ This file records all notable changes to this project. The format follows [Keep 
 
 ## [Unreleased]
 
+- Read SaT model capabilities from a versioned, digest-checked offline reference.
+  Preserve sentence-routing policy, runtime model pins, and historical fingerprints.
+
 ### Added
 
 - The global options `--version`, `-v`/`-vv` and `-q` (#69).

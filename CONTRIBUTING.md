@@ -54,3 +54,8 @@ Make one commit for each issue. Start the message with a short conventional pref
 ## Report a vulnerability
 
 Do not open a public issue. Read [SECURITY.md](SECURITY.md).
+
+## Shared sentence-model capabilities
+
+See [Shared SaT capabilities](docs/sat-capabilities.md) for ownership, offline pins,
+cross-repository drift checks, and the reviewed update procedure.

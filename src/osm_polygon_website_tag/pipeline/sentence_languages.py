@@ -12,6 +12,8 @@ GlotLID prefers for them, both resolve to one segmenter code.
 
 from __future__ import annotations
 
+from osm_polygon_website_tag.pipeline.sat_capabilities import load_supported_languages
+
 # ISO 639-1 code -> the ISO 639-3 subtags GlotLID may emit for that language.
 _SAT_CODE_TO_GLOTLID_SUBTAGS: dict[str, tuple[str, ...]] = {
     "af": ("afr",),
@@ -101,7 +103,7 @@ _SAT_CODE_TO_GLOTLID_SUBTAGS: dict[str, tuple[str, ...]] = {
     "zu": ("zul",),
 }
 
-SAT_LANGUAGE_CODES = frozenset(_SAT_CODE_TO_GLOTLID_SUBTAGS)
+SAT_LANGUAGE_CODES = frozenset(load_supported_languages())
 
 _SUBTAG_TO_SAT_CODE: dict[str, str] = {
     subtag: code for code, subtags in _SAT_CODE_TO_GLOTLID_SUBTAGS.items() for subtag in subtags
@@ -115,7 +117,8 @@ def sat_code_for_glotlid_label(label: object) -> str | None:
     if not isinstance(label, str):
         return None
     subtag = label.partition("_")[0]
-    return _SUBTAG_TO_SAT_CODE.get(subtag)
+    code = _SUBTAG_TO_SAT_CODE.get(subtag)
+    return code if code in SAT_LANGUAGE_CODES else None
 
 
 __all__ = [

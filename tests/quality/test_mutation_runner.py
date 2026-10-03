@@ -438,3 +438,82 @@ def test_mutant_cli_filter_parser_skips_option_values() -> None:
         ["run", "--max-children", "4", "--profile=fast", "package.module.*"]
     ) == ("package.module.*",)
     assert mutation_runner._mutant_names_from_cli(["results", "package.module.*"]) == ()
+
+
+def test_stats_do_not_attribute_collection_imports_to_the_first_test(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import mutmut
+    import mutmut.__main__ as mutmut_main
+
+    class FakeRunner:
+        def _pytest_args_regular_run(self, tests):
+            return [*tests]
+
+        def execute_pytest(self, params, **kwargs):
+            collector = kwargs["plugins"][0]
+            item = SimpleNamespace(nodeid=params[0], _nodeid=params[0])
+            mutmut._stats.add("collection_only")
+            collector.pytest_runtest_logstart(params[0], None)
+            assert not mutmut._stats
+            mutmut._stats.update({"setup_call", "body_call", "teardown_call"})
+            collector.pytest_runtest_makereport(item, SimpleNamespace(duration=0.25))
+            collector.pytest_runtest_logfinish(params[0], None)
+            assert not mutmut._stats
+            return 0
+
+    monkeypatch.setattr(mutmut_main, "PytestRunner", FakeRunner)
+    output = tmp_path / "stats.json"
+    assert mutation_runner._run_stats_child(output, ["tests/test_one.py::test_one"]) == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["tests_by_mangled_function_name"] == {
+        "setup_call": ["tests/test_one.py::test_one"],
+        "body_call": ["tests/test_one.py::test_one"],
+        "teardown_call": ["tests/test_one.py::test_one"],
+    }
+    assert payload["duration_by_test"] == {"tests/test_one.py::test_one": 0.25}
+
+
+def test_real_pytest_lifecycle_keeps_fixture_finalizers_with_their_test(tmp_path: Path) -> None:
+    import subprocess
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.mutmut]\nsource_paths = ["."]\n', encoding="utf-8"
+    )
+    test_file = tmp_path / "test_lifecycle.py"
+    test_file.write_text(
+        "import mutmut\nimport pytest\n"
+        "mutmut._stats.add('collection_only')\n"
+        "@pytest.fixture\ndef tracked():\n"
+        "    mutmut._stats.add('setup_call')\n"
+        "    yield\n"
+        "    mutmut._stats.add('teardown_call')\n"
+        "def test_one(tracked):\n    mutmut._stats.add('body_call')\n"
+        "def test_two():\n    mutmut._stats.add('second_body')\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "stats.json"
+    code = (
+        "from pathlib import Path; import sys; "
+        "from scripts.quality import mutation_runner as runner; "
+        "runner._mutants_directory = lambda: Path.cwd(); "
+        "raise SystemExit(runner._run_stats_child(Path(sys.argv[1]), [sys.argv[2]]))"
+    )
+    environment = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2]))
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(output), str(test_file)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    associations = json.loads(output.read_text(encoding="utf-8"))["tests_by_mangled_function_name"]
+    assert associations == {
+        "setup_call": ["test_lifecycle.py::test_one"],
+        "body_call": ["test_lifecycle.py::test_one"],
+        "teardown_call": ["test_lifecycle.py::test_one"],
+        "second_body": ["test_lifecycle.py::test_two"],
+    }
