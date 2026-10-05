@@ -1294,3 +1294,65 @@ def test_sync_records_the_receipt_hash_without_rescanning_the_installed_shard(
     assert bundle.source_shard not in scanned
     source = load_run(run_dir).sources[f"{Path(bundle.source_shard).stem}.osm.pbf"]
     assert source["public_shard_sha256"] == result.shard_sha256
+
+
+def _language_bundle_and_source(tmp_path: Path) -> tuple[grid5000.Grid5000Bundle, Path, Path]:
+    run_dir = _write_enriched_run(tmp_path)
+    model = tmp_path / "model_v3.bin"
+    model.write_bytes(b"model")
+    bundle = grid5000.prepare_language_bundle(
+        run_dir, tmp_path / "bundle", model_path=model, commit="abc123"
+    )
+    source = tmp_path / "bundle" / bundle.source_shard
+    target = tmp_path / "copy-target"
+    target.mkdir()
+    return bundle, source, target
+
+
+def test_copy_checkpoint_without_a_checkpoint_stages_nothing(tmp_path: Path) -> None:
+    bundle, source, target = _language_bundle_and_source(tmp_path)
+
+    grid5000._copy_checkpoint(source, target, bundle)
+
+    assert list(target.iterdir()) == []
+
+
+def test_copy_checkpoint_rejects_a_file_in_place_of_the_directory(tmp_path: Path) -> None:
+    bundle, source, target = _language_bundle_and_source(tmp_path)
+    checkpoint_path = source.with_name(f".{source.name}.language.parts")
+    checkpoint_path.write_text("file", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^language checkpoint is not a directory: {re.escape(str(checkpoint_path))}$",
+    ):
+        grid5000._copy_checkpoint(source, target, bundle)
+
+
+def test_copy_checkpoint_rejects_a_prefix_beyond_the_bundle_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, source, target = _language_bundle_and_source(tmp_path)
+    checkpoint_dir = source.with_name(f".{source.name}.language.parts")
+    checkpoint_dir.mkdir()
+    seen: dict[str, object] = {}
+
+    def load(path: Path, **kwargs: object) -> Checkpoint:
+        seen["path"] = path
+        seen["kwargs"] = kwargs
+        return Checkpoint(checkpoint_dir, (), bundle.source_row_count + 1)
+
+    monkeypatch.setattr(grid5000, "load_language_checkpoint", load)
+
+    with pytest.raises(ValueError, match=r"^language checkpoint exceeds bundle row count$"):
+        grid5000._copy_checkpoint(source, target, bundle)
+
+    assert seen == {
+        "path": source,
+        "kwargs": {
+            "source_row_count": bundle.source_row_count,
+            "source_shard_sha256": bundle.source_shard_sha256,
+            "model": bundle.model,
+        },
+    }
+    assert list(target.iterdir()) == []

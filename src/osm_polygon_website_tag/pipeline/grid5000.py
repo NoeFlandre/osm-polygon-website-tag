@@ -15,6 +15,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     is_current_public_polygon_schema,
     schema_matches,
 )
+from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint
 from osm_polygon_website_tag.pipeline.detect_languages import (
     LanguageDetectionResult,
     detect_language_shard,
@@ -62,6 +63,7 @@ from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
     load_language_checkpoint,
 )
+from osm_polygon_website_tag.pipeline.stage_sync import copy_checkpoint, validate_completed_shard
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ENRICHED,
     STATUS_ENRICHING,
@@ -313,20 +315,19 @@ def _validate_sync_state(state: RunState, bundle: Grid5000Bundle) -> None:
 
 def _copy_checkpoint(source: Path, target: Path, bundle: Grid5000Bundle) -> None:
     """Validate and copy an existing source-bound checkpoint prefix."""
-    checkpoint_dir = language_checkpoint_store().directory_for(source)
-    if not checkpoint_dir.exists():
-        return
-    if not checkpoint_dir.is_dir():
-        raise ValueError(f"language checkpoint is not a directory: {checkpoint_dir}")
-    checkpoint = load_language_checkpoint(
-        source,
-        source_row_count=bundle.source_row_count,
-        source_shard_sha256=bundle.source_shard_sha256,
-        model=bundle.model,
-    )
-    if checkpoint.completed_rows > bundle.source_row_count:
-        raise ValueError("language checkpoint exceeds bundle row count")
-    shutil.copytree(checkpoint.directory, target / checkpoint.directory.name)
+
+    def load() -> Checkpoint:
+        checkpoint = load_language_checkpoint(
+            source,
+            source_row_count=bundle.source_row_count,
+            source_shard_sha256=bundle.source_shard_sha256,
+            model=bundle.model,
+        )
+        if checkpoint.completed_rows > bundle.source_row_count:
+            raise ValueError("language checkpoint exceeds bundle row count")
+        return checkpoint
+
+    copy_checkpoint(source, target, store=language_checkpoint_store(), label="language", load=load)
 
 
 def _sync_completed_shard(
@@ -388,13 +389,13 @@ def _sync_paused_checkpoint(
 
 def _validate_completed_shard(path: Path, result: Grid5000Result) -> None:
     """Validate schema, row count, digest, and language completeness."""
-    parquet = pq.ParquetFile(path)
-    if parquet.metadata.num_rows != result.source_row_count:
-        raise ValueError("completed language shard row count does not match result")
-    if not schema_matches(parquet.schema_arrow, POLYGON_PUBLIC_SCHEMA_V1_4):
-        raise ValueError("completed language shard schema mismatch")
-    if hash_shard(path) != result.shard_sha256:
-        raise ValueError("completed language shard hash does not match result")
+    validate_completed_shard(
+        path,
+        row_count=result.source_row_count,
+        sha256=result.shard_sha256,
+        schema=POLYGON_PUBLIC_SCHEMA_V1_4,
+        label="language",
+    )
     if shard_needs_language_detection(path):
         raise ValueError("completed language shard still needs detection")
 

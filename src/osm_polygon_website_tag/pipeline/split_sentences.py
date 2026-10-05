@@ -24,7 +24,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.sentence_schema import SENTENCE_SCHEMA_VERSION
-from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
+from osm_polygon_website_tag.pipeline.checkpoint_storage import (
+    Checkpoint,
+    CheckpointStore,
+    skip_checkpointed_rows,
+)
 from osm_polygon_website_tag.pipeline.sentence_checkpoint import (
     load_sentence_checkpoint,
     sentence_checkpoint_store,
@@ -189,7 +193,7 @@ def _process_batches(
     max_batch_rows = 0
     next_part_index = context.next_part_index
     for batch in context.parquet.iter_batches(batch_size=batch_rows):
-        originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
+        originals, rows_to_skip = skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
         if not originals:
             continue
         if deadline_reached(deadline, clock):
@@ -211,13 +215,6 @@ def _migrate_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     for row in rows:
         row["schema_version"] = SENTENCE_SCHEMA_VERSION
     return rows
-
-
-def _skip_checkpointed_rows(
-    originals: list[dict[str, object]], rows_to_skip: int
-) -> tuple[list[dict[str, object]], int]:
-    """Drop the durable prefix from one Arrow batch."""
-    return originals[rows_to_skip:], max(0, rows_to_skip - len(originals))
 
 
 def _promote_shard(context: _Context, batch_rows: int, max_batch_rows: int) -> int:

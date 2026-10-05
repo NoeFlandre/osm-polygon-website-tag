@@ -219,16 +219,6 @@ def test_a_non_positive_time_budget_is_rejected(tmp_path: Path) -> None:
             )
 
 
-def test_skip_checkpointed_rows_covers_whole_partial_and_empty_prefixes() -> None:
-    originals: list[dict] = [{"id": 1}, {"id": 2}]
-
-    assert split_sentences._skip_checkpointed_rows(originals, 3) == ([], 1)
-    # Exactly the batch width must consume the whole batch, not fall through.
-    assert split_sentences._skip_checkpointed_rows(originals, 2) == ([], 0)
-    assert split_sentences._skip_checkpointed_rows(originals, 1) == ([{"id": 2}], 0)
-    assert split_sentences._skip_checkpointed_rows(originals, 0) == (originals, 0)
-
-
 def test_a_failure_removes_the_staged_file_and_keeps_the_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -254,7 +244,7 @@ def test_a_row_count_that_changed_under_the_run_is_rejected(
 ) -> None:
     shard = _write(tmp_path / "region.parquet", [language_polygon_row(0), language_polygon_row(1)])
     monkeypatch.setattr(
-        split_sentences, "_skip_checkpointed_rows", lambda originals, skip: ([], skip)
+        split_sentences, "skip_checkpointed_rows", lambda originals, skip: ([], skip)
     )
 
     with pytest.raises(ValueError, match=rf"^{re.escape('sentence row count changed')}$"):
