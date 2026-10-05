@@ -356,8 +356,8 @@ def test_centroid_agrees_with_trusted_implementation() -> None:
         (1_000_000_000.0, ">=1000km2"),
     ],
 )
-def test_validation_area_bucket_labels_every_boundary(area_m2: float, label: str) -> None:
-    assert geometry_module._validation_area_bucket(area_m2) == label
+def test_area_bucket_labels_every_boundary(area_m2: float, label: str) -> None:
+    assert geometry_module._area_bucket(area_m2) == label
 
 
 def test_geometry_from_geojson_pins_every_public_field() -> None:
