@@ -12,6 +12,7 @@ from osm_polygon_website_tag.application.inventory import (
     discover_sources,
     source_inventory_matches_expected,
 )
+from osm_polygon_website_tag.application.progress import report_progress
 from osm_polygon_website_tag.application.resume_planner import (
     prepare_resume_priorities,
     prioritize_sources,
@@ -253,7 +254,9 @@ def _frozen_snapshot_result(
             "frozen snapshot is missing its completion receipt; "
             "run finalize-snapshot before resuming"
         )
-    _progress(progress, "Frozen snapshot is already complete; skipping enrichment and uploads")
+    report_progress(
+        progress, "Frozen snapshot is already complete; skipping enrichment and uploads"
+    )
     return WorkflowResult(
         run_dir=run_dir,
         source_count=len(state.sources),
@@ -339,7 +342,7 @@ def _refresh_legacy_card_if_needed(
 ) -> tuple[RunState, str]:
     if status != STATUS_COMPLETE or not _card_refresh_needed(run_dir):
         return state, status
-    _progress(progress, "Refreshing the legacy dataset card and H3 density map")
+    report_progress(progress, "Refreshing the legacy dataset card and H3 density map")
     refreshed = refresh_card_run(run_dir)
     if not refreshed.ok:
         raise ValueError(f"legacy card refresh failed: {refreshed.verification.errors}")
@@ -398,7 +401,7 @@ def _ensure_dataset_repo(
     progress: Callable[[str], None] | None,
 ) -> None:
     if apply and ensure_repo:
-        _progress(progress, f"Ensuring Hugging Face dataset repository {repo_id}")
+        report_progress(progress, f"Ensuring Hugging Face dataset repository {repo_id}")
         create_repo(repo_id=repo_id, exist_ok=True)
 
 
@@ -578,7 +581,7 @@ def _complete_workflow(status: str, context: SourceProcessingContext) -> str:
 def _build_analysis_if_needed(status: str, context: SourceProcessingContext) -> str:
     if status != STATUS_ENRICHED:
         return status
-    _progress(context.progress, "Building aggregate analysis")
+    report_progress(context.progress, "Building aggregate analysis")
     analyze_results(context.run_dir)
     transition_status(context.state, STATUS_ANALYZED)
     return STATUS_ANALYZED
@@ -587,7 +590,7 @@ def _build_analysis_if_needed(status: str, context: SourceProcessingContext) -> 
 def _build_card_if_needed(status: str, context: SourceProcessingContext) -> str:
     if status != STATUS_ANALYZED:
         return status
-    _progress(context.progress, "Building artifact-derived dataset card")
+    report_progress(context.progress, "Building artifact-derived dataset card")
     build_card(context.run_dir)
     transition_status(context.state, STATUS_CARD_BUILT)
     return STATUS_CARD_BUILT
@@ -596,7 +599,7 @@ def _build_card_if_needed(status: str, context: SourceProcessingContext) -> str:
 def _finalize_if_needed(status: str, context: SourceProcessingContext) -> str:
     if status != STATUS_CARD_BUILT:
         return status
-    _progress(context.progress, "Verifying and finalizing the complete run")
+    report_progress(context.progress, "Verifying and finalizing the complete run")
     final = finalize_run(context.run_dir)
     if not final.ok:
         raise ValueError(f"final verification failed: {final.verification.errors}")
@@ -605,13 +608,8 @@ def _finalize_if_needed(status: str, context: SourceProcessingContext) -> str:
 
 def _publish_complete_run(status: str, context: SourceProcessingContext) -> None:
     if status == STATUS_COMPLETE and context.apply:
-        _progress(context.progress, "Uploading the receipt-bound complete dataset")
+        report_progress(context.progress, "Uploading the receipt-bound complete dataset")
         publish_to_hf(context.run_dir, repo_id=context.repo_id, dry_run=False)
-
-
-def _progress(callback: Callable[[str], None] | None, message: str) -> None:
-    if callback is not None:
-        callback(message)
 
 
 def _card_refresh_needed(run_dir: Path) -> bool:

@@ -486,7 +486,7 @@ def _accumulate_batch(
 def _accumulate_area(accumulator: _Accumulator, area_m2: float, _primary_tag: str) -> None:
     """Record one row's surface and its bounded area counters."""
     accumulator.row_count += 1
-    accumulator.buckets[_area_bucket(area_m2)] += 1
+    accumulator.buckets[_stats_area_bucket(area_m2)] += 1
     if area_m2 == 0.0:
         accumulator.zero_area_row_count += 1
     if area_m2 < TINY_AREA_M2:
@@ -620,7 +620,7 @@ def _vertex_count(rings: Sequence[Any]) -> int:
     return sum(len(ring) for ring in rings)
 
 
-def _area_bucket(area_m2: float) -> str:
+def _stats_area_bucket(area_m2: float) -> str:
     """Return the stable log-scale bucket label for one area."""
     if area_m2 == 0.0:
         return "0"

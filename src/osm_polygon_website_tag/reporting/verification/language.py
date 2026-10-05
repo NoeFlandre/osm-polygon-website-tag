@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Collection
 from pathlib import Path
 
 import pyarrow as pa
 
 from osm_polygon_website_tag.contracts.language_schema import LANGUAGE_COLUMN_NAMES
+from osm_polygon_website_tag.pipeline.detect_languages import valid_probability
 from osm_polygon_website_tag.reporting.verification.shard_scan import (
     iter_bounded_batches,
     verify_optional_shard,
@@ -97,23 +97,13 @@ def _verify_successful_language_pair(
     """Verify a successful text result has a complete language pair."""
     if not isinstance(label, str) or not label.strip():
         errors.append(f"{location} language label is missing")
-    if not _valid_probability(probability):
+    if not valid_probability(probability):
         errors.append(f"{location} language probability is invalid")
 
 
 def _has_language_values(label: object, probability: object) -> bool:
     """Return whether a non-successful row has a populated language field."""
     return label is not None or probability is not None
-
-
-def _valid_probability(value: object) -> bool:
-    """Return whether a language probability is a finite value in [0, 1]."""
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-        and 0.0 <= float(value) <= 1.0
-    )
 
 
 __all__ = ["verify_language_invariants", "verify_language_paths"]

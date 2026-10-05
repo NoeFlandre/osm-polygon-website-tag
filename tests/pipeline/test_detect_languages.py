@@ -879,14 +879,16 @@ def test_invalid_language_prediction_and_probability_fail_closed() -> None:
     assert row == {"website_language": "eng_Latn", "website_language_probability": 0.9}
 
 
-@pytest.mark.parametrize("value", [0, 1, 0.5])
+@pytest.mark.parametrize("value", [0, 1, 0.0, 1.0, 0.5])
 def test_valid_probability_accepts_unit_interval(value: float) -> None:
-    assert detection._valid_probability(value) is True
+    assert detection.valid_probability(value) is True
 
 
-@pytest.mark.parametrize("value", [True, None, -0.1, 1.1])
+@pytest.mark.parametrize(
+    "value", [True, False, None, "0.5", -0.1, 1.1, float("nan"), float("inf"), float("-inf")]
+)
 def test_valid_probability_rejects_invalid_values(value: object) -> None:
-    assert detection._valid_probability(value) is False
+    assert detection.valid_probability(value) is False
 
 
 def test_resolved_non_success_text_status_is_preserved_without_language(tmp_path: Path) -> None:

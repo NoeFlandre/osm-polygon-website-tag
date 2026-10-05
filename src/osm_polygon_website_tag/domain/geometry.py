@@ -100,7 +100,7 @@ def _round_ring(ring_coords: list[list[float]]) -> list[list[float]]:
     return [[_round_coord(x), _round_coord(y)] for (x, y) in ring_coords]
 
 
-def _area_bucket(area_m2: float) -> str:
+def _validation_area_bucket(area_m2: float) -> str:
     limits = (10.0, 100.0, 1_000_000.0, 10_000_000.0, 100_000_000.0, 1_000_000_000.0)
     labels = (
         "<10m2",
@@ -306,7 +306,7 @@ def geometry_from_geojson(raw_geojson: str) -> PolygonGeometry:
         bbox=bbox,
         area_m2=area_m2,
         area_km2=area_km2,
-        area_bucket=_area_bucket(area_m2),
+        area_bucket=_validation_area_bucket(area_m2),
     )
 
 
