@@ -576,14 +576,21 @@ def test_validate_completed_shard_checks_rows_schema_and_digest(tmp_path: Path) 
 
     grid5000_sentences._validate_completed_shard(shard, outcome)
 
-    with pytest.raises(ValueError, match="row count does not match"):
+    with pytest.raises(
+        ValueError,
+        match=r"^completed sentence shard row count does not match result: alpha\.parquet$",
+    ):
         grid5000_sentences._validate_completed_shard(
             shard, replace(outcome, row_count=outcome.row_count + 1)
         )
-    with pytest.raises(ValueError, match="hash does not match"):
+    with pytest.raises(
+        ValueError, match=r"^completed sentence shard hash does not match result: alpha\.parquet$"
+    ):
         grid5000_sentences._validate_completed_shard(shard, replace(outcome, shard_sha256="d" * 64))
     unsegmented = _write_shard(tmp_path / "v14.parquet", [language_polygon_row(0)])
-    with pytest.raises(ValueError, match="schema mismatch"):
+    with pytest.raises(
+        ValueError, match=r"^completed sentence shard schema mismatch: v14\.parquet$"
+    ):
         grid5000_sentences._validate_completed_shard(
             unsegmented,
             replace(outcome, row_count=1, shard_sha256=hash_shard(unsegmented)),
