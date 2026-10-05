@@ -41,6 +41,7 @@ from osm_polygon_website_tag.reporting.text_population import (
     TextPopulationSummary,
     compute_text_population_summary,
 )
+from osm_polygon_website_tag.storage.parquet import parquet_row_count
 
 # Footer reads are latency bound, so concurrency buys what a bigger buffer
 # cannot. Eight matches a typical workstation without oversubscribing a CI
@@ -207,7 +208,7 @@ def _add_public_shard_stats(stats: CardStats, public_shards: Collection[Path]) -
     for shard in public_shards:
         _add_enriched_source_count(stats, shard)
         stats.per_source_counts.append(
-            {"source_pbf": f"{shard.stem}.osm.pbf", "row_count": _parquet_row_count(shard)}
+            {"source_pbf": f"{shard.stem}.osm.pbf", "row_count": parquet_row_count(shard)}
         )
 
 
@@ -325,11 +326,6 @@ def _non_empty_successful_text_mask(text: pa.Array, status: pa.Array) -> pa.Arra
     return pc.fill_null(call_arrow_kernel("and_kleene", successful, non_empty), False)
 
 
-def _parquet_row_count(path: Path) -> int:
-    """Read a shard row count without materialising its columns."""
-    return int(pq.ParquetFile(path).metadata.num_rows)
-
-
 def _add_analysis_stats(
     stats: CardStats,
     analysis_dir: Path,
@@ -431,7 +427,7 @@ def _combined_language_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 def _optional_row_count(path: Path) -> int:
     """Return a table's row count, or zero when it was not published."""
-    return _parquet_row_count(path) if path.exists() else 0
+    return parquet_row_count(path) if path.exists() else 0
 
 
 def _add_cell_stats(stats: CardStats, path: Path) -> None:
@@ -491,7 +487,7 @@ def _count_parquets(paths: Iterable[Path]) -> int:
     if not ordered:
         return 0
     with ThreadPoolExecutor(max_workers=_FOOTER_READ_WORKERS) as pool:
-        return sum(pool.map(_parquet_row_count, ordered))
+        return sum(pool.map(parquet_row_count, ordered))
 
 
 def _add_text_stats(stats: CardStats, shard: Path) -> None:

@@ -181,3 +181,14 @@ def test_a_finished_run_can_start_a_new_bar(monkeypatch: pytest.MonkeyPatch) -> 
     reporter("[1/2] b")
 
     assert [bar.total for bar in _FakeTqdm.instances] == [3, 2]
+
+
+def test_report_progress_forwards_the_message_when_a_callback_is_set() -> None:
+    from osm_polygon_website_tag.application.progress import report_progress
+
+    messages: list[str] = []
+
+    report_progress(messages.append, "kept")
+    report_progress(None, "ignored")
+
+    assert messages == ["kept"]

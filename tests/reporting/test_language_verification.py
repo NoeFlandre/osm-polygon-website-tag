@@ -9,6 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from osm_polygon_website_tag.pipeline.detect_languages import valid_probability
 from osm_polygon_website_tag.reporting.verification import language as language_module
 from osm_polygon_website_tag.reporting.verification import shard_scan
 from osm_polygon_website_tag.reporting.verification.language import verify_language_invariants
@@ -359,7 +360,7 @@ def test_valid_probability_accepts_only_finite_numbers_in_range(
     value: object,
     expected: bool,
 ) -> None:
-    assert language_module._valid_probability(value) is expected
+    assert valid_probability(value) is expected
 
 
 @pytest.mark.parametrize(

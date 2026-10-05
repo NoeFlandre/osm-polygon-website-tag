@@ -498,9 +498,9 @@ def test_publication_helpers_keep_previous_sources_and_ignore_false_uploads(
     }
 
     context.progress = None
-    source_processing._progress(context.progress, "ignored")
+    source_processing.report_progress(context.progress, "ignored")
     messages: list[str] = []
-    source_processing._progress(messages.append, "kept")
+    source_processing.report_progress(messages.append, "kept")
     assert messages == ["kept"]
     assert source_processing._public_shard_path(tmp_path, source) == (
         tmp_path / "polygons" / "a.parquet"

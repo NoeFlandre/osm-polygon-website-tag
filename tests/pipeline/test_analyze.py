@@ -25,7 +25,6 @@ from osm_polygon_website_tag.pipeline.analyze import (
     _directory_row_count,
     _duckdb_extract_hostname,
     _global_cell_rows,
-    _parquet_row_count,
     _public_columns,
     _validate_analysis_inputs,
     _write_arrow_table,
@@ -39,6 +38,7 @@ from osm_polygon_website_tag.pipeline.analyze import (
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.runtime.run_state import initialise_run
 from osm_polygon_website_tag.storage.duckdb_engine import EIGHT_CELL_LABELS
+from osm_polygon_website_tag.storage.parquet import parquet_row_count
 
 
 def _write_comparison_shard(
@@ -116,7 +116,7 @@ def test_analyze_private_count_and_input_helpers(tmp_path: Path) -> None:
     assert _directory_row_count(run_dir / "polygons") == 0
     empty = tmp_path / "empty.parquet"
     pq.write_table(pa.table({"value": pa.array([], type=pa.int64())}), empty)
-    assert _parquet_row_count(empty) == 0
+    assert parquet_row_count(empty) == 0
     _validate_analysis_inputs(
         run_dir,
         run_dir / "polygons",
@@ -1233,7 +1233,7 @@ def test_analysis_summary_reports_absent_cells_as_zero(
     monkeypatch.setattr(module, "_directory_row_count", lambda path: {"p": 11, "r": 12}[path.name])
     monkeypatch.setattr(
         module,
-        "_parquet_row_count",
+        "parquet_row_count",
         lambda path: {"duplicate_observations.parquet": 13, "conflicting_snapshots.parquet": 14}[
             path.name
         ],

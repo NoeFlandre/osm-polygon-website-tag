@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Callable
 from typing import TextIO
 
 from tqdm import tqdm
+
+
+def report_progress(callback: Callable[[str], None] | None, message: str) -> None:
+    """Send ``message`` to ``callback`` when one is configured."""
+    if callback is not None:
+        callback(message)
+
 
 _COUNTED_MESSAGE = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
 

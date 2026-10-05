@@ -22,13 +22,13 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
     _accumulate_extent,
     _accumulate_shape,
     _Accumulator,
-    _area_bucket,
     _bbox_metre_values,
     _coordinates,
     _geodesic_lengths,
     _geometry_shape,
     _midpoints,
     _parse_bbox,
+    _stats_area_bucket,
     _widen_bbox,
     compute_geometry_stats,
     render_geometry_stats,
@@ -301,7 +301,7 @@ def test_antimeridian_and_polar_bounding_boxes_are_counted(tmp_path: Path) -> No
     assert stats.extent.bbox == [-179.0, -86.0, 179.0, 86.0]
 
 
-def test_area_buckets_are_stable_log_decades() -> None:
+def test_stats_area_buckets_are_stable_log_decades() -> None:
     assert AREA_BUCKET_LABELS == (
         "0",
         "<1e0",
@@ -317,13 +317,13 @@ def test_area_buckets_are_stable_log_decades() -> None:
         "1e9-1e10",
         ">=1e10",
     )
-    assert _area_bucket(0.0) == "0"
-    assert _area_bucket(0.5) == "<1e0"
-    assert _area_bucket(1.0) == "1e0-1e1"
-    assert _area_bucket(9.999) == "1e0-1e1"
-    assert _area_bucket(10.0) == "1e1-1e2"
-    assert _area_bucket(9.9e9) == "1e9-1e10"
-    assert _area_bucket(1e10) == ">=1e10"
+    assert _stats_area_bucket(0.0) == "0"
+    assert _stats_area_bucket(0.5) == "<1e0"
+    assert _stats_area_bucket(1.0) == "1e0-1e1"
+    assert _stats_area_bucket(9.999) == "1e0-1e1"
+    assert _stats_area_bucket(10.0) == "1e1-1e2"
+    assert _stats_area_bucket(9.9e9) == "1e9-1e10"
+    assert _stats_area_bucket(1e10) == ">=1e10"
 
 
 def test_histogram_counts_every_bucket_of_a_run(tmp_path: Path) -> None:
