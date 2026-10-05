@@ -336,3 +336,46 @@ def test_centroid_agrees_with_trusted_implementation() -> None:
     # Centroid of a symmetric square at (lat=5, lon=5) -- close to 5,5.
     assert geom_record.lat == pytest.approx(5.0, abs=1e-3)
     assert geom_record.lon == pytest.approx(5.0, abs=1e-3)
+
+
+@pytest.mark.parametrize(
+    ("area_m2", "label"),
+    [
+        (0.0, "<10m2"),
+        (9.999, "<10m2"),
+        (10.0, "10-100m2"),
+        (99.999, "10-100m2"),
+        (100.0, "100m2-1km2"),
+        (999_999.0, "100m2-1km2"),
+        (1_000_000.0, "1-10km2"),
+        (9_999_999.0, "1-10km2"),
+        (10_000_000.0, "10-100km2"),
+        (99_999_999.0, "10-100km2"),
+        (100_000_000.0, "100km2-1000km2"),
+        (999_999_999.0, "100km2-1000km2"),
+        (1_000_000_000.0, ">=1000km2"),
+    ],
+)
+def test_validation_area_bucket_labels_every_boundary(area_m2: float, label: str) -> None:
+    assert geometry_module._validation_area_bucket(area_m2) == label
+
+
+def test_geometry_from_geojson_pins_every_public_field() -> None:
+    raw = (
+        '{"type":"Polygon","coordinates":'
+        "[[[10,20],[10.001,20],[10.001,20.002],[10,20.002],[10,20]]]}"
+    )
+
+    result = geometry_module.geometry_from_geojson(raw)
+
+    assert result.geometry == (
+        '{"coordinates":[[[10.0,20.0],[10.001,20.0],[10.001,20.002],[10.0,20.002],'
+        '[10.0,20.0]]],"type":"Polygon"}'
+    )
+    assert result.centroid == '{"coordinates":[10.0005,20.001],"type":"Point"}'
+    assert result.centroid_kind == "lambert_azimuthal_equal_area"
+    assert (result.lon, result.lat) == (10.0005, 20.001)
+    assert result.bbox == [10.0, 20.0, 10.001, 20.002]
+    assert result.area_m2 == pytest.approx(23169.618677943945)
+    assert result.area_km2 == pytest.approx(result.area_m2 / 1_000_000.0, rel=1e-12)
+    assert result.area_bucket == "100m2-1km2"
