@@ -9,7 +9,6 @@ live here so neither stage owns a private copy of them.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import shutil
@@ -30,6 +29,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     transition_status,
 )
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
+from osm_polygon_website_tag.storage.digest import canonical_json_sha256
 
 BUNDLE_SCHEMA_VERSION = 1
 BUNDLE_MANIFEST_NAME = "bundle.json"
@@ -293,8 +293,7 @@ def install_validated_shard(
 
 def receipt_digest(payload: Mapping[str, object]) -> str:
     """Return the short, key-order-independent digest naming a history file."""
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+    return canonical_json_sha256(payload)[:16]
 
 
 def is_unfinished_source_shard(

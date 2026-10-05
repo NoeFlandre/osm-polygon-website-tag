@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Required, TypedDict, cast
 
+from osm_polygon_website_tag.storage.digest import sha256_file
+
 # Run state names. Transitions are documented in the module docstring.
 STATUS_INITIALIZED = "initialized"
 STATUS_EXTRACTING = "extracting"
@@ -389,13 +391,7 @@ def _add_optional_source_metadata(entry: SourceManifestEntry, **values: str | No
 
 def hash_shard(shard_path: Path) -> str:
     """Compute the SHA-256 of a Parquet shard's bytes."""
-    import hashlib
-
-    h = hashlib.sha256()
-    with shard_path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    return sha256_file(shard_path)
 
 
 def update_public_shard_metadata(

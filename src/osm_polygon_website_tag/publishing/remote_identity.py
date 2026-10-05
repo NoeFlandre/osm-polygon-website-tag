@@ -7,13 +7,13 @@ plan. ``release`` orchestrates these checks; this module never uploads.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from osm_polygon_website_tag.publishing.hf_token import resolve_hf_token
 from osm_polygon_website_tag.reporting.artifact_inventory import hash_file
+from osm_polygon_website_tag.storage.digest import canonical_json_sha256
 
 if TYPE_CHECKING:
     from osm_polygon_website_tag.publishing.release import ReleasedFile
@@ -201,12 +201,7 @@ def _remote_data_manifest_sha256(api: Any, repo_id: str, revision: str) -> str:
         *parquet_entries.values(),
         *_remote_text_population_manifest_entries(api, repo_id, revision, parquet_entries),
     ]
-    canonical = json.dumps(
-        sorted(entries, key=lambda item: str(item["path"])),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return canonical_json_sha256(sorted(entries, key=lambda item: str(item["path"])))
 
 
 def _remote_text_population_manifest_entries(
@@ -290,12 +285,7 @@ def _verify_remote_data_identity(
 def _remote_parquet_data_identity(api: Any, repo_id: str, revision: str) -> str:
     """Hash remote Parquet metadata without downloading potentially huge shards."""
     entries = _remote_parquet_entries(api, repo_id, revision)
-    canonical = json.dumps(
-        sorted(entries.values(), key=lambda item: str(item["path"])),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return canonical_json_sha256(sorted(entries.values(), key=lambda item: str(item["path"])))
 
 
 def _remote_parquet_entries(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -42,6 +41,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     load_run,
     transition_status,
 )
+from osm_polygon_website_tag.storage.digest import canonical_json_sha256
 
 
 @dataclass
@@ -183,14 +183,13 @@ def _write_completion_receipt(root: Path) -> dict[str, Any]:
         }
         for path in publishable_paths(root)
     ]
-    canonical = json.dumps(artifacts, sort_keys=True, separators=(",", ":"))
     sources = json.loads((root / "manifests" / "sources.json").read_bytes())
     receipt = {
         "schema_version": "v1.2",
         "digest_algorithm": "sha256",
         "data_manifest_sha256": data_manifest_sha256(root),
         "text_population_manifest": list(text_population_manifest_entries(root)),
-        "manifest_digest": hashlib.sha256(canonical.encode()).hexdigest(),
+        "manifest_digest": canonical_json_sha256(artifacts),
         "sources_count": len(sources),
         "artifacts": artifacts,
     }

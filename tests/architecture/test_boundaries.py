@@ -24,10 +24,10 @@ ALLOWED_DEPENDENCIES: dict[str, frozenset[str]] = {
     "domain": frozenset(),
     "storage": frozenset(),
     "web": frozenset({"contracts"}),
-    "runtime": frozenset(),
+    "runtime": frozenset({"storage"}),
     "pipeline": frozenset({"contracts", "domain", "storage", "web", "runtime"}),
     "reporting": frozenset({"contracts", "pipeline", "storage", "runtime"}),
-    "publishing": frozenset({"reporting", "runtime"}),
+    "publishing": frozenset({"reporting", "runtime", "storage"}),
     "application": LAYERS - {"application"},
 }
 

@@ -9,7 +9,7 @@ Adapts verified artifacts to Hugging Face publication.
   owns the read-only Hub checks (`default_hub_verifier`, remote revision, data,
   Parquet, text-population, and per-file size/SHA-256 identity) that the
   release gate runs before and after upload.
-- Dependencies: `reporting` and `runtime`.
+- Dependencies: `reporting`, `runtime`, and `storage`.
 - `incremental` compares content hashes for one polygon shard and the global
   README/YAML/map bundle. It uploads only changed files and atomically records
   `manifests/uploaded_polygons.json` (schema v2), which is operational state

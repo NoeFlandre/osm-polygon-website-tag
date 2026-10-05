@@ -3,7 +3,7 @@
 Defines configuration, local paths, safety, and resumable run lifecycle.
 
 - Modules: `config`, `paths`, `safety`, `run_state`.
-- Dependencies: no other project package.
+- Dependencies: `storage` (shard hashing only).
 - Entry points: `Settings()` configuration, safe path resolution, run initialization and transitions.
 - Excludes: extraction, reporting, publication, and application orchestration.
 - Resume manifests are UTF-8 JSON and are validated at the load boundary: source

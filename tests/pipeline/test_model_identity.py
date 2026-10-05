@@ -9,6 +9,7 @@ import pytest
 
 import osm_polygon_website_tag.pipeline.model_identity as model_identity
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
+from osm_polygon_website_tag.storage import digest
 
 
 def test_identity_is_a_value_compared_by_its_four_pinned_fields() -> None:
@@ -40,7 +41,7 @@ def test_sha256_reads_in_bounded_chunks_and_stops_at_empty_chunk(
             return None
 
         def read(self, size: int) -> bytes:
-            assert size == model_identity._HASH_CHUNK_BYTES
+            assert size == digest.HASH_CHUNK_BYTES
             self.sizes.append(size)
             try:
                 return next(self.chunks)
@@ -48,12 +49,12 @@ def test_sha256_reads_in_bounded_chunks_and_stops_at_empty_chunk(
                 raise AssertionError("hash reader was not stopped by an empty chunk") from error
 
     handle = FakeHandle()
-    monkeypatch.setattr(model_identity.Path, "open", lambda _path, _mode: handle)
+    monkeypatch.setattr(digest.Path, "open", lambda _path, _mode: handle)
 
     assert (
         model_identity.sha256_file(tmp_path / "model.bin") == hashlib.sha256(b"model").hexdigest()
     )
-    assert handle.sizes == [model_identity._HASH_CHUNK_BYTES, model_identity._HASH_CHUNK_BYTES]
+    assert handle.sizes == [digest.HASH_CHUNK_BYTES, digest.HASH_CHUNK_BYTES]
 
 
 def test_sha256_directory_covers_nested_files_and_is_stable(tmp_path: Path) -> None:

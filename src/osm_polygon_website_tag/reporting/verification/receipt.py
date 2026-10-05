@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,7 @@ from osm_polygon_website_tag.reporting.card import (
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
+from osm_polygon_website_tag.storage.digest import canonical_json_sha256
 
 _REFRESHABLE_CARD_PATHS = frozenset(
     (
@@ -266,12 +266,8 @@ def _verify_receipt_digest(
     canonical_entries: list[dict[str, Any]],
     errors: list[str],
 ) -> None:
-    canonical = json.dumps(
-        sorted(canonical_entries, key=lambda item: str(item["path"])),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    if receipt.get("manifest_digest") != hashlib.sha256(canonical.encode()).hexdigest():
+    expected = canonical_json_sha256(sorted(canonical_entries, key=lambda item: str(item["path"])))
+    if receipt.get("manifest_digest") != expected:
         errors.append("completion receipt digest mismatch")
 
 
