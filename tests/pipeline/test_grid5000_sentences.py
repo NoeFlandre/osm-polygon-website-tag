@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -20,6 +21,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.pipeline import grid5000_sentences
+from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
 from osm_polygon_website_tag.pipeline.sentence_checkpoint import sentence_checkpoint_store
 from osm_polygon_website_tag.pipeline.split_sentences import SentenceSegmentationResult
@@ -926,3 +928,62 @@ def test_finish_sync_state_waits_for_every_shard(tmp_path: Path) -> None:
     grid5000_sentences._finish_sync_state(state)
 
     assert state.metadata["status"] == "enriching"
+
+
+def test_copy_checkpoint_stages_nothing_without_a_checkpoint(tmp_path: Path) -> None:
+    run_dir, _bundle_dir, bundle = _prepare(tmp_path, shards={"alpha": 1})
+    target = tmp_path / "copy-target"
+    target.mkdir()
+
+    grid5000_sentences._copy_checkpoint(
+        run_dir / "polygons" / "alpha.parquet", target, bundle, bundle.shards[0]
+    )
+
+    assert list(target.iterdir()) == []
+
+
+def test_copy_checkpoint_rejects_a_file_in_place_of_the_directory(tmp_path: Path) -> None:
+    run_dir, _bundle_dir, bundle = _prepare(tmp_path, shards={"alpha": 1})
+    source = run_dir / "polygons" / "alpha.parquet"
+    target = tmp_path / "copy-target"
+    target.mkdir()
+    checkpoint_path = sentence_checkpoint_store().directory_for(source)
+    checkpoint_path.write_text("file", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"^sentence checkpoint is not a directory: {re.escape(str(checkpoint_path))}$",
+    ):
+        grid5000_sentences._copy_checkpoint(source, target, bundle, bundle.shards[0])
+
+
+def test_copy_checkpoint_loads_with_the_entry_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir, _bundle_dir, bundle = _prepare(tmp_path, shards={"alpha": 1})
+    source = run_dir / "polygons" / "alpha.parquet"
+    target = tmp_path / "copy-target"
+    target.mkdir()
+    checkpoint_dir = sentence_checkpoint_store().directory_for(source)
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "part").write_text("x", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    def load(path: Path, **kwargs: object) -> Checkpoint:
+        seen["path"] = path
+        seen["kwargs"] = kwargs
+        return Checkpoint(checkpoint_dir, (), 0)
+
+    monkeypatch.setattr(grid5000_sentences, "load_sentence_checkpoint", load)
+
+    grid5000_sentences._copy_checkpoint(source, target, bundle, bundle.shards[0])
+
+    assert seen == {
+        "path": source,
+        "kwargs": {
+            "source_row_count": bundle.shards[0].row_count,
+            "source_shard_sha256": bundle.shards[0].sha256,
+            "model": bundle.model,
+        },
+    }
+    assert (target / checkpoint_dir.name / "part").read_text(encoding="utf-8") == "x"
