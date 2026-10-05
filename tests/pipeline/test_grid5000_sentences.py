@@ -23,6 +23,7 @@ from osm_polygon_website_tag.pipeline import grid5000_sentences
 from osm_polygon_website_tag.pipeline.model_identity import ModelIdentity
 from osm_polygon_website_tag.pipeline.sentence_checkpoint import sentence_checkpoint_store
 from osm_polygon_website_tag.pipeline.split_sentences import SentenceSegmentationResult
+from osm_polygon_website_tag.pipeline.stage_sync import validate_result_identity
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_COMPLETE,
     atomic_write_json,
@@ -679,16 +680,16 @@ def test_validate_result_identity_rejects_every_mismatch(tmp_path: Path) -> None
     _, bundle_dir, bundle = _prepare(tmp_path, shards={"alpha": 1})
     result = _run(bundle_dir)
 
-    grid5000_sentences._validate_result_identity(result, bundle)
+    validate_result_identity(result, bundle)
 
     with pytest.raises(ValueError, match=r"^result run identity does not match bundle$"):
-        grid5000_sentences._validate_result_identity(replace(result, run_id="other"), bundle)
+        validate_result_identity(replace(result, run_id="other"), bundle)
     with pytest.raises(ValueError, match=r"^result model identity does not match bundle$"):
-        grid5000_sentences._validate_result_identity(
+        validate_result_identity(
             replace(result, model=replace(bundle.model, revision="other")), bundle
         )
     with pytest.raises(ValueError, match=r"^result commit does not match bundle$"):
-        grid5000_sentences._validate_result_identity(replace(result, commit="other"), bundle)
+        validate_result_identity(replace(result, commit="other"), bundle)
 
 
 def test_validate_outcome_binding_requires_a_staged_shard(tmp_path: Path) -> None:

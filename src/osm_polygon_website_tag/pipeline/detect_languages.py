@@ -23,7 +23,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES, TEXT_UNFINISHED_STATUSES
-from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
+from osm_polygon_website_tag.pipeline.checkpoint_storage import (
+    Checkpoint,
+    CheckpointStore,
+    skip_checkpointed_rows,
+)
 from osm_polygon_website_tag.pipeline.glotlid import LanguageDetector, LanguagePrediction
 from osm_polygon_website_tag.pipeline.language_detection_checkpoint import (
     language_checkpoint_store,
@@ -335,7 +339,7 @@ def _process_detection_batches_with_progress(
     rows_to_skip = checkpoint.completed_rows
     max_batch_rows = 0
     for batch in parquet.iter_batches(batch_size=batch_rows):
-        originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
+        originals, rows_to_skip = skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
         if not originals:
             continue
         if deadline_reached(deadline, clock):
@@ -353,16 +357,6 @@ def _process_detection_batches_with_progress(
     if processed_rows != source_row_count:
         raise ValueError("language detection row count changed")
     return _DetectionProgress(processed_rows, max_batch_rows, completed=True)
-
-
-def _skip_checkpointed_rows(
-    originals: list[dict[str, object]],
-    rows_to_skip: int,
-) -> tuple[list[dict[str, object]], int]:
-    if rows_to_skip:
-        skipped = min(rows_to_skip, len(originals))
-        return originals[skipped:], rows_to_skip - skipped
-    return originals, 0
 
 
 def _detect_batch(

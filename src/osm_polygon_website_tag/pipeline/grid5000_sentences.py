@@ -21,7 +21,6 @@ import pyarrow.parquet as pq
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_5,
     is_current_public_polygon_schema,
-    schema_matches,
 )
 from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     BUNDLE_MANIFEST_NAME,
@@ -64,6 +63,11 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
     SentenceSegmentationResult,
     segment_sentence_shard,
     shard_needs_sentence_segmentation,
+)
+from osm_polygon_website_tag.pipeline.stage_sync import (
+    copy_checkpoint,
+    validate_completed_shard,
+    validate_result_identity,
 )
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_ENRICHED,
@@ -332,18 +336,18 @@ def _copy_checkpoint(
     entry: SentenceShardEntry,
 ) -> None:
     """Validate and copy an existing source- and model-bound checkpoint."""
-    checkpoint_dir = sentence_checkpoint_store().directory_for(source)
-    if not checkpoint_dir.exists():
-        return
-    if not checkpoint_dir.is_dir():
-        raise ValueError(f"sentence checkpoint is not a directory: {checkpoint_dir}")
-    checkpoint = load_sentence_checkpoint(
+    copy_checkpoint(
         source,
-        source_row_count=entry.row_count,
-        source_shard_sha256=entry.sha256,
-        model=bundle.model,
+        target,
+        store=sentence_checkpoint_store(),
+        label="sentence",
+        load=lambda: load_sentence_checkpoint(
+            source,
+            source_row_count=entry.row_count,
+            source_shard_sha256=entry.sha256,
+            model=bundle.model,
+        ),
     )
-    shutil.copytree(checkpoint.directory, target / checkpoint.directory.name)
 
 
 def _stage_model_directory(model_dir: Path, target: Path) -> None:
@@ -544,13 +548,14 @@ def _checkpoint_rows(checkpoint_dir: Path) -> int:
 
 def _validate_completed_shard(path: Path, outcome: SentenceShardOutcome) -> None:
     """Validate schema, row count, digest, and sentence completeness."""
-    parquet = pq.ParquetFile(path)
-    if parquet.metadata.num_rows != outcome.row_count:
-        raise ValueError(f"completed sentence shard row count does not match result: {path.name}")
-    if not schema_matches(parquet.schema_arrow, POLYGON_PUBLIC_SCHEMA_V1_5):
-        raise ValueError(f"completed sentence shard schema mismatch: {path.name}")
-    if hash_shard(path) != outcome.shard_sha256:
-        raise ValueError(f"completed sentence shard hash does not match result: {path.name}")
+    validate_completed_shard(
+        path,
+        row_count=outcome.row_count,
+        sha256=outcome.shard_sha256,
+        schema=POLYGON_PUBLIC_SCHEMA_V1_5,
+        label="sentence",
+        name_in_message=True,
+    )
 
 
 def _finish_sync_state(state: RunState) -> None:
@@ -583,20 +588,10 @@ def _load_result(path: Path, bundle: SentenceBundle) -> SentenceBundleResult:
 
 def _validate_result_binding(result: SentenceBundleResult, bundle: SentenceBundle) -> None:
     """Reject a receipt that does not describe this bundle's staged work."""
-    _validate_result_identity(result, bundle)
+    validate_result_identity(result, bundle)
     staged = _staged_row_counts(bundle)
     for outcome in result.shards:
         _validate_outcome_binding(outcome, staged)
-
-
-def _validate_result_identity(result: SentenceBundleResult, bundle: SentenceBundle) -> None:
-    """Reject a receipt produced for another run, model, or commit."""
-    if result.run_id != bundle.run_id:
-        raise ValueError("result run identity does not match bundle")
-    if result.model != bundle.model:
-        raise ValueError("result model identity does not match bundle")
-    if result.commit != bundle.commit:
-        raise ValueError("result commit does not match bundle")
 
 
 def _staged_row_counts(bundle: SentenceBundle) -> dict[str, int]:

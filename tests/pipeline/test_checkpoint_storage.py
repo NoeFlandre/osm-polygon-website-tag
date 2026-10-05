@@ -11,7 +11,11 @@ import pyarrow.parquet as pq
 import pytest
 
 import osm_polygon_website_tag.pipeline.checkpoint_storage as checkpoint_storage
-from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
+from osm_polygon_website_tag.pipeline.checkpoint_storage import (
+    Checkpoint,
+    CheckpointStore,
+    skip_checkpointed_rows,
+)
 
 _SCHEMA = pa.schema([pa.field("value", pa.int64())])
 _DRIFTED_SCHEMA = pa.schema([pa.field("value", pa.int64())], metadata={b"stage": b"drifted"})
@@ -387,3 +391,18 @@ def test_metadata_is_persisted_through_the_shared_atomic_boundary(
             },
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("rows_to_skip", "remaining", "still_to_skip"),
+    [(0, [1, 2], 0), (1, [2], 0), (2, [], 0), (3, [], 1), (5, [], 3)],
+)
+def test_skip_checkpointed_rows_drops_the_durable_prefix(
+    rows_to_skip: int, remaining: list[int], still_to_skip: int
+) -> None:
+    originals: list[dict[str, object]] = [{"id": 1}, {"id": 2}]
+
+    assert skip_checkpointed_rows(originals, rows_to_skip) == (
+        [{"id": value} for value in remaining],
+        still_to_skip,
+    )

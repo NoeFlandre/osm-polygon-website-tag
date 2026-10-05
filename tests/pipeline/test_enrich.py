@@ -51,7 +51,6 @@ from osm_polygon_website_tag.pipeline.enrich import (
     _record_fetches,
     _record_one_fetch,
     _resolve_pending,
-    _skip_checkpointed_rows,
     _submit_fetches,
     _validate_enrichment_settings,
     enrich_polygon_shard,
@@ -137,11 +136,6 @@ def test_private_enrichment_state_helpers_are_deterministic(tmp_path: Path) -> N
         _validate_enrichment_settings(MAX_FETCH_WORKERS + 1, 1)
     with pytest.raises(ValueError, match=r"^batch_rows must be positive$"):
         _validate_enrichment_settings(1, 0)
-    rows: list[dict[str, object]] = [{"id": 1}, {"id": 2}, {"id": 3}]
-    assert _skip_checkpointed_rows(rows, 1) == ([{"id": 2}, {"id": 3}], 0)
-    assert _skip_checkpointed_rows(rows, len(rows)) == ([], 0)
-    assert _skip_checkpointed_rows(rows, 5) == ([], 2)
-    assert _skip_checkpointed_rows(rows, 0) == (rows, 0)
 
     row: dict[str, object] = {}
     _mark_absent(row, "website")

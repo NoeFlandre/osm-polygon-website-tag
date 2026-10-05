@@ -667,15 +667,6 @@ def test_batch_language_readiness_checks_contact_pair() -> None:
     assert detection._batch_needs_language_detection(batch)
 
 
-def test_skip_checkpointed_rows_preserves_remaining_skip_count() -> None:
-    originals: list[dict[str, object]] = [{"id": 1}, {"id": 2}]
-
-    assert detection._skip_checkpointed_rows(originals, 3) == ([], 1)
-    assert detection._skip_checkpointed_rows(originals, 2) == ([], 0)
-    assert detection._skip_checkpointed_rows(originals, 1) == ([{"id": 2}], 0)
-    assert detection._skip_checkpointed_rows(originals, 0) == (originals, 0)
-
-
 def test_completed_process_progress_retains_rows_and_completion() -> None:
     class EmptyParquet:
         def iter_batches(self, *, batch_size: int) -> list[object]:

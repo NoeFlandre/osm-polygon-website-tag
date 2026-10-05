@@ -25,7 +25,11 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     schema_matches,
 )
 from osm_polygon_website_tag.contracts.text_schema import TEXT_COLUMN_NAMES, initial_text_fields
-from osm_polygon_website_tag.pipeline.checkpoint_storage import Checkpoint, CheckpointStore
+from osm_polygon_website_tag.pipeline.checkpoint_storage import (
+    Checkpoint,
+    CheckpointStore,
+    skip_checkpointed_rows,
+)
 from osm_polygon_website_tag.pipeline.enrichment_checkpoint import enrichment_checkpoint_store
 from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
@@ -289,7 +293,7 @@ def _run_enrichment_batches(
 ) -> None:
     """Prefetch bounded batches and commit their results in source order."""
     for batch in parquet.iter_batches(batch_size=batch_rows):
-        originals, rows_to_skip = _skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
+        originals, rows_to_skip = skip_checkpointed_rows(batch.to_pylist(), rows_to_skip)
         if not originals:
             continue
         prepared_batches.append(
@@ -520,15 +524,6 @@ def _completed_future(
     except Exception as error:  # noqa: BLE001 - the caller re-raises from result()
         future.set_exception(error)
     return future
-
-
-def _skip_checkpointed_rows(
-    originals: list[dict[str, object]],
-    rows_to_skip: int,
-) -> tuple[list[dict[str, object]], int]:
-    """Drop the durable prefix from one Arrow batch."""
-    skipped = min(rows_to_skip, len(originals))
-    return originals[skipped:], rows_to_skip - skipped
 
 
 def _prepare_batch(

@@ -245,3 +245,13 @@ __all__ = [
     "Checkpoint",
     "CheckpointStore",
 ]
+
+
+def skip_checkpointed_rows(
+    originals: list[dict[str, object]], rows_to_skip: int
+) -> tuple[list[dict[str, object]], int]:
+    """Drop the durable prefix from one Arrow batch.
+
+    Return the remaining rows and how many rows are still left to skip.
+    """
+    return originals[rows_to_skip:], max(0, rows_to_skip - len(originals))

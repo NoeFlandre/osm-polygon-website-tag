@@ -7,7 +7,7 @@ Implements bounded data-processing stages.
   `language_detection_checkpoint`, `detect_languages`, `model_identity`,
   `sat`, `sentence_languages`, `sentences`, `sentence_checkpoint`,
   `split_sentences`, `sentence_run`, `grid5000_bundle`, `grid5000`,
-  `grid5000_sentences`,
+  `grid5000_sentences`, `stage_sync`,
   `public_schema_migration`, `analyze`, `partition_aggregate`, `deduplicate`,
   `time_budget`.
 - Dependencies: `contracts`, `domain`, `storage`, `web`, and `runtime`.
