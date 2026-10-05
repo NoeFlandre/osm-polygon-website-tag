@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import functools
-import hashlib
 from pathlib import Path
+
+from osm_polygon_website_tag.storage.digest import sha256_file
 
 
 def hash_file(path: Path) -> str:
@@ -17,11 +18,7 @@ def hash_file(path: Path) -> str:
 def _hash_identified_file(path: Path, size: int, mtime_ns: int) -> str:
     """Return the SHA-256 digest of one file revision using bounded reads."""
     del size, mtime_ns
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 __all__ = ["hash_file"]

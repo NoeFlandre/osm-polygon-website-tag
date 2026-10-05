@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Callable, Collection
 from pathlib import Path
 
@@ -11,6 +9,7 @@ from osm_polygon_website_tag.reporting import file_hashing as _file_hashing
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
 from osm_polygon_website_tag.reporting.text_population import text_population_manifest_entries
 from osm_polygon_website_tag.runtime.run_state import OPERATIONAL_MANIFEST_NAMES
+from osm_polygon_website_tag.storage.digest import canonical_json_sha256
 
 hash_file = _file_hashing.hash_file
 _hash_identified_file = _file_hashing._hash_identified_file
@@ -110,12 +109,7 @@ def parquet_manifest_sha256(root: Path) -> str:
 
 def _manifest_sha256(root: Path, include: Callable[[str], bool]) -> str:
     """Hash selected publishable paths using their relative path and bytes."""
-    canonical = json.dumps(
-        _manifest_entries(root, include),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return canonical_json_sha256(_manifest_entries(root, include))
 
 
 def _manifest_entries(root: Path, include: Callable[[str], bool]) -> list[dict[str, int | str]]:
@@ -133,12 +127,7 @@ def _manifest_entries(root: Path, include: Callable[[str], bool]) -> list[dict[s
 
 def _manifest_digest(entries: list[dict[str, int | str]]) -> str:
     """Hash canonical manifest entries."""
-    canonical = json.dumps(
-        sorted(entries, key=lambda item: str(item["path"])),
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return canonical_json_sha256(sorted(entries, key=lambda item: str(item["path"])))
 
 
 def _is_data_manifest_path(relative_path: str) -> bool:
