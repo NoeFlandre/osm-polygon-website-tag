@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
+import matplotlib.patches as real_patches
 import pytest
 from matplotlib.colors import to_rgba
 
@@ -136,4 +137,5 @@ def test_the_real_patches_module_survives_a_polluting_test() -> None:
     """The previous test's fake must not be what this one resolves."""
     patches_module = basemap._matplotlib_patches()
 
+    assert patches_module is real_patches
     assert basemap.__dict__["patches"] is patches_module
