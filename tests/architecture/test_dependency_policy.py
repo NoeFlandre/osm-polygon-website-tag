@@ -45,4 +45,4 @@ def test_pre_release_tools_stay_on_their_tested_series() -> None:
     dev = _project()["dependency-groups"]["dev"]
 
     assert "ty>=0.0.65,<0.1" in dev
-    assert "ruff>=0.5,<0.17" in dev
+    assert "ruff>=0.16.0,<0.17" in dev
