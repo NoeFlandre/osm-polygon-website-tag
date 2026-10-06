@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -14,6 +13,7 @@ import typer
 from huggingface_hub.errors import HfHubHTTPError
 from rich.console import Console
 
+from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.publishing.errors import TrackioUnavailableError
 from osm_polygon_website_tag.runtime.config import Settings
 from osm_polygon_website_tag.runtime.paths import data_root_source
@@ -65,7 +65,7 @@ _VERBOSITY_LEVELS = (logging.WARNING, logging.INFO, logging.DEBUG)
 
 def _show_version(value: bool) -> None:
     if value:
-        typer.echo(package_version(_DISTRIBUTION))
+        typer.echo(__version__)
         raise typer.Exit
 
 
@@ -101,7 +101,7 @@ def _global_options(
     _debug["enabled"] = debug
     _quiet["enabled"] = quiet
     _configure_logging(_log_level(verbose, quiet=quiet))
-    _LOGGER.info("%s %s", _DISTRIBUTION, package_version(_DISTRIBUTION))
+    _LOGGER.info("%s %s", _DISTRIBUTION, __version__)
     _LOGGER.debug("data root: %s", data_root_source())
 
 
