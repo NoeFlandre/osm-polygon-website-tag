@@ -33,8 +33,7 @@ def test_extract_main_text_from_static_html() -> None:
     assert result.text is not None
     assert "Public Library" in result.text
     assert "serves the whole community" in result.text
-    assert result.word_count is not None
-    assert result.word_count > 0
+    assert result.word_count == len(result.text.split())
 
 
 def test_trafilatura_version_lookup_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:

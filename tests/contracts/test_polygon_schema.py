@@ -168,9 +168,17 @@ def test_polygon_public_schema_dtypes() -> None:
 
 def test_column_doc_returns_string_per_column() -> None:
     for col in polygon_column_names(POLYGON_PUBLIC_SCHEMA):
-        doc = column_doc(col)
-        assert isinstance(doc, str)
-        assert len(doc) > 0
+        assert column_doc(col) == column_documentation()[col]
+        assert column_doc(col).endswith(".")
+
+    assert column_doc("osm_id") == (
+        "Original OSM numeric identifier of the way or relation. "
+        "Way and relation namespaces are kept distinct."
+    )
+    assert column_doc("lat") == (
+        "Centroid latitude in WGS84 decimal degrees. Rounded to seven decimal places. "
+        "``NaN`` and infinity are never produced."
+    )
 
 
 @pytest.mark.parametrize(
