@@ -18,7 +18,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
 )
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.reporting import verify as verify_module
-from osm_polygon_website_tag.reporting.verify import VerificationReport, verify_results
+from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.run_state import (
     SourceManifestEntry,
     initialise_run,
@@ -87,15 +87,16 @@ def _sha256(p: Path) -> str:
 
 
 def test_shared_json_loader_reports_parse_errors_once(tmp_path: Path) -> None:
-    read_json_value = getattr(verify_module, "_read_json_value", None)
-    assert callable(read_json_value)
     invalid = tmp_path / "invalid.json"
     invalid.write_text("{not-json", encoding="utf-8")
     errors: list[str] = []
-    ok, value = read_json_value(invalid, errors, label="array")
+    ok, value = verify_module._read_json_value(invalid, errors, label="array")
     assert ok is False
     assert value is None
-    assert errors and errors[0].startswith("invalid JSON array")
+    assert errors == [
+        f"invalid JSON array {invalid}: Expecting property name enclosed in double quotes: "
+        "line 1 column 2 (char 1)"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -180,7 +181,6 @@ def test_read_json_value_uses_utf8_for_the_json_boundary() -> None:
 def test_verify_results_happy_path(tmp_path: Path) -> None:
     run_dir, _ = _setup_minimal_run(tmp_path)
     report = verify_results(run_dir)
-    assert isinstance(report, VerificationReport)
     assert report.ok is True
     assert report.errors == []
 

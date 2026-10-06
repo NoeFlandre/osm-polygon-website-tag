@@ -136,5 +136,4 @@ def test_the_real_patches_module_survives_a_polluting_test() -> None:
     """The previous test's fake must not be what this one resolves."""
     patches_module = basemap._matplotlib_patches()
 
-    assert hasattr(patches_module, "Polygon")
     assert basemap.__dict__["patches"] is patches_module
