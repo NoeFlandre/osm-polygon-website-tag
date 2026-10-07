@@ -9,7 +9,6 @@ import pytest
 from osm_polygon_website_tag.runtime.safety import (
     UnsafePathError,
     assert_path_safe_against,
-    assert_path_safe_outside,
     normalize_path,
 )
 
@@ -25,39 +24,39 @@ def test_normalize_path_handles_relative(tmp_path: Path, monkeypatch: pytest.Mon
     assert p == tmp_path.resolve()
 
 
-def test_assert_path_safe_outside_allows_truly_separate(tmp_path: Path) -> None:
+def test_assert_path_safe_against_allows_truly_separate(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     inside = outside / "child"
     inside.mkdir()
     forbidden = tmp_path / "forbidden"
-    assert_path_safe_outside(inside, forbidden)
+    assert_path_safe_against(inside, forbidden)
 
 
-def test_assert_path_safe_outside_rejects_path_equal_to_forbidden(tmp_path: Path) -> None:
+def test_assert_path_safe_against_rejects_path_equal_to_forbidden(tmp_path: Path) -> None:
     with pytest.raises(UnsafePathError):
-        assert_path_safe_outside(tmp_path, tmp_path)
+        assert_path_safe_against(tmp_path, tmp_path)
 
 
-def test_assert_path_safe_outside_rejects_path_inside_forbidden(tmp_path: Path) -> None:
+def test_assert_path_safe_against_rejects_path_inside_forbidden(tmp_path: Path) -> None:
     forbidden = tmp_path / "forbidden"
     forbidden.mkdir()
     inside = forbidden / "child"
     inside.mkdir()
     with pytest.raises(UnsafePathError):
-        assert_path_safe_outside(inside, forbidden)
+        assert_path_safe_against(inside, forbidden)
 
 
-def test_assert_path_safe_outside_rejects_nested_inside(tmp_path: Path) -> None:
+def test_assert_path_safe_against_rejects_nested_inside(tmp_path: Path) -> None:
     forbidden = tmp_path / "forbidden"
     forbidden.mkdir()
     deeper = forbidden / "a" / "b" / "c"
     deeper.mkdir(parents=True)
     with pytest.raises(UnsafePathError):
-        assert_path_safe_outside(deeper, forbidden)
+        assert_path_safe_against(deeper, forbidden)
 
 
-def test_assert_path_safe_outside_does_not_raise_on_sibling(tmp_path: Path) -> None:
+def test_assert_path_safe_against_does_not_raise_on_sibling(tmp_path: Path) -> None:
     # /tmp/abc/safe vs /tmp/abc/forbidden - safe is a sibling, not inside.
     a = tmp_path / "a"
     a.mkdir()
@@ -65,15 +64,15 @@ def test_assert_path_safe_outside_does_not_raise_on_sibling(tmp_path: Path) -> N
     safe.mkdir()
     forbidden = a / "forbidden"
     forbidden.mkdir()
-    assert_path_safe_outside(safe, forbidden)
+    assert_path_safe_against(safe, forbidden)
 
 
-def test_assert_path_safe_outside_handles_missing_forbidden(tmp_path: Path) -> None:
+def test_assert_path_safe_against_handles_missing_forbidden(tmp_path: Path) -> None:
     """A missing forbidden path is still treated as a containment boundary."""
     target = tmp_path / "child"
     target.mkdir()
     forbidden = tmp_path / "missing"
-    assert_path_safe_outside(target, forbidden)
+    assert_path_safe_against(target, forbidden)
 
 
 def test_assert_path_safe_against_fails_closed_for_seagate() -> None:
