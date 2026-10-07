@@ -39,6 +39,12 @@ format:
 format-check:
     uv run --locked ruff format --check .
 
+# Lint every shell script (pinned so CI and local runs agree).
+shellcheck:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git ls-files -z -- '*.sh' | xargs -0 uvx --from shellcheck-py==0.10.0.1 shellcheck
+
 baseline:
     git rev-parse --abbrev-ref HEAD
     git status --short --branch
@@ -246,7 +252,7 @@ qa-push base="origin/main": ruff typecheck
 # function. `build` proves the sdist and wheel still package.
 # `audit` fails the gate on a known-vulnerable pin in uv.lock.
 # Tier 3: the pull-request gate.
-qa-pr: baseline ruff typecheck coverage crap build audit
+qa-pr: baseline ruff shellcheck typecheck coverage crap build audit
 
 # Everything the pull request proved, plus the container smoke test. In CI the
 # Quality workflow's `docker` job owns the container gate and runs it beside the quality job,

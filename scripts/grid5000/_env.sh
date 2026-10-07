@@ -15,6 +15,9 @@ job_dir="${GRID5000_JOB_DIR:-$PWD}"
 repo_dir="${GRID5000_REPO_DIR:-$job_dir/checkout}"
 uv_cache_dir="${GRID5000_UV_CACHE_DIR:-$job_dir/uv-cache}"
 
+# Sourced by scripts that run under `set -e`, so a failed cd already aborts;
+# `|| exit` would change nothing there and would kill an interactive shell.
+# shellcheck disable=SC2164
 cd "$repo_dir"
 export UV_CACHE_DIR="$uv_cache_dir"
 
