@@ -21,7 +21,7 @@ class UnsafePathError(ValueError):
 
 def normalize_path(path: str | Path) -> Path:
     """Return a fully-resolved absolute :class:`Path` for ``path``."""
-    return Path(path).expanduser().resolve(strict=False)
+    return Path(path).expanduser().resolve()
 
 
 def _is_equal_or_inside(candidate: Path, boundary: Path) -> bool:

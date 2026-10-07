@@ -90,3 +90,13 @@ def test_assert_path_safe_against_accepts_unrelated_path(tmp_path: Path) -> None
     safe.mkdir()
     seagate = Path("/Volumes/Seagate M3/projects/osm-polygon-wikidata-only/raw")
     assert_path_safe_against(safe, seagate)
+
+
+def test_assert_path_safe_against_error_names_both_paths(tmp_path: Path) -> None:
+    forbidden = tmp_path / "forbidden"
+    inside = forbidden / "child"
+    with pytest.raises(UnsafePathError) as excinfo:
+        assert_path_safe_against(inside, forbidden)
+    message = str(excinfo.value)
+    assert f"Refusing path {inside.resolve()}" in message
+    assert f"forbidden root {forbidden.resolve()}" in message
