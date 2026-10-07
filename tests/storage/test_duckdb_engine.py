@@ -30,6 +30,7 @@ from osm_polygon_website_tag.storage.duckdb_engine import (
     register_public_parquets,
     register_rejection_parquets,
     reporting_connection,
+    sql_string_literal,
 )
 
 
@@ -176,6 +177,11 @@ def test_registration_reads_nonempty_files_and_escapes_quoted_paths(tmp_path: Pa
         ]
     finally:
         connection.close()
+
+
+def test_sql_string_literal_doubles_embedded_quotes() -> None:
+    assert sql_string_literal(Path("a'b")) == "'a''b'"
+    assert sql_string_literal("plain") == "'plain'"
 
 
 def test_cells_global_returns_zeroes_for_empty_observations(tmp_path: Path) -> None:

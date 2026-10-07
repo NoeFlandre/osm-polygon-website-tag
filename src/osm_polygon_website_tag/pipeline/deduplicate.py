@@ -35,6 +35,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
     schema_matches,
 )
+from osm_polygon_website_tag.storage.duckdb_engine import sql_string_literal
 
 _SOURCE_SUFFIX = ".osm.pbf"
 
@@ -113,13 +114,13 @@ def _open_dedup_connection(
         con.execute("PRAGMA threads=4")
         temp_dir = staging_dir / "duckdb-temp"
         temp_dir.mkdir()
-        escaped_temp = str(temp_dir).replace("'", "''")
-        con.execute(f"SET temp_directory='{escaped_temp}'")
-        glob = str(source_dir / "*.parquet").replace("'", "''")
+        temp_literal = sql_string_literal(temp_dir)
+        con.execute(f"SET temp_directory={temp_literal}")
+        glob_literal = sql_string_literal(source_dir / "*.parquet")
         con.execute(
             f"""
             CREATE TEMP VIEW source_rows AS
-            SELECT * FROM read_parquet('{glob}', union_by_name=true)
+            SELECT * FROM read_parquet({glob_literal}, union_by_name=true)
             """  # noqa: S608
         )
     except BaseException:
@@ -206,13 +207,13 @@ def _write_canonical_shards(
 ) -> None:
     """Write canonical rows to source-partitioned Parquet files."""
     partition_dir = staging_dir / "partitions"
-    escaped_partition_dir = str(partition_dir).replace("'", "''")
+    partition_literal = sql_string_literal(partition_dir)
     con.execute(
         f"""
         COPY (
           SELECT * FROM canonical_rows
           ORDER BY osm_type, osm_id
-        ) TO '{escaped_partition_dir}'
+        ) TO {partition_literal}
         (FORMAT PARQUET, COMPRESSION 'snappy', PARTITION_BY (source_pbf),
          WRITE_PARTITION_COLUMNS TRUE)
         """  # noqa: S608
