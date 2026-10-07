@@ -364,9 +364,10 @@ def _initial_enrichment_decision(
         migration_changed=migration_changed,
     ):
         needs_enrichment = _shard_needs_enrichment(shard)
-    else:
-        assert isinstance(marker, bool)
+    elif isinstance(marker, bool):
         needs_enrichment = marker
+    else:
+        raise TypeError(f"enrichment marker must be bool, not {type(marker).__name__}")
     return _EnrichmentDecision(
         needs_enrichment=needs_enrichment,
         status_summary=status_summary,
