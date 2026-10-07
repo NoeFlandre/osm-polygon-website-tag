@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import duckdb
 import pytest
 
+from osm_polygon_website_tag.reporting.card_stats import CardStats
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geometry_stats import GeometryStats
 from osm_polygon_website_tag.reporting.verification import analysis, receipt, rows, text
 
@@ -404,7 +406,7 @@ def test_card_statistics_verifiers_forward_all_artifact_renderers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stats = object()
+    stats = CardStats()
     geometry = GeometryStats(row_count=2)
     calls: list[tuple[str, object]] = []
     errors: list[str] = []
@@ -528,7 +530,7 @@ def test_release_geometry_section_normalizes_newlines_and_requires_exact_block(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    geometry = object()
+    geometry = GeometryStats()
     lines = ["## Polygon geometry", "", "derived", ""]
     monkeypatch.setattr(analysis, "_render_polygon_geometry_section", lambda _geometry: lines)
     readme = tmp_path / "README.md"
@@ -568,7 +570,7 @@ def test_map_verifier_rejects_bytes_from_a_different_global_summary(
     monkeypatch.setattr(analysis, "render_polygon_density", fake_render)
     errors: list[str] = []
 
-    analysis._verify_map_matches_summary(tmp_path, object(), errors)
+    analysis._verify_map_matches_summary(tmp_path, PolygonDensitySummary(3, 0, 0, ()), errors)
 
     assert errors == ["map artifact does not match the canonical global summary"]
 
@@ -785,8 +787,8 @@ def test_card_statistics_reports_a_failed_computation_verbatim(
     assert errors == ["card statistic verification failed: unreadable shard"]
 
 
-def _text_stats() -> SimpleNamespace:
-    return SimpleNamespace(
+def _text_stats() -> CardStats:
+    return CardStats(
         website_text_success_count=11,
         website_total_words=22,
         contact_website_text_success_count=33,
@@ -891,7 +893,7 @@ def test_release_readme_ignores_a_missing_file(
     _no_language_section(monkeypatch)
     errors: list[str] = []
 
-    analysis._verify_release_readme(tmp_path / "README.md", object(), {"a": 1}, errors)
+    analysis._verify_release_readme(tmp_path / "README.md", CardStats(), {"a": 1}, errors)
 
     assert errors == []
 
@@ -905,7 +907,7 @@ def test_release_readme_reports_undecodable_bytes(tmp_path: Path) -> None:
         expected = f"README front matter text fields are unreadable: {exc}"
     errors: list[str] = []
 
-    analysis._verify_release_readme(path, object(), {"a": 1}, errors)
+    analysis._verify_release_readme(path, CardStats(), {"a": 1}, errors)
 
     assert errors == [expected]
 
@@ -921,7 +923,7 @@ def test_release_readme_checks_only_multiline_front_matter_fields(
     )
     errors: list[str] = []
 
-    analysis._verify_release_readme(path, object(), {"website_total_words": 3, "b": 8}, errors)
+    analysis._verify_release_readme(path, CardStats(), {"website_total_words": 3, "b": 8}, errors)
 
     assert errors == [
         "README front matter website_total_words does not match canonical text statistics"
@@ -936,7 +938,7 @@ def test_release_readme_without_front_matter_reports_no_field(
     path.write_text("website_total_words: 9\n", encoding="utf-8")
     errors: list[str] = []
 
-    analysis._verify_release_readme(path, object(), {"website_total_words": 3}, errors)
+    analysis._verify_release_readme(path, CardStats(), {"website_total_words": 3}, errors)
 
     assert errors == []
 
@@ -950,7 +952,7 @@ def test_release_readme_hands_the_whole_card_to_the_language_check(
     )
     path = tmp_path / "README.md"
     path.write_text("---\na: 1\n---\nbody\n", encoding="utf-8")
-    stats = object()
+    stats = CardStats()
     errors: list[str] = []
 
     analysis._verify_release_readme(path, stats, {"a": 1}, errors)
@@ -977,7 +979,7 @@ _LANGUAGE_ERROR = "README Languages section does not match canonical text statis
 def test_release_language_section_compares_an_existing_section(
     monkeypatch: pytest.MonkeyPatch, content: str, expected: list[str]
 ) -> None:
-    stats = object()
+    stats = CardStats()
     seen: list[object] = []
     monkeypatch.setattr(
         analysis,
@@ -1014,7 +1016,7 @@ def test_release_website_text_section_compares_an_existing_section(
     (tmp_path / "README.md").write_bytes(content)
     errors: list[str] = []
 
-    analysis._verify_release_website_text_section(tmp_path, object(), errors)
+    analysis._verify_release_website_text_section(tmp_path, CardStats(), errors)
 
     assert errors == expected
 
@@ -1034,7 +1036,7 @@ def test_release_website_text_section_reads_the_card_by_its_exact_name(
     (tmp_path / "README.md").write_bytes(b"## Website text\n\n- words: 4\n")
     errors: list[str] = []
 
-    analysis._verify_release_website_text_section(tmp_path, object(), errors)
+    analysis._verify_release_website_text_section(tmp_path, CardStats(), errors)
 
     assert opened == ["README.md"]
     assert errors == [_WEBSITE_ERROR]
@@ -1060,7 +1062,7 @@ def test_release_geographic_section_compares_the_exact_section(
     (tmp_path / "README.md").write_bytes(content)
     errors: list[str] = []
 
-    analysis._verify_release_geographic_section(tmp_path, object(), errors)
+    analysis._verify_release_geographic_section(tmp_path, CardStats(), errors)
 
     assert errors == expected
 
@@ -1074,13 +1076,13 @@ def test_release_geographic_section_reports_read_errors(
     monkeypatch.setattr(Path, "read_bytes", unreadable_readme)
     errors: list[str] = []
 
-    analysis._verify_release_geographic_section(tmp_path, object(), errors)
+    analysis._verify_release_geographic_section(tmp_path, CardStats(), errors)
 
     assert errors == ["README geographic section is unreadable: denied"]
 
 
 def test_release_density_yaml_matches_all_geographic_summary_fields(tmp_path: Path) -> None:
-    stats = SimpleNamespace(
+    stats = CardStats(
         polygon_density_h3_resolution=7,
         polygon_density_row_count=11,
         occupied_h3_cell_count=5,
@@ -1123,7 +1125,7 @@ def test_release_density_yaml_reports_read_errors(
     monkeypatch.setattr(Path, "read_text", unreadable_dataset)
     errors: list[str] = []
 
-    analysis._verify_release_density_yaml(tmp_path, object(), errors)
+    analysis._verify_release_density_yaml(tmp_path, CardStats(), errors)
 
     assert errors == ["dataset.yaml geographic fields are unreadable: denied"]
 
