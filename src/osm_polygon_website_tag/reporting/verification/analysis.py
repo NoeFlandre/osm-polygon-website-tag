@@ -20,14 +20,16 @@ from osm_polygon_website_tag.reporting.card_rendering import (
     _render_website_text_section,
     render_markdown,
 )
-from osm_polygon_website_tag.reporting.card_stats import compute_card_stats
+from osm_polygon_website_tag.reporting.card_stats import CardStats, compute_card_stats
 from osm_polygon_website_tag.reporting.geographic.aggregation import (
     compute_polygon_density_summary,
 )
 from osm_polygon_website_tag.reporting.geographic.layout import POLYGON_DENSITY_ASSET_REL_PATH
+from osm_polygon_website_tag.reporting.geographic.models import PolygonDensitySummary
 from osm_polygon_website_tag.reporting.geographic.rendering import render_polygon_density
 from osm_polygon_website_tag.reporting.geometry_stats import (
     GEOMETRY_STATS_FILENAME,
+    GeometryStats,
     compute_geometry_stats,
     render_geometry_stats,
 )
@@ -166,9 +168,9 @@ def _verify_release_card_statistics(root: Path, errors: list[str]) -> None:
 
 def _verify_text_population_agreement(
     text_population: TextPopulationSummary,
-    summary: Any,
-    stats: Any,
-    geometry: Any,
+    summary: PolygonDensitySummary,
+    stats: CardStats,
+    geometry: GeometryStats,
     errors: list[str],
 ) -> None:
     """Require card, map, and machine-readable text populations to agree."""
@@ -187,7 +189,9 @@ def _verify_text_population_agreement(
         errors.append("stats.json text population does not match the canonical text report")
 
 
-def _verify_map_matches_summary(root: Path, summary: Any, errors: list[str]) -> None:
+def _verify_map_matches_summary(
+    root: Path, summary: PolygonDensitySummary, errors: list[str]
+) -> None:
     """Re-render an existing map and reject bytes from another population."""
     map_path = root / POLYGON_DENSITY_ASSET_REL_PATH
     if not map_path.is_file():
@@ -204,7 +208,7 @@ def _verify_map_matches_summary(root: Path, summary: Any, errors: list[str]) -> 
 
 def _verify_release_geometry_section(
     root: Path,
-    geometry: Any,
+    geometry: GeometryStats,
     errors: list[str],
 ) -> None:
     """Require the additive geometry section to match artifact-derived values."""
@@ -222,7 +226,7 @@ def _verify_release_geometry_section(
 
 def _verify_release_geographic_section(
     root: Path,
-    stats: Any,
+    stats: CardStats,
     errors: list[str],
 ) -> None:
     """Require release README geography values to match unique text identities."""
@@ -240,7 +244,7 @@ def _verify_release_geographic_section(
         )
 
 
-def _verify_release_density_yaml(root: Path, stats: Any, errors: list[str]) -> None:
+def _verify_release_density_yaml(root: Path, stats: CardStats, errors: list[str]) -> None:
     """Require machine-readable geographic values to match the same summary."""
     path = root / "dataset.yaml"
     try:
@@ -258,7 +262,7 @@ def _verify_release_density_yaml(root: Path, stats: Any, errors: list[str]) -> N
             errors.append(f"dataset.yaml {key} does not match the unique-text summary")
 
 
-def _verify_release_website_text_section(root: Path, stats: Any, errors: list[str]) -> None:
+def _verify_release_website_text_section(root: Path, stats: CardStats, errors: list[str]) -> None:
     """Require an existing release card text section to match canonical counts."""
     path = root / "README.md"
     if not path.is_file():
@@ -273,11 +277,11 @@ def _verify_release_website_text_section(root: Path, stats: Any, errors: list[st
         errors.append("README Website text section does not match canonical text statistics")
 
 
-def _verify_release_text_yaml(root: Path, stats: Any, errors: list[str]) -> None:
+def _verify_release_text_yaml(root: Path, stats: CardStats, errors: list[str]) -> None:
     """Require release YAML and README metadata to expose canonical values."""
     if not (root / "dataset.yaml").is_file() and not (root / "README.md").is_file():
         return
-    expected = {
+    expected: dict[str, object] = {
         "website_text_success_count": stats.website_text_success_count,
         "website_total_words": stats.website_total_words,
         "contact_website_text_success_count": stats.contact_website_text_success_count,
@@ -307,7 +311,7 @@ def _verify_release_yaml_path(
 
 def _verify_release_readme(
     path: Path,
-    stats: Any,
+    stats: CardStats,
     expected: dict[str, object],
     errors: list[str],
 ) -> None:
@@ -331,7 +335,7 @@ def _verify_release_readme(
     _verify_release_language_section(readme_content, stats, errors)
 
 
-def _verify_release_language_section(content: str, stats: Any, errors: list[str]) -> None:
+def _verify_release_language_section(content: str, stats: CardStats, errors: list[str]) -> None:
     """Verify an existing README language section against canonical totals."""
     normalized = content.replace("\r\n", "\n")
     language_match = re.search(r"(?ms)^## Languages\n.*?(?=^## |\Z)", normalized)

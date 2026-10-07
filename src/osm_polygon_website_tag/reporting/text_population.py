@@ -12,8 +12,8 @@ import contextlib
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -291,7 +291,9 @@ def _has_text_contract(path: Path) -> bool:
 
 
 @contextlib.contextmanager
-def _canonical_connection(root: Path, paths: Collection[Path]) -> Iterator[Any]:
+def _canonical_connection(
+    root: Path, paths: Collection[Path]
+) -> Iterator[duckdb.DuckDBPyConnection]:
     """Create canonical DuckDB views over a bounded path selection."""
     connection = reporting_connection(root)
     try:
@@ -301,7 +303,7 @@ def _canonical_connection(root: Path, paths: Collection[Path]) -> Iterator[Any]:
         connection.close()
 
 
-def _create_views(connection: Any, paths: Collection[Path]) -> None:
+def _create_views(connection: duckdb.DuckDBPyConnection, paths: Collection[Path]) -> None:
     """Create source, qualifying, and canonical winner views.
 
     The winner order breaks ties on the extracted text, which for this dataset
@@ -328,7 +330,7 @@ def _create_views(connection: Any, paths: Collection[Path]) -> None:
     _create_ranked_view(connection, "canonical_contact", "contact_website_qualifies", order)
 
 
-def _has_prefix_ties(connection: Any) -> bool:
+def _has_prefix_ties(connection: duckdb.DuckDBPyConnection) -> bool:
     """Return whether any identity has two qualifying rows sharing the prefix keys."""
     row = connection.execute(
         """
@@ -343,7 +345,7 @@ def _has_prefix_ties(connection: Any) -> bool:
     return bool(row and row[0])
 
 
-def _restore_text_population_view(connection: Any) -> None:
+def _restore_text_population_view(connection: duckdb.DuckDBPyConnection) -> None:
     """Replace the narrow population with one carrying the extracted text."""
     connection.execute("DROP TABLE all_rows")
     connection.execute(
@@ -355,7 +357,7 @@ def _restore_text_population_view(connection: Any) -> None:
     )
 
 
-def _create_source_view(connection: Any, paths: Collection[Path]) -> None:
+def _create_source_view(connection: duckdb.DuckDBPyConnection, paths: Collection[Path]) -> None:
     """Create the normalized source view with nullable optional columns."""
     available = set().union(*(set(pq.read_schema(path).names) for path in paths))
     type_by_name = _text_column_types()
@@ -398,7 +400,7 @@ def _source_projection(name: str, available: set[str], types: dict[str, str]) ->
     return f"CAST(NULL AS {sql_type}) AS {name}"
 
 
-def _create_population_views(connection: Any) -> None:
+def _create_population_views(connection: duckdb.DuckDBPyConnection) -> None:
     """Reduce the source rows to the narrow population the ranking sorts.
 
     One streaming pass reads the extracted text to decide what qualifies and
@@ -421,7 +423,9 @@ def _create_population_views(connection: Any) -> None:
     )
 
 
-def _create_ranked_view(connection: Any, name: str, predicate: str, order: str) -> None:
+def _create_ranked_view(
+    connection: duckdb.DuckDBPyConnection, name: str, predicate: str, order: str
+) -> None:
     """Create one deterministic winner view for a qualifying population."""
     connection.execute(
         f"""
@@ -440,9 +444,15 @@ def _create_ranked_view(connection: Any, name: str, predicate: str, order: str) 
     )
 
 
-def _summary_from_connection(connection: Any) -> TextPopulationSummary:
+def _require_aggregate_row[RowT: tuple[object, ...]](row: RowT | None, label: str) -> RowT:
+    if row is None:
+        raise TypeError(f"text population {label} query returned no row")
+    return row
+
+
+def _summary_from_connection(connection: duckdb.DuckDBPyConnection) -> TextPopulationSummary:
     """Read scalar and language summaries from canonical winner views."""
-    unique, website, contact, website_words, contact_words = connection.execute(
+    row = connection.execute(
         """
         SELECT
           (SELECT COUNT(*) FROM canonical_any),
@@ -452,6 +462,8 @@ def _summary_from_connection(connection: Any) -> TextPopulationSummary:
           (SELECT COALESCE(SUM(contact_website_word_count), 0) FROM canonical_contact)
         """
     ).fetchone()
+    row = _require_aggregate_row(row, "summary")
+    unique, website, contact, website_words, contact_words = row
     _validate_word_counts(connection)
     website_urls = _identity_count(connection, "website")
     contact_urls = _identity_count(connection, "contact_website")
@@ -501,7 +513,7 @@ def _summary_from_connection(connection: Any) -> TextPopulationSummary:
     )
 
 
-def _validate_word_counts(connection: Any) -> None:
+def _validate_word_counts(connection: duckdb.DuckDBPyConnection) -> None:
     """Reject malformed successful text rows instead of silently undercounting."""
     missing = _scalar(
         connection,
@@ -520,7 +532,7 @@ def _validate_word_counts(connection: Any) -> None:
         raise TypeError("successful text row has no word count")
 
 
-def _identity_count(connection: Any, tag: str) -> int:
+def _identity_count(connection: duckdb.DuckDBPyConnection, tag: str) -> int:
     """Count identities carrying one URL field at least once."""
     column = "website" if tag == "website" else "contact_website"
     return _scalar(
@@ -535,7 +547,7 @@ def _identity_count(connection: Any, tag: str) -> int:
     )
 
 
-def _status_counts(connection: Any) -> tuple[int, int, int, int]:
+def _status_counts(connection: duckdb.DuckDBPyConnection) -> tuple[int, int, int, int]:
     """Count empty and failed tag populations once per qualifying identity."""
     row = connection.execute(
         """
@@ -565,6 +577,7 @@ def _status_counts(connection: Any) -> tuple[int, int, int, int]:
         )
         """
     ).fetchone()
+    row = _require_aggregate_row(row, "status")
     website_empty, contact_empty, website_failure, contact_failure = row
     return (
         int(website_empty or 0),
@@ -574,7 +587,7 @@ def _status_counts(connection: Any) -> tuple[int, int, int, int]:
     )
 
 
-def _scalar(connection: Any, query: str) -> int:
+def _scalar(connection: duckdb.DuckDBPyConnection, query: str) -> int:
     value = connection.execute(query).fetchone()
     return int(value[0]) if value else 0
 
