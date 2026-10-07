@@ -5,19 +5,12 @@ set export
 # runners have four; a workstation usually has more.
 MUTATION_CHILDREN := env("MUTATION_CHILDREN", "4")
 
-UV_CACHE_DIR := if env("UV_CACHE_DIR", "") != "" {
-    env("UV_CACHE_DIR", "")
-} else if path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == "true" {
-    "/Volumes/Seagate M3/projects/osm-polygon-website-tag/uv-cache"
-} else {
-    "/tmp/osm-polygon-website-tag-uv-cache"
-}
+# Neutral defaults; set UV_CACHE_DIR / BUILD_OUTPUT_DIR in the environment to
+# relocate them (for example onto an external volume). uv rejects an empty
+# UV_CACHE_DIR, so the fallback is a concrete temporary directory.
+UV_CACHE_DIR := env("UV_CACHE_DIR", "/tmp/osm-polygon-website-tag-uv-cache")
 
-BUILD_OUTPUT_DIR := if path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == "true" {
-    "/Volumes/Seagate M3/projects/osm-polygon-website-tag/build"
-} else {
-    "dist"
-}
+BUILD_OUTPUT_DIR := env("BUILD_OUTPUT_DIR", "dist")
 
 default: check
 
