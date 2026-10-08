@@ -27,6 +27,31 @@ RepoId = Annotated[
     ),
 ]
 
+# Bounded-run options: one alias per accepted type. Each alias owns its help text and
+# metavar, so every command that takes it shows the same text. The types differ on
+# purpose. grid5000-prepare and grid5000-prepare-sentences store the budget in the
+# bundle schema as an integer, so they take whole seconds. The run and detection
+# commands take fractional seconds. The default for each command is set at its parameter.
+BatchRows = Annotated[
+    int,
+    typer.Option("--batch-rows", help="Rows processed per checkpoint batch."),
+]
+OptionalBatchRows = Annotated[
+    int | None,
+    typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
+]
+WholeSeconds = Annotated[
+    int,
+    typer.Option("--time-budget-seconds", help="Time budget within the 30-minute job."),
+]
+OptionalSeconds = Annotated[
+    float | None,
+    typer.Option(
+        "--time-budget-seconds",
+        help="Stop cleanly after this many seconds; omit for the command default.",
+    ),
+]
+
 
 @dataclass
 class GlobalOptions:

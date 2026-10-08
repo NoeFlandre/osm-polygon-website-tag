@@ -25,20 +25,16 @@ from osm_polygon_website_tag.pipeline.grid5000_sentences import (
 from osm_polygon_website_tag.pipeline.sat import load_sat_splitter_from_path
 from osm_polygon_website_tag.runtime.paths import require_under_data_root
 
-from ._common import RunDir, echo_json
+from ._common import (
+    BatchRows,
+    OptionalBatchRows,
+    OptionalSeconds,
+    RunDir,
+    WholeSeconds,
+    echo_json,
+)
 
 BundleDir = Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")]
-
-# Overrides shared by the two run commands. Their types and help text are kept
-# exactly as they were, so the help output and the bundle schema do not change.
-OverrideTimeBudget = Annotated[
-    float | None,
-    typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
-]
-OverrideBatchRows = Annotated[
-    int | None,
-    typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
-]
 JobId = Annotated[
     str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
 ]
@@ -46,8 +42,8 @@ JobId = Annotated[
 
 def grid5000_run_sentences_command(
     bundle_dir: BundleDir,
-    time_budget_seconds: OverrideTimeBudget = None,
-    batch_rows: OverrideBatchRows = None,
+    time_budget_seconds: OptionalSeconds = None,
+    batch_rows: OptionalBatchRows = None,
     job_id: JobId = None,
 ) -> int:
     """Segment one staged sentence bundle on a reserved node, offline."""
@@ -80,14 +76,8 @@ def grid5000_prepare_command(
         str | None,
         typer.Option("--shard", help="Optional source shard basename to stage."),
     ] = None,
-    time_budget_seconds: Annotated[
-        int,
-        typer.Option("--time-budget-seconds", help="Detection budget within the 30-minute job."),
-    ] = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: Annotated[
-        int,
-        typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
-    ] = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
+    time_budget_seconds: WholeSeconds = DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    batch_rows: BatchRows = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
 ) -> int:
     """Prepare one data-root, offline Grid'5000 language bundle."""
     normalized_run_dir = require_under_data_root(run_dir, label="run directory")
@@ -108,8 +98,8 @@ def grid5000_prepare_command(
 
 def grid5000_run_command(
     bundle_dir: BundleDir,
-    time_budget_seconds: OverrideTimeBudget = None,
-    batch_rows: OverrideBatchRows = None,
+    time_budget_seconds: OptionalSeconds = None,
+    batch_rows: OptionalBatchRows = None,
     job_id: JobId = None,
 ) -> int:
     """Run one staged bundle on a reserved node without network access."""
@@ -135,14 +125,8 @@ def grid5000_prepare_sentences_command(
     commit: Annotated[
         str, typer.Option("--commit", help="Repository commit recorded in the bundle.")
     ],
-    time_budget_seconds: Annotated[
-        int,
-        typer.Option("--time-budget-seconds", help="Segmentation budget within the job."),
-    ] = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: Annotated[
-        int,
-        typer.Option("--batch-rows", help="Rows processed per sentence checkpoint batch."),
-    ] = DEFAULT_GRID_SENTENCE_BATCH_ROWS,
+    time_budget_seconds: WholeSeconds = DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    batch_rows: BatchRows = DEFAULT_GRID_SENTENCE_BATCH_ROWS,
     max_rows: Annotated[
         int,
         typer.Option("--max-rows", help="Row budget packed into one bundle."),
