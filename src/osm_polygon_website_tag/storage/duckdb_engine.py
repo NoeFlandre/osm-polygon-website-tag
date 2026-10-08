@@ -57,8 +57,12 @@ def _make_connection(
 
 
 def close_quietly(con: duckdb.DuckDBPyConnection) -> None:
-    """Close DuckDB without masking the failure that led to the cleanup."""
-    with contextlib.suppress(Exception):
+    """Close DuckDB without masking the failure that led to the cleanup.
+
+    Only ``duckdb.Error`` is suppressed. Any other exception, such as a
+    programming error, propagates.
+    """
+    with contextlib.suppress(duckdb.Error):
         con.close()
 
 
