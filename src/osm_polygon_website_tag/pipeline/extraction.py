@@ -49,11 +49,16 @@ from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 # imports from this module continue to work while the implementation has a
 # focused home.
 FLUSH_BATCH_ROWS = _extraction_handler.FLUSH_BATCH_ROWS
+MIN_DISTINCT_NODES = _extraction_handler.MIN_DISTINCT_NODES
 _ExtractionHandler = _extraction_handler._ExtractionHandler
 _AreaWorkCoordinator = _extraction_handler._AreaWorkCoordinator
 _validate_area_settings = _extraction_handler._validate_area_settings
 _process_area_payload = _extraction_handler._process_area_payload
+_is_closed_way = _extraction_handler._is_closed_way
+_is_supported_polygon_relation = _extraction_handler._is_supported_polygon_relation
+_tags_dict = _extraction_handler._tags_dict
 _as_utc = _extraction_handler._as_utc
+derive_tags = _extraction_handler.derive_tags
 
 # Preserve the established private row-builder facade.
 _public_record = _extraction_records.build_public_record
