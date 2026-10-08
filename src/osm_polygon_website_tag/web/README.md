@@ -4,12 +4,15 @@ Owns safe HTTP retrieval, Trafilatura adaptation, and persistent text caching.
 
 `web_fetch` checks and caches each origin's `robots.txt` before requesting a
 page, applies its `Crawl-delay`, and uses the same SSRF-safe transport for both
-requests. Previously cached successful text remains reusable and is not
-retroactively removed.
+requests. The cache is a `RobotsCache` object. `fetch_html` takes one through
+`robots_cache=`; without it, the module's shared instance is used. A cache can
+bound its origins (`max_entries`) and expire failed robots fetches
+(`error_ttl_seconds`). Previously cached successful text remains reusable and is
+not retroactively removed.
 
 - Modules: `web_fetch`, `content_type`, `encoding_labels`, `text_extract`, `text_cache`.
 - Dependencies: `contracts` only.
-- Entry points: URL normalization, bounded fetch, main-text extraction, `TextCache`.
+- Entry points: URL normalization, bounded fetch, `RobotsCache`, main-text extraction, `TextCache`.
 - Excludes: OSM classification, reporting, publication, and orchestration.
 
 `web_fetch` is this repository's reference implementation for safe website

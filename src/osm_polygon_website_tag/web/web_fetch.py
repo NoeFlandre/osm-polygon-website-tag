@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import urllib.robotparser
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -68,16 +69,110 @@ class FetchResult:
 class _RobotsPolicy:
     """Cached robots rules and any safe-transport failure for one origin."""
 
-    parser: urllib.robotparser.RobotFileParser | None
+    parser: urllib.robotparser.RobotFileParser | _AllowAllRobots | None
     error_status: Literal["unsafe_url", "fetch_error"] | None = None
     final_url: str | None = None
     message: str | None = None
     crawl_delay: float | None = None
 
 
-_ROBOTS_CACHE: dict[str, _RobotsPolicy] = {}
-_ROBOTS_CACHE_LOCK = threading.Lock()
-_ROBOTS_LOAD_LOCKS: dict[str, threading.Lock] = {}
+class _AllowAllRobots:
+    """Robots rules that allow every agent and path: a missing or malformed robots.txt."""
+
+    def can_fetch(self, _useragent: str, _url: str) -> bool:
+        return True
+
+    def crawl_delay(self, _useragent: str) -> None:
+        return None
+
+
+@dataclass(frozen=True)
+class _CachedPolicy:
+    """A robots policy and the clock time it was stored."""
+
+    policy: _RobotsPolicy
+    stored_at: float
+
+
+class RobotsCache:
+    """Per-origin robots policies, shared by the fetches that receive this object.
+
+    With no bounds, a policy stays for the life of the object. ``max_entries``
+    evicts the least recently used origin when the cache is full.
+    ``error_ttl_seconds`` expires the policy of a failed robots fetch (unsafe,
+    unavailable or unreadable), so that origin is requested again later.
+    Concurrent callers for one origin wait for a single load.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_entries: int | None = None,
+        error_ttl_seconds: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if max_entries is not None and max_entries < 1:
+            raise ValueError("max_entries must be at least 1")
+        self._max_entries = max_entries
+        self._error_ttl_seconds = error_ttl_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._entries: OrderedDict[str, _CachedPolicy] = OrderedDict()
+        self._load_locks: dict[str, threading.Lock] = {}
+
+    def get_or_load(self, origin: str, load: Callable[[str], _RobotsPolicy]) -> _RobotsPolicy:
+        """Return the cached policy for ``origin``, loading it at most once at a time."""
+        cached = self._lookup(origin)
+        if cached is not None:
+            return cached
+        load_lock = self._load_lock(origin)
+        try:
+            with load_lock:
+                cached = self._lookup(origin)
+                if cached is not None:
+                    return cached
+                policy = load(origin)
+                self._store(origin, policy)
+                return policy
+        finally:
+            self._release_load_lock(origin, load_lock)
+
+    def _lookup(self, origin: str) -> _RobotsPolicy | None:
+        with self._lock:
+            entry = self._entries.get(origin)
+            if entry is None:
+                return None
+            if self._is_expired(entry):
+                del self._entries[origin]
+                return None
+            self._entries.move_to_end(origin)
+            return entry.policy
+
+    def _is_expired(self, entry: _CachedPolicy) -> bool:
+        if self._error_ttl_seconds is None or entry.policy.error_status is None:
+            return False
+        return self._clock() - entry.stored_at >= self._error_ttl_seconds
+
+    def _store(self, origin: str, policy: _RobotsPolicy) -> None:
+        with self._lock:
+            self._entries[origin] = _CachedPolicy(policy, self._clock())
+            self._entries.move_to_end(origin)
+            while self._max_entries is not None and len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+
+    def _load_lock(self, origin: str) -> threading.Lock:
+        with self._lock:
+            return self._load_locks.setdefault(origin, threading.Lock())
+
+    def _release_load_lock(self, origin: str, load_lock: threading.Lock) -> None:
+        # The lock is only needed while a load is in flight. Later callers find
+        # the stored policy first, so the per-origin lock does not accumulate.
+        with self._lock:
+            if self._load_locks.get(origin) is load_lock:
+                del self._load_locks[origin]
+
+
+_DEFAULT_ROBOTS_CACHE = RobotsCache()
 
 
 def normalize_http_url(raw: str) -> str:
@@ -209,11 +304,14 @@ def fetch_html(
     max_bytes: int = MAX_RESPONSE_BYTES,
     max_redirects: int = MAX_REDIRECTS,
     limiter: HostLimiter | None = None,
+    robots_cache: RobotsCache | None = None,
 ) -> FetchResult:
     """Fetch one HTML document while validating each redirect target.
 
     With a ``limiter``, requests to one host are capped and spaced, and a 429 or
     503 that carries a short ``Retry-After`` is retried once after the pause.
+    Robots policies come from ``robots_cache``; by default they come from the
+    module's shared cache.
     """
     requested_or_error = _normalise_requested_url(raw_url)
     if isinstance(requested_or_error, FetchResult):
@@ -228,6 +326,7 @@ def fetch_html(
         max_bytes,
         max_redirects,
         limiter=limiter,
+        robots_cache=robots_cache,
     )
 
 
@@ -304,6 +403,7 @@ def _follow_redirects(
     *,
     limiter: HostLimiter | None = None,
     check_robots: bool = True,
+    robots_cache: RobotsCache | None = None,
 ) -> FetchResult:
     """Fetch a normalized URL while validating each redirect target."""
     if max_redirects < 0:
@@ -319,6 +419,7 @@ def _follow_redirects(
             max_bytes,
             limiter,
             check_robots=check_robots,
+            robots_cache=robots_cache,
         )
         if isinstance(outcome, FetchResult):
             return outcome
@@ -333,6 +434,7 @@ def _follow_redirects(
         max_bytes,
         limiter,
         check_robots=check_robots,
+        robots_cache=robots_cache,
     )
     if isinstance(outcome, FetchResult):
         return outcome
@@ -349,10 +451,13 @@ def _request_redirect_hop(
     limiter: HostLimiter | None,
     *,
     check_robots: bool,
+    robots_cache: RobotsCache | None,
 ) -> FetchResult | str:
     """Check policy and execute one bounded redirect hop."""
     if check_robots:
-        robots_result = _check_robots(current, requested, transport, resolver, limiter)
+        robots_result = _check_robots(
+            current, requested, transport, resolver, limiter, robots_cache
+        )
         if robots_result is not None:
             return robots_result
     next_url, result = _fetch_step(
@@ -372,9 +477,11 @@ def _check_robots(
     transport: RequestOnce,
     resolver: Resolver,
     limiter: HostLimiter | None,
+    robots_cache: RobotsCache | None,
 ) -> FetchResult | None:
     """Return a robots policy failure or allow this redirect target."""
-    policy = _robots_policy(current, transport, resolver)
+    cache = _DEFAULT_ROBOTS_CACHE if robots_cache is None else robots_cache
+    policy = _robots_policy(current, transport, resolver, cache)
     return _apply_robots_policy(policy, current, requested, limiter)
 
 
@@ -437,24 +544,15 @@ def _robots_policy(
     url: str,
     transport: RequestOnce,
     resolver: Resolver,
+    cache: RobotsCache,
 ) -> _RobotsPolicy:
     """Return one cached, safely fetched robots policy for a URL's origin."""
     parsed = urllib.parse.urlsplit(url)
     origin = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
-    with _ROBOTS_CACHE_LOCK:
-        cached = _ROBOTS_CACHE.get(origin)
-        if cached is not None:
-            return cached
-        load_lock = _ROBOTS_LOAD_LOCKS.setdefault(origin, threading.Lock())
-    with load_lock:
-        with _ROBOTS_CACHE_LOCK:
-            cached = _ROBOTS_CACHE.get(origin)
-            if cached is not None:
-                return cached
-        policy = _fetch_robots_policy(origin, transport, resolver)
-        with _ROBOTS_CACHE_LOCK:
-            _ROBOTS_CACHE[origin] = policy
-        return policy
+    return cache.get_or_load(
+        origin,
+        lambda loaded_origin: _fetch_robots_policy(loaded_origin, transport, resolver),
+    )
 
 
 def _fetch_robots_policy(
@@ -473,14 +571,14 @@ def _fetch_robots_policy(
         MAX_REDIRECTS,
         check_robots=False,
     )
-    failure = _robots_fetch_failure(robots_url, fetched)
+    failure = _robots_fetch_failure(fetched)
     if failure is not None:
         return failure
     assert fetched.body is not None
     return _parse_robots_policy(robots_url, fetched.body)
 
 
-def _robots_fetch_failure(robots_url: str, fetched: FetchResult) -> _RobotsPolicy | None:
+def _robots_fetch_failure(fetched: FetchResult) -> _RobotsPolicy | None:
     """Classify unsafe, absent, or unavailable robots responses."""
     if fetched.status == "unsafe_url":
         return _RobotsPolicy(
@@ -490,7 +588,7 @@ def _robots_fetch_failure(robots_url: str, fetched: FetchResult) -> _RobotsPolic
             message="robots_unsafe_url",
         )
     if _robots_response_is_missing(fetched):
-        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+        return _RobotsPolicy(_AllowAllRobots())
     return None if _robots_response_is_ok(fetched) else _robots_unavailable_policy(fetched)
 
 
@@ -517,10 +615,10 @@ def _parse_robots_policy(robots_url: str, body: bytes) -> _RobotsPolicy:
     try:
         parser.parse(body.decode(errors="replace").splitlines())
     except Exception:  # noqa: BLE001 - malformed robots text is treated as no rules
-        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+        return _RobotsPolicy(_AllowAllRobots())
     crawl_delay, valid = _robots_crawl_delay(parser)
     if not valid:
-        return _RobotsPolicy(_allow_all_robots_parser(robots_url))
+        return _RobotsPolicy(_AllowAllRobots())
     return _RobotsPolicy(parser, crawl_delay=crawl_delay)
 
 
@@ -538,13 +636,6 @@ def _robots_crawl_delay(
     if not math.isfinite(delay) or delay < 0:
         return None, True
     return delay, True
-
-
-def _allow_all_robots_parser(robots_url: str) -> urllib.robotparser.RobotFileParser:
-    """Return a parser marked as checked with no blocking rules."""
-    parser = urllib.robotparser.RobotFileParser(robots_url)
-    vars(parser)["allow_all"] = True
-    return parser
 
 
 def _fetch_step(

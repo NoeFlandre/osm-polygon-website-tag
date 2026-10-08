@@ -136,8 +136,7 @@ def loopback_http_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[LoopbackH
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     _restrict_to_loopback_fixture(fixture, monkeypatch)
-    monkeypatch.setattr(web_fetch, "_ROBOTS_CACHE", {})
-    monkeypatch.setattr(web_fetch, "_ROBOTS_LOAD_LOCKS", {})
+    monkeypatch.setattr(web_fetch, "_DEFAULT_ROBOTS_CACHE", web_fetch.RobotsCache())
     try:
         yield fixture
     finally:
