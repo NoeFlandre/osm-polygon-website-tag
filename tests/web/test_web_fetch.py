@@ -467,6 +467,42 @@ def test_validate_rejects_private_literal_before_resolving(literal: str) -> None
     assert calls == []
 
 
+def test_validate_blocks_missing_hostname_before_resolving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # normalize_http_url never returns a hostless URL; bypass it to exercise the check itself.
+    monkeypatch.setattr(web_fetch_module, "normalize_http_url", lambda url: url)
+    calls = []
+
+    def resolve(*args):
+        calls.append(args)
+        return _PUBLIC
+
+    with pytest.raises(UnsafeUrlError, match=r"^missing_hostname$"):
+        validate_public_http_url("http:///private", resolver=resolve)
+    assert calls == []
+
+
+def test_safe_request_blocks_missing_hostname_without_a_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_fetch_module, "normalize_http_url", lambda url: url)
+    requested: list[str] = []
+
+    def transport(url: str, _timeout: float, _max_bytes: int) -> HttpResponse:
+        requested.append(url)
+        return HttpResponse(200, {}, b"ok")
+
+    result = web_fetch_module._safe_request(
+        "http:///private", "http:///private", transport, _public_resolver, 1.0, 100
+    )
+
+    assert result == FetchResult(
+        "unsafe_url", "http:///private", final_url="http:///private", message="unsafe_url"
+    )
+    assert requested == []
+
+
 def test_validate_public_literal_uses_default_resolver() -> None:
     assert validate_public_http_url("https://93.184.216.34/") is True
     assert validate_public_http_url("https://[2606:2800:220:1::1]/") is True

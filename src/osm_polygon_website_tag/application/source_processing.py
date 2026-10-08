@@ -10,7 +10,7 @@ from typing import TypedDict
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.application.inventory import source_bundle_is_complete
-from osm_polygon_website_tag.application.progress import report_progress
+from osm_polygon_website_tag.application.progress import CountedProgress, report_progress
 from osm_polygon_website_tag.application.resume_planner import (
     coerce_enrichment_status_summary,
     summarize_enrichment_status,
@@ -213,7 +213,8 @@ def _ensure_source_bundle(
     ):
         if allow_extraction:
             report_progress(
-                context.progress, f"[{index}/{total}] Resuming: {source.name} is complete"
+                context.progress,
+                CountedProgress(index, total, f"Resuming: {source.name} is complete"),
             )
         return _SourceBundleResult(
             shard=_public_shard_path(context.run_dir, source),
@@ -222,7 +223,7 @@ def _ensure_source_bundle(
         )
     if not allow_extraction:
         raise ValueError(f"cannot enrich incomplete source bundle: {source.name}")
-    report_progress(context.progress, f"[{index}/{total}] Extracting {source.name}")
+    report_progress(context.progress, CountedProgress(index, total, f"Extracting {source.name}"))
     _extract_with_options(source, context)
     if not source_bundle_is_complete(
         context.run_dir,
@@ -257,7 +258,8 @@ def _migrate_public_shard_if_needed(
         return False
     migration = migrate_public_shard(shard)
     report_progress(
-        context.progress, f"[{index}/{total}] Migrating {source.name} to public schema v1.3"
+        context.progress,
+        CountedProgress(index, total, f"Migrating {source.name} to public schema v1.3"),
     )
     update_public_shard_metadata(
         context.state,
@@ -289,7 +291,7 @@ def _enrich_source_shard_if_needed(
         migration_changed=migration_changed,
     )
     if decision.needs_enrichment:
-        report_progress(context.progress, f"[{index}/{total}] Enriching {source.name}")
+        report_progress(context.progress, CountedProgress(index, total, f"Enriching {source.name}"))
         enrichment = _enrich_shard(shard, context)
         update_public_shard_metadata(
             context.state,
@@ -307,11 +309,13 @@ def _enrich_source_shard_if_needed(
             status_summary=summarize_enrichment_status(shard),
         )
         report_progress(
-            context.progress, f"[{index}/{total}] Resuming: {source.name} text is complete"
+            context.progress,
+            CountedProgress(index, total, f"Resuming: {source.name} text is complete"),
         )
     else:
         report_progress(
-            context.progress, f"[{index}/{total}] Resuming: {source.name} text is complete"
+            context.progress,
+            CountedProgress(index, total, f"Resuming: {source.name} text is complete"),
         )
     update_source_enrichment_status(
         context.state,
@@ -341,7 +345,9 @@ def _detect_source_shard_if_needed(
     result = detect_language_shard(shard, detector=detector)
     if not result.changed:
         return False
-    report_progress(context.progress, f"[{index}/{total}] Detecting languages for {source.name}")
+    report_progress(
+        context.progress, CountedProgress(index, total, f"Detecting languages for {source.name}")
+    )
     update_public_shard_metadata(
         context.state,
         filename=source.name,
@@ -364,9 +370,10 @@ def _initial_enrichment_decision(
         migration_changed=migration_changed,
     ):
         needs_enrichment = _shard_needs_enrichment(shard)
-    else:
-        assert isinstance(marker, bool)
+    elif isinstance(marker, bool):
         needs_enrichment = marker
+    else:
+        raise TypeError(f"enrichment marker must be bool, not {type(marker).__name__}")
     return _EnrichmentDecision(
         needs_enrichment=needs_enrichment,
         status_summary=status_summary,
@@ -464,7 +471,8 @@ def _source_upload_is_current_for_context(
     ):
         return False
     report_progress(
-        context.progress, f"[{index}/{total}] Resuming: {source.name} is already uploaded"
+        context.progress,
+        CountedProgress(index, total, f"Resuming: {source.name} is already uploaded"),
     )
     return True
 
@@ -596,7 +604,7 @@ def _maybe_publish_enriched_shard(
         return False
     report_progress(
         progress,
-        f"[{index}/{total}] Uploading enriched shard and recomputed card",
+        CountedProgress(index, total, "Uploading enriched shard and recomputed card"),
     )
     _upload_public_shard(run_dir, source, repo_id, preview)
     persist_successful_upload(
