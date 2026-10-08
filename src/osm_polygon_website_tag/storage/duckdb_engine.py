@@ -57,8 +57,12 @@ def _make_connection(
 
 
 def close_quietly(con: duckdb.DuckDBPyConnection) -> None:
-    """Close DuckDB without masking the failure that led to the cleanup."""
-    with contextlib.suppress(Exception):
+    """Close DuckDB without masking the failure that led to the cleanup.
+
+    Only ``duckdb.Error`` is suppressed. Any other exception, such as a
+    programming error, propagates.
+    """
+    with contextlib.suppress(duckdb.Error):
         con.close()
 
 
@@ -94,7 +98,7 @@ def register_comparison_parquets(
     If ``obs_dir`` is empty, the view is registered as empty with the
     comparison schema's column types.
     """
-    glob = str(obs_dir / "*.parquet").replace("'", "''")
+    glob_literal = sql_string_literal(obs_dir / "*.parquet")
     files = sorted(obs_dir.glob("*.parquet"))
     if not files:
         con.execute(
@@ -123,7 +127,7 @@ def register_comparison_parquets(
     con.execute(
         f"""
         CREATE OR REPLACE VIEW observations AS
-        SELECT * FROM read_parquet('{glob}')
+        SELECT * FROM read_parquet({glob_literal})
         """  # noqa: S608
     )
 
@@ -137,7 +141,7 @@ def register_public_parquets(
     If the directory is empty, register an empty view with the public
     schema's column types.
     """
-    glob = str(polygons_dir / "*.parquet").replace("'", "''")
+    glob_literal = sql_string_literal(polygons_dir / "*.parquet")
     files = sorted(polygons_dir.glob("*.parquet"))
     if not files:
         con.execute(
@@ -191,7 +195,7 @@ def register_public_parquets(
     con.execute(
         f"""
         CREATE OR REPLACE VIEW public_polygons AS
-        SELECT * FROM read_parquet('{glob}', union_by_name=true)
+        SELECT * FROM read_parquet({glob_literal}, union_by_name=true)
         """  # noqa: S608
     )
 
@@ -212,10 +216,10 @@ def register_rejection_parquets(
             """
         )
         return
-    glob = str(rejection_dir / "*.parquet").replace("'", "''")
+    glob_literal = sql_string_literal(rejection_dir / "*.parquet")
     con.execute(
         f"""CREATE OR REPLACE VIEW rejection_rows AS
-            SELECT source_pbf, rejection_kind FROM read_parquet('{glob}')"""  # noqa: S608
+            SELECT source_pbf, rejection_kind FROM read_parquet({glob_literal})"""  # noqa: S608
     )
 
 
@@ -321,9 +325,9 @@ def copy_query_atomic(
     """COPY a query to a sibling temporary Parquet and atomically promote it."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = out_path.with_name(f".{out_path.name}.tmp.parquet")
-    escaped = str(temp_path).replace("'", "''")
+    literal = sql_string_literal(temp_path)
     try:
-        con.execute(f"COPY ({query}) TO '{escaped}' (FORMAT 'parquet', COMPRESSION 'snappy')")
+        con.execute(f"COPY ({query}) TO {literal} (FORMAT 'parquet', COMPRESSION 'snappy')")
         atomic_write_file(temp_path, out_path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
@@ -353,6 +357,15 @@ def cleanup_temp_dir(run_dir: Path) -> bool:
     return True
 
 
+def sql_string_literal(value: str | Path) -> str:
+    """Return ``value`` as a single-quoted DuckDB string literal.
+
+    Embedded single quotes are doubled, so the result can be spliced into a
+    statement as one literal, quotes included.
+    """
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 __all__ = [
     "DEFAULT_MEMORY_LIMIT",
     "DUCKDB_REPORTING_THREADS",
@@ -370,4 +383,5 @@ __all__ = [
     "register_public_parquets",
     "register_rejection_parquets",
     "reporting_connection",
+    "sql_string_literal",
 ]

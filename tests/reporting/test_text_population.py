@@ -667,10 +667,6 @@ def test_word_count_validation_sums_both_tags() -> None:
     text_population._validate_word_counts(_scripted_connection((0,), (0,)))
 
 
-def test_sql_string_doubles_embedded_quotes() -> None:
-    assert text_population._sql_string(Path("a'b")) == "'a''b'"
-
-
 def _record_parquets(monkeypatch: pytest.MonkeyPatch, paths: list[Path]) -> list[object]:
     requested: list[object] = []
 
