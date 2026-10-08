@@ -94,6 +94,14 @@ class _CachedPolicy:
     stored_at: float
 
 
+@dataclass
+class _LoadSlot:
+    """The lock that serialises one origin's robots load, and how many callers use it."""
+
+    lock: threading.Lock
+    users: int = 0
+
+
 def _checked_error_ttl(seconds: float | None) -> float | None:
     """Return a finite, non-negative error TTL, or None for no expiry.
 
@@ -129,16 +137,16 @@ class RobotsCache:
         self._clock = clock
         self._lock = threading.Lock()
         self._entries: OrderedDict[str, _CachedPolicy] = OrderedDict()
-        self._load_locks: dict[str, threading.Lock] = {}
+        self._load_slots: dict[str, _LoadSlot] = {}
 
     def get_or_load(self, origin: str, load: Callable[[str], _RobotsPolicy]) -> _RobotsPolicy:
         """Return the cached policy for ``origin``, loading it at most once at a time."""
         cached = self._lookup(origin)
         if cached is not None:
             return cached
-        load_lock = self._load_lock(origin)
+        slot = self._join_load(origin)
         try:
-            with load_lock:
+            with slot.lock:
                 cached = self._lookup(origin)
                 if cached is not None:
                     return cached
@@ -146,7 +154,7 @@ class RobotsCache:
                 self._store(origin, policy)
                 return policy
         finally:
-            self._release_load_lock(origin, load_lock)
+            self._leave_load(origin)
 
     def _lookup(self, origin: str) -> _RobotsPolicy | None:
         with self._lock:
@@ -172,16 +180,21 @@ class RobotsCache:
             while self._max_entries is not None and len(self._entries) > self._max_entries:
                 self._entries.popitem(last=False)
 
-    def _load_lock(self, origin: str) -> threading.Lock:
+    def _join_load(self, origin: str) -> _LoadSlot:
         with self._lock:
-            return self._load_locks.setdefault(origin, threading.Lock())
+            slot = self._load_slots.setdefault(origin, _LoadSlot(threading.Lock()))
+            slot.users += 1
+            return slot
 
-    def _release_load_lock(self, origin: str, load_lock: threading.Lock) -> None:
-        # The lock is only needed while a load is in flight. Later callers find
-        # the stored policy first, so the per-origin lock does not accumulate.
+    def _leave_load(self, origin: str) -> None:
+        # The slot stays registered while any caller still waits on its lock, so a
+        # caller that arrives after a failed load queues behind them. It is dropped
+        # with the last caller, so the per-origin locks do not accumulate.
         with self._lock:
-            if self._load_locks.get(origin) is load_lock:
-                del self._load_locks[origin]
+            slot = self._load_slots[origin]
+            slot.users -= 1
+            if slot.users == 0:
+                del self._load_slots[origin]
 
 
 _DEFAULT_ROBOTS_CACHE = RobotsCache()

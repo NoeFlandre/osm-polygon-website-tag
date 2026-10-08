@@ -468,6 +468,61 @@ def test_robots_policy_loads_an_origin_once_for_concurrent_requests(
     assert len(results) == 2 and results[0] is results[1]
 
 
+def test_a_failed_load_keeps_the_origin_lock_for_callers_already_queued() -> None:
+    """A caller that arrives after a failed load still waits for the queued caller (#135)."""
+    cache = web_fetch.RobotsCache()
+    origin = "https://failed-load.example"
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    release_second = threading.Event()
+    third_entered = threading.Event()
+    attempts: list[str] = []
+    attempts_lock = threading.Lock()
+    errors: list[OSError] = []
+
+    def load(origin_arg: str) -> web_fetch._RobotsPolicy:
+        with attempts_lock:
+            attempts.append(origin_arg)
+            attempt = len(attempts)
+        if attempt == 1:
+            first_entered.set()
+            release_first.wait(timeout=2)
+            raise OSError("robots fetch failed")
+        if attempt == 2:
+            second_entered.set()
+            release_second.wait(timeout=2)
+        else:
+            third_entered.set()
+        return web_fetch._RobotsPolicy(web_fetch._AllowAllRobots())
+
+    def call() -> None:
+        try:
+            cache.get_or_load(origin, load)
+        except OSError as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=call)
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second = threading.Thread(target=call)
+    second.start()
+    assert not second_entered.wait(timeout=0.1)
+    release_first.set()
+    assert second_entered.wait(timeout=2)
+    third = threading.Thread(target=call)
+    third.start()
+    try:
+        assert not third_entered.wait(timeout=0.1)
+    finally:
+        release_second.set()
+        for thread in (first, second, third):
+            thread.join(timeout=2)
+
+    assert attempts == [origin, origin]
+    assert len(errors) == 1
+
+
 def test_disallowed_page_is_not_requested(memory_http: MemoryHTTPFixture) -> None:
     memory_http.route(
         "/robots.txt",
