@@ -289,7 +289,7 @@ def test_deduplicate_rejects_unlisted_source_and_closes_connection(
         def close(self) -> None:
             self.closed = True
             self.inner.close()
-            raise RuntimeError("connection close failed")
+            raise duckdb.Error("connection close failed")
 
     tracked = TrackingConnection(connection)
     monkeypatch.setattr(
