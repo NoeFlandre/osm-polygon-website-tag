@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import osm_polygon_website_tag.pipeline.extraction as extraction_module
+import osm_polygon_website_tag.runtime.clock as clock_module
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.runtime.run_state import initialise_run, load_run
 
@@ -41,7 +42,7 @@ def _clock(monkeypatch: pytest.MonkeyPatch, *moments: dt.datetime) -> None:
         def now(tz: dt.tzinfo | None = None) -> dt.datetime:
             return queue.pop(0)
 
-    monkeypatch.setattr(extraction_module, "dt", SimpleNamespace(datetime=FakeDatetime, UTC=dt.UTC))
+    monkeypatch.setattr(clock_module, "dt", SimpleNamespace(datetime=FakeDatetime, UTC=dt.UTC))
 
 
 def _pbf(make_pbf: Any) -> Path:

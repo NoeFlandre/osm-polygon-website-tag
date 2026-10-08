@@ -50,13 +50,13 @@ Source identity contract
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Required, TypedDict, cast
 
+from osm_polygon_website_tag.runtime.clock import utc_iso, utc_run_id
 from osm_polygon_website_tag.storage.digest import sha256_file
 
 # Run state names. Transitions are documented in the module docstring.
@@ -106,7 +106,7 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
 
 def default_run_id() -> str:
     """Return a deterministic run ID derived from UTC timestamp."""
-    return dt.datetime.now(tz=dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    return utc_run_id()
 
 
 @dataclass(frozen=True)
@@ -268,7 +268,7 @@ def initialise_run(
     (run_dir / "manifests").mkdir()
     state = RunState(run_dir=run_dir, run_id=run_id)
     state.metadata["run_id"] = run_id
-    state.metadata["created_at"] = dt.datetime.now(tz=dt.UTC).isoformat()
+    state.metadata["created_at"] = utc_iso()
     state.metadata["status"] = STATUS_INITIALIZED
     atomic_write_json(run_dir / "manifests" / "run.json", state.metadata)
     atomic_write_json(run_dir / "manifests" / "sources.json", [])
@@ -334,7 +334,7 @@ def transition_status(state: RunState, new_status: str) -> None:
     if new_status not in allowed:
         raise ValueError(f"illegal run-status transition: {current!r} -> {new_status!r}")
     state.metadata["status"] = new_status
-    state.metadata["status_changed_at"] = dt.datetime.now(tz=dt.UTC).isoformat()
+    state.metadata["status_changed_at"] = utc_iso()
     atomic_write_json(state.run_dir / "manifests" / "run.json", state.metadata)
 
 
