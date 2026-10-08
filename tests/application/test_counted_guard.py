@@ -7,7 +7,7 @@ import types
 import pytest
 from tests.application.guard_support import install_producer_guard, plain_counted_texts
 
-from osm_polygon_website_tag.application.progress import counted_progress
+from osm_polygon_website_tag.application.progress import CountedProgress
 
 
 @pytest.mark.parametrize(
@@ -23,8 +23,8 @@ def test_the_guard_flags_a_plain_counted_string_including_empty_and_multiline(
 @pytest.mark.parametrize(
     "message",
     [
-        counted_progress(1, 2, "Extracting a.osm.pbf"),
-        counted_progress(3, 4, ""),
+        CountedProgress(1, 2, "Extracting a.osm.pbf"),
+        CountedProgress(3, 4, ""),
         "kept",
         "ignored",
         "Extracting a.osm.pbf",
@@ -44,7 +44,7 @@ def test_the_guard_wiring_records_plain_counted_text_and_still_forwards(
     plain = install_producer_guard(monkeypatch, module)
 
     module.report_progress(None, "[1/2] Extracting a.osm.pbf")
-    module.report_progress(None, counted_progress(1, 2, "ok"))
+    module.report_progress(None, CountedProgress(1, 2, "ok"))
 
     assert plain == ["[1/2] Extracting a.osm.pbf"]
     assert forwarded == ["[1/2] Extracting a.osm.pbf", "[1/2] ok"]

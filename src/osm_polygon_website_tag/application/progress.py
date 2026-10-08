@@ -46,11 +46,6 @@ class CountedProgress(str):
         return (CountedProgress, (self.current, self.total, self.text))
 
 
-def counted_progress(current: int, total: int, text: str) -> CountedProgress:
-    """Return a counted progress message for item ``current`` of ``total``."""
-    return CountedProgress(current, total, text)
-
-
 def _require_str(message: object) -> None:
     """Refuse non-text messages in both modes, as before the counted-progress change."""
     if not isinstance(message, str):
@@ -139,4 +134,4 @@ class ProgressReporter:
         self._last_current = None
 
 
-__all__ = ["CountedProgress", "ProgressReporter", "counted_progress"]
+__all__ = ["CountedProgress", "ProgressReporter"]

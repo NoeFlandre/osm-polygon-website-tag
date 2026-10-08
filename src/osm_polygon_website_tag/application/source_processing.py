@@ -10,7 +10,7 @@ from typing import TypedDict
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.application.inventory import source_bundle_is_complete
-from osm_polygon_website_tag.application.progress import counted_progress, report_progress
+from osm_polygon_website_tag.application.progress import CountedProgress, report_progress
 from osm_polygon_website_tag.application.resume_planner import (
     coerce_enrichment_status_summary,
     summarize_enrichment_status,
@@ -214,7 +214,7 @@ def _ensure_source_bundle(
         if allow_extraction:
             report_progress(
                 context.progress,
-                counted_progress(index, total, f"Resuming: {source.name} is complete"),
+                CountedProgress(index, total, f"Resuming: {source.name} is complete"),
             )
         return _SourceBundleResult(
             shard=_public_shard_path(context.run_dir, source),
@@ -223,7 +223,7 @@ def _ensure_source_bundle(
         )
     if not allow_extraction:
         raise ValueError(f"cannot enrich incomplete source bundle: {source.name}")
-    report_progress(context.progress, counted_progress(index, total, f"Extracting {source.name}"))
+    report_progress(context.progress, CountedProgress(index, total, f"Extracting {source.name}"))
     _extract_with_options(source, context)
     if not source_bundle_is_complete(
         context.run_dir,
@@ -259,7 +259,7 @@ def _migrate_public_shard_if_needed(
     migration = migrate_public_shard(shard)
     report_progress(
         context.progress,
-        counted_progress(index, total, f"Migrating {source.name} to public schema v1.3"),
+        CountedProgress(index, total, f"Migrating {source.name} to public schema v1.3"),
     )
     update_public_shard_metadata(
         context.state,
@@ -291,9 +291,7 @@ def _enrich_source_shard_if_needed(
         migration_changed=migration_changed,
     )
     if decision.needs_enrichment:
-        report_progress(
-            context.progress, counted_progress(index, total, f"Enriching {source.name}")
-        )
+        report_progress(context.progress, CountedProgress(index, total, f"Enriching {source.name}"))
         enrichment = _enrich_shard(shard, context)
         update_public_shard_metadata(
             context.state,
@@ -312,12 +310,12 @@ def _enrich_source_shard_if_needed(
         )
         report_progress(
             context.progress,
-            counted_progress(index, total, f"Resuming: {source.name} text is complete"),
+            CountedProgress(index, total, f"Resuming: {source.name} text is complete"),
         )
     else:
         report_progress(
             context.progress,
-            counted_progress(index, total, f"Resuming: {source.name} text is complete"),
+            CountedProgress(index, total, f"Resuming: {source.name} text is complete"),
         )
     update_source_enrichment_status(
         context.state,
@@ -348,7 +346,7 @@ def _detect_source_shard_if_needed(
     if not result.changed:
         return False
     report_progress(
-        context.progress, counted_progress(index, total, f"Detecting languages for {source.name}")
+        context.progress, CountedProgress(index, total, f"Detecting languages for {source.name}")
     )
     update_public_shard_metadata(
         context.state,
@@ -473,7 +471,7 @@ def _source_upload_is_current_for_context(
         return False
     report_progress(
         context.progress,
-        counted_progress(index, total, f"Resuming: {source.name} is already uploaded"),
+        CountedProgress(index, total, f"Resuming: {source.name} is already uploaded"),
     )
     return True
 
@@ -605,7 +603,7 @@ def _maybe_publish_enriched_shard(
         return False
     report_progress(
         progress,
-        counted_progress(index, total, "Uploading enriched shard and recomputed card"),
+        CountedProgress(index, total, "Uploading enriched shard and recomputed card"),
     )
     _upload_public_shard(run_dir, source, repo_id, preview)
     persist_successful_upload(

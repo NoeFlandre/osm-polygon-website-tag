@@ -13,7 +13,6 @@ from osm_polygon_website_tag.application import progress as progress_module
 from osm_polygon_website_tag.application.progress import (
     CountedProgress,
     ProgressReporter,
-    counted_progress,
 )
 
 
@@ -60,7 +59,7 @@ def test_noninteractive_progress_preserves_plain_log_lines() -> None:
     stream = StringIO()
     reporter = ProgressReporter(stream, interactive=False)
 
-    reporter(counted_progress(2, 3, "Extracting source.osm.pbf"))
+    reporter(CountedProgress(2, 3, "Extracting source.osm.pbf"))
     reporter("Building aggregate analysis")
     reporter.close(completed=True)
 
@@ -74,7 +73,7 @@ def test_interactive_progress_uses_tqdm_and_keeps_phase_messages(
     stream = StringIO()
     reporter = ProgressReporter(stream, interactive=True)
 
-    reporter(counted_progress(2, 3, "Extracting source.osm.pbf"))
+    reporter(CountedProgress(2, 3, "Extracting source.osm.pbf"))
     reporter("Building aggregate analysis")
 
     bar = _FakeTqdm.instances[0]
@@ -91,7 +90,7 @@ def test_interrupted_progress_closes_without_marking_complete(
 ) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
-    reporter(counted_progress(2, 3, "Extracting source.osm.pbf"))
+    reporter(CountedProgress(2, 3, "Extracting source.osm.pbf"))
 
     reporter.close(completed=False)
 
@@ -105,9 +104,9 @@ def test_interactive_progress_starts_a_new_bar_when_source_index_resets(
 ) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
-    reporter(counted_progress(3, 3, "Extracting c.osm.pbf"))
+    reporter(CountedProgress(3, 3, "Extracting c.osm.pbf"))
 
-    reporter(counted_progress(1, 3, "Enriching a.osm.pbf"))
+    reporter(CountedProgress(1, 3, "Enriching a.osm.pbf"))
 
     assert len(_FakeTqdm.instances) == 2
     assert _FakeTqdm.instances[0].closed is True
@@ -119,7 +118,7 @@ def test_quiet_progress_writes_nothing() -> None:
     stream = StringIO()
     reporter = ProgressReporter(stream, interactive=False, quiet=True)
 
-    reporter(counted_progress(1, 2, "a.osm.pbf"))
+    reporter(CountedProgress(1, 2, "a.osm.pbf"))
     reporter("phase message")
 
     assert stream.getvalue() == ""
@@ -147,8 +146,8 @@ def test_a_repeated_index_updates_the_same_bar(monkeypatch: pytest.MonkeyPatch) 
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
 
-    reporter(counted_progress(2, 3, "Extracting a.osm.pbf"))
-    reporter(counted_progress(2, 3, "Enriching a.osm.pbf"))
+    reporter(CountedProgress(2, 3, "Extracting a.osm.pbf"))
+    reporter(CountedProgress(2, 3, "Enriching a.osm.pbf"))
 
     assert len(_FakeTqdm.instances) == 1
     assert _FakeTqdm.instances[0].description == "Enriching a.osm.pbf"
@@ -158,9 +157,9 @@ def test_the_bar_only_advances_by_positive_amounts(monkeypatch: pytest.MonkeyPat
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
 
-    reporter(counted_progress(1, 3, "a"))
-    reporter(counted_progress(3, 3, "c"))
-    reporter(counted_progress(4, 3, "d"))
+    reporter(CountedProgress(1, 3, "a"))
+    reporter(CountedProgress(3, 3, "c"))
+    reporter(CountedProgress(4, 3, "d"))
     reporter.close(completed=True)
 
     bar = _FakeTqdm.instances[0]
@@ -171,7 +170,7 @@ def test_the_bar_only_advances_by_positive_amounts(monkeypatch: pytest.MonkeyPat
 def test_closing_a_complete_run_fills_the_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
-    reporter(counted_progress(1, 3, "a"))
+    reporter(CountedProgress(1, 3, "a"))
 
     reporter.close(completed=True)
 
@@ -181,10 +180,10 @@ def test_closing_a_complete_run_fills_the_bar(monkeypatch: pytest.MonkeyPatch) -
 def test_a_finished_run_can_start_a_new_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
-    reporter(counted_progress(2, 3, "a"))
+    reporter(CountedProgress(2, 3, "a"))
     reporter.close(completed=True)
 
-    reporter(counted_progress(1, 2, "b"))
+    reporter(CountedProgress(1, 2, "b"))
 
     assert [bar.total for bar in _FakeTqdm.instances] == [3, 2]
 
@@ -201,7 +200,7 @@ def test_report_progress_forwards_the_message_when_a_callback_is_set() -> None:
 
 
 def test_counted_progress_is_a_str_with_the_legacy_text() -> None:
-    event = counted_progress(2, 3, "Extracting a.osm.pbf")
+    event = CountedProgress(2, 3, "Extracting a.osm.pbf")
 
     assert isinstance(event, CountedProgress)
     assert isinstance(event, str)
@@ -212,7 +211,7 @@ def test_counted_progress_is_a_str_with_the_legacy_text() -> None:
 
 
 def test_counted_progress_survives_copy_and_pickle() -> None:
-    event = counted_progress(2, 3, "Extracting a.osm.pbf")
+    event = CountedProgress(2, 3, "Extracting a.osm.pbf")
     restored = pickle.loads(pickle.dumps(event))  # noqa: S301
 
     for clone in (copy.copy(event), copy.deepcopy(event), restored):
@@ -225,7 +224,7 @@ def test_counted_progress_noninteractive_output_matches_the_legacy_string() -> N
     typed = StringIO()
 
     ProgressReporter(legacy, interactive=False)("[2/3] Extracting a.osm.pbf")
-    ProgressReporter(typed, interactive=False)(counted_progress(2, 3, "Extracting a.osm.pbf"))
+    ProgressReporter(typed, interactive=False)(CountedProgress(2, 3, "Extracting a.osm.pbf"))
 
     assert typed.getvalue() == legacy.getvalue() == "[2/3] Extracting a.osm.pbf\n"
 
@@ -246,9 +245,9 @@ def test_counted_progress_wording_does_not_change_the_bar(monkeypatch: pytest.Mo
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
 
-    reporter(counted_progress(1, 4, "Extracting a.osm.pbf"))
-    reporter(counted_progress(2, 4, "Reworded: [draft] 9/9 text, unicode é"))
-    reporter(counted_progress(3, 4, ""))
+    reporter(CountedProgress(1, 4, "Extracting a.osm.pbf"))
+    reporter(CountedProgress(2, 4, "Reworded: [draft] 9/9 text, unicode é"))
+    reporter(CountedProgress(3, 4, ""))
     reporter.close(completed=True)
 
     assert len(_FakeTqdm.instances) == 1
@@ -260,9 +259,9 @@ def test_counted_progress_wording_does_not_change_the_bar(monkeypatch: pytest.Mo
 def test_counted_progress_index_reset_starts_a_new_bar(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
-    reporter(counted_progress(3, 3, "Extracting c.osm.pbf"))
+    reporter(CountedProgress(3, 3, "Extracting c.osm.pbf"))
 
-    reporter(counted_progress(1, 3, "Enriching a.osm.pbf"))
+    reporter(CountedProgress(1, 3, "Enriching a.osm.pbf"))
 
     assert len(_FakeTqdm.instances) == 2
     assert _FakeTqdm.instances[0].closed is True
@@ -276,8 +275,8 @@ def test_quiet_counted_progress_writes_nothing(monkeypatch: pytest.MonkeyPatch) 
     plain = ProgressReporter(stream, interactive=False, quiet=True)
     interactive = ProgressReporter(stream, interactive=True, quiet=True)
 
-    plain(counted_progress(1, 2, "a.osm.pbf"))
-    interactive(counted_progress(1, 2, "a.osm.pbf"))
+    plain(CountedProgress(1, 2, "a.osm.pbf"))
+    interactive(CountedProgress(1, 2, "a.osm.pbf"))
     interactive.close(completed=True)
 
     assert stream.getvalue() == ""
@@ -290,7 +289,7 @@ def test_interrupted_counted_progress_closes_without_marking_complete(
 ) -> None:
     _install_fake_tqdm(monkeypatch)
     reporter = ProgressReporter(StringIO(), interactive=True)
-    reporter(counted_progress(2, 3, "Extracting a.osm.pbf"))
+    reporter(CountedProgress(2, 3, "Extracting a.osm.pbf"))
 
     reporter.close(completed=False)
 
@@ -316,7 +315,7 @@ def test_multiline_counted_text_prints_the_same_line_as_the_legacy_string(
     _install_fake_tqdm(monkeypatch)
     typed_stream, legacy_stream = StringIO(), StringIO()
 
-    ProgressReporter(typed_stream, interactive=True)(counted_progress(1, 2, "first\nsecond"))
+    ProgressReporter(typed_stream, interactive=True)(CountedProgress(1, 2, "first\nsecond"))
     ProgressReporter(legacy_stream, interactive=True)("[1/2] first\nsecond")
 
     assert _FakeTqdm.instances == []
@@ -329,7 +328,7 @@ def test_multiline_counted_text_prints_the_same_line_as_the_legacy_string(
 def test_multiline_counted_text_plain_output_matches_the_legacy_string() -> None:
     typed, legacy = StringIO(), StringIO()
 
-    ProgressReporter(typed, interactive=False)(counted_progress(1, 2, "first\nsecond"))
+    ProgressReporter(typed, interactive=False)(CountedProgress(1, 2, "first\nsecond"))
     ProgressReporter(legacy, interactive=False)("[1/2] first\nsecond")
 
     assert typed.getvalue() == legacy.getvalue() == "[1/2] first\nsecond\n"
@@ -338,7 +337,7 @@ def test_multiline_counted_text_plain_output_matches_the_legacy_string() -> None
 def test_counted_progress_refuses_non_string_text() -> None:
     no_text: Any = None
     with pytest.raises(TypeError, match="text must be a str"):
-        counted_progress(1, 2, no_text)
+        CountedProgress(1, 2, no_text)
 
 
 def test_non_string_progress_is_refused_in_plain_and_interactive_modes(
@@ -365,8 +364,8 @@ def test_quiet_progress_ignores_non_string_messages_without_raising() -> None:
     assert stream.getvalue() == ""
 
 
-def test_counted_progress_wrapper_keeps_every_field() -> None:
-    event = counted_progress(2, 3, "Extracting a.osm.pbf")
+def test_counted_progress_keeps_every_field() -> None:
+    event = CountedProgress(2, 3, "Extracting a.osm.pbf")
 
     assert (event.current, event.total, event.text) == (2, 3, "Extracting a.osm.pbf")
     assert str(event) == "[2/3] Extracting a.osm.pbf"
