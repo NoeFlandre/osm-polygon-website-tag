@@ -176,6 +176,34 @@ def test_fetch_html_uses_the_injected_cache_for_robots_rules(
     ]
 
 
+def test_every_redirect_hop_checks_robots_through_the_injected_cache(
+    memory_http: MemoryHTTPFixture,
+) -> None:
+    memory_http.route("/robots.txt", b"User-agent: *\nAllow: /\n", Content_Type="text/plain")
+    memory_http.route("/start", b"", status=302, Location=memory_http.url("/middle"))
+    memory_http.route("/middle", b"", status=302, Location=memory_http.url("/final"))
+    memory_http.route("/final", b"done", Content_Type="text/html")
+
+    result = fetch_html(memory_http.url("/start"), robots_cache=RobotsCache())
+
+    assert result.status == "ok"
+    # Each hop reuses the injected policy; the module default would fetch robots.txt again.
+    assert memory_http.requests == ["/robots.txt", "/start", "/middle", "/final"]
+
+
+def test_the_last_redirect_hop_checks_robots_through_the_injected_cache(
+    memory_http: MemoryHTTPFixture,
+) -> None:
+    memory_http.route("/robots.txt", b"User-agent: *\nAllow: /\n", Content_Type="text/plain")
+    memory_http.route("/start", b"", status=302, Location=memory_http.url("/final"))
+    memory_http.route("/final", b"done", Content_Type="text/html")
+
+    result = fetch_html(memory_http.url("/start"), robots_cache=RobotsCache(), max_redirects=1)
+
+    assert result.status == "ok"
+    assert memory_http.requests == ["/robots.txt", "/start", "/final"]
+
+
 def test_each_polite_fetcher_keeps_its_own_robots_cache(memory_http: MemoryHTTPFixture) -> None:
     memory_http.route("/robots.txt", b"User-agent: *\nAllow: /\n", Content_Type="text/plain")
     memory_http.route("/public/a", b"a", Content_Type="text/html")
