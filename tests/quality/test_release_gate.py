@@ -67,6 +67,13 @@ def test_the_intended_push_run_with_a_passing_gate_passes() -> None:
     assert _decide(runs, checks) == release_gate.PASSED
 
 
+def test_a_run_path_carrying_a_ref_suffix_still_qualifies() -> None:
+    runs = [_run(1, path=f"{QUALITY}@main")]
+    checks = [_check(10, suite_id=1001)]
+
+    assert _decide(runs, checks) == release_gate.PASSED
+
+
 @pytest.mark.parametrize(
     "run",
     [

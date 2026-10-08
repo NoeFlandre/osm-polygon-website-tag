@@ -36,16 +36,33 @@ EXIT_CODES = {PASSED: 0, PENDING: 2, FAILED: 1}
 Record = Mapping[str, Any]
 
 
-def qualifying_run(sha: str, runs: Sequence[Record]) -> Record | None:
-    """Return the newest Quality push run on main for ``sha``, if any."""
-    matches = [
-        run
-        for run in runs
-        if run.get("path") == QUALITY_WORKFLOW_PATH
+def _workflow_file(path: object) -> object:
+    """Drop the ``@<ref>`` suffix some API responses append to a run's path."""
+    return path.split("@", 1)[0] if isinstance(path, str) else path
+
+
+def _is_qualifying_run(sha: str, run: Record) -> bool:
+    """Return True when ``run`` is a push run of quality.yml on main for ``sha``."""
+    return (
+        _workflow_file(run.get("path")) == QUALITY_WORKFLOW_PATH
         and run.get("event") == "push"
         and run.get("head_branch") == "main"
         and run.get("head_sha") == sha
-    ]
+    )
+
+
+def _is_gate_check(run: Record, check: Record) -> bool:
+    """Return True when ``check`` is the ``ci-ok`` job of ``run``'s check suite."""
+    return (
+        check.get("name") == GATE_CHECK_NAME
+        and (check.get("check_suite") or {}).get("id") == run.get("check_suite_id")
+        and (check.get("app") or {}).get("slug") == GATE_APP_SLUG
+    )
+
+
+def qualifying_run(sha: str, runs: Sequence[Record]) -> Record | None:
+    """Return the newest Quality push run on main for ``sha``, if any."""
+    matches = [run for run in runs if _is_qualifying_run(sha, run)]
     if not matches:
         return None
     return max(matches, key=lambda run: int(run["id"]))
@@ -53,16 +70,19 @@ def qualifying_run(sha: str, runs: Sequence[Record]) -> Record | None:
 
 def gate_check(run: Record, check_runs: Sequence[Record]) -> Record | None:
     """Return the newest ``ci-ok`` check that belongs to the run's check suite."""
-    matches = [
-        check
-        for check in check_runs
-        if check.get("name") == GATE_CHECK_NAME
-        and (check.get("check_suite") or {}).get("id") == run.get("check_suite_id")
-        and (check.get("app") or {}).get("slug") == GATE_APP_SLUG
-    ]
+    matches = [check for check in check_runs if _is_gate_check(run, check)]
     if not matches:
         return None
     return max(matches, key=lambda check: int(check["id"]))
+
+
+def _gate_outcome(run: Record, gate: Record | None) -> str:
+    """Return the outcome of the gate check that belongs to ``run``."""
+    if gate is None:
+        return FAILED if run.get("status") == "completed" else PENDING
+    if gate.get("status") != "completed":
+        return PENDING
+    return PASSED if gate.get("conclusion") == "success" else FAILED
 
 
 def decide(sha: str, runs: Sequence[Record], check_runs: Sequence[Record]) -> str:
@@ -70,12 +90,7 @@ def decide(sha: str, runs: Sequence[Record], check_runs: Sequence[Record]) -> st
     run = qualifying_run(sha, runs)
     if run is None:
         return PENDING
-    gate = gate_check(run, check_runs)
-    if gate is None:
-        return FAILED if run.get("status") == "completed" else PENDING
-    if gate.get("status") != "completed":
-        return PENDING
-    return PASSED if gate.get("conclusion") == "success" else FAILED
+    return _gate_outcome(run, gate_check(run, check_runs))
 
 
 def _load(path: Path) -> list[Record]:
