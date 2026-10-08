@@ -242,3 +242,8 @@ def test_concurrent_callers_for_one_origin_load_it_once() -> None:
     assert not waiter.is_alive()
     assert loads == [origin]
     assert results[0] is first
+
+
+def test_the_public_export_list_names_robots_cache() -> None:
+    assert "RobotsCache" in web_fetch.__all__
+    assert all(hasattr(web_fetch, name) for name in web_fetch.__all__)

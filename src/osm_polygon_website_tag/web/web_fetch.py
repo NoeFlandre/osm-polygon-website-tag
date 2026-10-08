@@ -917,6 +917,7 @@ def _worth_reading(head: HttpResponse, max_bytes: int) -> bool:
 __all__ = [
     "FetchResult",
     "HttpResponse",
+    "RobotsCache",
     "UnsafeUrlError",
     "fetch_html",
     "make_polite_fetcher",
