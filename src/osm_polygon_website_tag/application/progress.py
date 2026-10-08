@@ -16,6 +16,35 @@ def report_progress(callback: Callable[[str], None] | None, message: str) -> Non
         callback(message)
 
 
+class CountedProgress(str):
+    """A ``[current/total] text`` progress message that also carries its counts.
+
+    The string value is the legacy prefixed text, so logs, list comparisons and
+    plain-string callbacks behave as they did with a formatted string. The
+    reporter reads the fields directly instead of parsing the prefix.
+    """
+
+    current: int
+    total: int
+    text: str
+
+    def __new__(cls, current: int, total: int, text: str) -> CountedProgress:
+        event = super().__new__(cls, f"[{current}/{total}] {text}")
+        event.current = current
+        event.total = total
+        event.text = text
+        return event
+
+    def __reduce__(self) -> tuple[type[CountedProgress], tuple[int, int, str]]:
+        """Let ``copy`` and ``pickle`` rebuild the message from its fields."""
+        return (CountedProgress, (self.current, self.total, self.text))
+
+
+def counted_progress(current: int, total: int, text: str) -> CountedProgress:
+    """Return a counted progress message for item ``current`` of ``total``."""
+    return CountedProgress(current, total, text)
+
+
 _COUNTED_MESSAGE = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
 
 
@@ -38,14 +67,18 @@ class ProgressReporter:
     def __call__(self, message: str) -> None:
         if self._quiet:
             return
-        match = _COUNTED_MESSAGE.fullmatch(message)
         if not self._interactive:
             self._write_plain(message)
             return
+        if isinstance(message, CountedProgress):
+            self._update_counted(message.current, message.total, message.text)
+            return
+        match = _COUNTED_MESSAGE.fullmatch(message)
         if match is None:
             self._write_uncounted(message)
             return
-        self._update_counted(match)
+        current, total, description = match.groups()
+        self._update_counted(int(current), int(total), description)
 
     def _write_plain(self, message: str) -> None:
         """Write a stable line when no terminal progress bar is active."""
@@ -56,11 +89,8 @@ class ProgressReporter:
         self._finish_bar(completed=True)
         tqdm.write(message, file=self._stream)
 
-    def _update_counted(self, match: re.Match[str]) -> None:
+    def _update_counted(self, current_value: int, total_value: int, description: str) -> None:
         """Update the bounded tqdm display for one counted workflow message."""
-        current, total, description = match.groups()
-        current_value = int(current)
-        total_value = int(total)
         if self._last_current is not None and current_value < self._last_current:
             self._finish_bar(completed=True)
         if self._bar is None:
@@ -91,4 +121,4 @@ class ProgressReporter:
         self._last_current = None
 
 
-__all__ = ["ProgressReporter"]
+__all__ = ["CountedProgress", "ProgressReporter", "counted_progress"]
