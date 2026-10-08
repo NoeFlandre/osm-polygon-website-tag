@@ -35,6 +35,7 @@ from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA_V1_4,
     schema_matches,
 )
+from osm_polygon_website_tag.storage import duckdb_engine
 
 _SOURCE_SUFFIX = ".osm.pbf"
 
@@ -88,8 +89,7 @@ def deduplicate_public_shards(
         return summary
     finally:
         if con is not None:
-            with contextlib.suppress(Exception):
-                con.close()
+            duckdb_engine.close_quietly(con)
         with contextlib.suppress(OSError):
             _remove_tree(staging_dir)
 

@@ -164,7 +164,7 @@ def analyze_results(run_dir: Path | str) -> AnalysisSummary:
         try:
             summary = _write_analysis_tables(con, polygons_dir, rej_dir, analysis_dir)
         finally:
-            _close_analysis_connection(con)
+            duckdb_engine.close_quietly(con)
         atomic_promote_bundle(
             [
                 (analysis_dir / filename, final_analysis_dir / filename)
@@ -198,15 +198,9 @@ def _register_analysis_sources(
         duckdb_engine.register_rejection_parquets(con, rej_dir)
         duckdb_engine.canonical_observations(con)
     except BaseException:
-        _close_analysis_connection(con)
+        duckdb_engine.close_quietly(con)
         raise
     return con
-
-
-def _close_analysis_connection(con: duckdb.DuckDBPyConnection) -> None:
-    """Close DuckDB without masking an analysis failure."""
-    with contextlib.suppress(Exception):
-        con.close()
 
 
 def _write_analysis_tables(

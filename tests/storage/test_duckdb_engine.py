@@ -314,3 +314,11 @@ def test_ensure_temp_dir_is_idempotent(tmp_path: Path) -> None:
 
     assert ensure_temp_dir(tmp_path / "run") == first
     assert first.is_dir()
+
+
+def test_close_quietly_suppresses_a_close_failure() -> None:
+    class _Connection:
+        def close(self) -> None:
+            raise RuntimeError("already closed")
+
+    duckdb_engine.close_quietly(_Connection())  # ty: ignore[invalid-argument-type]
