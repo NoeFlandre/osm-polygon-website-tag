@@ -30,6 +30,7 @@ from osm_polygon_website_tag.storage.duckdb_engine import (
     register_public_parquets,
     register_rejection_parquets,
     reporting_connection,
+    sql_string_literal,
 )
 
 
@@ -178,6 +179,11 @@ def test_registration_reads_nonempty_files_and_escapes_quoted_paths(tmp_path: Pa
         connection.close()
 
 
+def test_sql_string_literal_doubles_embedded_quotes() -> None:
+    assert sql_string_literal(Path("a'b")) == "'a''b'"
+    assert sql_string_literal("plain") == "'plain'"
+
+
 def test_cells_global_returns_zeroes_for_empty_observations(tmp_path: Path) -> None:
     connection = _make_connection(tmp_path / "duckdb")
     try:
@@ -314,3 +320,22 @@ def test_ensure_temp_dir_is_idempotent(tmp_path: Path) -> None:
 
     assert ensure_temp_dir(tmp_path / "run") == first
     assert first.is_dir()
+
+
+@pytest.mark.parametrize("exc_type", [AttributeError, TypeError])
+def test_close_quietly_propagates_a_programming_error(exc_type: type[Exception]) -> None:
+    class _Connection:
+        def close(self) -> None:
+            raise exc_type("boom")
+
+    with pytest.raises(exc_type, match="boom"):
+        duckdb_engine.close_quietly(_Connection())  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("exc_type", [duckdb.Error, duckdb.IOException])
+def test_close_quietly_suppresses_a_duckdb_close_failure(exc_type: type[Exception]) -> None:
+    class _Connection:
+        def close(self) -> None:
+            raise exc_type("close failed")
+
+    duckdb_engine.close_quietly(_Connection())  # ty: ignore[invalid-argument-type]

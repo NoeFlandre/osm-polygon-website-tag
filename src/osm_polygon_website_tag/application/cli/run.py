@@ -36,7 +36,7 @@ from osm_polygon_website_tag.web.politeness import (
     HostPolicy,
 )
 
-from . import RepoId, RunDir, _configured_hf_dataset_repo, _json, _quiet
+from ._common import GLOBAL_OPTIONS, RepoId, RunDir, configured_hf_dataset_repo, echo_json
 
 
 def extract_command(
@@ -158,13 +158,13 @@ def run_all_command(
     """Run or resume the complete PBF inventory."""
     if ensure_repo and not apply:
         raise ValueError("--ensure-repo requires --apply")
-    progress = ProgressReporter(quiet=_quiet["enabled"])
+    progress = ProgressReporter(quiet=GLOBAL_OPTIONS.quiet)
     try:
         result = run_all(
             source_root=source_root,
             output_root=output_root,
             run_id=run_id,
-            repo_id=_configured_hf_dataset_repo(repo_id),
+            repo_id=configured_hf_dataset_repo(repo_id),
             apply=apply,
             ensure_repo=ensure_repo,
             progress=progress,
@@ -178,7 +178,7 @@ def run_all_command(
         progress.close(completed=False)
         raise
     progress.close(completed=result.complete)
-    _json({**result.__dict__, "run_dir": str(result.run_dir)}, sort_keys=True)
+    echo_json({**result.__dict__, "run_dir": str(result.run_dir)}, sort_keys=True)
     return 0
 
 

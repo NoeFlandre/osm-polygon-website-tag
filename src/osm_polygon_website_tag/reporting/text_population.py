@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from osm_polygon_website_tag.reporting.file_hashing import hash_file
-from osm_polygon_website_tag.storage.duckdb_engine import reporting_connection
+from osm_polygon_website_tag.storage.duckdb_engine import reporting_connection, sql_string_literal
 
 _REQUIRED_COLUMNS = frozenset(
     {
@@ -364,7 +364,7 @@ def _create_source_view(connection: duckdb.DuckDBPyConnection, paths: Collection
     names = tuple(dict.fromkeys((*type_by_name, *(column for column, _ in _OPTIONAL_COLUMNS))))
     selected = [_source_projection(name, available, type_by_name) for name in names]
     selected.append("filename AS __source_path")
-    file_list = ", ".join(_sql_string(path) for path in paths)
+    file_list = ", ".join(sql_string_literal(path) for path in paths)
     connection.execute(
         f"""
         CREATE TEMP VIEW source_rows AS
@@ -590,7 +590,3 @@ def _status_counts(connection: duckdb.DuckDBPyConnection) -> tuple[int, int, int
 def _scalar(connection: duckdb.DuckDBPyConnection, query: str) -> int:
     value = connection.execute(query).fetchone()
     return int(value[0]) if value else 0
-
-
-def _sql_string(path: Path) -> str:
-    return "'" + str(path).replace("'", "''") + "'"

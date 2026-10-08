@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
@@ -15,8 +12,10 @@ from rich.console import Console
 
 from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.publishing.errors import TrackioUnavailableError
-from osm_polygon_website_tag.runtime.config import Settings
 from osm_polygon_website_tag.runtime.paths import data_root_source
+
+from . import grid5000, languages, publish, run, sentences, verify
+from ._common import DEBUG_ENV, GLOBAL_OPTIONS, debug_requested
 
 app = typer.Typer(
     name="osm-polygon-website-tag",
@@ -45,16 +44,10 @@ _EXIT_CODES: tuple[tuple[type[Exception], int], ...] = (
 
 _HANDLED_ERRORS = tuple(error_type for error_type, _code in _EXIT_CODES)
 
-DEBUG_ENV = "OSM_PWT_DEBUG"
-
 _CLICK_EXCEPTION = cast(
     "type[Exception]",
     next(kind for kind in typer.BadParameter.__mro__ if kind.__name__ == "ClickException"),
 )
-
-_debug = {"enabled": False}
-
-_quiet = {"enabled": False}
 
 _DISTRIBUTION = "osm-polygon-website-tag"
 
@@ -98,8 +91,8 @@ def _global_options(
     """Analyze and publish OSM polygons carrying website tags."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet cannot be combined")
-    _debug["enabled"] = debug
-    _quiet["enabled"] = quiet
+    GLOBAL_OPTIONS.debug = debug
+    GLOBAL_OPTIONS.quiet = quiet
     _configure_logging(_log_level(verbose, quiet=quiet))
     _LOGGER.info("%s %s", _DISTRIBUTION, __version__)
     _LOGGER.debug("data root: %s", data_root_source())
@@ -126,25 +119,6 @@ def _reset_logging() -> None:
     _LOGGER.setLevel(logging.NOTSET)
 
 
-RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
-
-RepoId = Annotated[
-    str | None,
-    typer.Option(
-        "--repo-id", help="Hugging Face dataset repository (defaults to HF_DATASET_REPO)."
-    ),
-]
-
-
-def _configured_hf_dataset_repo(repo_id: str | None) -> str:
-    """Resolve an explicit CLI override or the current environment/.env setting."""
-    return repo_id if repo_id is not None else Settings().hf_dataset_repo
-
-
-def _json(payload: Any, *, sort_keys: bool = False) -> None:
-    typer.echo(json.dumps(payload, default=str, indent=2, sort_keys=sort_keys))
-
-
 def exit_code_for(error: Exception) -> int:
     """Map a handled error to its documented exit code."""
     return next(code for error_type, code in _EXIT_CODES if isinstance(error, error_type))
@@ -155,14 +129,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _run_app(argv)
     except _HANDLED_ERRORS as exc:
-        if _debug_requested():
+        if debug_requested():
             raise
         _error_console.print(f"error: {exc}")
         return exit_code_for(exc)
     finally:
         # Global options apply to one invocation only.
-        _debug["enabled"] = False
-        _quiet["enabled"] = False
+        GLOBAL_OPTIONS.reset()
         _reset_logging()
 
 
@@ -189,13 +162,7 @@ def _show_click_error(error: Any) -> int:
     return int(error.exit_code)
 
 
-def _debug_requested() -> bool:
-    return _debug["enabled"] or os.environ.get(DEBUG_ENV) == "1"
-
-
 def _register_commands(target: typer.Typer) -> None:
-    from . import grid5000, languages, publish, run, sentences, verify
-
     target.command(
         "init",
         epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
