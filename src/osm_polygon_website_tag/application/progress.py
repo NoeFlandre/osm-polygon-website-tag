@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from collections.abc import Callable
 from typing import TextIO
@@ -52,9 +51,6 @@ def counted_progress(current: int, total: int, text: str) -> CountedProgress:
     return CountedProgress(current, total, text)
 
 
-_COUNTED_MESSAGE = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
-
-
 def _require_str(message: object) -> None:
     """Refuse non-text messages in both modes, as before the counted-progress change."""
     if not isinstance(message, str):
@@ -62,18 +58,15 @@ def _require_str(message: object) -> None:
 
 
 def _counted_fields(message: str) -> tuple[int, int, str] | None:
-    """Return (current, total, text) for a counted message, or None for an ordinary one.
+    """Return (current, total, text) for a typed counted message, or None for any other.
 
-    A typed message carries its fields. Multi-line text stays ordinary, as the
-    legacy string does, so both forms print the same line.
+    Plain strings are never counted, so a reworded producer cannot lose its bar
+    silently by changing a prefix. Multi-line text stays ordinary, as the
+    counted string does, so both forms print the same line.
     """
     if isinstance(message, CountedProgress) and "\n" not in message.text:
         return message.current, message.total, message.text
-    match = _COUNTED_MESSAGE.fullmatch(message)
-    if match is None:
-        return None
-    current, total, description = match.groups()
-    return int(current), int(total), description
+    return None
 
 
 class ProgressReporter:
