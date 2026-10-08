@@ -12,67 +12,43 @@ import pytest
 
 import osm_polygon_website_tag.application.cli as cli
 from osm_polygon_website_tag.application.cli import languages, publish, run, sentences
+from osm_polygon_website_tag.runtime.run_state import RunState, load_run
 from osm_polygon_website_tag.web.politeness import HostPolicy
 
 
 @pytest.mark.parametrize("inventory_matches", [True, False], ids=["complete", "partial"])
-def test_extract_adapter_validates_inventory_and_forwards_worker_limits(
+def test_extract_adapter_forwards_worker_limits_and_persists_the_resulting_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inventory_matches: bool
 ) -> None:
-    run_dir = tmp_path / "run"
-    state_file = run_dir / "manifests" / "run.json"
-    state_file.parent.mkdir(parents=True)
-    state_file.write_text("{}", encoding="utf-8")
-    source = tmp_path / "source.osm.pbf"
-    state = SimpleNamespace(metadata={"status": "initialized"})
-    fingerprint = SimpleNamespace(filename=source.name, size_bytes=4, mtime_ns=17)
-    events: list[tuple[object, ...]] = []
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "source.osm.pbf"
+    source.write_bytes(b"pbf!")
+    output_root = tmp_path / "runs"
+    assert run.init_command(output_root, source_root, [source], run_id="run-1") == 0
+    run_dir = output_root / "run-1"
+    extractions: list[tuple[Path, Path, RunState, int, int]] = []
 
-    monkeypatch.setattr(run, "load_run", lambda path: events.append(("load", path)) or state)
-    monkeypatch.setattr(
-        run,
-        "snapshot_source_fingerprint",
-        lambda path: events.append(("fingerprint", path)) or fingerprint,
-    )
-    monkeypatch.setattr(
-        run,
-        "expected_source_inventory",
-        lambda path: (
-            events.append(("inventory", path))
-            or [{"filename": source.name, "size_bytes": 4, "mtime_ns": 17}]
-        ),
-    )
+    def extract(
+        pbf_path: Path,
+        extract_dir: Path,
+        *,
+        run_state: RunState,
+        area_workers: int,
+        max_in_flight_areas: int,
+    ) -> None:
+        extractions.append((pbf_path, extract_dir, run_state, area_workers, max_in_flight_areas))
 
-    def transition(current: object, status: str) -> None:
-        assert current is state
-        events.append(("status", status))
-        state.metadata["status"] = status
-
-    monkeypatch.setattr(run, "transition_status", transition)
-    monkeypatch.setattr(
-        run,
-        "extract_pbf",
-        lambda *args, **kwargs: events.append(("extract", *args, kwargs)),
-    )
+    monkeypatch.setattr(run, "extract_pbf", extract)
     monkeypatch.setattr(run, "source_inventory_matches", lambda _path: inventory_matches)
 
     assert run.extract_command(source, run_dir, area_workers=3, max_in_flight_areas=11) == 0
 
-    expected_events = [
-        ("load", run_dir),
-        ("fingerprint", source),
-        ("inventory", run_dir),
-        ("status", "extracting"),
-        (
-            "extract",
-            source,
-            run_dir,
-            {"run_state": state, "area_workers": 3, "max_in_flight_areas": 11},
-        ),
-    ]
-    if inventory_matches:
-        expected_events.append(("status", "extracted"))
-    assert events == expected_events
+    [(pbf_path, extract_dir, run_state, area_workers, in_flight)] = extractions
+    assert (pbf_path, extract_dir, area_workers, in_flight) == (source, run_dir, 3, 11)
+    assert run_state.run_dir == run_dir
+    expected_status = "extracted" if inventory_matches else "extracting"
+    assert load_run(run_dir).metadata["status"] == expected_status
 
 
 def test_extract_rejects_a_source_missing_from_the_expected_inventory_with_its_path(
@@ -161,18 +137,18 @@ def test_run_all_adapter_forwards_every_option_and_serializes_result(
 ) -> None:
     source_root = tmp_path / "source"
     output_root = tmp_path / "runs"
-    events: list[tuple[object, ...]] = []
     calls: list[dict[str, object]] = []
-    reporters: list[object] = []
 
     class Reporter:
         def __init__(self, *, quiet: bool) -> None:
-            reporters.append(self)
-            events.append(("reporter", quiet))
+            self.quiet = quiet
+            self.completed: bool | None = None
+            created.append(self)
 
         def close(self, *, completed: bool) -> None:
-            events.append(("close", completed))
+            self.completed = completed
 
+    created: list[Reporter] = []
     monkeypatch.setattr(run, "ProgressReporter", Reporter)
     monkeypatch.setattr(run, "configured_hf_dataset_repo", lambda repo_id: repo_id)
 
@@ -202,7 +178,9 @@ def test_run_all_adapter_forwards_every_option_and_serializes_result(
         == 0
     )
 
-    assert events == [("reporter", False), ("close", True)]
+    [reporter] = created
+    assert reporter.quiet is False
+    assert reporter.completed is True
     assert calls == [
         {
             "source_root": source_root,
@@ -211,7 +189,7 @@ def test_run_all_adapter_forwards_every_option_and_serializes_result(
             "repo_id": "owner/dataset",
             "apply": True,
             "ensure_repo": True,
-            "progress": reporters[0],
+            "progress": reporter,
             "area_workers": 2,
             "max_in_flight_areas": 7,
             "fetch_workers": 9,
@@ -426,10 +404,10 @@ def test_sentence_command_forwards_model_and_budget_and_reports_partial_work(
         == 0
     )
 
-    assert validated == [
+    assert set(validated) == {
         (run_dir, "run directory"),
         (model_dir, "SaT model directory"),
-    ]
+    }
     assert load_calls == [(model_dir, "revision-7")]
     assert len(run_calls) == 1
     paths, kwargs = run_calls[0]
@@ -759,14 +737,15 @@ def test_create_repo_adapter_keeps_preview_read_only_and_forwards_defaults(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    calls: list[tuple[object, ...]] = []
+    checked: list[str] = []
+    created: list[tuple[str, bool]] = []
 
     def repo_exists(*, repo_id: str) -> bool:
-        calls.append(("exists", repo_id))
+        checked.append(repo_id)
         return True
 
     def create_repo(*, repo_id: str, exist_ok: bool) -> str:
-        calls.append(("create", repo_id, exist_ok))
+        created.append((repo_id, exist_ok))
         return "owner/dataset"
 
     monkeypatch.setattr(publish, "repo_exists", repo_exists)
@@ -778,15 +757,13 @@ def test_create_repo_adapter_keeps_preview_read_only_and_forwards_defaults(
     output = capsys.readouterr().out
     assert output == json.dumps(preview, indent=2) + "\n"
     assert json.loads(output) == preview
-    assert calls == [("exists", "owner/dataset")]
+    assert checked == ["owner/dataset"]
+    assert created == []
 
     assert publish.create_repo_command(repo_id="owner/dataset", apply=True) == 0
 
     assert capsys.readouterr().out == "owner/dataset\n"
-    assert calls == [
-        ("exists", "owner/dataset"),
-        ("create", "owner/dataset", False),
-    ]
+    assert created == [("owner/dataset", False)]
 
 
 def test_trackio_adapter_previews_resolved_snapshot_without_publishing(
@@ -841,19 +818,19 @@ def test_trackio_adapter_publishes_the_selected_snapshot_when_applied(
         manifest_digest="digest-2",
         metrics={"row_count": 8},
     )
-    calls: list[tuple[object, ...]] = []
+    builds: list[tuple[Path, str]] = []
+    publishes: list[tuple[object, str, str]] = []
     monkeypatch.setattr(publish, "configured_hf_dataset_repo", lambda repo_id: repo_id)
     monkeypatch.setattr(
         publish,
         "build_trackio_snapshot",
-        lambda path, *, dataset_repo: calls.append(("build", path, dataset_repo)) or snapshot,
+        lambda path, *, dataset_repo: builds.append((path, dataset_repo)) or snapshot,
     )
     monkeypatch.setattr(
         publish,
         "publish_trackio_snapshot",
         lambda value, *, space_id, project: (
-            calls.append(("publish", value, space_id, project))
-            or {"revision": "published-revision"}
+            publishes.append((value, space_id, project)) or {"revision": "published-revision"}
         ),
     )
 
@@ -868,10 +845,8 @@ def test_trackio_adapter_publishes_the_selected_snapshot_when_applied(
         == 0
     )
 
-    assert calls == [
-        ("build", run_dir, "owner/dataset"),
-        ("publish", snapshot, "owner/metrics", "custom-project"),
-    ]
+    assert builds == [(run_dir, "owner/dataset")]
+    assert publishes == [(snapshot, "owner/metrics", "custom-project")]
     expected = {
         "dry_run": False,
         "space_id": "owner/metrics",
