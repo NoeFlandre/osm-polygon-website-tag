@@ -113,7 +113,7 @@ def _verify_status_artifacts(
     include_receipt: bool,
     errors: list[str],
     *,
-    preserve_card_sections: bool = False,
+    preserve_card_sections: bool,
 ) -> None:
     if status in {"card_built", "verified", "complete"}:
         if preserve_card_sections:

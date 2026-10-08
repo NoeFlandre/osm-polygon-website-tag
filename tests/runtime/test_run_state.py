@@ -197,6 +197,41 @@ def test_load_run_rejects_invalid_source_fingerprint(tmp_path: Path) -> None:
         load_run(run_dir)
 
 
+def test_expected_source_inventory_reports_a_missing_file_by_its_path(tmp_path: Path) -> None:
+    run_dir = tmp_path / "r"
+
+    with pytest.raises(FileNotFoundError) as caught:
+        expected_source_inventory(run_dir)
+
+    assert str(caught.value) == f"missing {run_dir / 'manifests' / 'expected_sources.json'}"
+
+
+def test_expected_source_inventory_names_the_expected_manifest_when_corrupt(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "r"
+    path = run_dir / "manifests" / "expected_sources.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{bad", encoding="utf-8")
+
+    with pytest.raises(ValueError) as caught:
+        expected_source_inventory(run_dir)
+
+    assert str(caught.value).startswith(f"invalid expected sources manifest JSON: {path}: ")
+
+
+def test_source_inventory_matches_names_the_actual_manifest_when_corrupt(tmp_path: Path) -> None:
+    fp = SourceFingerprint(filename="a-latest.osm.pbf", size_bytes=10, mtime_ns=12345)
+    run_dir, _state = initialise_run(tmp_path, run_id="r", expected_sources=[fp])
+    path = run_dir / "manifests" / "sources.json"
+    path.write_text("{bad", encoding="utf-8")
+
+    with pytest.raises(ValueError) as caught:
+        source_inventory_matches(run_dir)
+
+    assert str(caught.value).startswith(f"invalid sources manifest JSON: {path}: ")
+
+
 def test_expected_source_inventory_rejects_duplicate_filenames(tmp_path: Path) -> None:
     run_dir, _state = initialise_run(tmp_path, run_id="abc")
     entries = [
