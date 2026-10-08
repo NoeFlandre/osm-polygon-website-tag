@@ -60,6 +60,7 @@ _INSTANTS: dict[str, dict[str, Any]] = {
         "last_attempt_at": "2026-03-14T15:09:26.535897+00:00",
         "quarantine_stamp": "20260314T150926535897Z",
         "retry_after_seconds": 33.464103,
+        "failure_record": '{"kind": "RuntimeError", "message": "boom", "osm_id": 0, "osm_type": "", "phase": "extract", "source_pbf": "testland-latest.osm.pbf", "timestamp": "2026-03-14T15:09:26+00:00"}\n',
     },
     "whole_second": {
         "moment": _REAL_DATETIME(2026, 1, 2, 3, 4, 5, tzinfo=_UTC),
@@ -74,6 +75,7 @@ _INSTANTS: dict[str, dict[str, Any]] = {
         "last_attempt_at": "2026-01-02T03:04:05+00:00",
         "quarantine_stamp": "20260102T030405000000Z",
         "retry_after_seconds": 55.0,
+        "failure_record": '{"kind": "RuntimeError", "message": "boom", "osm_id": 0, "osm_type": "", "phase": "extract", "source_pbf": "testland-latest.osm.pbf", "timestamp": "2026-01-02T03:04:05+00:00"}\n',
     },
     "trailing_zero": {
         "moment": _REAL_DATETIME(2026, 12, 31, 23, 59, 59, 500000, tzinfo=_UTC),
@@ -88,6 +90,7 @@ _INSTANTS: dict[str, dict[str, Any]] = {
         "last_attempt_at": "2026-12-31T23:59:59.500000+00:00",
         "quarantine_stamp": "20261231T235959500000Z",
         "retry_after_seconds": 0.5,
+        "failure_record": '{"kind": "RuntimeError", "message": "boom", "osm_id": 0, "osm_type": "", "phase": "extract", "source_pbf": "testland-latest.osm.pbf", "timestamp": "2026-12-31T23:59:59+00:00"}\n',
     },
     "one_microsecond": {
         "moment": _REAL_DATETIME(2026, 10, 8, 0, 0, 0, 1, tzinfo=_UTC),
@@ -102,6 +105,7 @@ _INSTANTS: dict[str, dict[str, Any]] = {
         "last_attempt_at": "2026-10-08T00:00:00.000001+00:00",
         "quarantine_stamp": "20261008T000000000001Z",
         "retry_after_seconds": 29.999999,
+        "failure_record": '{"kind": "RuntimeError", "message": "boom", "osm_id": 0, "osm_type": "", "phase": "extract", "source_pbf": "testland-latest.osm.pbf", "timestamp": "2026-10-08T00:00:00+00:00"}\n',
     },
 }
 _IDS = sorted(_INSTANTS)
@@ -251,3 +255,23 @@ def test_retry_after_default_now_matches_parent_output(
     _freeze(monkeypatch, golden["moment"])
 
     assert retry_after_seconds(golden["http_date"]) == golden["retry_after_seconds"]
+
+
+@pytest.mark.parametrize("instant", _IDS)
+def test_extraction_failure_record_matches_parent_output(
+    instant: str, make_pbf: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    golden = _INSTANTS[instant]
+    src = _pbf(make_pbf)
+    run_dir, state = initialise_run(tmp_path, run_id="r4")
+    _freeze(monkeypatch, golden["moment"])
+
+    def failing_extract(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(extraction_module, "_extract_and_promote", failing_extract)
+    with pytest.raises(RuntimeError, match="boom"):
+        extract_pbf(src, run_dir, state)
+
+    record = (run_dir / "failures.jsonl").read_text(encoding="utf-8")
+    assert record == golden["failure_record"]

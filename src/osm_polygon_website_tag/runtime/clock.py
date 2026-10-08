@@ -1,7 +1,8 @@
 """UTC wall-clock reads and the serialized timestamp formats built from them.
 
-Each helper returns exactly the string its call site wrote before this module
-existed. Those strings are persisted (``run.json``, ``sources.json``,
+``utc_now`` returns the current time as a datetime. Each other helper returns
+exactly the string its call site wrote before this module existed. Those
+strings are persisted (``run.json``, ``sources.json``,
 ``failures.jsonl`` and run directory names), so do not reformat them:
 
 * ``utc_iso`` keeps ``isoformat()`` precision, so microseconds appear only when
