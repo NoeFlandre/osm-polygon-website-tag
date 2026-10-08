@@ -1522,8 +1522,7 @@ def test_cli_language_shard_runner_records_only_completed_results(
         batch_rows=16,
         time_budget_seconds=None,
     ) == languages._LanguageRunProgress(1, 5, completed=True)
-    assert len(calls) == 2
-    assert set(calls) == {(shards[0], detector, 16, None), (shards[1], detector, 16, None)}
+    assert calls == [(shards[0], detector, 16, None), (shards[1], detector, 16, None)]
     assert len(records) == len(shards)
     assert {shard for shard, _result in records} == set(shards)
 
