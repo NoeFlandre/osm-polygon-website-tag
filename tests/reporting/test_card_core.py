@@ -415,7 +415,7 @@ def test_build_card_forwards_custom_yaml_source_to_bundle_renderer(
     assert received == [b"custom"]
 
 
-def test_build_card_preserves_collaborator_and_staging_contracts(  # noqa: C901, PLR0915 - too long or branchy; TODO(#76) split with the fixture work
+def test_build_card_preserves_collaborator_and_staging_contracts(  # noqa: C901, PLR0915 - too long or branchy; split with the fixture work
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

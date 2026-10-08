@@ -129,7 +129,7 @@ ignore = [
 
 [tool.ruff.lint.pylint]
 # Typer commands take many options, so the CLI package is exempt below. The rest of the
-# package is held to this bound; the listed modules predate it (TODO(#76)).
+# package is held to this bound; the listed modules predate it.
 max-args = 6
 
 [tool.ruff.lint.per-file-ignores]
@@ -144,7 +144,7 @@ max-args = 6
 # shapely's transform() passes a z argument that the projection closures ignore.
 "src/osm_polygon_website_tag/domain/geometry.py" = ["ARG001"]
 # Signatures that predate the argument-count and boolean-flag rules. New modules
-# are held to them; shrink this list as each function is reshaped (TODO(#76)).
+# are held to them; shrink this list as each function is reshaped.
 "src/osm_polygon_website_tag/application/source_processing.py" = ["FBT001", "PLR0913"]
 "src/osm_polygon_website_tag/application/workflow.py" = ["FBT001", "PLR0913"]
 "src/osm_polygon_website_tag/contracts/polygon_schema.py" = ["FBT001"]
