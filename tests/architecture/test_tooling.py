@@ -88,6 +88,7 @@ def test_mutation_gate_covers_the_whole_package_and_behavior_suite() -> None:
     assert config["source_paths"] == ["src/osm_polygon_website_tag"]
     assert "pytest_add_cli_args_test_selection" not in config
     assert "--ignore=tests/architecture" in config["pytest_add_cli_args"]
+    assert "--continue-on-collection-errors" in config["pytest_add_cli_args"]
     assert {
         ".github",
         ".pre-commit-config.yaml",
