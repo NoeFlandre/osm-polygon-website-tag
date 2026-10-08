@@ -173,6 +173,9 @@ class RobotsCache:
 
 
 _DEFAULT_ROBOTS_CACHE = RobotsCache()
+# Bounds for the per-fetcher caches (#135). The module default stays unbounded.
+ROBOTS_CACHE_MAX_ORIGINS = 4096
+ROBOTS_ERROR_TTL_SECONDS = 3600.0
 
 
 def normalize_http_url(raw: str) -> str:
@@ -330,10 +333,24 @@ def fetch_html(
     )
 
 
+def make_bounded_robots_cache() -> RobotsCache:
+    """A robots cache for one fetcher: at most 4096 origins; failed fetches retry after an hour."""
+    return RobotsCache(
+        max_entries=ROBOTS_CACHE_MAX_ORIGINS, error_ttl_seconds=ROBOTS_ERROR_TTL_SECONDS
+    )
+
+
 def make_polite_fetcher(policy: HostPolicy) -> Callable[[str], FetchResult]:
-    """A ``fetch_html`` that shares one per-host limiter across all its callers."""
+    """A ``fetch_html`` that shares one per-host limiter and one bounded robots cache."""
     limiter = HostLimiter(policy)
-    return lambda url: fetch_html(url, limiter=limiter)
+    cache = make_bounded_robots_cache()
+    return lambda url: fetch_html(url, limiter=limiter, robots_cache=cache)
+
+
+def make_bounded_fetcher() -> Callable[[str], FetchResult]:
+    """A ``fetch_html`` with its own bounded robots cache and no shared host limiter."""
+    cache = make_bounded_robots_cache()
+    return lambda url: fetch_html(url, robots_cache=cache)
 
 
 def _polite(transport: RequestOnce, limiter: HostLimiter) -> RequestOnce:
@@ -904,6 +921,7 @@ __all__ = [
     "HttpResponse",
     "UnsafeUrlError",
     "fetch_html",
+    "make_bounded_fetcher",
     "make_polite_fetcher",
     "normalize_http_url",
     "validate_public_http_url",
