@@ -338,11 +338,10 @@ def test_retry_after_parses_seconds_and_http_dates(
     assert retry_after_seconds(value, now=_NOW) == expected
 
 
-def test_retry_after_dates_are_measured_from_the_current_time() -> None:
-    wait = retry_after_seconds("Wed, 21 Oct 2099 07:28:00 GMT")
+def test_retry_after_dates_are_measured_from_the_given_now() -> None:
+    wait = retry_after_seconds("Wed, 21 Oct 2099 07:28:00 GMT", now=_NOW)
 
-    assert wait is not None
-    assert wait > 10**6
+    assert wait == (datetime(2099, 10, 21, 7, 28, tzinfo=UTC) - _NOW).total_seconds()
 
 
 def test_a_missing_retry_after_is_none_not_an_empty_date() -> None:
