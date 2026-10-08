@@ -244,6 +244,21 @@ def test_initial_enrichment_decision_preserves_the_cached_summary(
     assert decision == source_processing._EnrichmentDecision(False, summary)
 
 
+def test_initial_enrichment_decision_rejects_a_non_bool_marker_without_recheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(source_processing, "_should_recheck_enrichment", lambda **_kwargs: False)
+
+    with pytest.raises(TypeError, match=r"enrichment marker must be bool, not str"):
+        source_processing._initial_enrichment_decision(
+            tmp_path / "a.parquet",
+            marker="yes",
+            status_summary=None,
+            migration_changed=False,
+        )
+
+
 def test_initial_enrichment_decision_rechecks_after_migration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

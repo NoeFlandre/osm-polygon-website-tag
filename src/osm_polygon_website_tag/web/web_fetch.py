@@ -251,8 +251,9 @@ def validate_public_http_url(
     """Require every resolved address for ``url`` to be globally routable."""
     normalized = normalize_http_url(url)
     parsed = urllib.parse.urlsplit(normalized)
-    assert parsed.hostname is not None
     host = parsed.hostname
+    if host is None:
+        raise UnsafeUrlError("missing_hostname")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     _validate_literal_host(host)
     addresses = _resolve_addresses(resolver, host, port)
@@ -586,7 +587,9 @@ def _fetch_robots_policy(
     failure = _robots_fetch_failure(fetched)
     if failure is not None:
         return failure
-    assert fetched.body is not None
+    if fetched.body is None:
+        # An "ok" response always carries a body; fail closed if that ever changes.
+        return _robots_unavailable_policy(fetched)
     return _parse_robots_policy(robots_url, fetched.body)
 
 

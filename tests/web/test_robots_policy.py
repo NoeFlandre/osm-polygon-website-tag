@@ -280,6 +280,27 @@ def test_fetch_robots_policy_uses_bounded_fetch_without_recursing(
     assert not policy.parser.can_fetch(web_fetch.USER_AGENT, f"{origin}/private")
 
 
+def test_fetch_robots_policy_fails_closed_when_ok_response_has_no_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def follow(url: str, *_args: Any, **_kwargs: Any) -> FetchResult:
+        return FetchResult("ok", url, final_url=url, body=None)
+
+    monkeypatch.setattr(web_fetch, "_follow_redirects", follow)
+
+    def transport(_url: str, _timeout: float, _max_bytes: int) -> web_fetch.HttpResponse:
+        return web_fetch.HttpResponse(200, {}, b"")
+
+    def resolver(_host: str, _port: int) -> list[tuple[Any, ...]]:
+        return []
+
+    policy = web_fetch._fetch_robots_policy("https://example.org", transport, resolver)
+
+    assert policy.parser is None
+    assert policy.error_status == "fetch_error"
+    assert policy.message == "robots_unavailable"
+
+
 def test_fetch_robots_policy_allows_every_page_when_robots_file_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
