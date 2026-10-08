@@ -87,15 +87,17 @@ def _sha256(p: Path) -> str:
 
 
 def test_shared_json_loader_reports_parse_errors_once(tmp_path: Path) -> None:
-    invalid = tmp_path / "invalid.json"
-    invalid.write_text("{not-json", encoding="utf-8")
-    errors: list[str] = []
-    ok, value = verify_module._read_json_value(invalid, errors, label="array")
-    assert ok is False
-    assert value is None
-    assert errors == [
-        f"invalid JSON array {invalid}: Expecting property name enclosed in double quotes: "
-        "line 1 column 2 (char 1)"
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    expected = run_dir / "manifests" / "expected_sources.json"
+    expected.write_text("{not-json", encoding="utf-8")
+
+    report = verify_results(run_dir)
+
+    assert report.ok is False
+    assert report.errors == [
+        f"invalid JSON array {expected}: Expecting property name enclosed in double quotes: "
+        "line 1 column 2 (char 1)",
+        "processed sources do not exactly match expected source inventory",
     ]
 
 
@@ -166,16 +168,42 @@ def test_verify_expected_inventory_compares_every_identity_field(
     assert errors == ["processed sources do not exactly match expected source inventory"]
 
 
-def test_read_json_value_uses_utf8_for_the_json_boundary() -> None:
-    class PathSpy:
-        def read_text(self, *, encoding: str) -> str:
-            assert encoding == "utf-8"
-            return '{"value": 1}'
+def test_verify_reads_non_ascii_inventory_as_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="r")
+    source = tmp_path / "café.osm.pbf"
+    source.write_bytes(b"data")
+    fp = snapshot_source_fingerprint(source)
+    record_processed_source(
+        state, fp, public_row_count=1, observation_row_count=0, rejection_count=0
+    )
+    # Raw UTF-8 bytes on disk; the processed manifest stores the same name ASCII-escaped.
+    entry = _manifest_identity(filename=fp.filename, size_bytes=fp.size_bytes, mtime_ns=fp.mtime_ns)
+    (run_dir / "manifests" / "expected_sources.json").write_bytes(
+        json.dumps([entry], ensure_ascii=False).encode("utf-8")
+    )
 
-    errors: list[str] = []
-    ok, value = verify_module._read_json_value(cast(Any, PathSpy()), errors, label="object")
+    # Simulate a non-UTF-8 locale default: a read_text call without an explicit encoding
+    # decodes as latin-1, so a reader that drops encoding="utf-8" mangles the inventory.
+    original_read_text = Path.read_text
 
-    assert (ok, value, errors) == (True, {"value": 1}, [])
+    def read_text_with_latin1_default(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if encoding is None:
+            return path.read_bytes().decode("latin-1", errors=errors or "strict")
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", read_text_with_latin1_default)
+
+    errors = verify_results(run_dir).errors
+
+    inventory_errors = [e for e in errors if "invalid JSON" in e or "do not exactly match" in e]
+    assert inventory_errors == []
 
 
 def test_verify_results_happy_path(tmp_path: Path) -> None:
