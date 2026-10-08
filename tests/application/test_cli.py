@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -100,18 +101,26 @@ def _setup_run(tmp_path: Path) -> Path:
 _Call = tuple[tuple[object, ...], dict[str, object]]
 
 
-def _recording(calls: dict[str, _Call], name: str, result: object) -> Callable[..., object]:
-    """Return a backend stub that stores its arguments under ``name`` and returns ``result``.
+def _recording(calls: dict[str, list[_Call]], name: str, result: object) -> Callable[..., object]:
+    """Return a backend stub that appends its arguments under ``name`` and returns ``result``.
 
     Each command is asserted by the arguments it forwarded, keyed by backend name, so the
     assertions do not depend on the order in which the command reached its collaborators.
+    Every call is kept, so a side effect that runs twice shows up as a second entry.
     """
 
     def stub(*args: object, **kwargs: object) -> object:
-        calls[name] = (args, kwargs)
+        calls.setdefault(name, []).append((args, kwargs))
         return result
 
     return stub
+
+
+def _only_call(calls: dict[str, list[_Call]], name: str) -> _Call:
+    """Return the one recorded call to ``name``; any other count fails the test."""
+    recorded = calls[name]
+    assert len(recorded) == 1, f"{name} was called {len(recorded)} times"
+    return recorded[0]
 
 
 def test_cli_help_exits_2() -> None:
@@ -262,11 +271,11 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         },
     )
     result = SimpleNamespace(payload=lambda: {"shard_sha256": "a" * 64, "completed": True})
-    calls: dict[str, _Call] = {}
-    validations: set[tuple[Path, str]] = set()
+    calls: dict[str, list[_Call]] = {}
+    validations: list[tuple[Path, str]] = []
 
     def require_under_data_root(path: Path, *, label: str) -> Path:
-        validations.add((Path(path), label))
+        validations.append((Path(path), label))
         return Path(path)
 
     splitter = object()
@@ -422,7 +431,7 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         "run_sentences",
         "sync_sentences",
     }
-    assert calls["prepare"] == (
+    assert _only_call(calls, "prepare") == (
         (tmp_path / "run", tmp_path / "bundle"),
         {
             "model_path": tmp_path / "model.bin",
@@ -432,12 +441,12 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
             "shard_name": "source.parquet",
         },
     )
-    assert calls["run"] == (
+    assert _only_call(calls, "run") == (
         (tmp_path / "bundle",),
         {"time_budget_seconds": 12.5, "batch_rows": 4, "job_id": "job-1"},
     )
-    assert calls["sync"][0] == (tmp_path / "bundle", tmp_path / "run")
-    assert calls["prepare_sentences"] == (
+    assert _only_call(calls, "sync")[0] == (tmp_path / "bundle", tmp_path / "run")
+    assert _only_call(calls, "prepare_sentences") == (
         (tmp_path / "run", tmp_path / "sentence-bundle"),
         {
             "model_dir": tmp_path / "sat-model",
@@ -448,12 +457,12 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
             "max_rows": 11,
         },
     )
-    assert calls["load_sentences"] == ((tmp_path / "sentence-bundle",), {})
-    assert calls["load_splitter"] == (
+    assert _only_call(calls, "load_sentences") == ((tmp_path / "sentence-bundle",), {})
+    assert _only_call(calls, "load_splitter") == (
         (tmp_path / "sentence-bundle" / "sat.bin",),
         {"revision": "revision-1"},
     )
-    assert calls["run_sentences"] == (
+    assert _only_call(calls, "run_sentences") == (
         (tmp_path / "sentence-bundle",),
         {
             "splitter": splitter,
@@ -462,14 +471,26 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
             "job_id": "job-2",
         },
     )
-    assert calls["sync_sentences"][0] == (tmp_path / "sentence-bundle", tmp_path / "run")
-    assert validations == {
-        (tmp_path / "run", "run directory"),
-        (tmp_path / "bundle", "Grid'5000 bundle directory"),
-        (tmp_path / "model.bin", "GlotLID model path"),
-        (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
-        (tmp_path / "sat-model", "SaT model directory"),
-    }
+    assert _only_call(calls, "sync_sentences")[0] == (
+        tmp_path / "sentence-bundle",
+        tmp_path / "run",
+    )
+    # One entry per checked path per command: prepare, prepare-sentences, sync and
+    # sync-sentences each validate their own paths, so a dropped check changes the count.
+    assert Counter(validations) == Counter(
+        [
+            (tmp_path / "run", "run directory"),
+            (tmp_path / "bundle", "Grid'5000 bundle directory"),
+            (tmp_path / "model.bin", "GlotLID model path"),
+            (tmp_path / "run", "run directory"),
+            (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
+            (tmp_path / "sat-model", "SaT model directory"),
+            (tmp_path / "bundle", "Grid'5000 bundle directory"),
+            (tmp_path / "run", "run directory"),
+            (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
+            (tmp_path / "run", "run directory"),
+        ]
+    )
     assert prepare_output == {
         "aaa": "first when sorted",
         "bundle_dir": str(tmp_path / "bundle"),
@@ -1010,7 +1031,7 @@ def test_verify_cli_report_commands_forward_paths_and_emit_exact_payloads(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     run_dir = tmp_path / "run"
-    calls: dict[str, _Call] = {}
+    calls: dict[str, list[_Call]] = {}
 
     monkeypatch.setattr(
         verify,
@@ -1063,10 +1084,10 @@ def test_verify_cli_report_commands_forward_paths_and_emit_exact_payloads(
     assert json.loads(capsys.readouterr().out) == {"ok": True, "errors": []}
 
     assert calls == {
-        "refresh_card_run": ((run_dir,), {}),
-        "finalize_run": ((run_dir,), {}),
-        "finalize_snapshot": ((run_dir,), {}),
-        "verify_results": ((run_dir,), {}),
+        "refresh_card_run": [((run_dir,), {})],
+        "finalize_run": [((run_dir,), {})],
+        "finalize_snapshot": [((run_dir,), {})],
+        "verify_results": [((run_dir,), {})],
     }
 
 
@@ -1077,7 +1098,7 @@ def test_verify_cli_statistics_commands_render_each_backend_result(
 ) -> None:
     run_dir = tmp_path / "run"
     geometry = object()
-    calls: dict[str, _Call] = {}
+    calls: dict[str, list[_Call]] = {}
     monkeypatch.setattr(
         verify,
         "compute_card_stats",
@@ -1099,9 +1120,9 @@ def test_verify_cli_statistics_commands_render_each_backend_result(
     assert verify.geometry_stats_command(run_dir) == 0
     assert capsys.readouterr().out == "geometry-report"
     assert calls == {
-        "compute_card_stats": ((run_dir,), {}),
-        "compute_geometry_stats": ((run_dir,), {}),
-        "render_geometry_stats": ((geometry,), {}),
+        "compute_card_stats": [((run_dir,), {})],
+        "compute_geometry_stats": [((run_dir,), {})],
+        "render_geometry_stats": [((geometry,), {})],
     }
 
 
@@ -1352,7 +1373,7 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
 ) -> None:
     bundle = SimpleNamespace(payload=lambda: {"shards": [{"name": "source.parquet"}]})
     result = SimpleNamespace(payload=lambda: {"completed": True, "shards": []})
-    calls: dict[str, _Call] = {}
+    calls: dict[str, list[_Call]] = {}
 
     monkeypatch.setattr(grid5000, "require_under_data_root", lambda path, **_kwargs: Path(path))
     monkeypatch.setattr(grid5000, "prepare_sentence_bundle", _recording(calls, "prepare", bundle))
@@ -1404,12 +1425,12 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
     )
 
     assert set(calls) == {"prepare", "run", "sync"}
-    prepare_args, prepare_kwargs = calls["prepare"]
+    prepare_args, prepare_kwargs = _only_call(calls, "prepare")
     assert prepare_args == (tmp_path / "run", tmp_path / "bundle")
     assert prepare_kwargs["model_dir"] == tmp_path / "sat-3l-sm"
     assert prepare_kwargs["model_revision"] == "137da05"
-    assert calls["run"][0] == (tmp_path / "bundle",)
-    assert calls["sync"][0] == (tmp_path / "bundle", tmp_path / "run")
+    assert _only_call(calls, "run")[0] == (tmp_path / "bundle",)
+    assert _only_call(calls, "sync")[0] == (tmp_path / "bundle", tmp_path / "run")
     assert "source.parquet" in capsys.readouterr().out
 
 
