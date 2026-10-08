@@ -174,7 +174,7 @@ def test_run_all_adapter_forwards_every_option_and_serializes_result(
             events.append(("close", completed))
 
     monkeypatch.setattr(run, "ProgressReporter", Reporter)
-    monkeypatch.setattr(run, "_configured_hf_dataset_repo", lambda repo_id: repo_id)
+    monkeypatch.setattr(run, "configured_hf_dataset_repo", lambda repo_id: repo_id)
 
     def backend(**kwargs: object) -> SimpleNamespace:
         calls.append(kwargs)
@@ -678,7 +678,7 @@ def test_publish_adapter_keeps_upload_dry_run_and_forwards_explicit_repository(
     calls: list[tuple[Path, str | None, bool]] = []
     monkeypatch.setattr(
         publish,
-        "_configured_hf_dataset_repo",
+        "configured_hf_dataset_repo",
         lambda repo_id: "resolved/dataset" if repo_id is None else repo_id,
     )
 
@@ -701,7 +701,7 @@ def test_publish_adapter_applies_only_when_requested(
 ) -> None:
     run_dir = tmp_path / "run"
     calls: list[tuple[Path, str | None, bool]] = []
-    monkeypatch.setattr(publish, "_configured_hf_dataset_repo", lambda repo_id: repo_id)
+    monkeypatch.setattr(publish, "configured_hf_dataset_repo", lambda repo_id: repo_id)
     monkeypatch.setattr(
         publish,
         "publish_to_hf",
@@ -732,7 +732,7 @@ def test_publish_plan_reports_resolved_artifact_count_and_readme(
     def resolve_repo(repo_id: str | None) -> str:
         return "owner/configured" if repo_id is None else f"resolved/{repo_id}"
 
-    monkeypatch.setattr(publish, "_configured_hf_dataset_repo", resolve_repo)
+    monkeypatch.setattr(publish, "configured_hf_dataset_repo", resolve_repo)
     monkeypatch.setattr(
         publish,
         "build_publish_plan",
@@ -801,9 +801,7 @@ def test_trackio_adapter_previews_resolved_snapshot_without_publishing(
         metrics={"row_count": 4},
     )
     calls: list[tuple[object, ...]] = []
-    monkeypatch.setattr(
-        publish, "_configured_hf_dataset_repo", lambda repo_id: "configured/dataset"
-    )
+    monkeypatch.setattr(publish, "configured_hf_dataset_repo", lambda repo_id: "configured/dataset")
     monkeypatch.setattr(
         publish,
         "build_trackio_snapshot",
@@ -844,7 +842,7 @@ def test_trackio_adapter_publishes_the_selected_snapshot_when_applied(
         metrics={"row_count": 8},
     )
     calls: list[tuple[object, ...]] = []
-    monkeypatch.setattr(publish, "_configured_hf_dataset_repo", lambda repo_id: repo_id)
+    monkeypatch.setattr(publish, "configured_hf_dataset_repo", lambda repo_id: repo_id)
     monkeypatch.setattr(
         publish,
         "build_trackio_snapshot",
