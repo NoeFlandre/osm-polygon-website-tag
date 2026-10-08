@@ -19,7 +19,7 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
 from osm_polygon_website_tag.runtime.paths import require_under_data_root
 from osm_polygon_website_tag.runtime.run_state import load_run
 
-from . import RunDir, _json
+from ._common import RunDir, echo_json
 from .languages import (
     _language_command_payload,
     _record_completed_language_shard,
@@ -56,7 +56,7 @@ def segment_sentences_command(
     _reject_frozen_language_run(state)
     needed = [path for path in paths if shard_needs_sentence_segmentation(path)]
     if not needed:
-        _json(
+        echo_json(
             _language_command_payload(
                 normalized_run_dir,
                 changed_shards=0,
@@ -78,7 +78,7 @@ def segment_sentences_command(
         batch_rows=batch_rows,
         time_budget_seconds=time_budget_seconds,
     )
-    _json(
+    echo_json(
         _language_command_payload(
             normalized_run_dir,
             changed_shards=progress.changed_shards,
