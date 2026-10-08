@@ -210,14 +210,15 @@ class TextCache:
 
 def _retry_locked[ResultT](operation: Callable[[], ResultT]) -> ResultT:
     """Retry a short-lived SQLite writer lock with bounded exponential backoff."""
-    for attempt in range(_LOCK_RETRY_COUNT + 1):
+    for attempt in range(_LOCK_RETRY_COUNT):
         try:
             return operation()
         except sqlite3.OperationalError as error:
-            if not _is_locked_error(error) or attempt == _LOCK_RETRY_COUNT:
+            if not _is_locked_error(error):
                 raise
             time.sleep(_LOCK_RETRY_DELAY_SECONDS * (2**attempt))
-    raise AssertionError("unreachable")
+    # The last attempt is not wrapped: a lock that persists propagates unchanged.
+    return operation()
 
 
 def _cached_text_from_row(row: tuple[Any, ...]) -> CachedText:
