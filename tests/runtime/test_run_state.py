@@ -497,3 +497,35 @@ def test_source_inventory_matches_rejects_duplicate_actual_entries(tmp_path: Pat
 
     with pytest.raises(ValueError, match="sources manifest contains duplicate filename"):
         source_inventory_matches(run_dir)
+
+
+def test_expected_source_inventory_names_the_missing_manifest(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=r"^missing .*manifests.expected_sources\.json$"):
+        expected_source_inventory(tmp_path / "run")
+
+
+def test_expected_source_inventory_reports_corrupt_json_with_its_label(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "expected_sources.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid expected sources manifest JSON"):
+        expected_source_inventory(run_dir)
+
+
+def test_source_inventory_matches_is_false_without_an_expected_inventory(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "sources.json").write_text("[]", encoding="utf-8")
+
+    assert source_inventory_matches(run_dir) is False
+
+
+def test_source_inventory_matches_reports_corrupt_actual_json(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "expected_sources.json").write_text("[]", encoding="utf-8")
+    (run_dir / "manifests" / "sources.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid sources manifest JSON"):
+        source_inventory_matches(run_dir)
