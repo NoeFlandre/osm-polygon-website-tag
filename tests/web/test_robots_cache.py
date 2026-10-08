@@ -247,3 +247,21 @@ def test_concurrent_callers_for_one_origin_load_it_once() -> None:
 def test_the_public_export_list_names_robots_cache() -> None:
     assert "RobotsCache" in web_fetch.__all__
     assert all(hasattr(web_fetch, name) for name in web_fetch.__all__)
+
+
+@pytest.mark.parametrize("error_ttl_seconds", [float("nan"), float("inf"), -1.0])
+def test_error_ttl_must_be_a_finite_non_negative_duration(error_ttl_seconds: float) -> None:
+    with pytest.raises(ValueError, match="error_ttl_seconds"):
+        RobotsCache(error_ttl_seconds=error_ttl_seconds)
+
+
+def test_a_zero_error_ttl_reloads_a_failed_policy_on_the_next_call() -> None:
+    cache = RobotsCache(error_ttl_seconds=0.0, clock=FakeClock())
+    loads: list[str] = []
+    load = _recording_loader(loads, error=True)
+    origin = "https://flaky.example"
+
+    cache.get_or_load(origin, load)
+    cache.get_or_load(origin, load)
+
+    assert loads == [origin, origin]

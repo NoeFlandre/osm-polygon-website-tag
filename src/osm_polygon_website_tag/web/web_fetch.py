@@ -94,6 +94,17 @@ class _CachedPolicy:
     stored_at: float
 
 
+def _checked_error_ttl(seconds: float | None) -> float | None:
+    """Return a finite, non-negative error TTL, or None for no expiry.
+
+    NaN never expires a failed robots policy and a negative TTL expires it at
+    once; both silently defeat the retry policy.
+    """
+    if seconds is None or (math.isfinite(seconds) and seconds >= 0):
+        return seconds
+    raise ValueError("error_ttl_seconds must be a finite, non-negative number")
+
+
 class RobotsCache:
     """Per-origin robots policies, shared by the fetches that receive this object.
 
@@ -114,7 +125,7 @@ class RobotsCache:
         if max_entries is not None and max_entries < 1:
             raise ValueError("max_entries must be at least 1")
         self._max_entries = max_entries
-        self._error_ttl_seconds = error_ttl_seconds
+        self._error_ttl_seconds = _checked_error_ttl(error_ttl_seconds)
         self._clock = clock
         self._lock = threading.Lock()
         self._entries: OrderedDict[str, _CachedPolicy] = OrderedDict()
