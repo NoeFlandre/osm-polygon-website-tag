@@ -27,20 +27,28 @@ from osm_polygon_website_tag.runtime.paths import require_under_data_root
 
 from . import RunDir, _json
 
+BundleDir = Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")]
+
+# Overrides shared by the two run commands. Their types and help text are kept
+# exactly as they were, so the help output and the bundle schema do not change.
+OverrideTimeBudget = Annotated[
+    float | None,
+    typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
+]
+OverrideBatchRows = Annotated[
+    int | None,
+    typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
+]
+JobId = Annotated[
+    str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
+]
+
 
 def grid5000_run_sentences_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
-    time_budget_seconds: Annotated[
-        float | None,
-        typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
-    ] = None,
-    batch_rows: Annotated[
-        int | None,
-        typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
-    ] = None,
-    job_id: Annotated[
-        str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
-    ] = None,
+    bundle_dir: BundleDir,
+    time_budget_seconds: OverrideTimeBudget = None,
+    batch_rows: OverrideBatchRows = None,
+    job_id: JobId = None,
 ) -> int:
     """Segment one staged sentence bundle on a reserved node, offline."""
     bundle = load_sentence_bundle(bundle_dir)
@@ -61,7 +69,7 @@ def grid5000_run_sentences_command(
 
 def grid5000_prepare_command(
     run_dir: RunDir,
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     model_path: Annotated[
         Path, typer.Option("--model-path", help="Verified pinned GlotLID model binary.")
     ],
@@ -99,18 +107,10 @@ def grid5000_prepare_command(
 
 
 def grid5000_run_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
-    time_budget_seconds: Annotated[
-        float | None,
-        typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
-    ] = None,
-    batch_rows: Annotated[
-        int | None,
-        typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
-    ] = None,
-    job_id: Annotated[
-        str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
-    ] = None,
+    bundle_dir: BundleDir,
+    time_budget_seconds: OverrideTimeBudget = None,
+    batch_rows: OverrideBatchRows = None,
+    job_id: JobId = None,
 ) -> int:
     """Run one staged bundle on a reserved node without network access."""
     result = run_language_bundle(
@@ -125,7 +125,7 @@ def grid5000_run_command(
 
 def grid5000_prepare_sentences_command(
     run_dir: RunDir,
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     model_dir: Annotated[
         Path, typer.Option("--model-dir", help="Locally staged SaT model directory.")
     ],
@@ -167,7 +167,7 @@ def grid5000_prepare_sentences_command(
 
 
 def grid5000_sync_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     run_dir: RunDir,
 ) -> int:
     """Synchronize one Grid'5000 result into the canonical run."""
@@ -186,7 +186,7 @@ def grid5000_sync_command(
 
 
 def grid5000_sync_sentences_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     run_dir: RunDir,
 ) -> int:
     """Synchronize one sentence receipt into the canonical run."""
