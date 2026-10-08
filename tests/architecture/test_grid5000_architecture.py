@@ -78,6 +78,7 @@ def _run_node_script_with_stubs(
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "HOME": str(tmp_path),
         "RECORD_DIR": str(record_dir),
+        "GRID5000_MODULES_INIT": str(tmp_path / "no-modules-init.sh"),
         **extra_env,
     }
 
