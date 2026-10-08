@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Callable
 
 import pytest
@@ -185,3 +187,58 @@ def test_each_polite_fetcher_keeps_its_own_robots_cache(memory_http: MemoryHTTPF
     second(memory_http.url("/public/a"))
 
     assert memory_http.requests.count("/robots.txt") == 2
+
+
+def test_a_cache_of_one_origin_keeps_that_origin() -> None:
+    loads: list[str] = []
+    cache = RobotsCache(max_entries=1)
+    load = _recording_loader(loads)
+    origin = "https://only.example"
+
+    cache.get_or_load(origin, load)
+    cache.get_or_load(origin, load)
+
+    assert loads == [origin]
+
+
+def test_a_full_cache_keeps_exactly_max_entries_origins() -> None:
+    loads: list[str] = []
+    cache = RobotsCache(max_entries=2)
+    load = _recording_loader(loads)
+    first, second = "https://a.example", "https://b.example"
+
+    cache.get_or_load(first, load)
+    cache.get_or_load(second, load)
+    cache.get_or_load(first, load)
+    cache.get_or_load(second, load)
+
+    assert loads == [first, second]
+
+
+def test_concurrent_callers_for_one_origin_load_it_once() -> None:
+    cache = RobotsCache()
+    origin = "https://busy.example"
+    loads: list[str] = []
+    results: list[web_fetch._RobotsPolicy] = []
+    waiter: threading.Thread | None = None
+
+    def load(loaded_origin: str) -> web_fetch._RobotsPolicy:
+        nonlocal waiter
+        loads.append(loaded_origin)
+        if waiter is None:
+            # A second caller arrives while this load is in flight. It must wait for the
+            # load and reuse its result, not load the origin again.
+            waiter = threading.Thread(
+                target=lambda: results.append(cache.get_or_load(origin, load))
+            )
+            waiter.start()
+            time.sleep(0.05)
+        return _policy()
+
+    first = cache.get_or_load(origin, load)
+    assert waiter is not None
+    waiter.join(timeout=5)
+
+    assert not waiter.is_alive()
+    assert loads == [origin]
+    assert results[0] is first
