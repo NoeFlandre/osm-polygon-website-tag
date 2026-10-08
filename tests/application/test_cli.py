@@ -28,6 +28,7 @@ from osm_polygon_website_tag.application.cli import (
     sentences,
     verify,
 )
+from osm_polygon_website_tag.application.cli._common import GLOBAL_OPTIONS, echo_json
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import (
     POLYGON_PUBLIC_SCHEMA,
@@ -1442,13 +1443,13 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
 
 
 def test_cli_json_serialization_is_sorted_and_path_safe(capsys) -> None:
-    cli._json({"z": Path("run"), "a": 1}, sort_keys=True)
+    echo_json({"z": Path("run"), "a": 1}, sort_keys=True)
 
     assert capsys.readouterr().out == '{\n  "a": 1,\n  "z": "run"\n}\n'
 
 
 def test_cli_json_serialization_preserves_order_by_default(capsys) -> None:
-    cli._json({"z": 1, "a": 2})
+    echo_json({"z": 1, "a": 2})
 
     assert capsys.readouterr().out == '{\n  "z": 1,\n  "a": 2\n}\n'
 
@@ -1792,7 +1793,7 @@ def test_debug_flag_brings_the_traceback_back(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         cli.main(["--debug", "detect-languages", "--run-dir", str(tmp_path / "missing")])
     # One invocation only.
-    assert cli._debug == {"enabled": False}
+    assert GLOBAL_OPTIONS.debug is False
 
 
 def test_debug_environment_variable_brings_the_traceback_back(
@@ -1886,7 +1887,7 @@ def test_global_options_last_one_invocation(
 ) -> None:
     _stderr_for(["-q", "-vv"][:1], monkeypatch, capsys)
 
-    assert cli._quiet == {"enabled": False}
+    assert GLOBAL_OPTIONS.quiet is False
     assert cli._LOGGER.handlers == []
     assert cli._LOGGER.level == logging.NOTSET
 

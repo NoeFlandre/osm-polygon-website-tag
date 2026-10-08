@@ -23,7 +23,7 @@ from osm_polygon_website_tag.runtime.config import (
     DEFAULT_TRACKIO_SPACE,
 )
 
-from . import RepoId, RunDir, _configured_hf_dataset_repo, _json
+from ._common import RepoId, RunDir, configured_hf_dataset_repo, echo_json
 
 
 def publish_command(
@@ -35,8 +35,8 @@ def publish_command(
     ] = False,
 ) -> int:
     """Publish or dry-run a complete dataset."""
-    plan = publish_to_hf(run_dir, repo_id=_configured_hf_dataset_repo(repo_id), dry_run=not apply)
-    _json({"dry_run": not apply, "artifact_count": len(plan.artifact_paths)})
+    plan = publish_to_hf(run_dir, repo_id=configured_hf_dataset_repo(repo_id), dry_run=not apply)
+    echo_json({"dry_run": not apply, "artifact_count": len(plan.artifact_paths)})
     return 0
 
 
@@ -45,8 +45,8 @@ def publish_plan_command(
     repo_id: RepoId = None,
 ) -> int:
     """List the publication plan."""
-    plan = build_publish_plan(run_dir, repo_id=_configured_hf_dataset_repo(repo_id))
-    _json(
+    plan = build_publish_plan(run_dir, repo_id=configured_hf_dataset_repo(repo_id))
+    echo_json(
         {
             # Do not echo values sourced from Settings; only reveal an explicit CLI option.
             "repo_id": repo_id,
@@ -70,7 +70,7 @@ def create_repo_command(
 ) -> int:
     """Create the Hugging Face dataset repository (dry run unless --apply)."""
     if not apply:
-        _json({"applied": False, "exists": repo_exists(repo_id=repo_id), "repo_id": repo_id})
+        echo_json({"applied": False, "exists": repo_exists(repo_id=repo_id), "repo_id": repo_id})
         return 0
     repo = create_repo(repo_id=repo_id, exist_ok=exist_ok)
     typer.echo(repo)
@@ -101,12 +101,12 @@ def publish_trackio_command(
 ) -> int:
     """Preview or publish metrics for one finalized dataset snapshot."""
     snapshot = build_trackio_snapshot(
-        run_dir, dataset_repo=_configured_hf_dataset_repo(dataset_repo)
+        run_dir, dataset_repo=configured_hf_dataset_repo(dataset_repo)
     )
     remote = (
         publish_trackio_snapshot(snapshot, space_id=space_id, project=project) if apply else None
     )
-    _json(
+    echo_json(
         {
             "dry_run": not apply,
             "space_id": space_id,
@@ -142,5 +142,5 @@ def release_stats_command(
         repo_id=repo_id,
         apply=apply,
     )
-    _json(report.to_payload(), sort_keys=True)
+    echo_json(report.to_payload(), sort_keys=True)
     return 0
