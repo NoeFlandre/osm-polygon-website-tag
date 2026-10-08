@@ -22,6 +22,11 @@ class CountedProgress(str):
     The string value is the legacy prefixed text, so logs, list comparisons and
     plain-string callbacks behave as they did with a formatted string. The
     reporter reads the fields directly instead of parsing the prefix.
+
+    Contract: multi-line text is not counted, as the legacy string is not
+    (the reporter prints it as an ordinary line). Empty text is counted and
+    gives the bar an empty description. No producer sends empty text. A source
+    file name can contain a newline, so multi-line text can occur.
     """
 
     current: int
@@ -29,6 +34,8 @@ class CountedProgress(str):
     text: str
 
     def __new__(cls, current: int, total: int, text: str) -> CountedProgress:
+        if not isinstance(text, str):
+            raise TypeError(f"counted progress text must be a str, not {type(text).__name__}")
         event = super().__new__(cls, f"[{current}/{total}] {text}")
         event.current = current
         event.total = total
@@ -46,6 +53,27 @@ def counted_progress(current: int, total: int, text: str) -> CountedProgress:
 
 
 _COUNTED_MESSAGE = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
+
+
+def _require_str(message: object) -> None:
+    """Refuse non-text messages in both modes, as before the counted-progress change."""
+    if not isinstance(message, str):
+        raise TypeError(f"progress message must be a str, not {type(message).__name__}")
+
+
+def _counted_fields(message: str) -> tuple[int, int, str] | None:
+    """Return (current, total, text) for a counted message, or None for an ordinary one.
+
+    A typed message carries its fields. Multi-line text stays ordinary, as the
+    legacy string does, so both forms print the same line.
+    """
+    if isinstance(message, CountedProgress) and "\n" not in message.text:
+        return message.current, message.total, message.text
+    match = _COUNTED_MESSAGE.fullmatch(message)
+    if match is None:
+        return None
+    current, total, description = match.groups()
+    return int(current), int(total), description
 
 
 class ProgressReporter:
@@ -67,18 +95,15 @@ class ProgressReporter:
     def __call__(self, message: str) -> None:
         if self._quiet:
             return
+        _require_str(message)
         if not self._interactive:
             self._write_plain(message)
             return
-        if isinstance(message, CountedProgress):
-            self._update_counted(message.current, message.total, message.text)
-            return
-        match = _COUNTED_MESSAGE.fullmatch(message)
-        if match is None:
+        fields = _counted_fields(message)
+        if fields is None:
             self._write_uncounted(message)
             return
-        current, total, description = match.groups()
-        self._update_counted(int(current), int(total), description)
+        self._update_counted(*fields)
 
     def _write_plain(self, message: str) -> None:
         """Write a stable line when no terminal progress bar is active."""

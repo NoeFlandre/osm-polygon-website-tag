@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import pickle
 from io import StringIO
-from typing import ClassVar, TextIO
+from typing import Any, ClassVar, TextIO
 
 import pytest
 
@@ -309,3 +309,58 @@ def test_a_reworded_prefix_stays_an_uncounted_message(monkeypatch: pytest.Monkey
 
     assert _FakeTqdm.instances == []
     assert _FakeTqdm.written == [("(3/4) Extracting a.osm.pbf", stream)]
+
+
+def test_multiline_counted_text_prints_the_same_line_as_the_legacy_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_tqdm(monkeypatch)
+    typed_stream, legacy_stream = StringIO(), StringIO()
+
+    ProgressReporter(typed_stream, interactive=True)(counted_progress(1, 2, "first\nsecond"))
+    ProgressReporter(legacy_stream, interactive=True)("[1/2] first\nsecond")
+
+    assert _FakeTqdm.instances == []
+    assert [text for text, _file in _FakeTqdm.written] == [
+        "[1/2] first\nsecond",
+        "[1/2] first\nsecond",
+    ]
+
+
+def test_multiline_counted_text_plain_output_matches_the_legacy_string() -> None:
+    typed, legacy = StringIO(), StringIO()
+
+    ProgressReporter(typed, interactive=False)(counted_progress(1, 2, "first\nsecond"))
+    ProgressReporter(legacy, interactive=False)("[1/2] first\nsecond")
+
+    assert typed.getvalue() == legacy.getvalue() == "[1/2] first\nsecond\n"
+
+
+def test_counted_progress_refuses_non_string_text() -> None:
+    no_text: Any = None
+    with pytest.raises(TypeError, match="text must be a str"):
+        counted_progress(1, 2, no_text)
+
+
+def test_non_string_progress_is_refused_in_plain_and_interactive_modes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_tqdm(monkeypatch)
+    stream = StringIO()
+    not_text: Any = b"[1/2] bytes"
+    no_text: Any = None
+
+    with pytest.raises(TypeError, match="must be a str"):
+        ProgressReporter(stream, interactive=False)(not_text)
+    with pytest.raises(TypeError, match="must be a str"):
+        ProgressReporter(stream, interactive=True)(no_text)
+    assert stream.getvalue() == ""
+
+
+def test_quiet_progress_ignores_non_string_messages_without_raising() -> None:
+    stream = StringIO()
+    not_text: Any = b"[1/2] bytes"
+
+    ProgressReporter(stream, interactive=False, quiet=True)(not_text)
+
+    assert stream.getvalue() == ""
