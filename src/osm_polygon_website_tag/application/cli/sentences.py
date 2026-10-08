@@ -19,7 +19,7 @@ from osm_polygon_website_tag.pipeline.split_sentences import (
 from osm_polygon_website_tag.runtime.paths import require_under_data_root
 from osm_polygon_website_tag.runtime.run_state import load_run
 
-from ._common import RunDir, echo_json
+from ._common import BatchRows, OptionalSeconds, RunDir, echo_json
 from .languages import (
     _language_command_payload,
     _record_completed_language_shard,
@@ -38,14 +38,8 @@ def segment_sentences_command(
         str,
         typer.Option("--model-revision", help="Pinned Hugging Face revision of the SaT model."),
     ],
-    batch_rows: Annotated[
-        int,
-        typer.Option("--batch-rows", help="Rows processed per sentence checkpoint batch."),
-    ] = DEFAULT_SENTENCE_BATCH_ROWS,
-    time_budget_seconds: Annotated[
-        float | None,
-        typer.Option("--time-budget-seconds", help="Stop cleanly after this segmentation budget."),
-    ] = None,
+    batch_rows: BatchRows = DEFAULT_SENTENCE_BATCH_ROWS,
+    time_budget_seconds: OptionalSeconds = None,
 ) -> int:
     """Segment website text into sentences for every language-complete shard."""
     validate_segmentation_options(batch_rows, time_budget_seconds)
