@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +22,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     STATUS_VERIFIED,
     SourceFingerprint,
     SourceManifestEntry,
+    _normalise_status_field,
     _read_json_document,
     _source_fingerprint_payload,
     _source_identity_matches,
@@ -38,6 +40,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     source_inventory_matches,
     source_is_unchanged,
     transition_status,
+    update_public_shard_metadata,
     update_source_enrichment_status,
     upsert_run_metadata,
 )
@@ -565,10 +568,81 @@ def test_source_entry_messages_name_the_label_index_and_field() -> None:
         _validate_source_filename("", label="sources manifest", index=2)
     assert str(empty_name.value) == "sources manifest[2].filename must be a non-empty string"
 
-    for field_name in ("size_bytes", "mtime_ns"):
-        entry = {"filename": "a.osm.pbf", "size_bytes": 1, "mtime_ns": 1, field_name: True}
-        with pytest.raises(ValueError) as bool_field:
-            _validate_source_numeric_fields(entry, label="sources manifest", index=4)
-        assert str(bool_field.value) == (
-            f"sources manifest[4].{field_name} must be a non-bool integer"
+
+def test_source_inventory_matches_reports_corrupt_actual_json(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "expected_sources.json").write_text("[]", encoding="utf-8")
+    (run_dir / "manifests" / "sources.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid sources manifest JSON"):
+        source_inventory_matches(run_dir)
+
+
+def test_zero_status_count_is_accepted() -> None:
+    _validate_status_count("success", 0)
+
+
+def test_source_is_unchanged_requires_the_same_size_and_mtime(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="identity")
+    p = tmp_path / "monaco-latest.osm.pbf"
+    p.write_bytes(b"data")
+    fp = snapshot_source_fingerprint(p)
+    record_processed_source(state, fp, public_row_count=1, observation_row_count=0)
+    recorded = load_run(run_dir)
+
+    assert source_is_unchanged(recorded, fp) is True
+    assert (
+        source_is_unchanged(
+            recorded, SourceFingerprint(fp.filename, fp.size_bytes, fp.mtime_ns + 1)
+        )
+        is False
+    )
+    assert (
+        source_is_unchanged(
+            recorded, SourceFingerprint(fp.filename, fp.size_bytes + 1, fp.mtime_ns)
+        )
+        is False
+    )
+    assert (
+        source_is_unchanged(
+            recorded, SourceFingerprint("other.osm.pbf", fp.size_bytes, fp.mtime_ns)
+        )
+        is False
+    )
+
+
+def test_normalise_status_field_validates_and_sorts_counts() -> None:
+    assert _normalise_status_field("text", {"success": 2, "absent": 0}) == {
+        "absent": 0,
+        "success": 2,
+    }
+    with pytest.raises(ValueError, match="string-keyed mappings"):
+        _normalise_status_field(1, {"success": 1})
+    with pytest.raises(ValueError, match="string-keyed mappings"):
+        _normalise_status_field("text", ["success"])
+
+
+def test_update_public_shard_metadata_records_the_shard_and_clears_pending(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="shard")
+    p = tmp_path / "monaco-latest.osm.pbf"
+    p.write_bytes(b"data")
+    fp = snapshot_source_fingerprint(p)
+    record_processed_source(state, fp, public_row_count=1, observation_row_count=0)
+    state.sources[fp.filename]["enrichment_pending"] = True
+
+    update_public_shard_metadata(state, filename=fp.filename, row_count=7, shard_sha256="a" * 64)
+
+    entry = load_run(run_dir).sources[fp.filename]
+    assert entry["public_row_count"] == 7
+    assert entry["public_shard_sha256"] == "a" * 64
+    assert "enrichment_pending" not in entry
+
+
+def test_update_public_shard_metadata_rejects_an_unprocessed_source(tmp_path: Path) -> None:
+    _, state = initialise_run(tmp_path, run_id="missing")
+
+    with pytest.raises(ValueError, match=re.escape("source is not processed: ghost.osm.pbf")):
+        update_public_shard_metadata(
+            state, filename="ghost.osm.pbf", row_count=1, shard_sha256="b" * 64
         )
