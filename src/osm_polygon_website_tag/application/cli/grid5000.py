@@ -25,7 +25,7 @@ from osm_polygon_website_tag.pipeline.grid5000_sentences import (
 from osm_polygon_website_tag.pipeline.sat import load_sat_splitter_from_path
 from osm_polygon_website_tag.runtime.paths import require_under_data_root
 
-from . import RunDir, _json
+from ._common import RunDir, echo_json
 
 BundleDir = Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")]
 
@@ -63,7 +63,7 @@ def grid5000_run_sentences_command(
         batch_rows=batch_rows,
         job_id=job_id,
     )
-    _json(result.payload(), sort_keys=True)
+    echo_json(result.payload(), sort_keys=True)
     return 0
 
 
@@ -102,7 +102,7 @@ def grid5000_prepare_command(
         batch_rows=batch_rows,
         shard_name=shard,
     )
-    _json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
+    echo_json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
     return 0
 
 
@@ -119,7 +119,7 @@ def grid5000_run_command(
         batch_rows=batch_rows,
         job_id=job_id,
     )
-    _json(result.payload(), sort_keys=True)
+    echo_json(result.payload(), sort_keys=True)
     return 0
 
 
@@ -162,7 +162,7 @@ def grid5000_prepare_sentences_command(
         batch_rows=batch_rows,
         max_rows=max_rows,
     )
-    _json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
+    echo_json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
     return 0
 
 
@@ -174,7 +174,7 @@ def grid5000_sync_command(
     normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
     normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     result = sync_language_bundle(normalized_bundle_dir, normalized_run_dir)
-    _json(
+    echo_json(
         {
             "bundle_dir": str(normalized_bundle_dir),
             "run_dir": str(normalized_run_dir),
@@ -193,7 +193,7 @@ def grid5000_sync_sentences_command(
     normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
     normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     result = sync_sentence_bundle(normalized_bundle_dir, normalized_run_dir)
-    _json(
+    echo_json(
         {
             "bundle_dir": str(normalized_bundle_dir),
             "run_dir": str(normalized_run_dir),
