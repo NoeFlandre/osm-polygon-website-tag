@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from typing import Annotated, Any, cast
 
 import httpx
@@ -180,7 +179,7 @@ _EPILOGS: dict[str, str] = {
 
 def _register_commands(target: typer.Typer) -> None:
     # Registration order is the order shown in --help.
-    commands: tuple[tuple[str, Callable[..., Any]], ...] = (
+    commands = (
         ("init", run.init_command),
         ("extract", run.extract_command),
         ("analyze-results", verify.analyze_command),
