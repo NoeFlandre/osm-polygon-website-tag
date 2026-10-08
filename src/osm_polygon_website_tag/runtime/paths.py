@@ -16,16 +16,25 @@ DATA_ROOT_ENV = "OSM_POLY_DATA_DIR"
 DEFAULT_DATA_DIRNAME = "data"
 
 
+def _configured_data_dir() -> str:
+    """Return the stripped ``OSM_POLY_DATA_DIR`` value, or ``""`` when unset.
+
+    The only place that builds ``Settings`` here. It is built per call, never
+    cached, so a test's patched environment is always honoured.
+    """
+    return Settings().osm_poly_data_dir.strip()
+
+
 def resolve_data_root() -> Path:
     """Return the absolute generated-data root, without creating it."""
-    configured = Settings().osm_poly_data_dir.strip()
+    configured = _configured_data_dir()
     root = Path(configured).expanduser() if configured else Path.cwd() / DEFAULT_DATA_DIRNAME
     return root.resolve()
 
 
 def data_root_source() -> str:
     """Say whether the root is ``custom`` or the ``default``, never its value."""
-    return "custom" if Settings().osm_poly_data_dir.strip() else "default"
+    return "custom" if _configured_data_dir() else "default"
 
 
 def model_cache_dir(name: str) -> Path:

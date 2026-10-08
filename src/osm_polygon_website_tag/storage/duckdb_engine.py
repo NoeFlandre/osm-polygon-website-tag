@@ -28,6 +28,7 @@ Safety
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any, Literal
 
@@ -53,6 +54,12 @@ def _make_connection(
     con.execute(f"SET temp_directory = '{str(temp_dir).replace(chr(39), chr(39) + chr(39))}'")
     con.execute("SET enable_progress_bar = false")
     return con
+
+
+def close_quietly(con: duckdb.DuckDBPyConnection) -> None:
+    """Close DuckDB without masking the failure that led to the cleanup."""
+    with contextlib.suppress(Exception):
+        con.close()
 
 
 def fresh_connection(run_dir: Path) -> duckdb.DuckDBPyConnection:
