@@ -29,7 +29,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
 )
 
-from . import RunDir, _json
+from ._common import RunDir, echo_json
 
 
 def _record_completed_language_shard(
@@ -96,7 +96,7 @@ def detect_languages_command(
     _reject_frozen_language_run(state)
     needed = _needed_language_shards(paths)
     if not needed:
-        _json(
+        echo_json(
             _language_command_payload(
                 normalized_run_dir,
                 changed_shards=0,
@@ -119,7 +119,7 @@ def detect_languages_command(
     )
     if progress.completed:
         _finish_language_command_state(state)
-    _json(
+    echo_json(
         _language_command_payload(
             normalized_run_dir,
             changed_shards=progress.changed_shards,

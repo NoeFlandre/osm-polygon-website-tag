@@ -43,6 +43,7 @@ def test_cli_package_modules_stay_below_the_size_budget() -> None:
     assert {path.stem for path in modules} == {
         "__init__",
         "__main__",
+        "_common",
         "grid5000",
         "languages",
         "publish",

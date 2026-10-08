@@ -21,7 +21,6 @@ from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHE
 from osm_polygon_website_tag.contracts.rejection_schema import REJECTION_SCHEMA
 from osm_polygon_website_tag.pipeline.analyze import (
     ANALYSIS_FILES,
-    _close_analysis_connection,
     _directory_row_count,
     _duckdb_extract_hostname,
     _global_cell_rows,
@@ -37,7 +36,7 @@ from osm_polygon_website_tag.pipeline.analyze import (
 )
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.runtime.run_state import initialise_run
-from osm_polygon_website_tag.storage.duckdb_engine import EIGHT_CELL_LABELS
+from osm_polygon_website_tag.storage.duckdb_engine import EIGHT_CELL_LABELS, close_quietly
 from osm_polygon_website_tag.storage.parquet import parquet_row_count
 
 
@@ -156,7 +155,7 @@ def test_analyze_private_duckdb_writers_validate_allowed_queries(tmp_path: Path)
                 con, tmp_path / "bad-class.parquet", column="bad", view="public_polygons"
             )
     finally:
-        _close_analysis_connection(con)
+        close_quietly(con)
 
 
 def _row_obs(
@@ -494,7 +493,7 @@ def test_hostname_analysis_normalizes_each_field_once(
             {"website_hostname": "c.example", "row_count": 1},
         ]
     finally:
-        _close_analysis_connection(con)
+        close_quietly(con)
 
 
 def test_hostname_analysis_registers_nullable_typed_normalizer(
@@ -1301,7 +1300,7 @@ def test_analyze_results_threads_one_staging_bundle_through_every_step(
         lambda *args: calls.append(("tables", args)) or summary,
     )
     monkeypatch.setattr(
-        module, "_close_analysis_connection", lambda *args: calls.append(("close", args))
+        module.duckdb_engine, "close_quietly", lambda *args: calls.append(("close", args))
     )
     monkeypatch.setattr(
         module, "atomic_promote_bundle", lambda pairs: calls.append(("promote", ()))
@@ -1340,14 +1339,6 @@ def test_staging_cleanup_suppresses_a_removal_failure(
     monkeypatch.setattr(module.shutil, "rmtree", fail)
 
     module._cleanup_invocation_staging_dir(tmp_path)
-
-
-def test_closing_the_connection_suppresses_its_failure() -> None:
-    class _Connection:
-        def close(self) -> None:
-            raise RuntimeError("already closed")
-
-    _close_analysis_connection(_Connection())  # ty: ignore[invalid-argument-type]
 
 
 def test_global_cell_rows_report_absent_cells_as_zero() -> None:
