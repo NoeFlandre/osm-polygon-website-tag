@@ -363,3 +363,18 @@ def test_quiet_progress_ignores_non_string_messages_without_raising() -> None:
     ProgressReporter(stream, interactive=False, quiet=True)(not_text)
 
     assert stream.getvalue() == ""
+
+
+def test_counted_progress_wrapper_keeps_every_field() -> None:
+    event = counted_progress(2, 3, "Extracting a.osm.pbf")
+
+    assert (event.current, event.total, event.text) == (2, 3, "Extracting a.osm.pbf")
+    assert str(event) == "[2/3] Extracting a.osm.pbf"
+
+
+def test_a_non_text_progress_message_names_its_type() -> None:
+    reporter = ProgressReporter(StringIO(), interactive=False)
+    not_text: Any = b"[1/2] bytes"
+
+    with pytest.raises(TypeError, match=r"^progress message must be a str, not bytes$"):
+        reporter(not_text)
