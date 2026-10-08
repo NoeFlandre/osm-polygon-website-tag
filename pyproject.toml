@@ -77,6 +77,8 @@ dev = [
     "pytest-xdist>=3,<4",
     "hypothesis>=6,<7",
     "pytest-benchmark>=5.3,<6",
+    # The workflow contract tests read the GitHub Actions YAML.
+    "pyyaml>=6,<7",
 ]
 
 [tool.ruff]

@@ -31,7 +31,7 @@
 # (module constants for case-insensitive names and codec aliases, partition for
 # the scheme check, and dropping a redundant lower() after SplitResult.hostname),
 # not by excluding them from scoring.
-# Recorded mutants: 155
+# Recorded mutants: 154
 # No current-run survivor is classified as equivalent by this note beyond the
 # groups described above.
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10

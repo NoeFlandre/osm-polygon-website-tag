@@ -10,6 +10,7 @@ sweep: a scoped run leaves most mutants unchecked.
 from __future__ import annotations
 
 import argparse
+import difflib
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -32,15 +33,46 @@ HEADER = (
 
 
 def render(names: Sequence[str]) -> str:
-    """Return the baseline file content for one sweep's unverified mutants."""
+    """Return the baseline file content for one sweep's unverified mutants.
+
+    The header count is derived from the same unique names as the entries, so
+    it always equals the number of entries the gate reads back.
+    """
     unique = sorted(set(names))
     return "\n".join([*HEADER, f"# Recorded mutants: {len(unique)}", "", *unique]) + "\n"
+
+
+def unified_diff(current: str, candidate: str, *, current_name: str, candidate_name: str) -> str:
+    """Return the reviewable diff from the recorded baseline to a regenerated one."""
+    return "".join(
+        difflib.unified_diff(
+            current.splitlines(keepends=True),
+            candidate.splitlines(keepends=True),
+            fromfile=current_name,
+            tofile=candidate_name,
+        )
+    )
 
 
 def _write_baseline(target: Path, names: Sequence[str]) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render(names), encoding="utf-8")
     print(f"recorded {len(set(names))} unverified mutant(s) in {target}")
+
+
+def _write_diff(diff: Path, baseline: Path, target: Path, candidate: str) -> None:
+    """Write the baseline diff a reviewer reads when the sweep would change it."""
+    current = baseline.read_text(encoding="utf-8") if baseline.is_file() else ""
+    diff.parent.mkdir(parents=True, exist_ok=True)
+    diff.write_text(
+        unified_diff(
+            current,
+            candidate,
+            current_name=str(baseline),
+            candidate_name=str(target),
+        ),
+        encoding="utf-8",
+    )
 
 
 def _report_growth(
@@ -85,11 +117,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="exit 1 when the sweep left a survivor the current baseline does not record",
     )
+    parser.add_argument(
+        "--diff",
+        type=Path,
+        help="write a unified diff from --baseline to the regenerated baseline here",
+    )
     args = parser.parse_args(argv)
     lines = args.results.read_text(encoding="utf-8").splitlines()
     names = unverified_mutants(lines)
     target = args.output or args.baseline
     grown = sorted(set(names) - read_baseline(args.baseline))
+    if args.diff is not None:
+        _write_diff(args.diff, args.baseline, target, render(names))
     if _report_growth(
         fail_on_growth=args.fail_on_growth,
         grown=grown,
