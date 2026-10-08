@@ -155,8 +155,9 @@ class RobotsCache:
 
     def _store(self, origin: str, policy: _RobotsPolicy) -> None:
         with self._lock:
+            # A stored origin is always absent here (a hit returns early), so the new
+            # entry already sits at the end of the LRU order.
             self._entries[origin] = _CachedPolicy(policy, self._clock())
-            self._entries.move_to_end(origin)
             while self._max_entries is not None and len(self._entries) > self._max_entries:
                 self._entries.popitem(last=False)
 
