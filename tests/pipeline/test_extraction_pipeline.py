@@ -102,6 +102,20 @@ def test_geometry_rejection_preserves_payload_and_derived_values() -> None:
     }
 
 
+def test_load_geometry_rejects_a_payload_without_serialized_geometry() -> None:
+    payload = replace(_website_payload("not-used"), raw_geojson=None)
+    assert payload.derived_tags is not None
+    derived = replace(payload.derived_tags, website="https://derived.example")
+
+    rejected = extraction_handler_module._load_geometry(payload, derived)
+
+    assert isinstance(rejected, AreaResult)
+    assert rejected.rejection_row is not None
+    assert rejected.rejection_row["rejection_kind"] == "geometry_error"
+    assert rejected.rejection_row["message"] == "missing serialized area geometry"
+    assert rejected.rejection_row["website"] == "https://derived.example"
+
+
 def test_load_geometry_converts_expected_and_unexpected_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
