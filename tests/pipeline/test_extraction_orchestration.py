@@ -11,8 +11,8 @@ from typing import Any
 import pyarrow.parquet as pq
 import pytest
 
+import osm_polygon_website_tag.contracts.timestamps as clock_module
 import osm_polygon_website_tag.pipeline.extraction as extraction_module
-import osm_polygon_website_tag.runtime.clock as clock_module
 from osm_polygon_website_tag.pipeline.extraction import extract_pbf
 from osm_polygon_website_tag.runtime.run_state import initialise_run, load_run
 

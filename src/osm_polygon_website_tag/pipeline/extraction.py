@@ -23,6 +23,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from osm_polygon_website_tag.contracts.timestamps import utc_iso_seconds, utc_now
 from osm_polygon_website_tag.domain.region import region_from_pbf_filename
 from osm_polygon_website_tag.pipeline import extraction_handler as _extraction_handler
 from osm_polygon_website_tag.pipeline import extraction_records as _extraction_records
@@ -34,7 +35,6 @@ from osm_polygon_website_tag.pipeline.area_work import (
     AreaPayload,
     AreaResult,
 )
-from osm_polygon_website_tag.runtime.clock import utc_iso_seconds, utc_now
 from osm_polygon_website_tag.runtime.run_state import (
     STATUS_INCOMPLETE,
     RunState,

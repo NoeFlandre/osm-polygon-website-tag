@@ -1,4 +1,4 @@
-"""Tests for the UTC clock helpers in ``runtime.clock``."""
+"""Tests for the UTC clock helpers in ``contracts.timestamps``."""
 
 from __future__ import annotations
 
@@ -6,8 +6,13 @@ import datetime as dt
 
 import pytest
 
-import osm_polygon_website_tag.runtime.clock as clock
-from osm_polygon_website_tag.runtime.clock import utc_iso, utc_iso_seconds, utc_now, utc_run_id
+import osm_polygon_website_tag.contracts.timestamps as clock
+from osm_polygon_website_tag.contracts.timestamps import (
+    utc_iso,
+    utc_iso_seconds,
+    utc_now,
+    utc_run_id,
+)
 
 
 def test_utc_now_is_timezone_aware_utc() -> None:
