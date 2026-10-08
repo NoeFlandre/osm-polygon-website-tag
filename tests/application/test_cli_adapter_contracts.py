@@ -51,6 +51,29 @@ def test_extract_adapter_forwards_worker_limits_and_persists_the_resulting_statu
     assert load_run(run_dir).metadata["status"] == expected_status
 
 
+def test_extract_failure_does_not_mark_the_run_extracted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    source = source_root / "source.osm.pbf"
+    source.write_bytes(b"pbf!")
+    output_root = tmp_path / "runs"
+    assert run.init_command(output_root, source_root, [source], run_id="run-1") == 0
+    run_dir = output_root / "run-1"
+
+    def extract(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("extraction failed")
+
+    monkeypatch.setattr(run, "extract_pbf", extract)
+    monkeypatch.setattr(run, "source_inventory_matches", lambda _path: True)
+
+    with pytest.raises(RuntimeError, match=r"^extraction failed$"):
+        run.extract_command(source, run_dir, area_workers=1, max_in_flight_areas=1)
+
+    assert load_run(run_dir).metadata["status"] == "extracting"
+
+
 def test_extract_rejects_a_source_missing_from_the_expected_inventory_with_its_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

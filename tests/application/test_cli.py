@@ -1025,6 +1025,31 @@ def test_verify_cli_analysis_and_card_commands_preserve_state_transitions(
     assert built == [run_dir]
 
 
+def test_verify_cli_failed_analysis_or_card_build_keeps_the_previous_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    for status in ("extracting", "extracted", "enriching", "enriched"):
+        transition_status(state, status)
+
+    def fail(*_args: object) -> object:
+        raise RuntimeError("backend failed")
+
+    monkeypatch.setattr(verify, "analyze_results", fail)
+    with pytest.raises(RuntimeError, match="backend failed"):
+        verify.analyze_command(run_dir)
+    assert load_run(run_dir).metadata["status"] == STATUS_ENRICHED
+
+    monkeypatch.setattr(verify, "analyze_results", lambda _path: SimpleNamespace(value=1))
+    assert verify.analyze_command(run_dir) == 0
+    monkeypatch.setattr(verify, "build_card", fail)
+    with pytest.raises(RuntimeError, match="backend failed"):
+        verify.card_command(run_dir)
+    assert load_run(run_dir).metadata["status"] == STATUS_ANALYZED
+
+
 def test_verify_cli_report_commands_forward_paths_and_emit_exact_payloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1499,6 +1524,7 @@ def test_cli_language_shard_runner_records_only_completed_results(
     ) == languages._LanguageRunProgress(1, 5, completed=True)
     assert len(calls) == 2
     assert set(calls) == {(shards[0], detector, 16, None), (shards[1], detector, 16, None)}
+    assert len(records) == len(shards)
     assert {shard for shard, _result in records} == set(shards)
 
 
