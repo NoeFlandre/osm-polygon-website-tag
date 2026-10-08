@@ -255,7 +255,7 @@ def test_cli_run_examples_use_the_portable_data_root_fallback() -> None:
         assert "${OSM_POLY_DATA_DIR:-./data}/runs" in result.stdout
 
 
-def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
+def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(  # noqa: PLR0915 - one scenario drives all six Grid5000 commands in order
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys,
@@ -273,6 +273,7 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
     result = SimpleNamespace(payload=lambda: {"shard_sha256": "a" * 64, "completed": True})
     calls: dict[str, list[_Call]] = {}
     validations: list[tuple[Path, str]] = []
+    checked_by_command: list[list[tuple[Path, str]]] = []
 
     def require_under_data_root(path: Path, *, label: str) -> Path:
         validations.append((Path(path), label))
@@ -321,6 +322,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     prepare_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -338,6 +341,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     run_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -351,6 +356,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     sync_output = json.loads(capsys.readouterr().out)
 
     assert (
@@ -377,6 +384,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     prepare_sentences_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -394,6 +403,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     run_sentences_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -407,6 +418,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     sync_sentences_output = json.loads(capsys.readouterr().out)
 
     assert all(
@@ -475,22 +488,31 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         tmp_path / "sentence-bundle",
         tmp_path / "run",
     )
-    # One entry per checked path per command: prepare, prepare-sentences, sync and
-    # sync-sentences each validate their own paths, so a dropped check changes the count.
-    assert Counter(validations) == Counter(
-        [
-            (tmp_path / "run", "run directory"),
-            (tmp_path / "bundle", "Grid'5000 bundle directory"),
-            (tmp_path / "model.bin", "GlotLID model path"),
-            (tmp_path / "run", "run directory"),
-            (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
-            (tmp_path / "sat-model", "SaT model directory"),
-            (tmp_path / "bundle", "Grid'5000 bundle directory"),
-            (tmp_path / "run", "run directory"),
-            (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
-            (tmp_path / "run", "run directory"),
-        ]
-    )
+    # Each command checks its own paths and nothing else, in command order: prepare,
+    # run, sync, prepare-sentences, run-sentences, sync-sentences.
+    run_path = tmp_path / "run"
+    bundle_path = tmp_path / "bundle"
+    sentence_path = tmp_path / "sentence-bundle"
+    assert [Counter(checked) for checked in checked_by_command] == [
+        Counter(
+            [
+                (run_path, "run directory"),
+                (bundle_path, "Grid'5000 bundle directory"),
+                (tmp_path / "model.bin", "GlotLID model path"),
+            ]
+        ),
+        Counter(),
+        Counter([(bundle_path, "Grid'5000 bundle directory"), (run_path, "run directory")]),
+        Counter(
+            [
+                (run_path, "run directory"),
+                (sentence_path, "Grid'5000 bundle directory"),
+                (tmp_path / "sat-model", "SaT model directory"),
+            ]
+        ),
+        Counter(),
+        Counter([(sentence_path, "Grid'5000 bundle directory"), (run_path, "run directory")]),
+    ]
     assert prepare_output == {
         "aaa": "first when sorted",
         "bundle_dir": str(tmp_path / "bundle"),

@@ -786,6 +786,7 @@ def test_create_repo_adapter_keeps_preview_read_only_and_forwards_defaults(
     assert publish.create_repo_command(repo_id="owner/dataset", apply=True) == 0
 
     assert capsys.readouterr().out == "owner/dataset\n"
+    assert checked == ["owner/dataset"]
     assert created == [("owner/dataset", False)]
 
 
