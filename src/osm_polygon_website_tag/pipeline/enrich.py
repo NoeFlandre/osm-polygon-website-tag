@@ -35,11 +35,7 @@ from osm_polygon_website_tag.runtime.run_state import hash_shard
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 from osm_polygon_website_tag.web.text_cache import CachedText, TextCache
 from osm_polygon_website_tag.web.text_extract import TextExtraction, extract_main_text
-from osm_polygon_website_tag.web.web_fetch import (
-    FetchResult,
-    make_bounded_fetcher,
-    normalize_http_url,
-)
+from osm_polygon_website_tag.web.web_fetch import FetchResult, fetch_html, normalize_http_url
 
 DEFAULT_BATCH_ROWS = 512
 # Fetching is I/O-bound; keep the pool bounded so one shard cannot create an
@@ -117,7 +113,7 @@ def enrich_polygon_shard(
     *,
     cache_path: Path | str,
     invocation_id: str,
-    fetcher: Fetcher | None = None,
+    fetcher: Fetcher = fetch_html,
     extractor: Extractor = extract_main_text,
     batch_rows: int = DEFAULT_BATCH_ROWS,
     fetch_workers: int | None = None,
@@ -126,12 +122,10 @@ def enrich_polygon_shard(
 
     Completed batches are source-hash-bound checkpoint parts. They remain until
     the final shard promotion succeeds, allowing a graceful interruption to
-    resume without refetching or reprocessing the completed prefix. Without a
-    ``fetcher``, each call gets its own bounded robots cache (#135).
+    resume without refetching or reprocessing the completed prefix.
     """
     shard = Path(shard_path)
     workers = DEFAULT_FETCH_WORKERS if fetch_workers is None else fetch_workers
-    active_fetcher = make_bounded_fetcher() if fetcher is None else fetcher
     context = _prepare_enrichment_context(shard, cache_path, workers, batch_rows)
     try:
         changed_by_batches, max_batch_rows = _process_enrichment_batches(
@@ -145,7 +139,7 @@ def enrich_polygon_shard(
             checkpoint=context.checkpoint,
             cache=context.cache,
             invocation_id=invocation_id,
-            fetcher=active_fetcher,
+            fetcher=fetcher,
             extractor=extractor,
             workers=workers,
         )

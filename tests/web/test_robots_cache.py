@@ -174,26 +174,6 @@ def test_fetch_html_uses_the_injected_cache_for_robots_rules(
     ]
 
 
-def test_each_bounded_fetcher_keeps_its_own_robots_cache(memory_http: MemoryHTTPFixture) -> None:
-    memory_http.route("/robots.txt", b"User-agent: *\nAllow: /\n", Content_Type="text/plain")
-    memory_http.route("/public/a", b"a", Content_Type="text/html")
-    first = web_fetch.make_bounded_fetcher()
-    second = web_fetch.make_bounded_fetcher()
-
-    first(memory_http.url("/public/a"))
-    first(memory_http.url("/public/a"))
-    second(memory_http.url("/public/a"))
-
-    # Each fetcher loads robots.txt once; the second fetcher does not reuse the first's policy.
-    assert memory_http.requests == [
-        "/robots.txt",
-        "/public/a",
-        "/public/a",
-        "/robots.txt",
-        "/public/a",
-    ]
-
-
 def test_each_polite_fetcher_keeps_its_own_robots_cache(memory_http: MemoryHTTPFixture) -> None:
     memory_http.route("/robots.txt", b"User-agent: *\nAllow: /\n", Content_Type="text/plain")
     memory_http.route("/public/a", b"a", Content_Type="text/html")

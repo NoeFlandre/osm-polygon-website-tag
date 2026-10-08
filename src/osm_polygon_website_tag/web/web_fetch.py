@@ -347,12 +347,6 @@ def make_polite_fetcher(policy: HostPolicy) -> Callable[[str], FetchResult]:
     return lambda url: fetch_html(url, limiter=limiter, robots_cache=cache)
 
 
-def make_bounded_fetcher() -> Callable[[str], FetchResult]:
-    """A ``fetch_html`` with its own bounded robots cache and no shared host limiter."""
-    cache = make_bounded_robots_cache()
-    return lambda url: fetch_html(url, robots_cache=cache)
-
-
 def _polite(transport: RequestOnce, limiter: HostLimiter) -> RequestOnce:
     """Wrap a transport with the host limits and one bounded Retry-After retry."""
 
@@ -921,7 +915,6 @@ __all__ = [
     "HttpResponse",
     "UnsafeUrlError",
     "fetch_html",
-    "make_bounded_fetcher",
     "make_polite_fetcher",
     "normalize_http_url",
     "validate_public_http_url",
