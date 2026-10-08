@@ -383,6 +383,31 @@ def test_deduplicate_cleanup_error_does_not_mask_write_error(
         deduplicate_public_shards(source_dir, output_dir)
 
 
+def test_open_dedup_connection_setup_error_survives_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[bool] = []
+
+    class FailingSetupConnection:
+        def execute(self, query: str) -> duckdb.DuckDBPyConnection:
+            raise ValueError("setup failed")
+
+        def close(self) -> None:
+            closed.append(True)
+            raise duckdb.Error("cleanup close failed")
+
+    monkeypatch.setattr(
+        deduplicate_module.duckdb,
+        "connect",
+        lambda: cast(duckdb.DuckDBPyConnection, FailingSetupConnection()),
+    )
+
+    with pytest.raises(ValueError, match="setup failed"):
+        deduplicate_module._open_dedup_connection(tmp_path / "polygons", tmp_path / "staging")
+
+    assert closed == [True]
+
+
 def test_materialise_partitions_sorts_two_rows_and_writes_snappy(tmp_path: Path) -> None:
     source_name = SOURCE_NAMES[0]
     staging_dir = tmp_path / "staging"

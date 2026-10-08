@@ -124,7 +124,7 @@ def _open_dedup_connection(
             """  # noqa: S608
         )
     except BaseException:
-        con.close()
+        duckdb_engine.close_quietly(con)
         raise
     return con, temp_dir
 
