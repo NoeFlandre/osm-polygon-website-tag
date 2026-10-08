@@ -143,7 +143,7 @@ def test_failed_load_is_not_cached_and_the_next_call_loads_again() -> None:
 
 @pytest.mark.parametrize("max_entries", [0, -1])
 def test_max_entries_must_allow_at_least_one_origin(max_entries: int) -> None:
-    with pytest.raises(ValueError, match="max_entries"):
+    with pytest.raises(ValueError, match=r"^max_entries must be at least 1$"):
         RobotsCache(max_entries=max_entries)
 
 
@@ -217,6 +217,53 @@ def test_each_polite_fetcher_keeps_its_own_robots_cache(memory_http: MemoryHTTPF
     assert memory_http.requests.count("/robots.txt") == 2
 
 
+def test_the_polite_fetcher_shares_its_policy_limiter_and_a_bounded_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, object]] = []
+
+    def record(url: str, **kwargs: object) -> object:
+        seen.append(kwargs)
+        return "fetched"
+
+    monkeypatch.setattr(web_fetch, "fetch_html", record)
+    policy = web_fetch.HostPolicy(concurrency=1, delay_seconds=0.0)
+    fetcher = web_fetch.make_polite_fetcher(policy)
+
+    assert fetcher("https://polite.example/a") == "fetched"
+    assert fetcher("https://polite.example/b") == "fetched"
+
+    limiter = seen[0]["limiter"]
+    cache = seen[0]["robots_cache"]
+    assert isinstance(limiter, web_fetch.HostLimiter)
+    assert limiter.policy is policy
+    assert seen[1]["limiter"] is limiter
+    assert seen[1]["robots_cache"] is cache
+    assert isinstance(cache, RobotsCache)
+
+
+def test_the_bounded_cache_has_the_fetcher_limits() -> None:
+    cache = web_fetch.make_bounded_robots_cache()
+
+    assert cache._max_entries == web_fetch.ROBOTS_CACHE_MAX_ORIGINS
+    assert cache._error_ttl_seconds == web_fetch.ROBOTS_ERROR_TTL_SECONDS
+
+
+def test_the_load_registry_is_empty_once_every_load_has_finished() -> None:
+    cache = RobotsCache()
+    loads: list[str] = []
+
+    def failing(origin: str) -> web_fetch._RobotsPolicy:
+        loads.append(origin)
+        raise OSError("robots fetch failed")
+
+    cache.get_or_load("https://loaded.example", _recording_loader(loads))
+    with pytest.raises(OSError):
+        cache.get_or_load("https://failed.example", failing)
+
+    assert cache._load_slots == {}
+
+
 def test_a_cache_of_one_origin_keeps_that_origin() -> None:
     loads: list[str] = []
     cache = RobotsCache(max_entries=1)
@@ -279,8 +326,22 @@ def test_the_public_export_list_names_robots_cache() -> None:
 
 @pytest.mark.parametrize("error_ttl_seconds", [float("nan"), float("inf"), -1.0])
 def test_error_ttl_must_be_a_finite_non_negative_duration(error_ttl_seconds: float) -> None:
-    with pytest.raises(ValueError, match="error_ttl_seconds"):
+    with pytest.raises(
+        ValueError, match=r"^error_ttl_seconds must be a finite, non-negative number$"
+    ):
         RobotsCache(error_ttl_seconds=error_ttl_seconds)
+
+
+def test_an_unbounded_cache_keeps_a_failed_policy_for_its_whole_life() -> None:
+    cache = RobotsCache()
+    loads: list[str] = []
+    origin = "https://unbounded-failure.example"
+
+    first = cache.get_or_load(origin, _recording_loader(loads, error=True))
+    second = cache.get_or_load(origin, _recording_loader(loads, error=True))
+
+    assert second is first
+    assert loads == [origin]
 
 
 def test_a_zero_error_ttl_reloads_a_failed_policy_on_the_next_call() -> None:
