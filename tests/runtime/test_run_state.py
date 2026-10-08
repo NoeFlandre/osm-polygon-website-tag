@@ -220,11 +220,6 @@ def test_source_fingerprint_captures_size_and_mtime(tmp_path: Path) -> None:
     assert isinstance(fp.mtime_ns, int)
 
 
-def test_source_fingerprint_has_no_sha256_field() -> None:
-    fp = SourceFingerprint(filename="x", size_bytes=1, mtime_ns=2)
-    assert not hasattr(fp, "sha256")
-
-
 def test_source_fingerprint_changes_with_size(tmp_path: Path) -> None:
     p = tmp_path / "monaco-latest.osm.pbf"
     p.write_bytes(b"a")

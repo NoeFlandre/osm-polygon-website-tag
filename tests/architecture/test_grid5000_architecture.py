@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from osm_polygon_website_tag.pipeline.grid5000_bundle import (
     DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
@@ -32,7 +35,8 @@ NODE_JOB_SCRIPTS = (
     "run_language_detection.sh",
     "run_sentence_segmentation.sh",
 )
-MODULE_LOAD = "module load python/3.12.12 uv/0.10.12 expat/2.7.1"
+# The arguments `_env.sh` passes to `module`: the pinned runtime modules.
+PINNED_MODULES = "load python/3.12.12 uv/0.10.12 expat/2.7.1"
 
 
 def test_grid5000_scripts_are_executable() -> None:
@@ -42,24 +46,123 @@ def test_grid5000_scripts_are_executable() -> None:
         assert os.access(path, os.X_OK)
 
 
-def test_node_environment_is_defined_once_and_shared() -> None:
-    env = ENV_SCRIPT.read_text()
+# Stand-ins for the cluster's `module` and `uv`. They record what a script asked for,
+# so the tests check the environment a job receives rather than the script's text.
+_MODULE_STUB = r"""#!/bin/sh
+printf '%s\n' "$*" >> "$RECORD_DIR/module.txt"
+"""
+_UV_STUB = r"""#!/bin/sh
+{
+  printf 'cwd=%s\n' "$(pwd -P)"
+  printf 'uv_cache_dir=%s\n' "$UV_CACHE_DIR"
+  printf 'args=%s\n' "$*"
+} > "$RECORD_DIR/uv.txt"
+"""
 
-    assert MODULE_LOAD in env
-    assert "if [[ -f /etc/profile.d/modules.sh ]]; then" in env
-    assert "if ! command -v module" not in env
-    assert 'job_dir="${GRID5000_JOB_DIR:-$PWD}"' in env
-    assert 'repo_dir="${GRID5000_REPO_DIR:-$job_dir/checkout}"' in env
-    assert 'uv_cache_dir="${GRID5000_UV_CACHE_DIR:-$job_dir/uv-cache}"' in env
-    assert 'cd "$repo_dir"' in env
-    assert 'export UV_CACHE_DIR="$uv_cache_dir"' in env
-    for name in NODE_JOB_SCRIPTS:
-        script = (SCRIPT_ROOT / name).read_text()
-        assert 'source "$env_script"' in script
-        assert "scripts/grid5000/_env.sh" in script
+
+def _run_node_script_with_stubs(
+    tmp_path: Path,
+    script: str,
+    arguments: tuple[str, ...],
+    extra_env: dict[str, str],
+) -> tuple[str, dict[str, str]]:
+    """Run one node script under the stub tools; return the module and uv calls it made."""
+    bin_dir = tmp_path / "bin"
+    record_dir = tmp_path / "record"
+    bin_dir.mkdir()
+    record_dir.mkdir()
+    for tool, body in (("module", _MODULE_STUB), ("uv", _UV_STUB)):
+        (bin_dir / tool).write_text(body, encoding="utf-8")
+        (bin_dir / tool).chmod(0o755)
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "HOME": str(tmp_path),
+        "RECORD_DIR": str(record_dir),
+        **extra_env,
+    }
+
+    result = subprocess.run(
+        ["bash", str((SCRIPT_ROOT / script).resolve()), *arguments],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    modules = (record_dir / "module.txt").read_text(encoding="utf-8")
+    uv_lines = (record_dir / "uv.txt").read_text(encoding="utf-8").splitlines()
+    return modules, dict(line.split("=", 1) for line in uv_lines)
+
+
+def test_only_the_shared_environment_loads_modules() -> None:
     for path in SCRIPT_ROOT.glob("*.sh"):
         if path != ENV_SCRIPT:
             assert "module load" not in path.read_text(), path.name
+
+
+@pytest.mark.parametrize("script", NODE_JOB_SCRIPTS)
+def test_node_job_scripts_load_the_pins_and_run_in_the_default_checkout(
+    tmp_path: Path,
+    script: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    checkout = job_dir / "checkout"
+    checkout.mkdir(parents=True)
+    arguments = ("language",) if script == "bootstrap_runtime.sh" else ()
+
+    modules, uv = _run_node_script_with_stubs(
+        tmp_path, script, arguments, {"GRID5000_JOB_DIR": str(job_dir)}
+    )
+
+    assert modules == f"{PINNED_MODULES}\n"
+    assert uv["cwd"] == str(checkout.resolve())
+    assert uv["uv_cache_dir"] == str(job_dir / "uv-cache")
+
+
+def test_explicit_checkout_and_cache_variables_override_the_job_directory(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "repo"
+    checkout.mkdir()
+    cache = tmp_path / "cache"
+
+    _, uv = _run_node_script_with_stubs(
+        tmp_path,
+        "bootstrap_runtime.sh",
+        ("language",),
+        {
+            "GRID5000_JOB_DIR": str(tmp_path / "job"),
+            "GRID5000_REPO_DIR": str(checkout),
+            "GRID5000_UV_CACHE_DIR": str(cache),
+        },
+    )
+
+    assert uv["cwd"] == str(checkout.resolve())
+    assert uv["uv_cache_dir"] == str(cache)
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_args"),
+    [
+        ("language", "sync --locked --no-dev --python 3.12"),
+        ("sentences", "sync --locked --no-dev --extra sentences --python 3.12"),
+    ],
+)
+def test_bootstrap_syncs_the_locked_runtime_for_each_stage(
+    tmp_path: Path,
+    stage: str,
+    expected_args: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    (job_dir / "checkout").mkdir(parents=True)
+
+    _, uv = _run_node_script_with_stubs(
+        tmp_path, "bootstrap_runtime.sh", (stage,), {"GRID5000_JOB_DIR": str(job_dir)}
+    )
+
+    assert uv["args"] == expected_args
 
 
 def test_submitted_job_scripts_keep_their_oar_headers() -> None:

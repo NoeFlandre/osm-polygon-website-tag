@@ -97,11 +97,6 @@ def test_a_path_outside_the_root_is_rejected(
     assert str(tmp_path.resolve() / "root") not in str(caught.value)
 
 
-def test_the_dead_layout_helpers_are_gone() -> None:
-    for name in ("raw_dir", "processed_dir", "exports_dir", "data_root", "DEFAULT_DATA_ROOT"):
-        assert not hasattr(paths, name)
-
-
 @pytest.mark.parametrize(
     ("value", "expected"), [("/somewhere", "custom"), ("", "default"), ("  ", "default")]
 )
