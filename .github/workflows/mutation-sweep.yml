@@ -75,16 +75,27 @@ jobs:
         run: uv sync --locked
 
       - name: Sweep the area
+        # Exit status 86 means the area's filter matched no mutable function, as
+        # when an area mapped to a bare __init__.py. That is a mapping fault,
+        # so name the area in the failure rather than leave a bare exit code.
         run: |
+          status=0
           uv run --locked python scripts/quality/mutation_runner.py run \
             --max-children "${{ inputs.children || '4' }}" \
-            "osm_polygon_website_tag.${{ matrix.area }}.*"
+            "osm_polygon_website_tag.${{ matrix.area }}.*" || status=$?
+          if [ "$status" -eq 86 ]; then
+            echo "::error::mutation area ${{ matrix.area }} matched no mutable functions; check scripts/quality/mutation_scope.py and its package" >&2
+          fi
+          exit "$status"
 
       - name: Collect the area's unverified mutants
         run: |
-          uv run --locked mutmut results --all true \
-            | grep -E ': (survived|no tests|timeout|suspicious|segfault|check was interrupted by user)$' \
-            > "results-${{ matrix.area }}.txt" || true
+          set -euo pipefail
+          # A failing results command fails this step. Only grep's "no line
+          # matched" status (1) is an empty, valid result.
+          uv run --locked mutmut results --all true > "results-${{ matrix.area }}.all.txt"
+          grep -E ': (survived|no tests|timeout|suspicious|segfault|check was interrupted by user)$' \
+            "results-${{ matrix.area }}.all.txt" > "results-${{ matrix.area }}.txt" || [ "$?" -eq 1 ]
           wc -l < "results-${{ matrix.area }}.txt"
 
       - name: Upload the area's baseline
@@ -132,14 +143,16 @@ jobs:
 
       # The recorded baseline is never rewritten upward by the sweep: a new
       # survivor fails this job, and the regenerated file is only an artifact
-      # to review and commit deliberately.
+      # to review and commit deliberately. The diff artifact shows that change
+      # against the committed baseline, so a reviewer need not diff by hand.
       - name: Merge the areas into a candidate baseline
         run: |
           set -euo pipefail
           cat areas/results-*.txt > merged.txt
           uv run --locked python scripts/quality/mutation_baseline.py \
             --results merged.txt --baseline docs/quality/mutation-baseline.txt \
-            --output mutation-baseline-candidate.txt --fail-on-growth
+            --output mutation-baseline-candidate.txt --diff mutation-baseline.diff \
+            --fail-on-growth
           head -20 mutation-baseline-candidate.txt
 
       - name: Upload the candidate baseline
@@ -148,4 +161,12 @@ jobs:
         with:
           name: mutation-baseline-candidate
           path: mutation-baseline-candidate.txt
+          if-no-files-found: ignore
+
+      - name: Upload the baseline diff
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-baseline-diff
+          path: mutation-baseline.diff
           if-no-files-found: ignore
