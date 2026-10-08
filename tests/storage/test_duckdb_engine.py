@@ -322,9 +322,20 @@ def test_ensure_temp_dir_is_idempotent(tmp_path: Path) -> None:
     assert first.is_dir()
 
 
-def test_close_quietly_suppresses_a_close_failure() -> None:
+@pytest.mark.parametrize("exc_type", [AttributeError, TypeError])
+def test_close_quietly_propagates_a_programming_error(exc_type: type[Exception]) -> None:
     class _Connection:
         def close(self) -> None:
-            raise RuntimeError("already closed")
+            raise exc_type("boom")
+
+    with pytest.raises(exc_type, match="boom"):
+        duckdb_engine.close_quietly(_Connection())  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("exc_type", [duckdb.Error, duckdb.IOException])
+def test_close_quietly_suppresses_a_duckdb_close_failure(exc_type: type[Exception]) -> None:
+    class _Connection:
+        def close(self) -> None:
+            raise exc_type("close failed")
 
     duckdb_engine.close_quietly(_Connection())  # ty: ignore[invalid-argument-type]
