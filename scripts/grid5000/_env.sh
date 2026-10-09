@@ -4,10 +4,13 @@
 #
 # Sets job_dir, repo_dir and uv_cache_dir, loads the pinned modules, exports
 # UV_CACHE_DIR, and leaves the working directory at the repository checkout.
+# GRID5000_MODULES_INIT overrides the environment-modules init file; the tests
+# point it at a missing file so a host's own `module` function cannot win.
 
-if [[ -f /etc/profile.d/modules.sh ]]; then
+modules_init="${GRID5000_MODULES_INIT:-/etc/profile.d/modules.sh}"
+if [[ -f "$modules_init" ]]; then
   # shellcheck source=/dev/null
-  source /etc/profile.d/modules.sh
+  source "$modules_init"
 fi
 module load python/3.12.12 uv/0.10.12 expat/2.7.1
 

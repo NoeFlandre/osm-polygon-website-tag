@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -87,52 +87,48 @@ def _sha256(p: Path) -> str:
 
 
 def test_shared_json_loader_reports_parse_errors_once(tmp_path: Path) -> None:
-    invalid = tmp_path / "invalid.json"
-    invalid.write_text("{not-json", encoding="utf-8")
-    errors: list[str] = []
-    ok, value = verify_module._read_json_value(invalid, errors, label="array")
-    assert ok is False
-    assert value is None
-    assert errors == [
-        f"invalid JSON array {invalid}: Expecting property name enclosed in double quotes: "
-        "line 1 column 2 (char 1)"
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    expected = run_dir / "manifests" / "expected_sources.json"
+    expected.write_text("{not-json", encoding="utf-8")
+
+    report = verify_results(run_dir)
+
+    assert report.ok is False
+    assert report.errors == [
+        f"invalid JSON array {expected}: Expecting property name enclosed in double quotes: "
+        "line 1 column 2 (char 1)",
+        "processed sources do not exactly match expected source inventory",
     ]
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected", "error_prefix"),
-    [
-        ([{"filename": "a.osm.pbf"}], [{"filename": "a.osm.pbf"}], None),
-        ({"filename": "a.osm.pbf"}, [], "expected array of objects"),
-        (["not an object"], [], "expected array of objects"),
-    ],
+    "payload",
+    [{"filename": "a.osm.pbf"}, ["not an object"]],
+    ids=["object-root", "non-object-item"],
 )
-def test_json_array_loader_accepts_only_arrays_of_objects(
+def test_verify_rejects_a_sources_manifest_that_is_not_an_array_of_objects(
     tmp_path: Path,
     payload: object,
-    expected: list[dict[str, object]],
-    error_prefix: str | None,
 ) -> None:
-    path = tmp_path / "values.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    errors: list[str] = []
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    sources = run_dir / "manifests" / "sources.json"
+    sources.write_text(json.dumps(payload), encoding="utf-8")
 
-    result = verify_module._read_json_array(path, errors)
+    errors = verify_results(run_dir).errors
 
-    assert result == expected
-    if error_prefix is None:
-        assert errors == []
-    else:
-        assert len(errors) == 1
-        assert errors[0].startswith(error_prefix)
+    assert f"expected array of objects: {sources}" in errors
+    assert "sources manifest is empty" in errors
 
 
-def test_json_array_loader_reports_missing_file(tmp_path: Path) -> None:
-    errors: list[str] = []
+def test_verify_reports_a_missing_sources_manifest_as_invalid_json(tmp_path: Path) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    sources = run_dir / "manifests" / "sources.json"
+    sources.unlink()
 
-    assert verify_module._read_json_array(tmp_path / "missing.json", errors) == []
-    assert len(errors) == 1
-    assert errors[0].startswith("invalid JSON array")
+    errors = verify_results(run_dir).errors
+
+    assert any(error.startswith(f"invalid JSON array {sources}: ") for error in errors)
+    assert "sources manifest is empty" in errors
 
 
 def _manifest_identity(
@@ -144,38 +140,74 @@ def _manifest_identity(
     return {"filename": filename, "size_bytes": size_bytes, "mtime_ns": mtime_ns}
 
 
+INVENTORY_MISMATCH = "processed sources do not exactly match expected source inventory"
+
+
+def test_verify_accepts_an_expected_inventory_identical_to_the_processed_sources(
+    tmp_path: Path,
+) -> None:
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    processed = run_dir / "manifests" / "sources.json"
+    (run_dir / "manifests" / "expected_sources.json").write_bytes(processed.read_bytes())
+
+    assert verify_results(run_dir).errors == []
+
+
 @pytest.mark.parametrize(
     ("field_name", "changed_value"),
     [("filename", "other.osm.pbf"), ("size_bytes", 11), ("mtime_ns", 21)],
 )
-def test_verify_expected_inventory_compares_every_identity_field(
+def test_verify_rejects_an_expected_inventory_that_differs_in_any_identity_field(
     tmp_path: Path,
     field_name: str,
     changed_value: object,
 ) -> None:
-    expected_entry = _manifest_identity()
-    expected_path = tmp_path / "manifests" / "expected_sources.json"
-    expected_path.parent.mkdir()
-    expected_path.write_text(json.dumps([expected_entry]), encoding="utf-8")
-    actual_entry = cast(SourceManifestEntry, dict(expected_entry))
-    cast(dict[str, object], actual_entry)[field_name] = changed_value
-    errors: list[str] = []
+    run_dir, _ = _setup_minimal_run(tmp_path)
+    processed = json.loads((run_dir / "manifests" / "sources.json").read_text(encoding="utf-8"))
+    expected = [{**processed[0], field_name: changed_value}]
+    (run_dir / "manifests" / "expected_sources.json").write_text(
+        json.dumps(expected), encoding="utf-8"
+    )
 
-    verify_module._verify_expected_inventory(tmp_path, [actual_entry], errors)
-
-    assert errors == ["processed sources do not exactly match expected source inventory"]
+    assert verify_results(run_dir).errors == [INVENTORY_MISMATCH]
 
 
-def test_read_json_value_uses_utf8_for_the_json_boundary() -> None:
-    class PathSpy:
-        def read_text(self, *, encoding: str) -> str:
-            assert encoding == "utf-8"
-            return '{"value": 1}'
+def test_verify_reads_non_ascii_inventory_as_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="r")
+    source = tmp_path / "café.osm.pbf"
+    source.write_bytes(b"data")
+    fp = snapshot_source_fingerprint(source)
+    record_processed_source(
+        state, fp, public_row_count=1, observation_row_count=0, rejection_count=0
+    )
+    # Raw UTF-8 bytes on disk; the processed manifest stores the same name ASCII-escaped.
+    entry = _manifest_identity(filename=fp.filename, size_bytes=fp.size_bytes, mtime_ns=fp.mtime_ns)
+    (run_dir / "manifests" / "expected_sources.json").write_bytes(
+        json.dumps([entry], ensure_ascii=False).encode("utf-8")
+    )
 
-    errors: list[str] = []
-    ok, value = verify_module._read_json_value(cast(Any, PathSpy()), errors, label="object")
+    # Simulate a non-UTF-8 locale default: a read_text call without an explicit encoding
+    # decodes as latin-1, so a reader that drops encoding="utf-8" mangles the inventory.
+    original_read_text = Path.read_text
 
-    assert (ok, value, errors) == (True, {"value": 1}, [])
+    def read_text_with_latin1_default(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if encoding is None:
+            return path.read_bytes().decode("latin-1", errors=errors or "strict")
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", read_text_with_latin1_default)
+
+    errors = verify_results(run_dir).errors
+
+    inventory_errors = [e for e in errors if "invalid JSON" in e or "do not exactly match" in e]
+    assert inventory_errors == []
 
 
 def test_verify_results_happy_path(tmp_path: Path) -> None:
@@ -424,51 +456,6 @@ def test_status_selects_the_card_release_and_receipt_contracts(
     )
     receipt_checked = status == "complete" and verifier != "modern"
     assert ("completion receipt has no artifact list" in errors) is receipt_checked
-
-
-@pytest.mark.parametrize("status", ["extracted", "card_built", "verified", "complete"])
-@pytest.mark.parametrize("include_receipt", [False, True])
-@pytest.mark.parametrize("preserve_card_sections", [None, False, True])
-def test_status_artifact_dispatch_uses_the_exact_contract(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    status: str,
-    include_receipt: bool,
-    preserve_card_sections: bool | None,
-) -> None:
-    calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_analysis_and_card",
-        lambda _root, errors: calls.append(("card", errors)),
-    )
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_release_analysis_and_card",
-        lambda _root, errors: calls.append(("release-card", errors)),
-    )
-    monkeypatch.setattr(
-        verify_module,
-        "_verify_receipt",
-        lambda _root, errors: calls.append(("receipt", errors)),
-    )
-    errors: list[str] = []
-
-    dispatch_options = (
-        {} if preserve_card_sections is None else {"preserve_card_sections": preserve_card_sections}
-    )
-    verify_module._verify_status_artifacts(
-        tmp_path, status, include_receipt, errors, **dispatch_options
-    )
-
-    expected_card = status in {"card_built", "verified", "complete"}
-    expected_calls = []
-    if expected_card:
-        use_release_card = preserve_card_sections is True
-        expected_calls.append(("release-card" if use_release_card else "card", errors))
-    if status == "complete" and include_receipt:
-        expected_calls.append(("receipt", errors))
-    assert calls == expected_calls
 
 
 def test_verify_results_reports_the_empty_sources_manifest_exactly(tmp_path: Path) -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -93,6 +95,32 @@ def _setup_run(tmp_path: Path) -> Path:
         rejection_shard_sha256=hash_shard(rej),
     )
     return run_dir
+
+
+# (positional arguments, keyword arguments) of one call to a stubbed backend.
+_Call = tuple[tuple[object, ...], dict[str, object]]
+
+
+def _recording(calls: dict[str, list[_Call]], name: str, result: object) -> Callable[..., object]:
+    """Return a backend stub that appends its arguments under ``name`` and returns ``result``.
+
+    Each command is asserted by the arguments it forwarded, keyed by backend name, so the
+    assertions do not depend on the order in which the command reached its collaborators.
+    Every call is kept, so a side effect that runs twice shows up as a second entry.
+    """
+
+    def stub(*args: object, **kwargs: object) -> object:
+        calls.setdefault(name, []).append((args, kwargs))
+        return result
+
+    return stub
+
+
+def _only_call(calls: dict[str, list[_Call]], name: str) -> _Call:
+    """Return the one recorded call to ``name``; any other count fails the test."""
+    recorded = calls[name]
+    assert len(recorded) == 1, f"{name} was called {len(recorded)} times"
+    return recorded[0]
 
 
 def test_cli_help_exits_2() -> None:
@@ -227,7 +255,7 @@ def test_cli_run_examples_use_the_portable_data_root_fallback() -> None:
         assert "${OSM_POLY_DATA_DIR:-./data}/runs" in result.stdout
 
 
-def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
+def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(  # noqa: PLR0915 - one scenario drives all six Grid5000 commands in order
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys,
@@ -243,56 +271,33 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         },
     )
     result = SimpleNamespace(payload=lambda: {"shard_sha256": "a" * 64, "completed": True})
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+    calls: dict[str, list[_Call]] = {}
     validations: list[tuple[Path, str]] = []
+    checked_by_command: list[list[tuple[Path, str]]] = []
 
     def require_under_data_root(path: Path, *, label: str) -> Path:
         validations.append((Path(path), label))
         return Path(path)
 
+    splitter = object()
     monkeypatch.setattr(grid5000, "require_under_data_root", require_under_data_root)
     monkeypatch.setattr(
-        grid5000,
-        "prepare_language_bundle",
-        lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or language_bundle,
+        grid5000, "prepare_language_bundle", _recording(calls, "prepare", language_bundle)
+    )
+    monkeypatch.setattr(grid5000, "run_language_bundle", _recording(calls, "run", result))
+    monkeypatch.setattr(grid5000, "sync_language_bundle", _recording(calls, "sync", result))
+    monkeypatch.setattr(
+        grid5000, "prepare_sentence_bundle", _recording(calls, "prepare_sentences", sentence_bundle)
     )
     monkeypatch.setattr(
-        grid5000,
-        "run_language_bundle",
-        lambda *args, **kwargs: calls.append(("run", args, kwargs)) or result,
+        grid5000, "load_sentence_bundle", _recording(calls, "load_sentences", sentence_bundle)
     )
     monkeypatch.setattr(
-        grid5000,
-        "sync_language_bundle",
-        lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
+        grid5000, "load_sat_splitter_from_path", _recording(calls, "load_splitter", splitter)
     )
+    monkeypatch.setattr(grid5000, "run_sentence_bundle", _recording(calls, "run_sentences", result))
     monkeypatch.setattr(
-        grid5000,
-        "prepare_sentence_bundle",
-        lambda *args, **kwargs: (
-            calls.append(("prepare_sentences", args, kwargs)) or sentence_bundle
-        ),
-    )
-    monkeypatch.setattr(
-        grid5000,
-        "load_sentence_bundle",
-        lambda *args, **kwargs: calls.append(("load_sentences", args, kwargs)) or sentence_bundle,
-    )
-    splitter = object()
-    monkeypatch.setattr(
-        grid5000,
-        "load_sat_splitter_from_path",
-        lambda *args, **kwargs: calls.append(("load_splitter", args, kwargs)) or splitter,
-    )
-    monkeypatch.setattr(
-        grid5000,
-        "run_sentence_bundle",
-        lambda *args, **kwargs: calls.append(("run_sentences", args, kwargs)) or result,
-    )
-    monkeypatch.setattr(
-        grid5000,
-        "sync_sentence_bundle",
-        lambda *args, **kwargs: calls.append(("sync_sentences", args, kwargs)) or result,
+        grid5000, "sync_sentence_bundle", _recording(calls, "sync_sentences", result)
     )
 
     assert (
@@ -317,6 +322,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     prepare_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -334,6 +341,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     run_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -347,6 +356,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     sync_output = json.loads(capsys.readouterr().out)
 
     assert (
@@ -373,6 +384,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     prepare_sentences_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -390,6 +403,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     run_sentences_output = json.loads(capsys.readouterr().out)
     assert (
         main(
@@ -403,6 +418,8 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
         == 0
     )
+    checked_by_command.append(list(validations))
+    validations.clear()
     sync_sentences_output = json.loads(capsys.readouterr().out)
 
     assert all(
@@ -417,7 +434,7 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         )
     )
 
-    assert [name for name, _args, _kwargs in calls] == [
+    assert set(calls) == {
         "prepare",
         "run",
         "sync",
@@ -426,56 +443,75 @@ def test_cli_grid5000_commands_use_the_explicit_bundle_boundaries(
         "load_splitter",
         "run_sentences",
         "sync_sentences",
-    ]
-    assert calls[0][1] == (tmp_path / "run", tmp_path / "bundle")
-    assert calls[0][2] == {
-        "model_path": tmp_path / "model.bin",
-        "commit": "abc123",
-        "time_budget_seconds": 123,
-        "batch_rows": 7,
-        "shard_name": "source.parquet",
     }
-    assert calls[1][1] == (tmp_path / "bundle",)
-    assert calls[1][2] == {
-        "time_budget_seconds": 12.5,
-        "batch_rows": 4,
-        "job_id": "job-1",
-    }
-    assert calls[2][1] == (tmp_path / "bundle", tmp_path / "run")
-    assert calls[3][1] == (tmp_path / "run", tmp_path / "sentence-bundle")
-    assert calls[3][2] == {
-        "model_dir": tmp_path / "sat-model",
-        "model_revision": "revision-1",
-        "commit": "def456",
-        "time_budget_seconds": 321,
-        "batch_rows": 9,
-        "max_rows": 11,
-    }
-    assert calls[4][1:] == ((tmp_path / "sentence-bundle",), {})
-    assert calls[5] == (
-        "load_splitter",
+    assert _only_call(calls, "prepare") == (
+        (tmp_path / "run", tmp_path / "bundle"),
+        {
+            "model_path": tmp_path / "model.bin",
+            "commit": "abc123",
+            "time_budget_seconds": 123,
+            "batch_rows": 7,
+            "shard_name": "source.parquet",
+        },
+    )
+    assert _only_call(calls, "run") == (
+        (tmp_path / "bundle",),
+        {"time_budget_seconds": 12.5, "batch_rows": 4, "job_id": "job-1"},
+    )
+    assert _only_call(calls, "sync")[0] == (tmp_path / "bundle", tmp_path / "run")
+    assert _only_call(calls, "prepare_sentences") == (
+        (tmp_path / "run", tmp_path / "sentence-bundle"),
+        {
+            "model_dir": tmp_path / "sat-model",
+            "model_revision": "revision-1",
+            "commit": "def456",
+            "time_budget_seconds": 321,
+            "batch_rows": 9,
+            "max_rows": 11,
+        },
+    )
+    assert _only_call(calls, "load_sentences") == ((tmp_path / "sentence-bundle",), {})
+    assert _only_call(calls, "load_splitter") == (
         (tmp_path / "sentence-bundle" / "sat.bin",),
         {"revision": "revision-1"},
     )
-    assert calls[6][1] == (tmp_path / "sentence-bundle",)
-    assert calls[6][2] == {
-        "splitter": splitter,
-        "time_budget_seconds": 10.5,
-        "batch_rows": 3,
-        "job_id": "job-2",
-    }
-    assert calls[7][1] == (tmp_path / "sentence-bundle", tmp_path / "run")
-    assert validations == [
-        (tmp_path / "run", "run directory"),
-        (tmp_path / "bundle", "Grid'5000 bundle directory"),
-        (tmp_path / "model.bin", "GlotLID model path"),
-        (tmp_path / "bundle", "Grid'5000 bundle directory"),
-        (tmp_path / "run", "run directory"),
-        (tmp_path / "run", "run directory"),
-        (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
-        (tmp_path / "sat-model", "SaT model directory"),
-        (tmp_path / "sentence-bundle", "Grid'5000 bundle directory"),
-        (tmp_path / "run", "run directory"),
+    assert _only_call(calls, "run_sentences") == (
+        (tmp_path / "sentence-bundle",),
+        {
+            "splitter": splitter,
+            "time_budget_seconds": 10.5,
+            "batch_rows": 3,
+            "job_id": "job-2",
+        },
+    )
+    assert _only_call(calls, "sync_sentences")[0] == (
+        tmp_path / "sentence-bundle",
+        tmp_path / "run",
+    )
+    # Each command checks its own paths and nothing else, in command order: prepare,
+    # run, sync, prepare-sentences, run-sentences, sync-sentences.
+    run_path = tmp_path / "run"
+    bundle_path = tmp_path / "bundle"
+    sentence_path = tmp_path / "sentence-bundle"
+    assert [Counter(checked) for checked in checked_by_command] == [
+        Counter(
+            [
+                (run_path, "run directory"),
+                (bundle_path, "Grid'5000 bundle directory"),
+                (tmp_path / "model.bin", "GlotLID model path"),
+            ]
+        ),
+        Counter(),
+        Counter([(bundle_path, "Grid'5000 bundle directory"), (run_path, "run directory")]),
+        Counter(
+            [
+                (run_path, "run directory"),
+                (sentence_path, "Grid'5000 bundle directory"),
+                (tmp_path / "sat-model", "SaT model directory"),
+            ]
+        ),
+        Counter(),
+        Counter([(sentence_path, "Grid'5000 bundle directory"), (run_path, "run directory")]),
     ]
     assert prepare_output == {
         "aaa": "first when sorted",
@@ -986,43 +1022,54 @@ def test_verify_cli_analysis_and_card_commands_preserve_state_transitions(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run_dir = tmp_path / "run"
-    state = SimpleNamespace(metadata={"status": STATUS_ENRICHED})
-    calls: list[tuple[str, object]] = []
-
-    def analyze_results(path: Path) -> SimpleNamespace:
-        calls.append(("analyze_results", path))
-        return SimpleNamespace(value=1)
-
-    def build_card(path: Path) -> Path:
-        calls.append(("build_card", path))
-        return run_dir / "README.md"
-
-    def transition(state_value: SimpleNamespace, new_status: str) -> None:
-        assert state_value is state
-        calls.append(("transition_status", new_status))
-        state.metadata["status"] = new_status
-
-    monkeypatch.setattr(verify, "load_run", lambda path: calls.append(("load_run", path)) or state)
-    monkeypatch.setattr(verify, "analyze_results", analyze_results)
-    monkeypatch.setattr(verify, "build_card", build_card)
-    monkeypatch.setattr(verify, "transition_status", transition)
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    for status in ("extracting", "extracted", "enriching", "enriched"):
+        transition_status(state, status)
+    analyzed: list[Path] = []
+    built: list[Path] = []
+    card = run_dir / "README.md"
+    monkeypatch.setattr(
+        verify,
+        "analyze_results",
+        lambda path: analyzed.append(path) or SimpleNamespace(value=1),
+    )
+    monkeypatch.setattr(verify, "build_card", lambda path: built.append(path) or card)
 
     assert verify.analyze_command(run_dir) == 0
     assert json.loads(capsys.readouterr().out) == {"value": 1}
-    assert state.metadata["status"] == STATUS_ANALYZED
+    assert load_run(run_dir).metadata["status"] == STATUS_ANALYZED
 
     assert verify.card_command(run_dir) == 0
-    assert capsys.readouterr().out == f"{run_dir / 'README.md'}\n"
-    assert state.metadata["status"] == STATUS_CARD_BUILT
-    assert calls == [
-        ("load_run", run_dir),
-        ("analyze_results", run_dir),
-        ("transition_status", STATUS_ANALYZED),
-        ("load_run", run_dir),
-        ("build_card", run_dir),
-        ("transition_status", STATUS_CARD_BUILT),
-    ]
+    assert capsys.readouterr().out == f"{card}\n"
+    assert load_run(run_dir).metadata["status"] == STATUS_CARD_BUILT
+    assert analyzed == [run_dir]
+    assert built == [run_dir]
+
+
+def test_verify_cli_failed_analysis_or_card_build_keeps_the_previous_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = _setup_run(tmp_path)
+    state = load_run(run_dir)
+    for status in ("extracting", "extracted", "enriching", "enriched"):
+        transition_status(state, status)
+
+    def fail(*_args: object) -> object:
+        raise RuntimeError("backend failed")
+
+    monkeypatch.setattr(verify, "analyze_results", fail)
+    with pytest.raises(RuntimeError, match="backend failed"):
+        verify.analyze_command(run_dir)
+    assert load_run(run_dir).metadata["status"] == STATUS_ENRICHED
+
+    monkeypatch.setattr(verify, "analyze_results", lambda _path: SimpleNamespace(value=1))
+    assert verify.analyze_command(run_dir) == 0
+    monkeypatch.setattr(verify, "build_card", fail)
+    with pytest.raises(RuntimeError, match="backend failed"):
+        verify.card_command(run_dir)
+    assert load_run(run_dir).metadata["status"] == STATUS_ANALYZED
 
 
 def test_verify_cli_report_commands_forward_paths_and_emit_exact_payloads(
@@ -1031,40 +1078,43 @@ def test_verify_cli_report_commands_forward_paths_and_emit_exact_payloads(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     run_dir = tmp_path / "run"
-    calls: list[tuple[str, Path]] = []
+    calls: dict[str, list[_Call]] = {}
 
     monkeypatch.setattr(
         verify,
         "refresh_card_run",
-        lambda path: (
-            calls.append(("refresh_card_run", path))
-            or SimpleNamespace(ok=True, verification=SimpleNamespace(errors=["refreshed"]))
+        _recording(
+            calls,
+            "refresh_card_run",
+            SimpleNamespace(ok=True, verification=SimpleNamespace(errors=["refreshed"])),
         ),
     )
     monkeypatch.setattr(
         verify,
         "finalize_run",
-        lambda path: (
-            calls.append(("finalize_run", path))
-            or SimpleNamespace(ok=True, receipt={"manifest_digest": "final-digest"})
+        _recording(
+            calls,
+            "finalize_run",
+            SimpleNamespace(ok=True, receipt={"manifest_digest": "final-digest"}),
         ),
     )
     monkeypatch.setattr(
         verify,
         "finalize_snapshot",
-        lambda path: (
-            calls.append(("finalize_snapshot", path))
-            or SimpleNamespace(
+        _recording(
+            calls,
+            "finalize_snapshot",
+            SimpleNamespace(
                 ok=True,
                 receipt={"manifest_digest": "snapshot-digest"},
                 verification=SimpleNamespace(errors=["snapshot-check"]),
-            )
+            ),
         ),
     )
     monkeypatch.setattr(
         verify,
         "verify_results",
-        lambda path: calls.append(("verify_results", path)) or SimpleNamespace(ok=True, errors=[]),
+        _recording(calls, "verify_results", SimpleNamespace(ok=True, errors=[])),
     )
 
     assert verify.refresh_card_command(run_dir) == 0
@@ -1080,12 +1130,12 @@ def test_verify_cli_report_commands_forward_paths_and_emit_exact_payloads(
     assert verify.verify_command(run_dir) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "errors": []}
 
-    assert calls == [
-        ("refresh_card_run", run_dir),
-        ("finalize_run", run_dir),
-        ("finalize_snapshot", run_dir),
-        ("verify_results", run_dir),
-    ]
+    assert calls == {
+        "refresh_card_run": [((run_dir,), {})],
+        "finalize_run": [((run_dir,), {})],
+        "finalize_snapshot": [((run_dir,), {})],
+        "verify_results": [((run_dir,), {})],
+    }
 
 
 def test_verify_cli_statistics_commands_render_each_backend_result(
@@ -1095,32 +1145,32 @@ def test_verify_cli_statistics_commands_render_each_backend_result(
 ) -> None:
     run_dir = tmp_path / "run"
     geometry = object()
-    calls: list[tuple[str, object]] = []
+    calls: dict[str, list[_Call]] = {}
     monkeypatch.setattr(
         verify,
         "compute_card_stats",
-        lambda path: calls.append(("compute_card_stats", path)) or SimpleNamespace(row_count=2),
+        _recording(calls, "compute_card_stats", SimpleNamespace(row_count=2)),
     )
     monkeypatch.setattr(
         verify,
         "compute_geometry_stats",
-        lambda path: calls.append(("compute_geometry_stats", path)) or geometry,
+        _recording(calls, "compute_geometry_stats", geometry),
     )
     monkeypatch.setattr(
         verify,
         "render_geometry_stats",
-        lambda result: calls.append(("render_geometry_stats", result)) or "geometry-report",
+        _recording(calls, "render_geometry_stats", "geometry-report"),
     )
 
     assert verify.card_stats_command(run_dir) == 0
     assert json.loads(capsys.readouterr().out) == {"row_count": 2}
     assert verify.geometry_stats_command(run_dir) == 0
     assert capsys.readouterr().out == "geometry-report"
-    assert calls == [
-        ("compute_card_stats", run_dir),
-        ("compute_geometry_stats", run_dir),
-        ("render_geometry_stats", geometry),
-    ]
+    assert calls == {
+        "compute_card_stats": [((run_dir,), {})],
+        "compute_geometry_stats": [((run_dir,), {})],
+        "render_geometry_stats": [((geometry,), {})],
+    }
 
 
 @pytest.mark.parametrize(
@@ -1203,7 +1253,7 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
     monkeypatch,
     capsys,
 ) -> None:
-    events: list[bool] = []
+    closed: list[bool] = []
     calls: list[dict[str, object]] = []
 
     class FakeProgress:
@@ -1211,7 +1261,7 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
             assert quiet is False
 
         def close(self, *, completed: bool) -> None:
-            events.append(completed)
+            closed.append(completed)
 
     monkeypatch.setattr(run, "ProgressReporter", FakeProgress)
     monkeypatch.setattr(
@@ -1240,7 +1290,7 @@ def test_cli_run_all_command_closes_progress_and_reports_result(
         )
         == 0
     )
-    assert events == [True]
+    assert closed == [True]
     assert calls[0]["detect_languages"] is True
     assert calls[0]["host_policy"] == HostPolicy(concurrency=3, delay_seconds=0.5)
     assert '"complete": true' in capsys.readouterr().out
@@ -1370,24 +1420,12 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
 ) -> None:
     bundle = SimpleNamespace(payload=lambda: {"shards": [{"name": "source.parquet"}]})
     result = SimpleNamespace(payload=lambda: {"completed": True, "shards": []})
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+    calls: dict[str, list[_Call]] = {}
 
     monkeypatch.setattr(grid5000, "require_under_data_root", lambda path, **_kwargs: Path(path))
-    monkeypatch.setattr(
-        grid5000,
-        "prepare_sentence_bundle",
-        lambda *args, **kwargs: calls.append(("prepare", args, kwargs)) or bundle,
-    )
-    monkeypatch.setattr(
-        grid5000,
-        "run_sentence_bundle",
-        lambda *args, **kwargs: calls.append(("run", args, kwargs)) or result,
-    )
-    monkeypatch.setattr(
-        grid5000,
-        "sync_sentence_bundle",
-        lambda *args, **kwargs: calls.append(("sync", args, kwargs)) or result,
-    )
+    monkeypatch.setattr(grid5000, "prepare_sentence_bundle", _recording(calls, "prepare", bundle))
+    monkeypatch.setattr(grid5000, "run_sentence_bundle", _recording(calls, "run", result))
+    monkeypatch.setattr(grid5000, "sync_sentence_bundle", _recording(calls, "sync", result))
     monkeypatch.setattr(
         grid5000,
         "load_sat_splitter_from_path",
@@ -1433,12 +1471,13 @@ def test_cli_sentence_grid5000_commands_use_the_explicit_bundle_boundaries(
         == 0
     )
 
-    assert [name for name, _args, _kwargs in calls] == ["prepare", "run", "sync"]
-    assert calls[0][1] == (tmp_path / "run", tmp_path / "bundle")
-    assert calls[0][2]["model_dir"] == tmp_path / "sat-3l-sm"
-    assert calls[0][2]["model_revision"] == "137da05"
-    assert calls[1][1] == (tmp_path / "bundle",)
-    assert calls[2][1] == (tmp_path / "bundle", tmp_path / "run")
+    assert set(calls) == {"prepare", "run", "sync"}
+    prepare_args, prepare_kwargs = _only_call(calls, "prepare")
+    assert prepare_args == (tmp_path / "run", tmp_path / "bundle")
+    assert prepare_kwargs["model_dir"] == tmp_path / "sat-3l-sm"
+    assert prepare_kwargs["model_revision"] == "137da05"
+    assert _only_call(calls, "run")[0] == (tmp_path / "bundle",)
+    assert _only_call(calls, "sync")[0] == (tmp_path / "bundle", tmp_path / "run")
     assert "source.parquet" in capsys.readouterr().out
 
 
@@ -1506,7 +1545,8 @@ def test_cli_language_shard_runner_records_only_completed_results(
         time_budget_seconds=None,
     ) == languages._LanguageRunProgress(1, 5, completed=True)
     assert calls == [(shards[0], detector, 16, None), (shards[1], detector, 16, None)]
-    assert [shard for shard, _result in records] == shards
+    assert len(records) == len(shards)
+    assert {shard for shard, _result in records} == set(shards)
 
 
 def test_cli_language_shard_runner_stops_on_incomplete_or_exhausted_budget(
@@ -1953,21 +1993,23 @@ def test_create_repo_with_apply_creates_it(
 def test_repo_exists_asks_the_hub_with_the_resolved_token(monkeypatch: pytest.MonkeyPatch) -> None:
     import huggingface_hub
 
-    seen: list[tuple[object, ...]] = []
+    tokens: list[str | None] = []
+    queries: list[tuple[str, str]] = []
 
     class FakeApi:
         def __init__(self, *, token: str | None) -> None:
-            seen.append(("token", token))
+            tokens.append(token)
 
         def repo_exists(self, repo_id: str, *, repo_type: str) -> bool:
-            seen.append((repo_id, repo_type))
+            queries.append((repo_id, repo_type))
             return False
 
     monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
     monkeypatch.setattr(publish_module, "resolve_hf_token", lambda: "tok")
 
     assert publish_module.repo_exists(repo_id="o/n") is False
-    assert seen == [("token", "tok"), ("o/n", "dataset")]
+    assert tokens == ["tok"]
+    assert queries == [("o/n", "dataset")]
 
 
 def test_every_option_of_every_command_has_help_text() -> None:

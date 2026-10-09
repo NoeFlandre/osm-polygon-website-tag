@@ -11,16 +11,25 @@ MAP_CONTRACT_VERSION = 2
 AggregationMode = Literal["regional_rows", "global_unique_text"]
 
 
+def _legacy_mode(extracted_text_only: bool) -> AggregationMode:
+    """Return the mode the legacy ``extracted_text_only`` alias implies."""
+    return "global_unique_text" if extracted_text_only else "regional_rows"
+
+
 def _resolve_aggregation_mode(
     extracted_text_only: bool,
     aggregation_mode: AggregationMode | None,
 ) -> tuple[bool, AggregationMode]:
-    """Resolve the explicit aggregation mode and its legacy boolean alias."""
-    mode = aggregation_mode
-    if mode is None:
-        mode = "global_unique_text" if extracted_text_only else "regional_rows"
+    """Resolve the explicit aggregation mode and its legacy boolean alias.
+
+    Raises ``ValueError`` when the legacy flag requests text-only rows while the
+    explicit mode is ``regional_rows``. ``aggregation.py`` raises for the same input.
+    """
+    mode = _legacy_mode(extracted_text_only) if aggregation_mode is None else aggregation_mode
     if mode not in ("regional_rows", "global_unique_text"):
         raise ValueError(f"unsupported aggregation mode: {mode}")
+    if mode == "regional_rows" and extracted_text_only:
+        raise ValueError("extracted_text_only conflicts with regional_rows")
     return mode == "global_unique_text", mode
 
 

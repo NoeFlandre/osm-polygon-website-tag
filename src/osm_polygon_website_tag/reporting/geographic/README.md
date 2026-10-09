@@ -10,9 +10,12 @@ artifacts; it does not read PBFs, fetch websites, or publish remotely.
 The default summary uses ``aggregation_mode="regional_rows"`` and includes
 every public polygon observation. Use
 ``aggregation_mode="global_unique_text"`` (or the compatibility alias
-``extracted_text_only=True``) for the unique, non-empty-text definition;
-shards without the required identity, text, or status columns are excluded
-because they cannot prove that a qualifying polygon exists. The dataset-card
+``extracted_text_only=True``) for the unique, non-empty-text definition.
+Passing ``extracted_text_only=True`` with ``aggregation_mode="regional_rows"``
+raises ``ValueError``, both in ``compute_polygon_density_summary`` and in
+``PolygonDensitySummary``. Shards without the required identity, text, or status
+columns are excluded because they cannot prove that a qualifying polygon exists.
+The dataset-card
 map uses global mode. Regional duplicate rows remain separately reportable,
 but never inflate the global map total or its caption, which explicitly says
 that regional overlap duplicates were removed globally.
