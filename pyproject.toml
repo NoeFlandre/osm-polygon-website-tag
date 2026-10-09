@@ -211,10 +211,7 @@ also_copy = [
     "mkdocs.yml",
     "scripts",
 ]
-# Without --continue-on-collection-errors, a mutant that breaks an import at
-# collection makes pytest exit 2 (interrupted), which mutmut reports as unverified.
-# With it, the same failure exits 1 and the mutant counts as killed.
-pytest_add_cli_args = ["-q", "--ignore=tests/architecture", "--continue-on-collection-errors"]
+pytest_add_cli_args = ["-q", "--ignore=tests/architecture"]
 mutate_only_covered_lines = true
 # Dataclass-generated __init__ frames use <string>, which strict path resolution
 # cannot inspect during mutmut's dependency tracing.
