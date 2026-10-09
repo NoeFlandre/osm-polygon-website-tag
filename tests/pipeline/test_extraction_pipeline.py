@@ -242,9 +242,6 @@ def test_area_worker_reuses_precomputed_tag_projection(
     """The area worker must not re-derive tags already projected by the callback."""
     from osm_polygon_website_tag.pipeline import extraction_handler
 
-    payload_type = getattr(extraction_module, "AreaPayload", None)
-    if payload_type is None:
-        pytest.fail("AreaPayload is not implemented")
     derived = DerivedTags(
         website="https://example.org",
         contact_website=None,
@@ -253,7 +250,7 @@ def test_area_worker_reuses_precomputed_tag_projection(
         has_any_website=True,
         primary_category="building",
     )
-    payload = payload_type(
+    payload = AreaPayload(
         sequence=1,
         source_pbf="synthetic-latest.osm.pbf",
         region="synthetic",
