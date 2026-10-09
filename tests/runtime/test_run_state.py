@@ -29,8 +29,8 @@ from osm_polygon_website_tag.runtime.run_state import (
     _source_inventory_entries_match,
     _validate_source_filename,
     _validate_source_numeric_fields,
-    _validate_status_count,
     _validated_source_entry,
+    _validated_status_count,
     atomic_write_json,
     expected_source_inventory,
     initialise_run,
@@ -311,12 +311,23 @@ def test_update_source_enrichment_status_persists_deterministic_summary(tmp_path
     ("status", "count"),
     [(None, 1), ("success", True), ("success", -1), ("success", 1.5)],
 )
-def test_validate_status_count_rejects_malformed_values(
+def test_validated_status_count_rejects_malformed_values(
     status: object,
     count: object,
 ) -> None:
-    with pytest.raises(ValueError, match="non-negative integers"):
-        _validate_status_count(status, count)
+    message = r"^enrichment status counts must contain non-negative integers$"
+    with pytest.raises(ValueError, match=message):
+        _validated_status_count(status, count)
+
+
+def test_validated_status_count_returns_the_count_it_checked() -> None:
+    assert _validated_status_count("success", 3) == 3
+
+
+def test_normalise_status_field_names_a_non_mapping_in_its_message() -> None:
+    message = r"^enrichment status counts must be string-keyed mappings$"
+    with pytest.raises(ValueError, match=message):
+        _normalise_status_field("text", "not a mapping")
 
 
 def test_record_processed_source_dedupes_by_filename(tmp_path: Path) -> None:
@@ -568,6 +579,12 @@ def test_source_entry_messages_name_the_label_index_and_field() -> None:
         _validate_source_filename("", label="sources manifest", index=2)
     assert str(empty_name.value) == "sources manifest[2].filename must be a non-empty string"
 
+    with pytest.raises(ValueError) as entry_with_empty_name:
+        _validated_source_entry({"filename": ""}, label="sources manifest", index=2)
+    assert str(entry_with_empty_name.value) == (
+        "sources manifest[2].filename must be a non-empty string"
+    )
+
 
 def test_source_inventory_matches_reports_corrupt_actual_json(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
@@ -580,7 +597,7 @@ def test_source_inventory_matches_reports_corrupt_actual_json(tmp_path: Path) ->
 
 
 def test_zero_status_count_is_accepted() -> None:
-    _validate_status_count("success", 0)
+    _validated_status_count("success", 0)
 
 
 def test_source_is_unchanged_requires_the_same_size_and_mtime(tmp_path: Path) -> None:

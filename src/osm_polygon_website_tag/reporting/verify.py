@@ -161,7 +161,7 @@ def _read_json_value(
 ) -> Any:
     """Read one JSON value; report parse or encoding failures and return ``_INVALID_JSON``."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_bytes().decode())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON {label} {path}: {exc}")
         return _INVALID_JSON

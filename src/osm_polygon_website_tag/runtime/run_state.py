@@ -158,14 +158,14 @@ class RunState:
 def atomic_write_json(path: Path, payload: Any) -> None:
     """Write JSON through a same-directory temporary file and replace."""
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.write_bytes((json.dumps(payload, indent=2, sort_keys=True) + "\n").encode())
     tmp.replace(path)
 
 
 def _read_json_document(path: Path, *, label: str) -> Any:
     """Read a UTF-8 JSON document and normalize corruption errors."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_bytes().decode())
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid {label} JSON: {path}: {exc.msg}") from exc
     except UnicodeDecodeError as exc:
@@ -193,7 +193,8 @@ def _validated_source_entry(raw_entry: object, *, label: str, index: int) -> Sou
     """Validate one source-manifest entry's required identity fields."""
     if not isinstance(raw_entry, dict):
         raise ValueError(f"{label}[{index}] must be a JSON object")
-    entry = cast(SourceManifestEntry, raw_entry)
+    # The cast only informs the type checker, so mutating it cannot change behaviour.
+    entry = cast(SourceManifestEntry, raw_entry)  # pragma: no mutate
     _validate_source_filename(entry.get("filename"), label=label, index=index)
     _validate_source_numeric_fields(entry, label=label, index=index)
     return entry
@@ -468,13 +469,12 @@ def _normalise_status_field(field_name: object, counts: object) -> dict[str, int
         raise ValueError("enrichment status counts must be string-keyed mappings")
     field_counts: dict[str, int] = {}
     for status, count in counts.items():
-        _validate_status_count(status, count)
-        field_counts[str(status)] = cast(int, count)
+        field_counts[str(status)] = _validated_status_count(status, count)
     return dict(sorted(field_counts.items()))
 
 
-def _validate_status_count(status: object, count: object) -> None:
-    """Validate one non-negative integer status count."""
+def _validated_status_count(status: object, count: object) -> int:
+    """Return one status count, which must be a non-negative integer."""
     if (
         not isinstance(status, str)
         or isinstance(count, bool)
@@ -482,6 +482,7 @@ def _validate_status_count(status: object, count: object) -> None:
         or count < 0
     ):
         raise ValueError("enrichment status counts must contain non-negative integers")
+    return count
 
 
 def source_is_unchanged(state: RunState, fp: SourceFingerprint) -> bool:
