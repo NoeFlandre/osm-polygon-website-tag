@@ -23,7 +23,10 @@ import sys
 import tempfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
+
+if TYPE_CHECKING:
+    from mutmut.code_coverage import CoverageInfo
 
 MUTANTS_ROOT = Path("mutants")
 _PACKAGE_NAME: Final = "osm_polygon_website_tag"
@@ -92,10 +95,9 @@ def _configure_source_scope(
         return source_paths
 
     if config is None:
-        from mutmut.configuration import Config
+        from mutmut.configuration import config as mutmut_config
 
-        Config.ensure_loaded()
-        config = Config.get()
+        config = mutmut_config()
     config.only_mutate = [str(path) for path in source_paths]
     return source_paths
 
@@ -218,9 +220,10 @@ def _selected_tests(tests: Iterable[str]) -> tuple[str, ...]:
     return tuple(shlex.split(selection))
 
 
-def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
-    """Collect source coverage in a fresh process and return mutmut's mapping."""
+def _run_coverage(runner: Any, source_files: Iterable[Path]) -> CoverageInfo:
+    """Collect source coverage in a fresh process and return mutmut's coverage record."""
     import coverage
+    from mutmut.code_coverage import CoverageInfo
 
     project_root = _project_root()
     data_path = _mutants_directory() / _COVERAGE_FILE
@@ -251,17 +254,29 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
         loaded = coverage.Coverage(data_file=str(data_path))
         loaded.load()
         data = loaded.get_data()
-        covered: dict[str, set[int]] = {}
+        info = CoverageInfo()
         for source_file in source_files:
-            original = (project_root / source_file).resolve()
-            target = _mutants_directory() / source_file
-            covered[str(target)] = set(data.lines(str(original)) or [])
-        return covered
+            original = str((project_root / source_file).resolve())
+            target = str(_mutants_directory() / source_file)
+            info.covered_lines[target] = set(data.lines(original) or [])
+            info.excluded_lines[target] = _excluded_lines(loaded, original)
+        return info
     finally:
         data_path.unlink(missing_ok=True)
 
 
-def _gather_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
+def _excluded_lines(cov: Any, source: str) -> set[int]:
+    """Lines coverage.py excludes from measurement, read as mutmut's own gatherer does."""
+    import coverage.exceptions
+
+    try:
+        _, _, excluded, _, _ = cov.analysis2(source)
+    except coverage.exceptions.CoverageException:
+        return set()
+    return set(excluded)
+
+
+def _gather_coverage(runner: Any, source_files: Iterable[Path]) -> CoverageInfo:
     """Adapter matching mutmut's coverage hook signature."""
     return _run_coverage(runner, tuple(source_files))
 
@@ -318,14 +333,13 @@ def _run_stats(runner: Any, tests: Iterable[str]) -> int:
 
 def _merge_stats(output_path: Path) -> None:
     """Merge a successful child stats payload into mutmut's parent state."""
-    import mutmut
     from mutmut.state import state
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     for function_name, test_names in payload["tests_by_mangled_function_name"].items():
-        mutmut.tests_by_mangled_function_name[function_name].update(test_names)
+        state().tests_by_mangled_function_name[function_name].update(test_names)
     for test_name, duration in payload["duration_by_test"].items():
-        mutmut.duration_by_test[test_name] = float(duration)
+        state().duration_by_test[test_name] = float(duration)
     for function_name, callers in payload["function_dependencies"].items():
         state().function_dependencies[function_name].update(callers)
 
@@ -345,19 +359,19 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
             del location
             # Collection-time imports do not belong to the first arbitrary test.
             # Setup, body, and teardown calls are still recorded for each test.
-            mutmut._stats.clear()
-            mutmut.duration_by_test[nodeid] = 0.0
+            state()._stats.clear()
+            state().duration_by_test[nodeid] = 0.0
 
         def pytest_runtest_logfinish(self, nodeid: str, location: Any) -> None:
             del location
-            for function in mutmut._stats:
-                mutmut.tests_by_mangled_function_name[function].add(
+            for function in state()._stats:
+                state().tests_by_mangled_function_name[function].add(
                     strip_prefix(nodeid, prefix="mutants/")
                 )
-            mutmut._stats.clear()
+            state()._stats.clear()
 
         def pytest_runtest_makereport(self, item: Any, call: Any) -> None:
-            mutmut.duration_by_test[item.nodeid] += call.duration
+            state().duration_by_test[item.nodeid] += call.duration
 
     runner = mutmut_main.PytestRunner()
     with change_cwd(_mutants_directory()):
@@ -367,9 +381,9 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
     payload = {
         "tests_by_mangled_function_name": {
             name: sorted(test_names)
-            for name, test_names in mutmut.tests_by_mangled_function_name.items()
+            for name, test_names in state().tests_by_mangled_function_name.items()
         },
-        "duration_by_test": dict(mutmut.duration_by_test),
+        "duration_by_test": dict(state().duration_by_test),
         "function_dependencies": {
             name: sorted(callers) for name, callers in state().function_dependencies.items()
         },
@@ -397,7 +411,7 @@ def _validated_test_list(tests: Any) -> list[str]:
 def _install_mutmut_hooks(mutmut_main: Any) -> None:
     """Install fresh-process coverage, mutant-test, and stats adapters."""
 
-    def gather_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
+    def gather_coverage(runner: Any, source_files: Iterable[Path]) -> CoverageInfo:
         return _gather_coverage(runner, source_files)
 
     def run_tests(self: Any, *, mutant_name: str | None, tests: Iterable[str]) -> int:

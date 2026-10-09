@@ -1,4 +1,4 @@
-# wtpsplit==2.2.1
+# wtpsplit==2.2.2
 af
 am
 ar

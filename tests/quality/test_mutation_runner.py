@@ -6,7 +6,6 @@ import json
 import os
 import sys
 import tomllib
-from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -28,15 +27,13 @@ def isolated_mutation_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 @pytest.fixture(autouse=True)
 def isolated_mutmut_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """Adapter unit tests must not erase a surrounding mutation run's statistics."""
-    import mutmut
-    import mutmut.configuration as configuration
-    import mutmut.state as mutation_state
+    # mutmut re-exports its ``state`` function under the ``mutmut.state`` name, so
+    # the submodule must come from ``importlib`` rather than an attribute lookup.
+    import importlib
 
-    monkeypatch.setattr(mutmut, "duration_by_test", defaultdict(float))
-    monkeypatch.setattr(mutmut, "tests_by_mangled_function_name", defaultdict(set))
-    monkeypatch.setattr(mutmut, "_stats", set())
-    monkeypatch.setattr(mutmut, "stats_time", None)
-    monkeypatch.setattr(mutmut, "_covered_lines", None)
+    configuration = importlib.import_module("mutmut.configuration")
+    mutation_state = importlib.import_module("mutmut.state")
+
     monkeypatch.setattr(mutation_state, "_state", None)
     monkeypatch.setattr(configuration, "_config", configuration._config)
 
@@ -152,6 +149,11 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
             original = str((mutation_runner._project_root() / source_file).resolve())
             return SimpleNamespace(lines=lambda path: {11} if path == original else {99})
 
+        def analysis2(self, filename):
+            original = str((mutation_runner._project_root() / source_file).resolve())
+            assert filename == original
+            return filename, [11], {7}, [], ""
+
     def fake_run(command, **kwargs):
         captured["command"] = command
         captured.update(kwargs)
@@ -163,7 +165,8 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
     result = mutation_runner._run_coverage(_runner(), [source_file])
 
     mutant_path = str(mutation_runner._mutants_directory() / source_file)
-    assert result == {mutant_path: {11}}
+    assert result.covered_lines == {mutant_path: {11}}
+    assert result.excluded_lines == {mutant_path: {7}}
     assert captured["cwd"] == Path.cwd().resolve()
     environment = cast(dict[str, str], captured["env"])
     command = cast(list[str], captured["command"])
@@ -197,7 +200,6 @@ def test_run_tests_returns_child_exit_code(monkeypatch) -> None:
 
 
 def test_run_stats_merges_fresh_child_payload(monkeypatch, tmp_path: Path) -> None:
-    import mutmut
     from mutmut.state import state
 
     payload = {
@@ -216,8 +218,8 @@ def test_run_stats_merges_fresh_child_payload(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr(mutation_runner, "_stats_output_path", lambda: output)
     monkeypatch.setattr(mutation_runner.subprocess, "run", fake_run)
     assert mutation_runner._run_stats(_runner(), []) == 0
-    assert mutmut.tests_by_mangled_function_name["function"] == {"tests/test_one.py::test_one"}
-    assert mutmut.duration_by_test["tests/test_one.py::test_one"] == 0.25
+    assert state().tests_by_mangled_function_name["function"] == {"tests/test_one.py::test_one"}
+    assert state().duration_by_test["tests/test_one.py::test_one"] == 0.25
     assert state().function_dependencies["function"] == {"caller"}
 
 
@@ -273,12 +275,11 @@ def test_run_stats_reports_child_output_and_cleans_up_after_failure(
 
 
 def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> None:
-    import mutmut
     import mutmut.__main__ as mutmut_main
     from mutmut.state import state
 
-    mutmut.tests_by_mangled_function_name["stale"].add("old-test")
-    mutmut.duration_by_test["old-test"] = 1.0
+    state().tests_by_mangled_function_name["stale"].add("old-test")
+    state().duration_by_test["old-test"] = 1.0
     state().function_dependencies["stale"].add("old-caller")
     captured: dict[str, Path] = {}
 
@@ -290,8 +291,8 @@ def test_stats_child_serializes_mutmut_state(monkeypatch, tmp_path: Path) -> Non
             assert params == ["tests/test_one.py::test_one"]
             assert len(kwargs["plugins"]) == 1
             captured["cwd"] = Path.cwd()
-            mutmut.tests_by_mangled_function_name["function"].add(params[0])
-            mutmut.duration_by_test[params[0]] = 0.25
+            state().tests_by_mangled_function_name["function"].add(params[0])
+            state().duration_by_test[params[0]] = 0.25
             state().function_dependencies["function"].add("caller")
             return 0
 
@@ -379,6 +380,20 @@ def test_scoped_mutation_config_limits_generation_to_selected_source_modules() -
     ]
 
 
+def test_scoped_mutation_config_defaults_to_mutmut_configuration(monkeypatch) -> None:
+    import mutmut.configuration as configuration
+
+    config = SimpleNamespace(only_mutate=[])
+    monkeypatch.setattr(configuration, "_config", config)
+
+    source_paths = mutation_runner._configure_source_scope(
+        ["osm_polygon_website_tag.reporting.card.*"],
+    )
+
+    assert source_paths == (Path("src/osm_polygon_website_tag/reporting/card.py"),)
+    assert config.only_mutate == ["src/osm_polygon_website_tag/reporting/card.py"]
+
+
 def test_scoped_mutation_config_expands_root_package_filter_to_all_sources() -> None:
     config = SimpleNamespace(only_mutate=[])
 
@@ -442,8 +457,8 @@ def test_mutant_cli_filter_parser_skips_option_values() -> None:
 def test_stats_do_not_attribute_collection_imports_to_the_first_test(
     monkeypatch, tmp_path: Path
 ) -> None:
-    import mutmut
     import mutmut.__main__ as mutmut_main
+    from mutmut.state import state
 
     class FakeRunner:
         def _pytest_args_regular_run(self, tests):
@@ -452,13 +467,13 @@ def test_stats_do_not_attribute_collection_imports_to_the_first_test(
         def execute_pytest(self, params, **kwargs):
             collector = kwargs["plugins"][0]
             item = SimpleNamespace(nodeid=params[0], _nodeid=params[0])
-            mutmut._stats.add("collection_only")
+            state()._stats.add("collection_only")
             collector.pytest_runtest_logstart(params[0], None)
-            assert not mutmut._stats
-            mutmut._stats.update({"setup_call", "body_call", "teardown_call"})
+            assert not state()._stats
+            state()._stats.update({"setup_call", "body_call", "teardown_call"})
             collector.pytest_runtest_makereport(item, SimpleNamespace(duration=0.25))
             collector.pytest_runtest_logfinish(params[0], None)
-            assert not mutmut._stats
+            assert not state()._stats
             return 0
 
     monkeypatch.setattr(mutmut_main, "PytestRunner", FakeRunner)

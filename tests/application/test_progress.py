@@ -124,6 +124,29 @@ def test_quiet_progress_writes_nothing() -> None:
     assert stream.getvalue() == ""
 
 
+class _TerminalStream(StringIO):
+    def __init__(self, *, tty: bool) -> None:
+        super().__init__()
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+def test_default_interactivity_follows_whether_the_stream_is_a_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_tqdm(monkeypatch)
+    terminal = _TerminalStream(tty=True)
+    ProgressReporter(terminal)(CountedProgress(1, 2, "a.osm.pbf"))
+
+    pipe = _TerminalStream(tty=False)
+    ProgressReporter(pipe)(CountedProgress(1, 2, "a.osm.pbf"))
+
+    assert len(_FakeTqdm.instances) == 1
+    assert pipe.getvalue() == "[1/2] a.osm.pbf\n"
+
+
 class _FlushCounter(StringIO):
     flushes = 0
 
