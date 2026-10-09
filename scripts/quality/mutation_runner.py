@@ -92,10 +92,9 @@ def _configure_source_scope(
         return source_paths
 
     if config is None:
-        from mutmut.configuration import Config
+        from mutmut.configuration import config as mutmut_config
 
-        Config.ensure_loaded()
-        config = Config.get()
+        config = mutmut_config()
     config.only_mutate = [str(path) for path in source_paths]
     return source_paths
 
@@ -318,14 +317,13 @@ def _run_stats(runner: Any, tests: Iterable[str]) -> int:
 
 def _merge_stats(output_path: Path) -> None:
     """Merge a successful child stats payload into mutmut's parent state."""
-    import mutmut
     from mutmut.state import state
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     for function_name, test_names in payload["tests_by_mangled_function_name"].items():
-        mutmut.tests_by_mangled_function_name[function_name].update(test_names)
+        state().tests_by_mangled_function_name[function_name].update(test_names)
     for test_name, duration in payload["duration_by_test"].items():
-        mutmut.duration_by_test[test_name] = float(duration)
+        state().duration_by_test[test_name] = float(duration)
     for function_name, callers in payload["function_dependencies"].items():
         state().function_dependencies[function_name].update(callers)
 
@@ -345,19 +343,19 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
             del location
             # Collection-time imports do not belong to the first arbitrary test.
             # Setup, body, and teardown calls are still recorded for each test.
-            mutmut._stats.clear()
-            mutmut.duration_by_test[nodeid] = 0.0
+            state()._stats.clear()
+            state().duration_by_test[nodeid] = 0.0
 
         def pytest_runtest_logfinish(self, nodeid: str, location: Any) -> None:
             del location
-            for function in mutmut._stats:
-                mutmut.tests_by_mangled_function_name[function].add(
+            for function in state()._stats:
+                state().tests_by_mangled_function_name[function].add(
                     strip_prefix(nodeid, prefix="mutants/")
                 )
-            mutmut._stats.clear()
+            state()._stats.clear()
 
         def pytest_runtest_makereport(self, item: Any, call: Any) -> None:
-            mutmut.duration_by_test[item.nodeid] += call.duration
+            state().duration_by_test[item.nodeid] += call.duration
 
     runner = mutmut_main.PytestRunner()
     with change_cwd(_mutants_directory()):
@@ -367,9 +365,9 @@ def _run_stats_child(output_path: Path, tests: Iterable[str]) -> int:
     payload = {
         "tests_by_mangled_function_name": {
             name: sorted(test_names)
-            for name, test_names in mutmut.tests_by_mangled_function_name.items()
+            for name, test_names in state().tests_by_mangled_function_name.items()
         },
-        "duration_by_test": dict(mutmut.duration_by_test),
+        "duration_by_test": dict(state().duration_by_test),
         "function_dependencies": {
             name: sorted(callers) for name, callers in state().function_dependencies.items()
         },

@@ -23,7 +23,8 @@ def _article(topic: str, *, extra: str = "") -> str:
     sentence = f"{topic} is described here in plain words that a reader can follow easily. "
     return (
         "<html><head><title>Page</title></head><body><article>"
-        + "".join(f"<p>{sentence * 3}{extra}</p>" for _ in range(6))
+        # Distinct paragraphs: Trafilatura 2.3 drops repeated identical paragraphs as duplicates.
+        + "".join(f"<p>Part {part}: {sentence * 3}{extra}</p>" for part in range(1, 7))
         + "</article></body></html>"
     )
 

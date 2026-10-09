@@ -77,7 +77,7 @@ class ProgressReporter:
         self._quiet = quiet
         self._stream = stream or sys.stderr
         self._interactive = self._stream.isatty() if interactive is None else interactive
-        self._bar: tqdm[object] | None = None
+        self._bar: tqdm | None = None
         self._last_current: int | None = None
 
     def __call__(self, message: str) -> None:
