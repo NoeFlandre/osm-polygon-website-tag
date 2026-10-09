@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -33,6 +34,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     _validated_source_entry,
     _validated_status_count,
     atomic_write_json,
+    default_run_id,
     expected_source_inventory,
     initialise_run,
     load_run,
@@ -853,3 +855,22 @@ def test_record_processed_source_omits_timing_and_digests_it_is_not_given(tmp_pa
         "rejection_shard_sha256",
     ):
         assert key not in entry
+
+
+@pytest.mark.skipif(
+    not hasattr(time, "tzset"), reason="switching the process time zone needs tzset"
+)
+def test_default_run_id_is_the_utc_time_whatever_the_local_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")
+    time.tzset()
+    try:
+        before = datetime.now(UTC).replace(microsecond=0)
+        run_id = default_run_id()
+        after = datetime.now(UTC)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+    assert before <= datetime.strptime(run_id, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC) <= after
