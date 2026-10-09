@@ -289,6 +289,37 @@ def test_the_module_default_cache_is_shared_by_callers_that_inject_none() -> Non
     assert web_fetch._default_robots_cache() is first
 
 
+def test_concurrent_first_callers_share_one_default_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[RobotsCache] = []
+
+    def slow_build() -> RobotsCache:
+        # Widen the window in which an unsynchronised first use could build twice.
+        time.sleep(0.05)
+        cache = RobotsCache()
+        built.append(cache)
+        return cache
+
+    monkeypatch.setattr(web_fetch, "RobotsCache", slow_build)
+    monkeypatch.setattr(web_fetch, "_DEFAULT_ROBOTS_CACHE", None)
+    callers = 8
+    start = threading.Barrier(callers)
+    results: list[RobotsCache] = []
+
+    def call_default_cache() -> None:
+        start.wait()
+        results.append(web_fetch._default_robots_cache())
+
+    threads = [threading.Thread(target=call_default_cache) for _ in range(callers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(built) == 1
+    assert len(results) == callers
+    assert all(value is built[0] for value in results)
+
+
 def test_a_cache_of_one_origin_keeps_that_origin() -> None:
     loads: list[str] = []
     cache = RobotsCache(max_entries=1)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import http.client
 import ipaddress
 import math
@@ -195,14 +194,23 @@ class RobotsCache:
                 del self._load_slots[origin]
 
 
-@functools.cache
+_DEFAULT_ROBOTS_CACHE: RobotsCache | None = None
+_DEFAULT_ROBOTS_CACHE_LOCK = threading.Lock()
+
+
 def _default_robots_cache() -> RobotsCache:
     """The module-wide cache for fetches that do not inject one, built on first use.
 
     Built lazily so that no robots-cache code runs at import; a mutant there would
-    break the import itself rather than fail a test.
+    break the import itself rather than fail a test. The lock makes concurrent first
+    callers share one cache: ``functools.cache`` does not stop two of them from each
+    building their own.
     """
-    return RobotsCache()
+    global _DEFAULT_ROBOTS_CACHE  # noqa: PLW0603 - guarded by the lock below
+    with _DEFAULT_ROBOTS_CACHE_LOCK:
+        if _DEFAULT_ROBOTS_CACHE is None:
+            _DEFAULT_ROBOTS_CACHE = RobotsCache()
+        return _DEFAULT_ROBOTS_CACHE
 
 
 # Bounds for the per-fetcher caches (#135). The module default stays unbounded.
