@@ -23,7 +23,10 @@ import sys
 import tempfile
 from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
+
+if TYPE_CHECKING:
+    from mutmut.code_coverage import CoverageInfo
 
 MUTANTS_ROOT = Path("mutants")
 _PACKAGE_NAME: Final = "osm_polygon_website_tag"
@@ -217,9 +220,10 @@ def _selected_tests(tests: Iterable[str]) -> tuple[str, ...]:
     return tuple(shlex.split(selection))
 
 
-def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
-    """Collect source coverage in a fresh process and return mutmut's mapping."""
+def _run_coverage(runner: Any, source_files: Iterable[Path]) -> CoverageInfo:
+    """Collect source coverage in a fresh process and return mutmut's coverage record."""
     import coverage
+    from mutmut.code_coverage import CoverageInfo
 
     project_root = _project_root()
     data_path = _mutants_directory() / _COVERAGE_FILE
@@ -250,17 +254,29 @@ def _run_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[in
         loaded = coverage.Coverage(data_file=str(data_path))
         loaded.load()
         data = loaded.get_data()
-        covered: dict[str, set[int]] = {}
+        info = CoverageInfo()
         for source_file in source_files:
-            original = (project_root / source_file).resolve()
-            target = _mutants_directory() / source_file
-            covered[str(target)] = set(data.lines(str(original)) or [])
-        return covered
+            original = str((project_root / source_file).resolve())
+            target = str(_mutants_directory() / source_file)
+            info.covered_lines[target] = set(data.lines(original) or [])
+            info.excluded_lines[target] = _excluded_lines(loaded, original)
+        return info
     finally:
         data_path.unlink(missing_ok=True)
 
 
-def _gather_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
+def _excluded_lines(cov: Any, source: str) -> set[int]:
+    """Lines coverage.py excludes from measurement, read as mutmut's own gatherer does."""
+    import coverage.exceptions
+
+    try:
+        _, _, excluded, _, _ = cov.analysis2(source)
+    except coverage.exceptions.CoverageException:
+        return set()
+    return set(excluded)
+
+
+def _gather_coverage(runner: Any, source_files: Iterable[Path]) -> CoverageInfo:
     """Adapter matching mutmut's coverage hook signature."""
     return _run_coverage(runner, tuple(source_files))
 
@@ -395,7 +411,7 @@ def _validated_test_list(tests: Any) -> list[str]:
 def _install_mutmut_hooks(mutmut_main: Any) -> None:
     """Install fresh-process coverage, mutant-test, and stats adapters."""
 
-    def gather_coverage(runner: Any, source_files: Iterable[Path]) -> dict[str, set[int]]:
+    def gather_coverage(runner: Any, source_files: Iterable[Path]) -> CoverageInfo:
         return _gather_coverage(runner, source_files)
 
     def run_tests(self: Any, *, mutant_name: str | None, tests: Iterable[str]) -> int:

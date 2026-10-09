@@ -149,6 +149,11 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
             original = str((mutation_runner._project_root() / source_file).resolve())
             return SimpleNamespace(lines=lambda path: {11} if path == original else {99})
 
+        def analysis2(self, filename):
+            original = str((mutation_runner._project_root() / source_file).resolve())
+            assert filename == original
+            return filename, [11], {7}, [], ""
+
     def fake_run(command, **kwargs):
         captured["command"] = command
         captured.update(kwargs)
@@ -160,7 +165,8 @@ def test_run_coverage_maps_original_lines_to_mutant_paths(monkeypatch) -> None:
     result = mutation_runner._run_coverage(_runner(), [source_file])
 
     mutant_path = str(mutation_runner._mutants_directory() / source_file)
-    assert result == {mutant_path: {11}}
+    assert result.covered_lines == {mutant_path: {11}}
+    assert result.excluded_lines == {mutant_path: {7}}
     assert captured["cwd"] == Path.cwd().resolve()
     environment = cast(dict[str, str], captured["env"])
     command = cast(list[str], captured["command"])
