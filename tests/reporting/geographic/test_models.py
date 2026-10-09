@@ -48,7 +48,7 @@ def test_summary_explicit_regional_mode_keeps_legacy_text_flag_false() -> None:
 
 
 def test_summary_rejects_legacy_text_flag_with_regional_mode() -> None:
-    with pytest.raises(ValueError, match="extracted_text_only conflicts with regional_rows"):
+    with pytest.raises(ValueError, match=r"^extracted_text_only conflicts with regional_rows$"):
         PolygonDensitySummary(
             3,
             0,
@@ -62,7 +62,7 @@ def test_summary_rejects_legacy_text_flag_with_regional_mode() -> None:
 def test_summary_rejects_unknown_aggregation_mode() -> None:
     invalid_mode = cast(AggregationMode, "unsupported")
 
-    with pytest.raises(ValueError, match="unsupported aggregation mode"):
+    with pytest.raises(ValueError, match=r"^unsupported aggregation mode: unsupported$"):
         PolygonDensitySummary(3, 0, 0, (), aggregation_mode=invalid_mode)
 
 
@@ -84,5 +84,5 @@ def test_resolve_aggregation_mode_returns_consistent_legacy_values(
 
 
 def test_resolve_aggregation_mode_rejects_text_flag_with_regional_mode() -> None:
-    with pytest.raises(ValueError, match="extracted_text_only conflicts with regional_rows"):
+    with pytest.raises(ValueError, match=r"^extracted_text_only conflicts with regional_rows$"):
         _resolve_aggregation_mode(True, "regional_rows")
