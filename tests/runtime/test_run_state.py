@@ -29,6 +29,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     _validate_source_numeric_fields,
     _validate_status_count,
     _validated_source_entry,
+    atomic_write_json,
     expected_source_inventory,
     initialise_run,
     load_run,
@@ -98,7 +99,7 @@ def test_read_json_document_normalizes_corruption(tmp_path: Path) -> None:
     assert _read_json_document(valid, label="document") == {"ok": True}
     invalid = tmp_path / "invalid.json"
     invalid.write_text("{", encoding="utf-8")
-    with pytest.raises(ValueError, match="invalid document JSON"):
+    with pytest.raises(ValueError, match=r"^invalid document JSON: "):
         _read_json_document(invalid, label="document")
 
 
@@ -164,7 +165,7 @@ def test_load_run_reports_malformed_json_with_manifest_context(tmp_path: Path) -
     run_dir, _state = initialise_run(tmp_path, run_id="abc")
     (run_dir / "manifests" / "run.json").write_text("{", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="invalid run metadata JSON"):
+    with pytest.raises(ValueError, match=r"^invalid run metadata JSON: "):
         load_run(run_dir)
 
 
@@ -172,7 +173,7 @@ def test_load_run_reports_non_utf8_manifest_with_context(tmp_path: Path) -> None
     run_dir, _state = initialise_run(tmp_path, run_id="abc")
     (run_dir / "manifests" / "sources.json").write_bytes(b"\xff")
 
-    with pytest.raises(ValueError, match="invalid sources manifest encoding"):
+    with pytest.raises(ValueError, match=r"^invalid sources manifest encoding: "):
         load_run(run_dir)
 
 
@@ -527,3 +528,47 @@ def test_source_inventory_matches_rejects_duplicate_actual_entries(tmp_path: Pat
 
     with pytest.raises(ValueError, match="sources manifest contains duplicate filename"):
         source_inventory_matches(run_dir)
+
+
+def test_atomic_write_json_writes_sorted_indented_text_and_no_temp_file(tmp_path: Path) -> None:
+    target = tmp_path / "state.json"
+
+    atomic_write_json(target, {"b": 1, "a": [2]})
+
+    assert target.read_text(encoding="utf-8") == '{\n  "a": [\n    2\n  ],\n  "b": 1\n}\n'
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["state.json"]
+
+
+def test_atomic_write_json_stages_a_same_directory_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged: list[str] = []
+    original_replace = Path.replace
+
+    def record_replace(self: Path, target: Path) -> Path:
+        staged.append(self.name)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", record_replace)
+
+    atomic_write_json(tmp_path / "state.json", {"a": 1})
+
+    assert staged == ["state.json.tmp"]
+
+
+def test_source_entry_messages_name_the_label_index_and_field() -> None:
+    with pytest.raises(ValueError) as not_object:
+        _validated_source_entry("a.osm.pbf", label="sources manifest", index=3)
+    assert str(not_object.value) == "sources manifest[3] must be a JSON object"
+
+    with pytest.raises(ValueError) as empty_name:
+        _validate_source_filename("", label="sources manifest", index=2)
+    assert str(empty_name.value) == "sources manifest[2].filename must be a non-empty string"
+
+    for field_name in ("size_bytes", "mtime_ns"):
+        entry = {"filename": "a.osm.pbf", "size_bytes": 1, "mtime_ns": 1, field_name: True}
+        with pytest.raises(ValueError) as bool_field:
+            _validate_source_numeric_fields(entry, label="sources manifest", index=4)
+        assert str(bool_field.value) == (
+            f"sources manifest[4].{field_name} must be a non-bool integer"
+        )
