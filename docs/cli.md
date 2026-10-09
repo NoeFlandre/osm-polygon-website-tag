@@ -124,6 +124,14 @@ uv run --locked osm-polygon-website-tag grid5000-sync \
 
 `grid5000-prepare` and `grid5000-sync` reject paths outside the data root (`OSM_POLY_DATA_DIR`, default `./data`). `grid5000-run` accepts only a staged bundle. It never calls Hugging Face or the website-fetching code. The shell wrapper for the reserved node calls a module entry point with few dependencies. This way, it does not import native libraries that only extraction needs. The default is checkpoint batches of 256 rows. The shell wrappers add the OAR resource request and the policy checks. Read [Operations and resume](operations.md).
 
+The two bounded-run options take these types:
+
+- `--time-budget-seconds` takes whole seconds (`<int>`) on `grid5000-prepare` and `grid5000-prepare-sentences`, because the bundle stores the budget as an integer.
+- `--time-budget-seconds` takes fractional seconds (`<float>`) on `grid5000-run`, `grid5000-run-sentences`, `detect-languages`, and `segment-sentences`.
+- `--batch-rows` takes whole rows (`<int>`) on every command. On `grid5000-run` and `grid5000-run-sentences`, the value is an optional override.
+
+Each Grid'5000 budget must be in (0, 1500] seconds.
+
 `extract` also accepts `--area-workers` and `--max-in-flight-areas`. `run-all` owns the enrichment phase on purpose. It coordinates the URL cache, the retryable statuses, the durable batch checkpoints, and the upload acknowledgements for each source.
 
 The owner can decide to stop the retries of URL failures. In this case, do these steps:

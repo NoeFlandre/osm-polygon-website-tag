@@ -77,6 +77,8 @@ dev = [
     "pytest-xdist>=3,<4",
     "hypothesis>=6,<7",
     "pytest-benchmark>=5.3,<6",
+    # The workflow contract tests read the GitHub Actions YAML.
+    "pyyaml>=6,<7",
 ]
 
 [tool.ruff]
@@ -124,7 +126,6 @@ select = [
     # model contents, where ValueError is the contract the CLI maps to exit 3.
 ]
 ignore = [
-    "S101",  # asserts allowed in tests
     "E501",  # line length handled by formatter; some long dict literals are clearer on one line
 ]
 

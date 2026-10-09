@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Annotated, Any
-
-import typer
+from typing import Any
 
 from osm_polygon_website_tag.pipeline.detect_languages import (
     DEFAULT_BATCH_ROWS,
@@ -29,7 +27,7 @@ from osm_polygon_website_tag.runtime.run_state import (
     update_public_shard_metadata,
 )
 
-from ._common import RunDir, echo_json
+from ._common import BatchRows, OptionalSeconds, RunDir, echo_json
 
 
 def _record_completed_language_shard(
@@ -78,14 +76,8 @@ def _validate_language_shard_membership(state: RunState, paths: list[Path]) -> N
 
 def detect_languages_command(
     run_dir: RunDir,
-    batch_rows: Annotated[
-        int,
-        typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
-    ] = DEFAULT_BATCH_ROWS,
-    time_budget_seconds: Annotated[
-        float | None,
-        typer.Option("--time-budget-seconds", help="Stop cleanly after this detection budget."),
-    ] = None,
+    batch_rows: BatchRows = DEFAULT_BATCH_ROWS,
+    time_budget_seconds: OptionalSeconds = None,
 ) -> int:
     """Detect GlotLID languages for every completed text shard."""
     validate_language_detection_options(batch_rows, time_budget_seconds)

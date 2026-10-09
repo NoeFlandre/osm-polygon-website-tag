@@ -124,7 +124,10 @@ def _build_public_result(
 
 def _load_geometry(payload: AreaPayload, derived: DerivedTags) -> PolygonGeometry | AreaResult:
     """Parse payload geometry and convert all failures to rejection rows."""
-    assert payload.raw_geojson is not None
+    if payload.raw_geojson is None:
+        return _geometry_rejection(
+            payload, derived, "geometry_error", "missing serialized area geometry"
+        )
     try:
         return geometry_from_geojson(payload.raw_geojson)
     except GeometryRejection as rejection:
