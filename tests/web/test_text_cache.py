@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 import sqlite3
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from osm_polygon_website_tag.web import text_cache
 from osm_polygon_website_tag.web.text_cache import (
-    _LOCK_RETRY_COUNT,
     _LOCK_RETRY_DELAY_SECONDS,
     DEFAULT_COMMIT_BATCH_SIZE,
     CachedText,
@@ -369,6 +370,7 @@ def test_closing_twice_flushes_once_and_disables_the_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache = TextCache(tmp_path / "text.sqlite3")
+    assert cache._closed is False
     flushes = 0
     original_flush = cache.flush
 
@@ -484,8 +486,9 @@ def test_retry_locked_gives_up_after_exactly_the_retry_budget(
 
     with pytest.raises(sqlite3.OperationalError):
         _retry_locked(operation)
-    assert attempts == _LOCK_RETRY_COUNT + 1
-    assert len(sleeps) == _LOCK_RETRY_COUNT
+    # Five retries, then one final attempt that is not wrapped.
+    assert attempts == 6
+    assert len(sleeps) == 5
 
 
 def test_retry_locked_does_not_retry_other_operational_errors(
@@ -514,7 +517,8 @@ def test_quarantine_moves_the_database_and_each_sidecar_aside(tmp_path: Path) ->
 
     quarantine = _quarantine_corrupt_database(database)
 
-    assert quarantine.name.startswith("text.sqlite3.corrupt-")
+    pattern = r"text\.sqlite3\.corrupt-\d{8}T\d{6}\d{6}Z-[0-9a-f]{32}"
+    assert re.fullmatch(pattern, quarantine.name)
     assert not database.exists()
     assert quarantine.read_bytes() == b"corrupt"
     for suffix in ("-wal", "-shm", "-journal"):
@@ -530,3 +534,64 @@ def test_quarantine_without_sidecars_moves_only_the_database(tmp_path: Path) -> 
 
     assert [path.name for path in tmp_path.iterdir()] == [quarantine.name]
     assert quarantine.read_bytes() == b"corrupt"
+
+
+def test_both_opens_of_a_corrupt_cache_wait_thirty_seconds_for_a_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "text.sqlite3"
+    path.write_bytes(b"not a valid sqlite database")
+    real_connect = sqlite3.connect
+    timeouts: list[float | None] = []
+
+    def recording_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        timeouts.append(kwargs.get("timeout"))
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", recording_connect)
+    TextCache(path).close()
+
+    # The first open finds the corrupt file; the reopen follows quarantine.
+    assert timeouts == [30.0, 30.0]
+
+
+def test_bulk_lookup_queries_at_most_256_urls_per_statement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_connect = sqlite3.connect
+    lookup_sizes: list[int] = []
+
+    class RecordingConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def execute(self, sql: str, parameters: Any = ()) -> Any:
+            if "WHERE url IN (" in sql:
+                # The last two parameters are the status and the invocation id.
+                lookup_sizes.append(len(parameters) - 2)
+            return self._connection.execute(sql, parameters)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._connection, name)
+
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda *args, **kwargs: RecordingConnection(real_connect(*args, **kwargs)),
+    )
+    cache = TextCache(tmp_path / "text.sqlite3")
+    urls = {f"https://example.org/{index}" for index in range(300)}
+
+    cache.get_reusable_many(urls, invocation_id="run-2")
+
+    assert lookup_sizes == [256, 44]
+    cache.close()
+
+
+def test_text_cache_exports_its_public_contract() -> None:
+    assert set(text_cache.__all__) == {
+        "CACHE_LOOKUP_CHUNK_SIZE",
+        "DEFAULT_COMMIT_BATCH_SIZE",
+        "CachedText",
+        "TextCache",
+    }

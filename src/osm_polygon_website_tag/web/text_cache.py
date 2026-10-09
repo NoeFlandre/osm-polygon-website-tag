@@ -49,7 +49,6 @@ class TextCache:
         if commit_batch_size < 1:
             raise ValueError("commit_batch_size must be positive")
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = path
         self.commit_batch_size = commit_batch_size
         self._pending_mutations = 0
         self._closed = False
@@ -103,8 +102,6 @@ class TextCache:
         reusable: dict[str, CachedText] = {}
         for start in range(0, len(ordered_urls), CACHE_LOOKUP_CHUNK_SIZE):
             chunk = ordered_urls[start : start + CACHE_LOOKUP_CHUNK_SIZE]
-            if not chunk:
-                continue
             placeholders = ",".join("?" for _ in chunk)
             query = f"""SELECT url, status, text, word_count, final_url, message,
                   attempt_count, last_attempt_at, trafilatura_version,
