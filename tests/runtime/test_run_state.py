@@ -284,7 +284,9 @@ def test_validate_status_count_rejects_malformed_values(
     status: object,
     count: object,
 ) -> None:
-    with pytest.raises(ValueError, match="non-negative integers"):
+    with pytest.raises(
+        ValueError, match=r"^enrichment status counts must contain non-negative integers$"
+    ):
         _validate_status_count(status, count)
 
 
@@ -572,9 +574,13 @@ def test_normalise_status_field_validates_and_sorts_counts() -> None:
         "absent": 0,
         "success": 2,
     }
-    with pytest.raises(ValueError, match="string-keyed mappings"):
+    with pytest.raises(
+        ValueError, match=r"^enrichment status counts must be string-keyed mappings$"
+    ):
         _normalise_status_field(1, {"success": 1})
-    with pytest.raises(ValueError, match="string-keyed mappings"):
+    with pytest.raises(
+        ValueError, match=r"^enrichment status counts must be string-keyed mappings$"
+    ):
         _normalise_status_field("text", ["success"])
 
 
@@ -600,4 +606,22 @@ def test_update_public_shard_metadata_rejects_an_unprocessed_source(tmp_path: Pa
     with pytest.raises(ValueError, match=re.escape("source is not processed: ghost.osm.pbf")):
         update_public_shard_metadata(
             state, filename="ghost.osm.pbf", row_count=1, shard_sha256="b" * 64
+        )
+
+
+def test_source_entry_messages_name_the_label_index_and_field() -> None:
+    with pytest.raises(ValueError) as not_object:
+        _validated_source_entry("a.osm.pbf", label="sources manifest", index=3)
+    assert str(not_object.value) == "sources manifest[3] must be a JSON object"
+
+    with pytest.raises(ValueError) as empty_name:
+        _validate_source_filename("", label="sources manifest", index=2)
+    assert str(empty_name.value) == "sources manifest[2].filename must be a non-empty string"
+
+    for field_name in ("size_bytes", "mtime_ns"):
+        entry = {"filename": "a.osm.pbf", "size_bytes": 1, "mtime_ns": 1, field_name: True}
+        with pytest.raises(ValueError) as bool_field:
+            _validate_source_numeric_fields(entry, label="sources manifest", index=4)
+        assert str(bool_field.value) == (
+            f"sources manifest[4].{field_name} must be a non-bool integer"
         )

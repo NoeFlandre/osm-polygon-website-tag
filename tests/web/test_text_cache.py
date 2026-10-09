@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 import threading
 import time
@@ -84,6 +85,88 @@ def test_cache_close_flushes_pending_mutations(tmp_path: Path) -> None:
     cache.close()
 
     assert _committed_count(path) == 1
+
+
+def test_commit_batch_size_zero_names_the_bound(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match=r"^commit_batch_size must be positive$"):
+        TextCache(tmp_path / "unused-text-cache.sqlite3", commit_batch_size=0)
+
+
+def test_commit_batch_size_one_commits_every_record(tmp_path: Path) -> None:
+    path = tmp_path / "text.sqlite3"
+    cache = TextCache(path, commit_batch_size=1)
+
+    cache.record(_result(url="https://example.org/one"), invocation_id="run-1")
+
+    assert _committed_count(path) == 1
+    cache.close()
+
+
+def test_the_batch_commits_exactly_when_it_is_full(tmp_path: Path) -> None:
+    path = tmp_path / "text.sqlite3"
+    cache = TextCache(path, commit_batch_size=2)
+
+    cache.record(_result(url="https://example.org/one"), invocation_id="run-1")
+    assert _committed_count(path) == 0
+    cache.record(_result(url="https://example.org/two"), invocation_id="run-1")
+    assert _committed_count(path) == 2
+    cache.record(_result(url="https://example.org/three"), invocation_id="run-1")
+    assert _committed_count(path) == 2
+    cache.close()
+
+
+def test_the_cache_creates_missing_parent_directories(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "dir" / "text.sqlite3"
+
+    TextCache(path).close()
+    TextCache(path).close()
+
+    assert path.is_file()
+
+
+def test_reusable_lookup_returns_none_for_an_unknown_url(tmp_path: Path) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+
+    assert cache.get_reusable("https://unknown.example", invocation_id="run-1") is None
+
+    cache.close()
+
+
+def test_cached_text_is_immutable() -> None:
+    value = _result()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        value.status = "failure"  # type: ignore[misc]
+
+
+def test_invalid_cache_status_names_the_status(tmp_path: Path) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+
+    with pytest.raises(ValueError, match=r"^invalid cache status: 'bogus'$"):
+        cache.record(_result(status="bogus"), invocation_id="run-1")
+
+    cache.close()
+
+
+def test_record_reports_an_upsert_that_returns_no_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = TextCache(tmp_path / "text.sqlite3")
+
+    class NoRow:
+        def fetchone(self) -> None:
+            return None
+
+    class EmptyUpsert:
+        def execute(self, *_args: object) -> NoRow:
+            return NoRow()
+
+    monkeypatch.setattr(cache, "_db", EmptyUpsert())
+    with pytest.raises(AssertionError, match=r"^cache upsert did not return a row$"):
+        cache.record(_result(), invocation_id="run-1")
+
+    monkeypatch.undo()
+    cache.close()
 
 
 def test_cache_commit_batch_size_is_positive_and_bounded(tmp_path: Path) -> None:
