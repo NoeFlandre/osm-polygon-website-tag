@@ -25,22 +25,26 @@ from osm_polygon_website_tag.pipeline.grid5000_sentences import (
 from osm_polygon_website_tag.pipeline.sat import load_sat_splitter_from_path
 from osm_polygon_website_tag.runtime.paths import require_under_data_root
 
-from . import RunDir, _json
+from ._common import (
+    BatchRows,
+    OptionalBatchRows,
+    OptionalSeconds,
+    RunDir,
+    WholeSeconds,
+    echo_json,
+)
+
+BundleDir = Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")]
+JobId = Annotated[
+    str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
+]
 
 
 def grid5000_run_sentences_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
-    time_budget_seconds: Annotated[
-        float | None,
-        typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
-    ] = None,
-    batch_rows: Annotated[
-        int | None,
-        typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
-    ] = None,
-    job_id: Annotated[
-        str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
-    ] = None,
+    bundle_dir: BundleDir,
+    time_budget_seconds: OptionalSeconds = None,
+    batch_rows: OptionalBatchRows = None,
+    job_id: JobId = None,
 ) -> int:
     """Segment one staged sentence bundle on a reserved node, offline."""
     bundle = load_sentence_bundle(bundle_dir)
@@ -55,13 +59,13 @@ def grid5000_run_sentences_command(
         batch_rows=batch_rows,
         job_id=job_id,
     )
-    _json(result.payload(), sort_keys=True)
+    echo_json(result.payload(), sort_keys=True)
     return 0
 
 
 def grid5000_prepare_command(
     run_dir: RunDir,
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     model_path: Annotated[
         Path, typer.Option("--model-path", help="Verified pinned GlotLID model binary.")
     ],
@@ -72,14 +76,8 @@ def grid5000_prepare_command(
         str | None,
         typer.Option("--shard", help="Optional source shard basename to stage."),
     ] = None,
-    time_budget_seconds: Annotated[
-        int,
-        typer.Option("--time-budget-seconds", help="Detection budget within the 30-minute job."),
-    ] = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: Annotated[
-        int,
-        typer.Option("--batch-rows", help="Rows processed per language checkpoint batch."),
-    ] = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
+    time_budget_seconds: WholeSeconds = DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    batch_rows: BatchRows = DEFAULT_GRID_LANGUAGE_BATCH_ROWS,
 ) -> int:
     """Prepare one data-root, offline Grid'5000 language bundle."""
     normalized_run_dir = require_under_data_root(run_dir, label="run directory")
@@ -94,23 +92,15 @@ def grid5000_prepare_command(
         batch_rows=batch_rows,
         shard_name=shard,
     )
-    _json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
+    echo_json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
     return 0
 
 
 def grid5000_run_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
-    time_budget_seconds: Annotated[
-        float | None,
-        typer.Option("--time-budget-seconds", help="Optional override within the bundle limit."),
-    ] = None,
-    batch_rows: Annotated[
-        int | None,
-        typer.Option("--batch-rows", help="Optional override for checkpoint batch size."),
-    ] = None,
-    job_id: Annotated[
-        str | None, typer.Option("--job-id", help="Scheduler job id recorded in the receipt.")
-    ] = None,
+    bundle_dir: BundleDir,
+    time_budget_seconds: OptionalSeconds = None,
+    batch_rows: OptionalBatchRows = None,
+    job_id: JobId = None,
 ) -> int:
     """Run one staged bundle on a reserved node without network access."""
     result = run_language_bundle(
@@ -119,13 +109,13 @@ def grid5000_run_command(
         batch_rows=batch_rows,
         job_id=job_id,
     )
-    _json(result.payload(), sort_keys=True)
+    echo_json(result.payload(), sort_keys=True)
     return 0
 
 
 def grid5000_prepare_sentences_command(
     run_dir: RunDir,
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     model_dir: Annotated[
         Path, typer.Option("--model-dir", help="Locally staged SaT model directory.")
     ],
@@ -135,14 +125,8 @@ def grid5000_prepare_sentences_command(
     commit: Annotated[
         str, typer.Option("--commit", help="Repository commit recorded in the bundle.")
     ],
-    time_budget_seconds: Annotated[
-        int,
-        typer.Option("--time-budget-seconds", help="Segmentation budget within the job."),
-    ] = DEFAULT_GRID_TIME_BUDGET_SECONDS,
-    batch_rows: Annotated[
-        int,
-        typer.Option("--batch-rows", help="Rows processed per sentence checkpoint batch."),
-    ] = DEFAULT_GRID_SENTENCE_BATCH_ROWS,
+    time_budget_seconds: WholeSeconds = DEFAULT_GRID_TIME_BUDGET_SECONDS,
+    batch_rows: BatchRows = DEFAULT_GRID_SENTENCE_BATCH_ROWS,
     max_rows: Annotated[
         int,
         typer.Option("--max-rows", help="Row budget packed into one bundle."),
@@ -162,19 +146,19 @@ def grid5000_prepare_sentences_command(
         batch_rows=batch_rows,
         max_rows=max_rows,
     )
-    _json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
+    echo_json({"bundle_dir": str(normalized_bundle_dir), **bundle.payload()}, sort_keys=True)
     return 0
 
 
 def grid5000_sync_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     run_dir: RunDir,
 ) -> int:
     """Synchronize one Grid'5000 result into the canonical run."""
     normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
     normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     result = sync_language_bundle(normalized_bundle_dir, normalized_run_dir)
-    _json(
+    echo_json(
         {
             "bundle_dir": str(normalized_bundle_dir),
             "run_dir": str(normalized_run_dir),
@@ -186,14 +170,14 @@ def grid5000_sync_command(
 
 
 def grid5000_sync_sentences_command(
-    bundle_dir: Annotated[Path, typer.Option("--bundle-dir", help="Grid'5000 bundle directory.")],
+    bundle_dir: BundleDir,
     run_dir: RunDir,
 ) -> int:
     """Synchronize one sentence receipt into the canonical run."""
     normalized_bundle_dir = require_under_data_root(bundle_dir, label="Grid'5000 bundle directory")
     normalized_run_dir = require_under_data_root(run_dir, label="run directory")
     result = sync_sentence_bundle(normalized_bundle_dir, normalized_run_dir)
-    _json(
+    echo_json(
         {
             "bundle_dir": str(normalized_bundle_dir),
             "run_dir": str(normalized_run_dir),

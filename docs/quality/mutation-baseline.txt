@@ -14,6 +14,11 @@
 #   uv run --locked mutmut results --all true > results.txt
 #   uv run --locked python scripts/quality/mutation_baseline.py --results results.txt
 #
+# Import-breaking mutants: application.cli builds its command table when it is
+# imported, so a mutant that breaks that table fails the import itself. mutmut
+# then reports the run as interrupted (pytest exit 2) rather than killed, and no
+# test can observe it earlier. Kept until the registration runs outside import.
+
 # Equivalent mutants in reporting.verify, reporting.verification.text,
 # reporting.geographic.inputs/basemap and storage.duckdb_engine were once
 # "killed" only by spy tests that pinned forwarded arguments (#51, #52).
@@ -34,6 +39,7 @@
 # Recorded mutants: 155
 # No current-run survivor is classified as equivalent by this note beyond the
 # groups described above.
+osm_polygon_website_tag.application.cli.x__register_commands__mutmut_1
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_10
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_29
 osm_polygon_website_tag.pipeline.analyze.x__analysis_summary__mutmut_32
@@ -69,7 +75,6 @@ osm_polygon_website_tag.pipeline.deduplicate.x__write_canonical_shards__mutmut_4
 osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_25
 osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_27
 osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_29
-osm_polygon_website_tag.pipeline.deduplicate.x_deduplicate_public_shards__mutmut_59
 osm_polygon_website_tag.pipeline.extraction.x__record_extraction_state__mutmut_24
 osm_polygon_website_tag.pipeline.extraction.x__write_extraction_failure__mutmut_28
 osm_polygon_website_tag.pipeline.extraction.x__write_extraction_failure__mutmut_30
@@ -150,13 +155,13 @@ osm_polygon_website_tag.reporting.text_population.x__identity_count__mutmut_3
 osm_polygon_website_tag.reporting.text_population.x__identity_count__mutmut_8
 osm_polygon_website_tag.reporting.text_population.x__restore_text_population_view__mutmut_3
 osm_polygon_website_tag.reporting.text_population.x__restore_text_population_view__mutmut_4
-osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_13
-osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_16
-osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_17
-osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_28
-osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_29
+osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_21
+osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_24
+osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_25
 osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_36
 osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_37
+osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_44
+osm_polygon_website_tag.reporting.text_population.x__summary_from_connection__mutmut_45
 osm_polygon_website_tag.reporting.text_population.x_text_population_manifest_entries__mutmut_18
 osm_polygon_website_tag.reporting.verification.analysis.x__compare_card_file__mutmut_2
 osm_polygon_website_tag.reporting.verification.analysis.x__compare_card_file__mutmut_4

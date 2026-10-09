@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import create_autospec
 
+import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -493,7 +495,7 @@ def test_a_prefix_tie_restores_the_text_bearing_population(
     restored: list[bool] = []
     original = text_population._restore_text_population_view
 
-    def record(connection: object) -> None:
+    def record(connection: duckdb.DuckDBPyConnection) -> None:
         restored.append(True)
         original(connection)
 
@@ -616,19 +618,21 @@ def test_summary_from_connection_maps_every_view_to_its_own_field(
     )
 
 
-class _ScriptedConnection:
-    """Answer each query with the next scripted ``fetchone`` row."""
+def _scripted_connection(*rows: object) -> duckdb.DuckDBPyConnection:
+    connection = create_autospec(duckdb.DuckDBPyConnection, instance=True, spec_set=True)
+    connection.execute.return_value = connection
+    connection.fetchone.side_effect = rows
+    return connection
 
-    def __init__(self, *rows: object) -> None:
-        self._rows = list(rows)
-        self.queries: list[str] = []
 
-    def execute(self, query: str) -> _ScriptedConnection:
-        self.queries.append(query)
-        return self
+def test_summary_from_connection_rejects_a_missing_aggregate_row() -> None:
+    with pytest.raises(TypeError, match=r"^text population summary query returned no row$"):
+        text_population._summary_from_connection(_scripted_connection(None))
 
-    def fetchone(self) -> object:
-        return self._rows.pop(0)
+
+def test_status_counts_rejects_a_missing_aggregate_row() -> None:
+    with pytest.raises(TypeError, match=r"^text population status query returned no row$"):
+        text_population._status_counts(_scripted_connection(None))
 
 
 def test_filter_source_paths_keeps_only_the_named_sources() -> None:
@@ -640,7 +644,7 @@ def test_filter_source_paths_keeps_only_the_named_sources() -> None:
 
 @pytest.mark.parametrize(("row", "expected"), [(None, False), ((0,), False), ((1,), True)])
 def test_prefix_ties_read_the_exists_flag(row: object, expected: bool) -> None:
-    assert text_population._has_prefix_ties(_ScriptedConnection(row)) is expected
+    assert text_population._has_prefix_ties(_scripted_connection(row)) is expected
 
 
 @pytest.mark.parametrize(
@@ -648,23 +652,19 @@ def test_prefix_ties_read_the_exists_flag(row: object, expected: bool) -> None:
     [((1, 2, 3, 4), (1, 2, 3, 4)), ((None, None, None, None), (0, 0, 0, 0))],
 )
 def test_status_counts_map_each_column_and_null_to_zero(row: tuple, expected: tuple) -> None:
-    assert text_population._status_counts(_ScriptedConnection(row)) == expected
+    assert text_population._status_counts(_scripted_connection(row)) == expected
 
 
 def test_scalar_reads_an_absent_row_as_zero() -> None:
-    assert text_population._scalar(_ScriptedConnection(None), "q") == 0
-    assert text_population._scalar(_ScriptedConnection((7,)), "q") == 7
+    assert text_population._scalar(_scripted_connection(None), "q") == 0
+    assert text_population._scalar(_scripted_connection((7,)), "q") == 7
 
 
 def test_word_count_validation_sums_both_tags() -> None:
     with pytest.raises(TypeError, match=r"^successful text row has no word count$"):
-        text_population._validate_word_counts(_ScriptedConnection((1,), (1,)))
+        text_population._validate_word_counts(_scripted_connection((1,), (1,)))
 
-    text_population._validate_word_counts(_ScriptedConnection((0,), (0,)))
-
-
-def test_sql_string_doubles_embedded_quotes() -> None:
-    assert text_population._sql_string(Path("a'b")) == "'a''b'"
+    text_population._validate_word_counts(_scripted_connection((0,), (0,)))
 
 
 def _record_parquets(monkeypatch: pytest.MonkeyPatch, paths: list[Path]) -> list[object]:

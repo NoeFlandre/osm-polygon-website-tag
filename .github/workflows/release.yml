@@ -7,13 +7,74 @@ on:
     tags:
       - "v*"
 
+# Least privilege by default; only the publishing job may write.
 permissions:
-  contents: write
+  contents: read
+
+# Two tags pushed together must not publish at the same time.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  # A tag alone proves nothing: refuse to publish a commit that is not on main
+  # or whose Quality run (its `ci-ok` gate) has not passed.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Require the tagged commit to be on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "tagged commit ${GITHUB_SHA} is not on main" >&2
+            exit 1
+          fi
+
+      - name: Require a successful Quality run for the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Only the ci-ok job of a push run of quality.yml on main counts; see
+          # scripts/quality/release_gate.py. The merge's push run may still be
+          # finishing when the tag lands, so wait (up to 20 minutes) while the
+          # gate is absent or in progress, and fail closed on timeout.
+          runs_file="${RUNNER_TEMP}/quality-runs.json"
+          checks_file="${RUNNER_TEMP}/quality-check-runs.json"
+          for _ in $(seq 1 40); do
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?head_sha=${GITHUB_SHA}&event=push&branch=main&per_page=100" \
+              --jq '.workflow_runs[]' | jq -s '.' > "${runs_file}"
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100" \
+              --jq '.check_runs[]' | jq -s '.' > "${checks_file}"
+            status=0
+            python3 scripts/quality/release_gate.py --sha "${GITHUB_SHA}" \
+              --runs "${runs_file}" --check-runs "${checks_file}" || status=$?
+            case "${status}" in
+              0) exit 0 ;;
+              2) sleep 30 ;;
+              *) exit 1 ;;
+            esac
+          done
+          echo "no completed Quality gate found for ${GITHUB_SHA}" >&2
+          exit 1
+
   release:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -232,7 +232,7 @@ def test_atomic_save_png_cleans_up_when_figure_save_fails(tmp_path: Path, monkey
     assert not temporary.exists()
 
 
-def test_renderer_nonempty_branch_has_an_explicit_deterministic_visual_contract(  # noqa: C901 - too long or branchy; TODO(#76) split with the fixture work
+def test_renderer_nonempty_branch_has_an_explicit_deterministic_visual_contract(  # noqa: C901 - too long or branchy; split with the fixture work
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -416,7 +416,7 @@ def test_renderer_nonempty_branch_has_an_explicit_deterministic_visual_contract(
     assert events[-1] == ("close", figure)
 
 
-def test_renderer_empty_branch_uses_exact_explanatory_text_and_caption(  # noqa: C901 - too long or branchy; TODO(#76) split with the fixture work
+def test_renderer_empty_branch_uses_exact_explanatory_text_and_caption(  # noqa: C901 - too long or branchy; split with the fixture work
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -496,7 +496,7 @@ def test_renderer_empty_branch_uses_exact_explanatory_text_and_caption(  # noqa:
     assert events == ["land", "save", ("close", figure)]
 
 
-def test_renderer_empty_global_branch_uses_exact_explanatory_text(  # noqa: C901 - too long or branchy; TODO(#76) split with the fixture work
+def test_renderer_empty_global_branch_uses_exact_explanatory_text(  # noqa: C901 - too long or branchy; split with the fixture work
     tmp_path: Path,
     monkeypatch,
 ) -> None:

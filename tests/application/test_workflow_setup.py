@@ -187,7 +187,7 @@ def test_card_refresh_needed_uses_the_exact_contract_paths_and_encoding() -> Non
     assert not workflow._card_refresh_needed(cast(Any, PathSpy()))
 
 
-def test_run_all_forwards_each_orchestration_boundary_exactly(  # noqa: PLR0915 - too long or branchy; TODO(#76) split with the fixture work
+def test_run_all_forwards_each_orchestration_boundary_exactly(  # noqa: PLR0915 - too long or branchy; split with the fixture work
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

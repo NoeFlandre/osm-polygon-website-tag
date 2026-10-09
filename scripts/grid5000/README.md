@@ -30,16 +30,16 @@ the resulting `model_v3.bin` path:
 ```bash
 hf download cis-lmu/glotlid model_v3.bin \
   --revision 85cd671 \
-  --cache-dir '/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid'
+  --cache-dir "$OSM_POLY_DATA_DIR/models/glotlid"
 ```
 
 Prepare a new bundle. The command refuses an existing bundle directory so a
 finished or active bundle cannot be overwritten accidentally:
 
 ```bash
-export OSM_POLY_RUN_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/runs/<run-id>'
-export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>'
-export OSM_POLY_MODEL_PATH='/Volumes/Seagate M3/projects/osm-polygon-website-tag/models/glotlid/<snapshot>/model_v3.bin'
+export OSM_POLY_RUN_DIR="$OSM_POLY_DATA_DIR/runs/<run-id>"
+export OSM_POLY_BUNDLE_DIR="$OSM_POLY_DATA_DIR/grid5000/<bundle-id>"
+export OSM_POLY_MODEL_PATH="$OSM_POLY_DATA_DIR/models/glotlid/<snapshot>/model_v3.bin"
 export OSM_POLY_COMMIT="$(git rev-parse HEAD)"
 scripts/grid5000/prepare_language_detection.sh
 ```
@@ -87,7 +87,7 @@ After the job finishes, copy the bundle back to the Seagate bundle directory,
 then synchronize it:
 
 ```bash
-export OSM_POLY_BUNDLE_DIR='/Volumes/Seagate M3/projects/osm-polygon-website-tag/grid5000/<bundle-id>'
+export OSM_POLY_BUNDLE_DIR="$OSM_POLY_DATA_DIR/grid5000/<bundle-id>"
 scripts/grid5000/sync_language_detection.sh
 ```
 

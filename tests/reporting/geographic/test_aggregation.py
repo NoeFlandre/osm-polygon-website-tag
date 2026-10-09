@@ -448,10 +448,12 @@ def test_summary_constructs_the_exact_public_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[dict[str, object]] = []
+    created: list[object] = []
 
     class Summary:
         def __init__(self, **kwargs: object) -> None:
             captured.append(kwargs)
+            created.append(self)
 
     monkeypatch.setattr(aggregation_module, "PolygonDensitySummary", Summary)
     monkeypatch.setattr(
@@ -471,7 +473,7 @@ def test_summary_constructs_the_exact_public_contract(
         aggregation_mode="global_unique_text",
     )
 
-    assert result is not None
+    assert created == [result]
     assert captured == [
         {
             "h3_resolution": 7,

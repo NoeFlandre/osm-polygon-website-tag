@@ -15,11 +15,14 @@ def _skip_robots_for_transport_unit_tests(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """Keep transport unit tests focused; policy integration tests opt in."""
-    if Path(str(request.node.path)).name == "test_robots_policy.py":
+    if Path(str(request.node.path)).name in {"test_robots_policy.py", "test_robots_cache.py"}:
         return
 
     def allow_all(
-        _url: str, _transport: web_fetch.RequestOnce, _resolver: web_fetch.Resolver
+        _url: str,
+        _transport: web_fetch.RequestOnce,
+        _resolver: web_fetch.Resolver,
+        _cache: web_fetch.RobotsCache,
     ) -> web_fetch._RobotsPolicy:
         return web_fetch._RobotsPolicy(None)
 

@@ -21,13 +21,14 @@ class UnsafePathError(ValueError):
 
 def normalize_path(path: str | Path) -> Path:
     """Return a fully-resolved absolute :class:`Path` for ``path``."""
-    return Path(path).expanduser().resolve(strict=False)
+    return Path(path).expanduser().resolve()
 
 
 def _is_equal_or_inside(candidate: Path, boundary: Path) -> bool:
-    """Return ``True`` iff ``candidate`` equals ``boundary`` or is nested under it."""
-    candidate = normalize_path(candidate)
-    boundary = normalize_path(boundary)
+    """Return ``True`` iff ``candidate`` equals ``boundary`` or is nested under it.
+
+    Both arguments must already be normalized (see :func:`normalize_path`).
+    """
     return candidate.is_relative_to(boundary)
 
 
@@ -45,8 +46,3 @@ def assert_path_safe_against(candidate: str | Path, forbidden: str | Path) -> Pa
             f"the forbidden root {forbidden_resolved}."
         )
     return candidate_resolved
-
-
-def assert_path_safe_outside(candidate: str | Path, forbidden: str | Path) -> Path:
-    """Synonym for :func:`assert_path_safe_against` kept for readability."""
-    return assert_path_safe_against(candidate, forbidden)

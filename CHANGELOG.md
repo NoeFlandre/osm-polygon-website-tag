@@ -25,6 +25,7 @@ This file records all notable changes to this project. The format follows [Keep 
 - Politeness for each host: `--host-concurrency` (default 2) and `--host-delay-seconds` (default 0.2) limit and space the requests to one website. The fetcher obeys a short `Retry-After` on 429/503 and retries one time (#85).
 - A charset label with a NUL byte does not stop the extraction. The pipeline rejects a host that has only dots as `missing_hostname`. The new property tests found both problems (#89).
 - `publish-trackio` without the `trackio` package exits with code 5 and one clear line.
+- `--time-budget-seconds` and `--batch-rows` have one declaration per type. Every command that takes one shows the same help text. The accepted types do not change.
 
 ## [0.1.0]
 

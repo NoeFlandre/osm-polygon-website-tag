@@ -52,6 +52,7 @@ from osm_polygon_website_tag.domain.website import extract_hostname
 from osm_polygon_website_tag.storage import duckdb_engine
 from osm_polygon_website_tag.storage.atomic import atomic_promote_bundle
 from osm_polygon_website_tag.storage.duckdb_engine import EIGHT_CELL_EXPRESSIONS, EIGHT_CELL_LABELS
+from osm_polygon_website_tag.storage.parquet import parquet_row_count
 
 # Prefix used for the per-invocation, run-owned analysis staging directory.
 # Every call to ``analyze_results`` creates a freshly-named subdirectory
@@ -105,11 +106,7 @@ class AnalysisSummary:
 
 
 def _directory_row_count(directory: Path) -> int:
-    return sum(_parquet_row_count(path) for path in directory.glob("*.parquet"))
-
-
-def _parquet_row_count(path: Path) -> int:
-    return int(pq.ParquetFile(path).metadata.num_rows)
+    return sum(parquet_row_count(path) for path in directory.glob("*.parquet"))
 
 
 def _cleanup_invocation_staging_dir(path: Path) -> None:
@@ -167,7 +164,7 @@ def analyze_results(run_dir: Path | str) -> AnalysisSummary:
         try:
             summary = _write_analysis_tables(con, polygons_dir, rej_dir, analysis_dir)
         finally:
-            _close_analysis_connection(con)
+            duckdb_engine.close_quietly(con)
         atomic_promote_bundle(
             [
                 (analysis_dir / filename, final_analysis_dir / filename)
@@ -201,15 +198,9 @@ def _register_analysis_sources(
         duckdb_engine.register_rejection_parquets(con, rej_dir)
         duckdb_engine.canonical_observations(con)
     except BaseException:
-        _close_analysis_connection(con)
+        duckdb_engine.close_quietly(con)
         raise
     return con
-
-
-def _close_analysis_connection(con: duckdb.DuckDBPyConnection) -> None:
-    """Close DuckDB without masking an analysis failure."""
-    with contextlib.suppress(Exception):
-        con.close()
 
 
 def _write_analysis_tables(
@@ -512,8 +503,8 @@ def _analysis_summary(
         canonical_count=int(canonical_count[0]) if canonical_count else 0,
         public_row_count=_directory_row_count(polygons_dir),
         rejection_count=_directory_row_count(rej_dir),
-        duplicate_count=_parquet_row_count(analysis_dir / "duplicate_observations.parquet"),
-        conflicting_snapshot_count=_parquet_row_count(
+        duplicate_count=parquet_row_count(analysis_dir / "duplicate_observations.parquet"),
+        conflicting_snapshot_count=parquet_row_count(
             analysis_dir / "conflicting_snapshots.parquet"
         ),
         cell_observation={k: int(cells_obs.get(k, 0)) for k, _ in EIGHT_CELL_LABELS},

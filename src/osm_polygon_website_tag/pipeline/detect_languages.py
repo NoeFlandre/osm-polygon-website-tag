@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -463,21 +464,25 @@ def _raise_invalid_language_pair(prefix: str, label: object, probability: object
 
 
 def _complete_language_pair(label: object, probability: object) -> bool:
-    return isinstance(label, str) and bool(label) and _valid_probability(probability)
+    return isinstance(label, str) and bool(label) and valid_probability(probability)
 
 
 def _apply_prediction(row: dict[str, object], prefix: str, prediction: LanguagePrediction) -> None:
     if not isinstance(prediction, LanguagePrediction) or not prediction.label:
         raise ValueError(f"invalid {prefix} language prediction")
-    if not _valid_probability(prediction.probability):
+    if not valid_probability(prediction.probability):
         raise ValueError(f"invalid {prefix} language probability")
     row[f"{prefix}_language"] = prediction.label
     row[f"{prefix}_language_probability"] = prediction.probability
 
 
-def _valid_probability(value: object) -> bool:
+def valid_probability(value: object) -> bool:
+    """Return whether a language probability is a finite number in [0, 1]."""
     return (
-        isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= float(value) <= 1
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and 0.0 <= float(value) <= 1.0
     )
 
 

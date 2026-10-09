@@ -40,24 +40,29 @@ def test_summary_explicit_global_mode_sets_legacy_text_flag() -> None:
     assert summary.extracted_text_only is True
 
 
-def test_summary_explicit_regional_mode_clears_legacy_text_flag() -> None:
-    summary = PolygonDensitySummary(
-        3,
-        0,
-        0,
-        (),
-        extracted_text_only=True,
-        aggregation_mode="regional_rows",
-    )
+def test_summary_explicit_regional_mode_keeps_legacy_text_flag_false() -> None:
+    summary = PolygonDensitySummary(3, 0, 0, (), aggregation_mode="regional_rows")
 
     assert summary.aggregation_mode == "regional_rows"
     assert summary.extracted_text_only is False
 
 
+def test_summary_rejects_legacy_text_flag_with_regional_mode() -> None:
+    with pytest.raises(ValueError, match=r"^extracted_text_only conflicts with regional_rows$"):
+        PolygonDensitySummary(
+            3,
+            0,
+            0,
+            (),
+            extracted_text_only=True,
+            aggregation_mode="regional_rows",
+        )
+
+
 def test_summary_rejects_unknown_aggregation_mode() -> None:
     invalid_mode = cast(AggregationMode, "unsupported")
 
-    with pytest.raises(ValueError, match="unsupported aggregation mode"):
+    with pytest.raises(ValueError, match=r"^unsupported aggregation mode: unsupported$"):
         PolygonDensitySummary(3, 0, 0, (), aggregation_mode=invalid_mode)
 
 
@@ -67,7 +72,7 @@ def test_summary_rejects_unknown_aggregation_mode() -> None:
         (False, None, (False, "regional_rows")),
         (True, None, (True, "global_unique_text")),
         (False, "global_unique_text", (True, "global_unique_text")),
-        (True, "regional_rows", (False, "regional_rows")),
+        (False, "regional_rows", (False, "regional_rows")),
     ],
 )
 def test_resolve_aggregation_mode_returns_consistent_legacy_values(
@@ -76,3 +81,8 @@ def test_resolve_aggregation_mode_returns_consistent_legacy_values(
     expected: tuple[bool, AggregationMode],
 ) -> None:
     assert _resolve_aggregation_mode(extracted_text_only, aggregation_mode) == expected
+
+
+def test_resolve_aggregation_mode_rejects_text_flag_with_regional_mode() -> None:
+    with pytest.raises(ValueError, match=r"^extracted_text_only conflicts with regional_rows$"):
+        _resolve_aggregation_mode(True, "regional_rows")

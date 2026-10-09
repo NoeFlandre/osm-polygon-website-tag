@@ -244,6 +244,21 @@ def test_initial_enrichment_decision_preserves_the_cached_summary(
     assert decision == source_processing._EnrichmentDecision(False, summary)
 
 
+def test_initial_enrichment_decision_rejects_a_non_bool_marker_without_recheck(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(source_processing, "_should_recheck_enrichment", lambda **_kwargs: False)
+
+    with pytest.raises(TypeError, match=r"enrichment marker must be bool, not str"):
+        source_processing._initial_enrichment_decision(
+            tmp_path / "a.parquet",
+            marker="yes",
+            status_summary=None,
+            migration_changed=False,
+        )
+
+
 def test_initial_enrichment_decision_rechecks_after_migration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -498,9 +513,9 @@ def test_publication_helpers_keep_previous_sources_and_ignore_false_uploads(
     }
 
     context.progress = None
-    source_processing._progress(context.progress, "ignored")
+    source_processing.report_progress(context.progress, "ignored")
     messages: list[str] = []
-    source_processing._progress(messages.append, "kept")
+    source_processing.report_progress(messages.append, "kept")
     assert messages == ["kept"]
     assert source_processing._public_shard_path(tmp_path, source) == (
         tmp_path / "polygons" / "a.parquet"

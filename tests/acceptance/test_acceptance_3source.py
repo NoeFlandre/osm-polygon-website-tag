@@ -34,6 +34,7 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
 )
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.run_state import initialise_run
+from osm_polygon_website_tag.storage.duckdb_engine import sql_string_literal
 
 # ---------------------------------------------------------------------------
 # Source A
@@ -185,7 +186,7 @@ def _make_pbf(make_pbf, xml: str, name: str, tmp_path: Path) -> Path:
     return next(src.iterdir())
 
 
-def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:  # noqa: PLR0915 - too long or branchy; TODO(#76) split with the fixture work
+def test_acceptance_three_sources_end_to_end(make_pbf, tmp_path: Path) -> None:  # noqa: PLR0915 - too long or branchy; split with the fixture work
     """End-to-end acceptance test on three synthetic sources.
 
     Asserts:
@@ -382,9 +383,9 @@ def test_acceptance_geometry_relation_assembled(make_pbf, tmp_path: Path) -> Non
     assert summary.public_row_count >= 1
     # The canonical row's polygon is the relation, not the inner ring.
     con = duckdb.connect()
-    pub_glob = str(run_dir / "polygons" / "*.parquet").replace("'", "''")
+    pub_glob = sql_string_literal(run_dir / "polygons" / "*.parquet")
     rows = con.execute(
-        f"SELECT osm_id, polygon_id FROM read_parquet('{pub_glob}') WHERE osm_type='relation'"  # noqa: S608
+        f"SELECT osm_id, polygon_id FROM read_parquet({pub_glob}) WHERE osm_type='relation'"  # noqa: S608
     ).fetchall()
     assert len(rows) == 1
 

@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 from tests.fixtures.call_recording import recording_stub
+from tests.fixtures.card import parse_front_matter
 from tests.publishing.receipt_helpers import recording_receipt_reads
 from tests.reporting.test_finalize import _setup
 
@@ -29,6 +30,7 @@ from osm_polygon_website_tag.reporting.finalize import (
     _write_completion_receipt,
     replace_receipt_atomic,
 )
+from osm_polygon_website_tag.reporting.geometry_stats import GEOMETRY_STATS_SCHEMA_VERSION
 from osm_polygon_website_tag.reporting.verify import verify_results
 from osm_polygon_website_tag.runtime.config import DEFAULT_HF_DATASET
 
@@ -204,10 +206,10 @@ def test_release_rebuilds_missing_readme_from_trusted_dataset_yaml(run_dir: Path
 
     release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
-    assert custom[0] in (run_dir / "README.md").read_text(encoding="utf-8")
-    assert custom[1] in (run_dir / "README.md").read_text(encoding="utf-8")
-    assert custom[0] in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
-    assert custom[1] in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+    for relative in ("README.md", "dataset.yaml"):
+        front_matter = parse_front_matter((run_dir / relative).read_text(encoding="utf-8"))
+        assert front_matter["license"] == "mit"
+        assert front_matter["configs"][0]["data_files"][0]["path"] == "custom/*.parquet"
 
 
 def test_release_refuses_unrecoverable_missing_readme_metadata(run_dir: Path) -> None:
@@ -254,7 +256,8 @@ def test_release_rebuilds_missing_dataset_yaml_before_verification(run_dir: Path
 
     assert report.recomputed is True
     assert (run_dir / "dataset.yaml").is_file()
-    assert "unique_text_identity_count: 1" in (run_dir / "dataset.yaml").read_text()
+    dataset = parse_front_matter((run_dir / "dataset.yaml").read_text(encoding="utf-8"))
+    assert dataset["unique_text_identity_count"] == 1
 
 
 def test_release_rebuilds_missing_dataset_yaml_from_readme_custom_metadata(
@@ -307,8 +310,9 @@ def test_release_rebuilds_stale_metadata_before_verification(run_dir: Path) -> N
     report = release_card_and_stats(run_dir, confirm_repo=DEFAULT_HF_DATASET)
 
     assert report.recomputed is True
-    assert "website_total_words: 2" in readme.read_text(encoding="utf-8")
-    assert '"schema_version"' in (run_dir / "stats.json").read_text(encoding="utf-8")
+    assert parse_front_matter(readme.read_text(encoding="utf-8"))["website_total_words"] == 2
+    stats = json.loads((run_dir / "stats.json").read_text(encoding="utf-8"))
+    assert stats["schema_version"] == GEOMETRY_STATS_SCHEMA_VERSION
 
 
 def test_release_rejects_existing_readme_without_front_matter(run_dir: Path) -> None:
@@ -354,8 +358,9 @@ def test_release_rebuilds_stale_geographic_bundle_from_the_canonical_text_summar
     assert "STALE website values" not in updated_readme
     assert "Regional overlap duplicates are removed globally" in updated_readme
     assert "covering **1** unique polygons with extracted text" in updated_readme
-    assert "polygon_density_row_count: 1" in dataset_yaml.read_text(encoding="utf-8")
-    assert "unique_text_identity_count: 1" in dataset_yaml.read_text(encoding="utf-8")
+    dataset = parse_front_matter(dataset_yaml.read_text(encoding="utf-8"))
+    assert dataset["polygon_density_row_count"] == 1
+    assert dataset["unique_text_identity_count"] == 1
     assert map_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 

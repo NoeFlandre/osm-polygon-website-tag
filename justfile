@@ -5,19 +5,12 @@ set export
 # runners have four; a workstation usually has more.
 MUTATION_CHILDREN := env("MUTATION_CHILDREN", "4")
 
-UV_CACHE_DIR := if env("UV_CACHE_DIR", "") != "" {
-    env("UV_CACHE_DIR", "")
-} else if path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == "true" {
-    "/Volumes/Seagate M3/projects/osm-polygon-website-tag/uv-cache"
-} else {
-    "/tmp/osm-polygon-website-tag-uv-cache"
-}
+# Neutral defaults; set UV_CACHE_DIR / BUILD_OUTPUT_DIR in the environment to
+# relocate them (for example onto an external volume). uv rejects an empty
+# UV_CACHE_DIR, so the fallback is a concrete temporary directory.
+UV_CACHE_DIR := env("UV_CACHE_DIR", "/tmp/osm-polygon-website-tag-uv-cache")
 
-BUILD_OUTPUT_DIR := if path_exists("/Volumes/Seagate M3/projects/osm-polygon-website-tag") == "true" {
-    "/Volumes/Seagate M3/projects/osm-polygon-website-tag/build"
-} else {
-    "dist"
-}
+BUILD_OUTPUT_DIR := env("BUILD_OUTPUT_DIR", "dist")
 
 default: check
 
@@ -38,6 +31,12 @@ format:
 
 format-check:
     uv run --locked ruff format --check .
+
+# Lint every shell script (pinned so CI and local runs agree).
+shellcheck:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git ls-files -z -- '*.sh' | xargs -0 uvx --from shellcheck-py==0.10.0.1 shellcheck
 
 baseline:
     git rev-parse --abbrev-ref HEAD
@@ -246,7 +245,7 @@ qa-push base="origin/main": ruff typecheck
 # function. `build` proves the sdist and wheel still package.
 # `audit` fails the gate on a known-vulnerable pin in uv.lock.
 # Tier 3: the pull-request gate.
-qa-pr: baseline ruff typecheck coverage crap build audit
+qa-pr: baseline ruff shellcheck typecheck coverage crap build audit
 
 # Everything the pull request proved, plus the container smoke test. In CI the
 # Quality workflow's `docker` job owns the container gate and runs it beside the quality job,

@@ -2,13 +2,66 @@
 
 from __future__ import annotations
 
-import re
 import sys
+from collections.abc import Callable
 from typing import TextIO
 
 from tqdm import tqdm
 
-_COUNTED_MESSAGE = re.compile(r"^\[(\d+)/(\d+)\] (.+)$")
+
+def report_progress(callback: Callable[[str], None] | None, message: str) -> None:
+    """Send ``message`` to ``callback`` when one is configured."""
+    if callback is not None:
+        callback(message)
+
+
+class CountedProgress(str):
+    """A ``[current/total] text`` progress message that also carries its counts.
+
+    The string value is the legacy prefixed text, so logs, list comparisons and
+    plain-string callbacks behave as they did with a formatted string. The
+    reporter reads the fields directly instead of parsing the prefix.
+
+    Contract: multi-line text is not counted, as the legacy string is not
+    (the reporter prints it as an ordinary line). Empty text is counted and
+    gives the bar an empty description. No producer sends empty text. A source
+    file name can contain a newline, so multi-line text can occur.
+    """
+
+    current: int
+    total: int
+    text: str
+
+    def __new__(cls, current: int, total: int, text: str) -> CountedProgress:
+        if not isinstance(text, str):
+            raise TypeError(f"counted progress text must be a str, not {type(text).__name__}")
+        event = super().__new__(cls, f"[{current}/{total}] {text}")
+        event.current = current
+        event.total = total
+        event.text = text
+        return event
+
+    def __reduce__(self) -> tuple[type[CountedProgress], tuple[int, int, str]]:
+        """Let ``copy`` and ``pickle`` rebuild the message from its fields."""
+        return (CountedProgress, (self.current, self.total, self.text))
+
+
+def _require_str(message: object) -> None:
+    """Refuse non-text messages in both modes, as before the counted-progress change."""
+    if not isinstance(message, str):
+        raise TypeError(f"progress message must be a str, not {type(message).__name__}")
+
+
+def _counted_fields(message: str) -> tuple[int, int, str] | None:
+    """Return (current, total, text) for a typed counted message, or None for any other.
+
+    Plain strings are never counted, so a reworded producer cannot lose its bar
+    silently by changing a prefix. Multi-line text stays ordinary, as the
+    counted string does, so both forms print the same line.
+    """
+    if isinstance(message, CountedProgress) and "\n" not in message.text:
+        return message.current, message.total, message.text
+    return None
 
 
 class ProgressReporter:
@@ -30,14 +83,15 @@ class ProgressReporter:
     def __call__(self, message: str) -> None:
         if self._quiet:
             return
-        match = _COUNTED_MESSAGE.fullmatch(message)
+        _require_str(message)
         if not self._interactive:
             self._write_plain(message)
             return
-        if match is None:
+        fields = _counted_fields(message)
+        if fields is None:
             self._write_uncounted(message)
             return
-        self._update_counted(match)
+        self._update_counted(*fields)
 
     def _write_plain(self, message: str) -> None:
         """Write a stable line when no terminal progress bar is active."""
@@ -48,11 +102,8 @@ class ProgressReporter:
         self._finish_bar(completed=True)
         tqdm.write(message, file=self._stream)
 
-    def _update_counted(self, match: re.Match[str]) -> None:
+    def _update_counted(self, current_value: int, total_value: int, description: str) -> None:
         """Update the bounded tqdm display for one counted workflow message."""
-        current, total, description = match.groups()
-        current_value = int(current)
-        total_value = int(total)
         if self._last_current is not None and current_value < self._last_current:
             self._finish_bar(completed=True)
         if self._bar is None:
@@ -83,4 +134,4 @@ class ProgressReporter:
         self._last_current = None
 
 
-__all__ = ["ProgressReporter"]
+__all__ = ["CountedProgress", "ProgressReporter"]

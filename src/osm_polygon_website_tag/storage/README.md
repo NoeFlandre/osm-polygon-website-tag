@@ -2,9 +2,9 @@
 
 Provides bounded and transactional local persistence.
 
-- Modules: `atomic`, `batch_sink`, `candidate_ledger`, `digest`, `duckdb_engine`.
+- Modules: `atomic`, `batch_sink`, `candidate_ledger`, `digest`, `duckdb_engine`, `parquet`.
 - Dependencies: no other project package.
-- Entry points: atomic promotion, bounded Parquet writes, SQLite ledgers, DuckDB setup, SHA-256 file and canonical-JSON digests (`digest`).
+- Entry points: atomic promotion, bounded Parquet writes, SQLite ledgers, DuckDB setup, SHA-256 file and canonical-JSON digests (`digest`), Parquet footer row counts (`parquet`).
 - Excludes: run lifecycle, pipeline sequencing, and remote publication.
 
 `atomic_promote_bundle` moves existing targets to tokenized backups before

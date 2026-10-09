@@ -102,6 +102,20 @@ def test_geometry_rejection_preserves_payload_and_derived_values() -> None:
     }
 
 
+def test_load_geometry_rejects_a_payload_without_serialized_geometry() -> None:
+    payload = replace(_website_payload("not-used"), raw_geojson=None)
+    assert payload.derived_tags is not None
+    derived = replace(payload.derived_tags, website="https://derived.example")
+
+    rejected = extraction_handler_module._load_geometry(payload, derived)
+
+    assert isinstance(rejected, AreaResult)
+    assert rejected.rejection_row is not None
+    assert rejected.rejection_row["rejection_kind"] == "geometry_error"
+    assert rejected.rejection_row["message"] == "missing serialized area geometry"
+    assert rejected.rejection_row["website"] == "https://derived.example"
+
+
 def test_load_geometry_converts_expected_and_unexpected_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -228,9 +242,6 @@ def test_area_worker_reuses_precomputed_tag_projection(
     """The area worker must not re-derive tags already projected by the callback."""
     from osm_polygon_website_tag.pipeline import extraction_handler
 
-    payload_type = getattr(extraction_module, "AreaPayload", None)
-    if payload_type is None:
-        pytest.fail("AreaPayload is not implemented")
     derived = DerivedTags(
         website="https://example.org",
         contact_website=None,
@@ -239,7 +250,7 @@ def test_area_worker_reuses_precomputed_tag_projection(
         has_any_website=True,
         primary_category="building",
     )
-    payload = payload_type(
+    payload = AreaPayload(
         sequence=1,
         source_pbf="synthetic-latest.osm.pbf",
         region="synthetic",

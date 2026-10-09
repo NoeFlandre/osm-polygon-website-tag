@@ -27,8 +27,11 @@ def test_schema_version_is_v1_3() -> None:
     assert SCHEMA_VERSION == "v1.3"
 
 
-def test_polygon_public_schema_is_arrow_schema() -> None:
-    assert isinstance(POLYGON_PUBLIC_SCHEMA, pa.Schema)
+def test_polygon_public_schema_builds_an_empty_arrow_table() -> None:
+    table = pa.Table.from_pylist([], schema=POLYGON_PUBLIC_SCHEMA)
+
+    assert table.num_rows == 0
+    assert table.column_names == polygon_column_names(POLYGON_PUBLIC_SCHEMA)
 
 
 @pytest.mark.parametrize(
@@ -166,11 +169,23 @@ def test_polygon_public_schema_dtypes() -> None:
     assert pa.types.is_float64(by_name["area_m2"].type)
 
 
-def test_column_doc_returns_string_per_column() -> None:
-    for col in polygon_column_names(POLYGON_PUBLIC_SCHEMA):
-        doc = column_doc(col)
-        assert isinstance(doc, str)
-        assert len(doc) > 0
+def test_every_public_column_has_a_full_sentence_of_documentation() -> None:
+    public_columns = polygon_column_names(POLYGON_PUBLIC_SCHEMA)
+    assert set(public_columns) <= set(column_documentation())
+    for col in public_columns:
+        # A placeholder such as "", "TODO" or "tbd" never ends with a full stop.
+        assert column_doc(col).endswith(".")
+
+
+def test_column_doc_returns_the_documented_text() -> None:
+    assert column_doc("osm_id") == (
+        "Original OSM numeric identifier of the way or relation. "
+        "Way and relation namespaces are kept distinct."
+    )
+    assert column_doc("lat") == (
+        "Centroid latitude in WGS84 decimal degrees. Rounded to seven decimal places. "
+        "``NaN`` and infinity are never produced."
+    )
 
 
 @pytest.mark.parametrize(

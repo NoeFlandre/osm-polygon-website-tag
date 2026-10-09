@@ -115,7 +115,7 @@ def test_counting_shards_consumes_a_one_shot_iterable(tmp_path: Path) -> None:
 def test_one_shard_row_count_reads_the_footer(tmp_path: Path) -> None:
     shard = _write_shard(tmp_path / "one.parquet", 3)
 
-    assert card_stats._parquet_row_count(shard) == 3
+    assert card_stats.parquet_row_count(shard) == 3
 
 
 def test_footers_are_read_through_a_bounded_pool(tmp_path: Path, monkeypatch) -> None:
@@ -636,7 +636,7 @@ def test_density_stats_compute_only_the_extracted_text_population(
 
 def test_public_shard_stats_list_each_source_with_its_row_count(monkeypatch) -> None:
     monkeypatch.setattr(card_stats, "_add_enriched_source_count", lambda _stats, _shard: None)
-    monkeypatch.setattr(card_stats, "_parquet_row_count", lambda shard: len(shard.stem))
+    monkeypatch.setattr(card_stats, "parquet_row_count", lambda shard: len(shard.stem))
     stats = CardStats()
 
     card_stats._add_public_shard_stats(stats, [Path("x/ab.parquet"), Path("x/cde.parquet")])

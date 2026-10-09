@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from importlib.metadata import version as package_version
-from pathlib import Path
 from typing import Annotated, Any, cast
 
 import httpx
@@ -14,9 +10,12 @@ import typer
 from huggingface_hub.errors import HfHubHTTPError
 from rich.console import Console
 
+from osm_polygon_website_tag import __version__
 from osm_polygon_website_tag.publishing.errors import TrackioUnavailableError
-from osm_polygon_website_tag.runtime.config import Settings
 from osm_polygon_website_tag.runtime.paths import data_root_source
+
+from . import grid5000, languages, publish, run, sentences, verify
+from ._common import DEBUG_ENV, GLOBAL_OPTIONS, debug_requested
 
 app = typer.Typer(
     name="osm-polygon-website-tag",
@@ -45,16 +44,10 @@ _EXIT_CODES: tuple[tuple[type[Exception], int], ...] = (
 
 _HANDLED_ERRORS = tuple(error_type for error_type, _code in _EXIT_CODES)
 
-DEBUG_ENV = "OSM_PWT_DEBUG"
-
 _CLICK_EXCEPTION = cast(
     "type[Exception]",
     next(kind for kind in typer.BadParameter.__mro__ if kind.__name__ == "ClickException"),
 )
-
-_debug = {"enabled": False}
-
-_quiet = {"enabled": False}
 
 _DISTRIBUTION = "osm-polygon-website-tag"
 
@@ -65,7 +58,7 @@ _VERBOSITY_LEVELS = (logging.WARNING, logging.INFO, logging.DEBUG)
 
 def _show_version(value: bool) -> None:
     if value:
-        typer.echo(package_version(_DISTRIBUTION))
+        typer.echo(__version__)
         raise typer.Exit
 
 
@@ -98,10 +91,10 @@ def _global_options(
     """Analyze and publish OSM polygons carrying website tags."""
     if verbose and quiet:
         raise typer.BadParameter("--verbose and --quiet cannot be combined")
-    _debug["enabled"] = debug
-    _quiet["enabled"] = quiet
+    GLOBAL_OPTIONS.debug = debug
+    GLOBAL_OPTIONS.quiet = quiet
     _configure_logging(_log_level(verbose, quiet=quiet))
-    _LOGGER.info("%s %s", _DISTRIBUTION, package_version(_DISTRIBUTION))
+    _LOGGER.info("%s %s", _DISTRIBUTION, __version__)
     _LOGGER.debug("data root: %s", data_root_source())
 
 
@@ -126,25 +119,6 @@ def _reset_logging() -> None:
     _LOGGER.setLevel(logging.NOTSET)
 
 
-RunDir = Annotated[Path, typer.Option("--run-dir", help="Existing run directory.")]
-
-RepoId = Annotated[
-    str | None,
-    typer.Option(
-        "--repo-id", help="Hugging Face dataset repository (defaults to HF_DATASET_REPO)."
-    ),
-]
-
-
-def _configured_hf_dataset_repo(repo_id: str | None) -> str:
-    """Resolve an explicit CLI override or the current environment/.env setting."""
-    return repo_id if repo_id is not None else Settings().hf_dataset_repo
-
-
-def _json(payload: Any, *, sort_keys: bool = False) -> None:
-    typer.echo(json.dumps(payload, default=str, indent=2, sort_keys=sort_keys))
-
-
 def exit_code_for(error: Exception) -> int:
     """Map a handled error to its documented exit code."""
     return next(code for error_type, code in _EXIT_CODES if isinstance(error, error_type))
@@ -155,14 +129,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _run_app(argv)
     except _HANDLED_ERRORS as exc:
-        if _debug_requested():
+        if debug_requested():
             raise
         _error_console.print(f"error: {exc}")
         return exit_code_for(exc)
     finally:
         # Global options apply to one invocation only.
-        _debug["enabled"] = False
-        _quiet["enabled"] = False
+        GLOBAL_OPTIONS.reset()
         _reset_logging()
 
 
@@ -189,58 +162,51 @@ def _show_click_error(error: Any) -> int:
     return int(error.exit_code)
 
 
-def _debug_requested() -> bool:
-    return _debug["enabled"] or os.environ.get(DEBUG_ENV) == "1"
+# Shell-quoted default locations, shown verbatim in the epilogs of --help.
+_RUNS_ROOT_EXAMPLE = '"${OSM_POLY_DATA_DIR:-./data}/runs"'
+_RUN_DIR_EXAMPLE = '"${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"'
+
+_EPILOGS: dict[str, str] = {
+    "init": f"Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root {_RUNS_ROOT_EXAMPLE} --run-id website-v1",
+    "extract": f"Example: osm-polygon-website-tag extract region.osm.pbf --run-dir {_RUN_DIR_EXAMPLE}",
+    "publish": f"Example: osm-polygon-website-tag publish --run-dir {_RUN_DIR_EXAMPLE} --apply",
+    "release-stats": f"Example: osm-polygon-website-tag release-stats --run-dir {_RUN_DIR_EXAMPLE}",
+    "create-repo": "Example: osm-polygon-website-tag create-repo --repo-id owner/name --apply",
+    "run-all": f"Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root {_RUNS_ROOT_EXAMPLE} --run-id website-v1",
+    "grid5000-prepare": 'Example: osm-polygon-website-tag grid5000-prepare --run-dir <run> --bundle-dir <bundle> --model-path <model_v3.bin> --commit "$(git rev-parse HEAD)"',
+}
 
 
 def _register_commands(target: typer.Typer) -> None:
-    from . import grid5000, languages, publish, run, sentences, verify
-
-    target.command(
-        "init",
-        epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
-    )(run.init_command)
-    target.command(
-        "extract",
-        epilog='Example: osm-polygon-website-tag extract region.osm.pbf --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
-    )(run.extract_command)
-    target.command("analyze-results")(verify.analyze_command)
-    target.command("build-card")(verify.card_command)
-    target.command("verify-results")(verify.verify_command)
-    target.command("refresh-card")(verify.refresh_card_command)
-    target.command("finalize-run")(verify.finalize_command)
-    target.command("finalize-snapshot")(verify.finalize_snapshot_command)
-    target.command("publish-plan")(publish.publish_plan_command)
-    target.command(
-        "publish",
-        epilog='Example: osm-polygon-website-tag publish --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1" --apply',
-    )(publish.publish_command)
-    target.command(
-        "release-stats",
-        epilog='Example: osm-polygon-website-tag release-stats --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
-    )(publish.release_stats_command)
-    target.command(
-        "create-repo",
-        epilog="Example: osm-polygon-website-tag create-repo --repo-id owner/name --apply",
-    )(publish.create_repo_command)
-    target.command("card-stats")(verify.card_stats_command)
-    target.command("geometry-stats")(verify.geometry_stats_command)
-    target.command("publish-trackio")(publish.publish_trackio_command)
-    target.command(
-        "run-all",
-        epilog='Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
-    )(run.run_all_command)
-    target.command("detect-languages")(languages.detect_languages_command)
-    target.command("segment-sentences")(sentences.segment_sentences_command)
-    target.command(
-        "grid5000-prepare",
-        epilog='Example: osm-polygon-website-tag grid5000-prepare --run-dir <run> --bundle-dir <bundle> --model-path <model_v3.bin> --commit "$(git rev-parse HEAD)"',
-    )(grid5000.grid5000_prepare_command)
-    target.command("grid5000-run")(grid5000.grid5000_run_command)
-    target.command("grid5000-sync")(grid5000.grid5000_sync_command)
-    target.command("grid5000-prepare-sentences")(grid5000.grid5000_prepare_sentences_command)
-    target.command("grid5000-run-sentences")(grid5000.grid5000_run_sentences_command)
-    target.command("grid5000-sync-sentences")(grid5000.grid5000_sync_sentences_command)
+    # Registration order is the order shown in --help.
+    commands = (
+        ("init", run.init_command),
+        ("extract", run.extract_command),
+        ("analyze-results", verify.analyze_command),
+        ("build-card", verify.card_command),
+        ("verify-results", verify.verify_command),
+        ("refresh-card", verify.refresh_card_command),
+        ("finalize-run", verify.finalize_command),
+        ("finalize-snapshot", verify.finalize_snapshot_command),
+        ("publish-plan", publish.publish_plan_command),
+        ("publish", publish.publish_command),
+        ("release-stats", publish.release_stats_command),
+        ("create-repo", publish.create_repo_command),
+        ("card-stats", verify.card_stats_command),
+        ("geometry-stats", verify.geometry_stats_command),
+        ("publish-trackio", publish.publish_trackio_command),
+        ("run-all", run.run_all_command),
+        ("detect-languages", languages.detect_languages_command),
+        ("segment-sentences", sentences.segment_sentences_command),
+        ("grid5000-prepare", grid5000.grid5000_prepare_command),
+        ("grid5000-run", grid5000.grid5000_run_command),
+        ("grid5000-sync", grid5000.grid5000_sync_command),
+        ("grid5000-prepare-sentences", grid5000.grid5000_prepare_sentences_command),
+        ("grid5000-run-sentences", grid5000.grid5000_run_sentences_command),
+        ("grid5000-sync-sentences", grid5000.grid5000_sync_sentences_command),
+    )
+    for name, handler in commands:
+        target.command(name, epilog=_EPILOGS.get(name))(handler)
 
 
 _register_commands(app)
