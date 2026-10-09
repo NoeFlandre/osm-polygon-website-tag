@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import http.client
 import ipaddress
 import math
@@ -141,9 +142,6 @@ class RobotsCache:
 
     def get_or_load(self, origin: str, load: Callable[[str], _RobotsPolicy]) -> _RobotsPolicy:
         """Return the cached policy for ``origin``, loading it at most once at a time."""
-        cached = self._lookup(origin)
-        if cached is not None:
-            return cached
         slot = self._join_load(origin)
         try:
             with slot.lock:
@@ -178,7 +176,7 @@ class RobotsCache:
             # entry already sits at the end of the LRU order.
             self._entries[origin] = _CachedPolicy(policy, self._clock())
             while self._max_entries is not None and len(self._entries) > self._max_entries:
-                self._entries.popitem(last=False)
+                del self._entries[next(iter(self._entries))]
 
     def _join_load(self, origin: str) -> _LoadSlot:
         with self._lock:
@@ -197,7 +195,16 @@ class RobotsCache:
                 del self._load_slots[origin]
 
 
-_DEFAULT_ROBOTS_CACHE = RobotsCache()
+@functools.cache
+def _default_robots_cache() -> RobotsCache:
+    """The module-wide cache for fetches that do not inject one, built on first use.
+
+    Built lazily so that no robots-cache code runs at import; a mutant there would
+    break the import itself rather than fail a test.
+    """
+    return RobotsCache()
+
+
 # Bounds for the per-fetcher caches (#135). The module default stays unbounded.
 ROBOTS_CACHE_MAX_ORIGINS = 4096
 ROBOTS_ERROR_TTL_SECONDS = 3600.0
@@ -517,7 +524,7 @@ def _check_robots(
     robots_cache: RobotsCache | None,
 ) -> FetchResult | None:
     """Return a robots policy failure or allow this redirect target."""
-    cache = _DEFAULT_ROBOTS_CACHE if robots_cache is None else robots_cache
+    cache = _default_robots_cache() if robots_cache is None else robots_cache
     policy = _robots_policy(current, transport, resolver, cache)
     return _apply_robots_policy(policy, current, requested, limiter)
 

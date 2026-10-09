@@ -95,6 +95,24 @@ def test_full_cache_evicts_the_least_recently_used_origin() -> None:
     assert loads == [second]
 
 
+def test_error_ttl_is_measured_from_when_the_failure_was_stored() -> None:
+    clock = FakeClock()
+    clock.now = 1000.0
+    cache = RobotsCache(error_ttl_seconds=60.0, clock=clock)
+    loads: list[str] = []
+    load = _recording_loader(loads, error=True)
+    origin = "https://later-failure.example"
+
+    cache.get_or_load(origin, load)
+    clock.now = 1059.0
+    cache.get_or_load(origin, load)
+    assert loads == [origin]
+
+    clock.now = 1060.0
+    cache.get_or_load(origin, load)
+    assert loads == [origin, origin]
+
+
 def test_failed_policy_expires_after_the_error_ttl() -> None:
     clock = FakeClock()
     cache = RobotsCache(error_ttl_seconds=60.0, clock=clock)
@@ -262,6 +280,13 @@ def test_the_load_registry_is_empty_once_every_load_has_finished() -> None:
         cache.get_or_load("https://failed.example", failing)
 
     assert cache._load_slots == {}
+
+
+def test_the_module_default_cache_is_shared_by_callers_that_inject_none() -> None:
+    first = web_fetch._default_robots_cache()
+
+    assert isinstance(first, RobotsCache)
+    assert web_fetch._default_robots_cache() is first
 
 
 def test_a_cache_of_one_origin_keeps_that_origin() -> None:
