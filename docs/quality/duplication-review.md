@@ -94,7 +94,7 @@ PR #99 merged the combined delta of PRs #97 and #98 (merge commit `f0a55a52f95fb
 | #91 | Open | The fixed nightly Mutation sweep must run on `main` to confirm baseline-growth failure and the recorded kill ratio. No percentage floor is approved. |
 | #75 | Open | Three consecutive green scheduled sweeps and PR Quality p90 under 15 minutes across 20 runs. Both need future runs. |
 
-On `main`, `docs/quality/mutation-baseline.txt` holds 154 entries and no `web.web_fetch` entry. The team removed its six reviewed equivalents when it restructured the code. The `redirect_step` survivor described below is not a baseline entry.
+On `main`, `docs/quality/mutation-baseline.txt` holds 155 entries and no `web.web_fetch` entry. The team removed its six reviewed equivalents when it restructured the code. The `redirect_step` survivor described below is not a baseline entry.
 
 Treat `main` as the reference for every file, count, and mutant in this review. The ledgers below record the state before the merges of PRs #99 and #103; their references to PR #97 and PR #98 are provenance only. They start at the next heading and continue to the end of the issue sections. They are kept as provenance. The status above replaces their present-tense statements about open pull requests, red runs, and the 161-entry baseline.
 
