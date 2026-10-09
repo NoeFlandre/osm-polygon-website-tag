@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import urllib.robotparser
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 import pytest
 from tests.fixtures.memory_http import MemoryHTTPFixture
@@ -15,15 +15,12 @@ from osm_polygon_website_tag.web.politeness import HostLimiter, HostPolicy
 from osm_polygon_website_tag.web.web_fetch import FetchResult, fetch_html
 
 
-def test_allow_all_robots_parser_allows_every_user_agent_and_path() -> None:
-    robots_url = "https://example.org/robots.txt"
+def test_allow_all_robots_rules_permit_every_agent_and_path_without_delay() -> None:
+    rules = web_fetch._AllowAllRobots()
 
-    parser = web_fetch._allow_all_robots_parser(robots_url)
-
-    assert cast(Any, parser).url == robots_url
-    assert cast(Any, parser).allow_all is True
-    assert parser.can_fetch("osm-polygon-website-tag", "https://example.org/private")
-    assert parser.can_fetch("another-agent", "https://example.org/anything")
+    assert rules.can_fetch("osm-polygon-website-tag", "https://example.org/private")
+    assert rules.can_fetch("another-agent", "https://example.org/anything")
+    assert rules.crawl_delay(web_fetch.USER_AGENT) is None
 
 
 def test_apply_robots_policy_returns_errors_without_changing_host_delay(
@@ -175,8 +172,7 @@ def test_parse_robots_policy_keeps_the_url_when_malformed_rules_fail_open(
 
     policy = web_fetch._parse_robots_policy(robots_url, b"not valid rules")
 
-    assert policy.parser is not None
-    assert vars(policy.parser).get("url") == robots_url
+    assert isinstance(policy.parser, web_fetch._AllowAllRobots)
     assert policy.parser.can_fetch(web_fetch.USER_AGENT, "https://example.org/private")
 
 
@@ -219,13 +215,11 @@ def test_robots_fetch_failure_classifies_unsafe_missing_and_unavailable_response
     expected_status: Literal["unsafe_url", "fetch_error"] | None,
     expected_message: str | None,
 ) -> None:
-    robots_url = "https://example.org/robots.txt"
-
-    policy = web_fetch._robots_fetch_failure(robots_url, fetched)
+    policy = web_fetch._robots_fetch_failure(fetched)
 
     if expected_status is None:
-        assert policy is not None and policy.parser is not None
-        assert vars(policy.parser).get("url") == robots_url
+        assert policy is not None
+        assert isinstance(policy.parser, web_fetch._AllowAllRobots)
         assert policy.parser.can_fetch(web_fetch.USER_AGENT, "https://example.org/private")
     else:
         assert policy == web_fetch._RobotsPolicy(
@@ -307,7 +301,7 @@ def test_fetch_robots_policy_fails_closed_when_ok_response_has_no_body(
     assert policy.message == "robots_unavailable"
 
 
-def test_fetch_robots_policy_keeps_the_url_when_robots_file_is_missing(
+def test_fetch_robots_policy_allows_every_page_when_robots_file_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     origin = "https://missing.example"
@@ -339,8 +333,7 @@ def test_fetch_robots_policy_keeps_the_url_when_robots_file_is_missing(
     policy = web_fetch._fetch_robots_policy(origin, transport, resolver)
 
     assert calls == [robots_url]
-    assert policy.parser is not None
-    assert vars(policy.parser).get("url") == robots_url
+    assert isinstance(policy.parser, web_fetch._AllowAllRobots)
     assert policy.parser.can_fetch(web_fetch.USER_AGENT, f"{origin}/private")
 
 
@@ -350,10 +343,11 @@ def test_robots_policy_caches_by_origin_but_separates_scheme_and_port(
 ) -> None:
     host = f"cache-{id(tmp_path)}.example"
     loaded: list[str] = []
+    cache = web_fetch.RobotsCache()
 
     def load(origin: str, _transport: object, _resolver: object) -> web_fetch._RobotsPolicy:
         loaded.append(origin)
-        return web_fetch._RobotsPolicy(web_fetch._allow_all_robots_parser(f"{origin}/robots.txt"))
+        return web_fetch._RobotsPolicy(web_fetch._AllowAllRobots())
 
     monkeypatch.setattr(web_fetch, "_fetch_robots_policy", load)
 
@@ -364,19 +358,10 @@ def test_robots_policy_caches_by_origin_but_separates_scheme_and_port(
         return []
 
     origin = f"https://{host}"
-    first = web_fetch._robots_policy(f"{origin}/one", transport, resolver)
-
-    class UncachedPolicyLock:
-        def __enter__(self) -> None:
-            pytest.fail("a warm robots cache must return without taking the load lock")
-
-        def __exit__(self, *_args: object) -> None:
-            return None
-
-    monkeypatch.setitem(web_fetch._ROBOTS_LOAD_LOCKS, origin, cast(Any, UncachedPolicyLock()))
-    same_origin = web_fetch._robots_policy(f"https://{host}/two?next=1", transport, resolver)
-    other_scheme = web_fetch._robots_policy(f"http://{host}/one", transport, resolver)
-    other_port = web_fetch._robots_policy(f"https://{host}:8443/one", transport, resolver)
+    first = web_fetch._robots_policy(f"{origin}/one", transport, resolver, cache)
+    same_origin = web_fetch._robots_policy(f"https://{host}/two?next=1", transport, resolver, cache)
+    other_scheme = web_fetch._robots_policy(f"http://{host}/one", transport, resolver, cache)
+    other_port = web_fetch._robots_policy(f"https://{host}:8443/one", transport, resolver, cache)
 
     assert same_origin is first
     assert other_scheme is not first
@@ -393,6 +378,7 @@ def test_distinct_robots_origins_load_without_sharing_a_lock(
     first_entered = threading.Event()
     second_entered = threading.Event()
     release_first = threading.Event()
+    cache = web_fetch.RobotsCache()
 
     def load(origin: str, _transport: object, _resolver: object) -> web_fetch._RobotsPolicy:
         if origin == first_origin:
@@ -400,7 +386,7 @@ def test_distinct_robots_origins_load_without_sharing_a_lock(
             release_first.wait(timeout=2)
         elif origin == second_origin:
             second_entered.set()
-        return web_fetch._RobotsPolicy(web_fetch._allow_all_robots_parser(f"{origin}/robots.txt"))
+        return web_fetch._RobotsPolicy(web_fetch._AllowAllRobots())
 
     monkeypatch.setattr(web_fetch, "_fetch_robots_policy", load)
 
@@ -411,7 +397,7 @@ def test_distinct_robots_origins_load_without_sharing_a_lock(
         return []
 
     def fetch(origin: str) -> None:
-        web_fetch._robots_policy(f"{origin}/page", transport, resolver)
+        web_fetch._robots_policy(f"{origin}/page", transport, resolver, cache)
 
     first = threading.Thread(target=fetch, args=(first_origin,))
     second = threading.Thread(target=fetch, args=(second_origin,))
@@ -439,6 +425,7 @@ def test_robots_policy_loads_an_origin_once_for_concurrent_requests(
     release = threading.Event()
     attempts: list[str] = []
     attempts_lock = threading.Lock()
+    cache = web_fetch.RobotsCache()
 
     def load(origin: str, _transport: object, _resolver: object) -> web_fetch._RobotsPolicy:
         with attempts_lock:
@@ -448,7 +435,7 @@ def test_robots_policy_loads_an_origin_once_for_concurrent_requests(
             else:
                 second_load.set()
         release.wait(timeout=2)
-        return web_fetch._RobotsPolicy(web_fetch._allow_all_robots_parser(f"{origin}/robots.txt"))
+        return web_fetch._RobotsPolicy(web_fetch._AllowAllRobots())
 
     monkeypatch.setattr(web_fetch, "_fetch_robots_policy", load)
 
@@ -461,7 +448,7 @@ def test_robots_policy_loads_an_origin_once_for_concurrent_requests(
     results: list[web_fetch._RobotsPolicy] = []
 
     def fetch() -> None:
-        results.append(web_fetch._robots_policy(f"https://{host}/page", transport, resolver))
+        results.append(web_fetch._robots_policy(f"https://{host}/page", transport, resolver, cache))
 
     first = threading.Thread(target=fetch)
     second = threading.Thread(target=fetch)
@@ -479,6 +466,61 @@ def test_robots_policy_loads_an_origin_once_for_concurrent_requests(
     assert not second.is_alive()
     assert attempts == [f"https://{host}"]
     assert len(results) == 2 and results[0] is results[1]
+
+
+def test_a_failed_load_keeps_the_origin_lock_for_callers_already_queued() -> None:
+    """A caller that arrives after a failed load still waits for the queued caller (#135)."""
+    cache = web_fetch.RobotsCache()
+    origin = "https://failed-load.example"
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+    release_second = threading.Event()
+    third_entered = threading.Event()
+    attempts: list[str] = []
+    attempts_lock = threading.Lock()
+    errors: list[OSError] = []
+
+    def load(origin_arg: str) -> web_fetch._RobotsPolicy:
+        with attempts_lock:
+            attempts.append(origin_arg)
+            attempt = len(attempts)
+        if attempt == 1:
+            first_entered.set()
+            release_first.wait(timeout=2)
+            raise OSError("robots fetch failed")
+        if attempt == 2:
+            second_entered.set()
+            release_second.wait(timeout=2)
+        else:
+            third_entered.set()
+        return web_fetch._RobotsPolicy(web_fetch._AllowAllRobots())
+
+    def call() -> None:
+        try:
+            cache.get_or_load(origin, load)
+        except OSError as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=call)
+    first.start()
+    assert first_entered.wait(timeout=2)
+    second = threading.Thread(target=call)
+    second.start()
+    assert not second_entered.wait(timeout=0.1)
+    release_first.set()
+    assert second_entered.wait(timeout=2)
+    third = threading.Thread(target=call)
+    third.start()
+    try:
+        assert not third_entered.wait(timeout=0.1)
+    finally:
+        release_second.set()
+        for thread in (first, second, third):
+            thread.join(timeout=2)
+
+    assert attempts == [origin, origin]
+    assert len(errors) == 1
 
 
 def test_disallowed_page_is_not_requested(memory_http: MemoryHTTPFixture) -> None:

@@ -162,52 +162,51 @@ def _show_click_error(error: Any) -> int:
     return int(error.exit_code)
 
 
+# Shell-quoted default locations, shown verbatim in the epilogs of --help.
+_RUNS_ROOT_EXAMPLE = '"${OSM_POLY_DATA_DIR:-./data}/runs"'
+_RUN_DIR_EXAMPLE = '"${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"'
+
+_EPILOGS: dict[str, str] = {
+    "init": f"Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root {_RUNS_ROOT_EXAMPLE} --run-id website-v1",
+    "extract": f"Example: osm-polygon-website-tag extract region.osm.pbf --run-dir {_RUN_DIR_EXAMPLE}",
+    "publish": f"Example: osm-polygon-website-tag publish --run-dir {_RUN_DIR_EXAMPLE} --apply",
+    "release-stats": f"Example: osm-polygon-website-tag release-stats --run-dir {_RUN_DIR_EXAMPLE}",
+    "create-repo": "Example: osm-polygon-website-tag create-repo --repo-id owner/name --apply",
+    "run-all": f"Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root {_RUNS_ROOT_EXAMPLE} --run-id website-v1",
+    "grid5000-prepare": 'Example: osm-polygon-website-tag grid5000-prepare --run-dir <run> --bundle-dir <bundle> --model-path <model_v3.bin> --commit "$(git rev-parse HEAD)"',
+}
+
+
 def _register_commands(target: typer.Typer) -> None:
-    target.command(
-        "init",
-        epilog='Example: osm-polygon-website-tag init --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
-    )(run.init_command)
-    target.command(
-        "extract",
-        epilog='Example: osm-polygon-website-tag extract region.osm.pbf --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
-    )(run.extract_command)
-    target.command("analyze-results")(verify.analyze_command)
-    target.command("build-card")(verify.card_command)
-    target.command("verify-results")(verify.verify_command)
-    target.command("refresh-card")(verify.refresh_card_command)
-    target.command("finalize-run")(verify.finalize_command)
-    target.command("finalize-snapshot")(verify.finalize_snapshot_command)
-    target.command("publish-plan")(publish.publish_plan_command)
-    target.command(
-        "publish",
-        epilog='Example: osm-polygon-website-tag publish --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1" --apply',
-    )(publish.publish_command)
-    target.command(
-        "release-stats",
-        epilog='Example: osm-polygon-website-tag release-stats --run-dir "${OSM_POLY_DATA_DIR:-./data}/runs/website-v1"',
-    )(publish.release_stats_command)
-    target.command(
-        "create-repo",
-        epilog="Example: osm-polygon-website-tag create-repo --repo-id owner/name --apply",
-    )(publish.create_repo_command)
-    target.command("card-stats")(verify.card_stats_command)
-    target.command("geometry-stats")(verify.geometry_stats_command)
-    target.command("publish-trackio")(publish.publish_trackio_command)
-    target.command(
-        "run-all",
-        epilog='Example: osm-polygon-website-tag run-all --source-root /path/to/pbf-root --output-root "${OSM_POLY_DATA_DIR:-./data}/runs" --run-id website-v1',
-    )(run.run_all_command)
-    target.command("detect-languages")(languages.detect_languages_command)
-    target.command("segment-sentences")(sentences.segment_sentences_command)
-    target.command(
-        "grid5000-prepare",
-        epilog='Example: osm-polygon-website-tag grid5000-prepare --run-dir <run> --bundle-dir <bundle> --model-path <model_v3.bin> --commit "$(git rev-parse HEAD)"',
-    )(grid5000.grid5000_prepare_command)
-    target.command("grid5000-run")(grid5000.grid5000_run_command)
-    target.command("grid5000-sync")(grid5000.grid5000_sync_command)
-    target.command("grid5000-prepare-sentences")(grid5000.grid5000_prepare_sentences_command)
-    target.command("grid5000-run-sentences")(grid5000.grid5000_run_sentences_command)
-    target.command("grid5000-sync-sentences")(grid5000.grid5000_sync_sentences_command)
+    # Registration order is the order shown in --help.
+    commands = (
+        ("init", run.init_command),
+        ("extract", run.extract_command),
+        ("analyze-results", verify.analyze_command),
+        ("build-card", verify.card_command),
+        ("verify-results", verify.verify_command),
+        ("refresh-card", verify.refresh_card_command),
+        ("finalize-run", verify.finalize_command),
+        ("finalize-snapshot", verify.finalize_snapshot_command),
+        ("publish-plan", publish.publish_plan_command),
+        ("publish", publish.publish_command),
+        ("release-stats", publish.release_stats_command),
+        ("create-repo", publish.create_repo_command),
+        ("card-stats", verify.card_stats_command),
+        ("geometry-stats", verify.geometry_stats_command),
+        ("publish-trackio", publish.publish_trackio_command),
+        ("run-all", run.run_all_command),
+        ("detect-languages", languages.detect_languages_command),
+        ("segment-sentences", sentences.segment_sentences_command),
+        ("grid5000-prepare", grid5000.grid5000_prepare_command),
+        ("grid5000-run", grid5000.grid5000_run_command),
+        ("grid5000-sync", grid5000.grid5000_sync_command),
+        ("grid5000-prepare-sentences", grid5000.grid5000_prepare_sentences_command),
+        ("grid5000-run-sentences", grid5000.grid5000_run_sentences_command),
+        ("grid5000-sync-sentences", grid5000.grid5000_sync_sentences_command),
+    )
+    for name, handler in commands:
+        target.command(name, epilog=_EPILOGS.get(name))(handler)
 
 
 _register_commands(app)

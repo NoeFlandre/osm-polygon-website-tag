@@ -241,8 +241,7 @@ def test_run_stats_invokes_child_and_removes_transfer_file(monkeypatch, tmp_path
     monkeypatch.setattr(mutation_runner, "_stats_output_path", lambda: output)
     monkeypatch.setattr(mutation_runner.subprocess, "run", fake_run)
     assert mutation_runner._run_stats(_runner(), ["tests/test_one.py::test_one"]) == 0
-    command = captured["command"]
-    assert isinstance(command, list)
+    command = cast(list[str], captured["command"])
     assert command[2] == "--stats-child"
     assert captured["cwd"] == Path.cwd().resolve()
     assert captured["check"] is False
