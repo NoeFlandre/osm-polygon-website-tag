@@ -135,8 +135,9 @@ def test_reusable_lookup_returns_none_for_an_unknown_url(tmp_path: Path) -> None
 def test_cached_text_is_immutable() -> None:
     value = _result()
 
+    attribute = "status"
     with pytest.raises(dataclasses.FrozenInstanceError):
-        value.status = "failure"  # type: ignore[misc]
+        setattr(value, attribute, "failure")
 
 
 def test_invalid_cache_status_names_the_status(tmp_path: Path) -> None:
