@@ -150,23 +150,26 @@ def _read_source_manifest(path: Path, errors: list[str]) -> list[SourceManifestE
     return _read_json_array(path, errors)
 
 
+_INVALID_JSON = object()
+
+
 def _read_json_value(
     path: Path,
     errors: list[str],
     *,
     label: str,
-) -> tuple[bool, Any]:
-    """Read one JSON value and report parse or encoding failures."""
+) -> Any:
+    """Read one JSON value; report parse or encoding failures and return ``_INVALID_JSON``."""
     try:
-        return True, json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         errors.append(f"invalid JSON {label} {path}: {exc}")
-        return False, None
+        return _INVALID_JSON
 
 
 def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:
-    ok, value = _read_json_value(path, errors, label="object")
-    if not ok:
+    value = _read_json_value(path, errors, label="object")
+    if value is _INVALID_JSON:
         return {}
     if not isinstance(value, dict):
         errors.append(f"expected JSON object: {path}")
@@ -175,8 +178,8 @@ def _read_json_object(path: Path, errors: list[str]) -> dict[str, Any]:
 
 
 def _read_json_array(path: Path, errors: list[str]) -> list[SourceManifestEntry]:
-    ok, value = _read_json_value(path, errors, label="array")
-    if not ok:
+    value = _read_json_value(path, errors, label="array")
+    if value is _INVALID_JSON:
         return []
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         errors.append(f"expected array of objects: {path}")
