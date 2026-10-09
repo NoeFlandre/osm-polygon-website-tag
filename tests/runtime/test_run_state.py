@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -152,7 +153,7 @@ def test_load_run_rejects_non_object_run_metadata(tmp_path: Path) -> None:
     run_dir, _state = initialise_run(tmp_path, run_id="abc")
     (run_dir / "manifests" / "run.json").write_text("[]", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="run metadata must be a JSON object"):
+    with pytest.raises(ValueError, match=r"^run metadata must be a JSON object$"):
         load_run(run_dir)
 
 
@@ -663,3 +664,192 @@ def test_update_public_shard_metadata_rejects_an_unprocessed_source(tmp_path: Pa
         update_public_shard_metadata(
             state, filename="ghost.osm.pbf", row_count=1, shard_sha256="b" * 64
         )
+
+
+def test_initialise_run_creates_missing_output_parents(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path / "outputs" / "nested", run_id="abc")
+
+    assert run_dir == tmp_path / "outputs" / "nested" / "abc"
+    assert state.run_dir == run_dir
+
+
+def test_initialise_run_records_id_creation_time_and_initial_status(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
+
+    stored = json.loads((run_dir / "manifests" / "run.json").read_text(encoding="utf-8"))
+    assert stored == state.metadata
+    assert stored["run_id"] == "abc"
+    assert stored["status"] == STATUS_INITIALIZED
+    assert datetime.fromisoformat(stored["created_at"]).tzinfo is not None
+
+
+def test_initialise_run_writes_expected_sources_sorted_by_filename(tmp_path: Path) -> None:
+    expected = [
+        SourceFingerprint(filename="b.osm.pbf", size_bytes=2, mtime_ns=2),
+        SourceFingerprint(filename="a.osm.pbf", size_bytes=1, mtime_ns=1),
+    ]
+
+    run_dir, _state = initialise_run(tmp_path, run_id="abc", expected_sources=expected)
+
+    manifest = run_dir / "manifests" / "expected_sources.json"
+    stored = json.loads(manifest.read_text(encoding="utf-8"))
+    assert [entry["filename"] for entry in stored] == ["a.osm.pbf", "b.osm.pbf"]
+
+
+def test_load_run_prefers_the_recorded_run_id_over_the_directory_name(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="recorded")
+    renamed = run_dir.rename(tmp_path / "renamed-directory")
+
+    assert load_run(renamed).run_id == "recorded"
+
+
+def test_load_run_falls_back_to_directory_name_when_run_id_absent(tmp_path: Path) -> None:
+    run_dir = tmp_path / "fallback-run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "run.json").write_text("{}", encoding="utf-8")
+
+    assert load_run(run_dir).run_id == "fallback-run"
+
+
+def test_load_run_reports_a_missing_run_json_by_its_path(tmp_path: Path) -> None:
+    run_dir = tmp_path / "empty-run"
+
+    with pytest.raises(FileNotFoundError) as missing:
+        load_run(run_dir)
+
+    assert str(missing.value) == f"missing {run_dir / 'manifests' / 'run.json'}"
+
+
+def test_upsert_run_metadata_refuses_status_with_its_message(tmp_path: Path) -> None:
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
+    message = (
+        "use transition_status() to change run status; "
+        "upsert_run_metadata refuses to set it implicitly"
+    )
+
+    with pytest.raises(ValueError, match=rf"^{re.escape(message)}$"):
+        upsert_run_metadata(state, {"status": STATUS_EXTRACTING})
+
+
+def test_transition_status_walks_the_pipeline_and_records_each_change(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
+
+    for status in (STATUS_EXTRACTING, STATUS_EXTRACTED):
+        transition_status(state, status)
+        stored = json.loads((run_dir / "manifests" / "run.json").read_text(encoding="utf-8"))
+        assert stored["status"] == status
+        assert datetime.fromisoformat(stored["status_changed_at"]).tzinfo is not None
+
+    assert state.metadata["status"] == STATUS_EXTRACTED
+
+
+def test_record_processed_source_defaults_every_count_to_zero(tmp_path: Path) -> None:
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
+    pbf = _write_pbf_with_size(tmp_path / "monaco-latest.osm.pbf", b"data")
+    fp = snapshot_source_fingerprint(pbf)
+
+    record_processed_source(state, fp)
+
+    entry = state.sources[fp.filename]
+    counts = (entry["public_row_count"], entry["observation_row_count"], entry["rejection_count"])
+    assert counts == (0, 0, 0)
+
+
+def test_initialise_run_without_an_id_names_the_run_after_its_creation_time(
+    tmp_path: Path,
+) -> None:
+    run_dir, state = initialise_run(tmp_path)
+
+    assert state.run_id == run_dir.name
+    assert re.fullmatch(r"\d{8}T\d{6}Z", run_dir.name)
+
+
+def test_initialise_run_refuses_an_existing_run_directory(tmp_path: Path) -> None:
+    initialise_run(tmp_path, run_id="abc")
+
+    with pytest.raises(FileExistsError):
+        initialise_run(tmp_path, run_id="abc")
+
+
+def test_initialise_run_state_points_at_the_new_run(tmp_path: Path) -> None:
+    run_dir, state = initialise_run(tmp_path, run_id="abc")
+
+    assert state.run_dir == run_dir
+    assert state.run_id == "abc"
+
+
+def test_load_run_state_points_at_the_run_directory(tmp_path: Path) -> None:
+    run_dir, _state = initialise_run(tmp_path, run_id="abc")
+
+    assert load_run(run_dir).run_dir == run_dir
+
+
+def test_transition_status_names_an_unknown_target_in_its_message(tmp_path: Path) -> None:
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
+
+    with pytest.raises(ValueError, match=r"^unknown run status: 'bogus'$"):
+        transition_status(state, "bogus")
+
+
+def test_a_run_without_a_recorded_status_starts_as_initialised(tmp_path: Path) -> None:
+    run_dir = tmp_path / "statusless-run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "run.json").write_text("{}", encoding="utf-8")
+    state = load_run(run_dir)
+
+    transition_status(state, STATUS_EXTRACTING)
+
+    assert state.metadata["status"] == STATUS_EXTRACTING
+
+
+def test_a_run_with_an_unknown_recorded_status_rejects_every_transition(tmp_path: Path) -> None:
+    run_dir = tmp_path / "unknown-status-run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "run.json").write_text('{"status": "bogus"}', encoding="utf-8")
+    state = load_run(run_dir)
+
+    with pytest.raises(
+        ValueError, match=r"^illegal run-status transition: 'bogus' -> 'extracting'$"
+    ):
+        transition_status(state, STATUS_EXTRACTING)
+
+
+def test_record_processed_source_keeps_timing_and_digests_it_is_given(tmp_path: Path) -> None:
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
+    pbf = _write_pbf_with_size(tmp_path / "monaco-latest.osm.pbf", b"data")
+    fp = snapshot_source_fingerprint(pbf)
+
+    record_processed_source(
+        state,
+        fp,
+        started_at="start",
+        finished_at="finish",
+        public_shard_sha256="public",
+        observation_shard_sha256="observation",
+        rejection_shard_sha256="rejection",
+    )
+
+    entry = state.sources[fp.filename]
+    assert entry["started_at"] == "start"
+    assert entry["finished_at"] == "finish"
+    assert entry["public_shard_sha256"] == "public"
+    assert entry["observation_shard_sha256"] == "observation"
+    assert entry["rejection_shard_sha256"] == "rejection"
+
+
+def test_record_processed_source_omits_timing_and_digests_it_is_not_given(tmp_path: Path) -> None:
+    _run_dir, state = initialise_run(tmp_path, run_id="abc")
+    pbf = _write_pbf_with_size(tmp_path / "monaco-latest.osm.pbf", b"data")
+    fp = snapshot_source_fingerprint(pbf)
+
+    record_processed_source(state, fp)
+
+    entry = state.sources[fp.filename]
+    for key in (
+        "started_at",
+        "finished_at",
+        "public_shard_sha256",
+        "observation_shard_sha256",
+        "rejection_shard_sha256",
+    ):
+        assert key not in entry

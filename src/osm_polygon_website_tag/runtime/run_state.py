@@ -261,7 +261,7 @@ def initialise_run(
     if run_id is None:
         run_id = default_run_id()
     run_dir = output_root / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir.mkdir(parents=True)
     (run_dir / "polygons").mkdir()
     (run_dir / "analysis_observations").mkdir()
     (run_dir / "rejections").mkdir()
@@ -294,7 +294,8 @@ def load_run(run_dir: Path) -> RunState:
     metadata_raw = _read_json_document(run_json, label="run metadata")
     if not isinstance(metadata_raw, dict):
         raise ValueError("run metadata must be a JSON object")
-    metadata = cast(dict[str, Any], metadata_raw)
+    # The cast only informs the type checker, so mutating it cannot change behaviour.
+    metadata = cast(dict[str, Any], metadata_raw)  # pragma: no mutate
     sources_raw = (
         _read_json_document(sources_json, label="sources manifest") if sources_json.exists() else []
     )
@@ -377,7 +378,8 @@ def record_processed_source(
 
 def _add_optional_source_metadata(entry: SourceManifestEntry, **values: str | None) -> None:
     """Add present timing and output-digest fields without writing nulls."""
-    entry_data = cast(dict[str, object], entry)
+    # The cast only informs the type checker, so mutating it cannot change behaviour.
+    entry_data = cast(dict[str, object], entry)  # pragma: no mutate
     key_map = {
         "started_at": "started_at",
         "finished_at": "finished_at",
