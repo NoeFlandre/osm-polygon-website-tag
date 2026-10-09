@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
 
 from osm_polygon_website_tag.contracts.comparison_schema import COMPARISON_OBSERVATION_SCHEMA
 from osm_polygon_website_tag.contracts.polygon_schema import POLYGON_PUBLIC_SCHEMA
@@ -20,6 +23,24 @@ from osm_polygon_website_tag.reporting.geometry_stats import (
     ShapeStats,
 )
 from osm_polygon_website_tag.runtime.run_state import initialise_run
+
+_FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---(?:\n|\Z)", re.DOTALL)
+
+
+def parse_front_matter(document: str) -> dict[str, Any]:
+    """Return the YAML mapping between the leading ``---`` fences of a card document.
+
+    Works for ``README.md`` (front matter, then the body) and ``dataset.yaml``
+    (front matter only). Tests compare parsed fields, not substrings, so
+    ``public_row_count: 2`` never matches ``public_row_count: 20``.
+    """
+    match = _FRONT_MATTER.match(document)
+    if match is None:
+        raise ValueError("document has no leading YAML front matter")
+    loaded = yaml.safe_load(match.group(1))
+    if not isinstance(loaded, dict):
+        raise ValueError("YAML front matter is not a mapping")
+    return loaded
 
 
 def _ts():

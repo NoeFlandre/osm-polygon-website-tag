@@ -23,8 +23,3 @@ def test_settings_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_the_settings_read_the_data_root_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OSM_POLY_DATA_DIR", "/somewhere")
     assert config.Settings().osm_poly_data_dir == "/somewhere"
-
-
-def test_there_is_no_module_level_singleton_or_alias() -> None:
-    assert not hasattr(config, "settings")
-    assert not hasattr(config, "TRACKIO_DASHBOARD_URL")

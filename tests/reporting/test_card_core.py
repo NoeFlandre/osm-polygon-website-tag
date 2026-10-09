@@ -15,6 +15,7 @@ from tests.fixtures.card import (
     _golden_geometry_stats,
     _public_row,
     _setup_minimal_run,
+    parse_front_matter,
 )
 
 import osm_polygon_website_tag.reporting.card as card_module
@@ -99,12 +100,13 @@ def test_build_card_writes_readme_and_yaml(tmp_path: Path) -> None:
     assert path.exists()
     assert (run_dir / "dataset.yaml").exists()
     content = path.read_text()
+    front_matter = parse_front_matter(content)
     assert content.startswith("---")
-    assert "license: odbl" in content
-    assert "license_name:" not in content
-    assert "task_categories:" not in content
-    assert "task_categories:" not in (run_dir / "dataset.yaml").read_text()
-    assert "size_categories:\n  - n<1K" in content
+    assert front_matter["license"] == "odbl"
+    assert "license_name" not in front_matter
+    assert "task_categories" not in front_matter
+    assert "task_categories" not in parse_front_matter((run_dir / "dataset.yaml").read_text())
+    assert front_matter["size_categories"] == ["n<1K"]
     assert "© OpenStreetMap contributors" in content
     assert "https://www.openstreetmap.org/copyright" in content
     assert "https://download.geofabrik.de/" in content
@@ -139,7 +141,8 @@ def test_source_scoped_card_build_refreshes_existing_yaml(tmp_path: Path) -> Non
 
     build_card(run_dir, source_names={*first_source, "france-latest.osm.pbf"})
 
-    assert "public_row_count: 2" in (run_dir / "dataset.yaml").read_text(encoding="utf-8")
+    dataset = parse_front_matter((run_dir / "dataset.yaml").read_text(encoding="utf-8"))
+    assert dataset["public_row_count"] == 2
 
 
 def test_snapshot_section_renders_its_metrics_as_markdown_rows() -> None:
