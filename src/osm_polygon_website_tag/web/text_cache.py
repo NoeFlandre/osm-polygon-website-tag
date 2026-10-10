@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import sqlite3
 import time
 from collections.abc import Callable, Collection
@@ -12,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from osm_polygon_website_tag.contracts.text_schema import TEXT_STATUSES
+from osm_polygon_website_tag.contracts.timestamps import utc_iso, utc_now
 
 _CACHE_BUSY_TIMEOUT_SECONDS = 30.0
 _LOCK_RETRY_COUNT = 5
@@ -49,7 +49,6 @@ class TextCache:
         if commit_batch_size < 1:
             raise ValueError("commit_batch_size must be positive")
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.path = path
         self.commit_batch_size = commit_batch_size
         self._pending_mutations = 0
         self._closed = False
@@ -103,8 +102,6 @@ class TextCache:
         reusable: dict[str, CachedText] = {}
         for start in range(0, len(ordered_urls), CACHE_LOOKUP_CHUNK_SIZE):
             chunk = ordered_urls[start : start + CACHE_LOOKUP_CHUNK_SIZE]
-            if not chunk:
-                continue
             placeholders = ",".join("?" for _ in chunk)
             query = f"""SELECT url, status, text, word_count, final_url, message,
                   attempt_count, last_attempt_at, trafilatura_version,
@@ -132,7 +129,7 @@ class TextCache:
         """
         if value.status not in TEXT_STATUSES - {"absent", "pending"}:
             raise ValueError(f"invalid cache status: {value.status!r}")
-        last_attempt_at = dt.datetime.now(tz=dt.UTC).isoformat()
+        last_attempt_at = utc_iso()
         row = _retry_locked(
             lambda: self._db.execute(
                 """INSERT INTO website_text (
@@ -210,14 +207,15 @@ class TextCache:
 
 def _retry_locked[ResultT](operation: Callable[[], ResultT]) -> ResultT:
     """Retry a short-lived SQLite writer lock with bounded exponential backoff."""
-    for attempt in range(_LOCK_RETRY_COUNT + 1):
+    for attempt in range(_LOCK_RETRY_COUNT):
         try:
             return operation()
         except sqlite3.OperationalError as error:
-            if not _is_locked_error(error) or attempt == _LOCK_RETRY_COUNT:
+            if not _is_locked_error(error):
                 raise
             time.sleep(_LOCK_RETRY_DELAY_SECONDS * (2**attempt))
-    raise AssertionError("unreachable")
+    # The last attempt is not wrapped: a lock that persists propagates unchanged.
+    return operation()
 
 
 def _cached_text_from_row(row: tuple[Any, ...]) -> CachedText:
@@ -250,7 +248,7 @@ def _is_corruption_error(error: sqlite3.DatabaseError) -> bool:
 
 def _quarantine_corrupt_database(path: Path) -> Path:
     """Move a corrupt cache and its SQLite sidecars out of the active path."""
-    token = f"{dt.datetime.now(tz=dt.UTC):%Y%m%dT%H%M%S%fZ}-{uuid4().hex}"
+    token = f"{utc_now():%Y%m%dT%H%M%S%fZ}-{uuid4().hex}"
     quarantine = path.with_name(f"{path.name}.corrupt-{token}")
     for suffix in ("", "-wal", "-shm", "-journal"):
         candidate = Path(f"{path}{suffix}")

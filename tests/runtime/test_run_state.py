@@ -588,6 +588,14 @@ def test_source_entry_messages_name_the_label_index_and_field() -> None:
         "sources manifest[2].filename must be a non-empty string"
     )
 
+    for field_name in ("size_bytes", "mtime_ns"):
+        entry = {"filename": "a.osm.pbf", "size_bytes": 1, "mtime_ns": 1, field_name: True}
+        with pytest.raises(ValueError) as bool_field:
+            _validate_source_numeric_fields(entry, label="sources manifest", index=4)
+        assert str(bool_field.value) == (
+            f"sources manifest[4].{field_name} must be a non-bool integer"
+        )
+
 
 def test_source_inventory_matches_reports_corrupt_actual_json(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
@@ -874,3 +882,25 @@ def test_default_run_id_is_the_utc_time_whatever_the_local_zone(
         time.tzset()
 
     assert before <= datetime.strptime(run_id, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC) <= after
+
+
+def test_expected_source_inventory_names_the_missing_manifest(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=r"^missing .*manifests.expected_sources\.json$"):
+        expected_source_inventory(tmp_path / "run")
+
+
+def test_expected_source_inventory_reports_corrupt_json_with_its_label(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "expected_sources.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid expected sources manifest JSON"):
+        expected_source_inventory(run_dir)
+
+
+def test_source_inventory_matches_is_false_without_an_expected_inventory(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "manifests").mkdir(parents=True)
+    (run_dir / "manifests" / "sources.json").write_text("[]", encoding="utf-8")
+
+    assert source_inventory_matches(run_dir) is False

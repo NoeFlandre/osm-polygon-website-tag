@@ -9,8 +9,10 @@ import urllib.parse
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from email.utils import parsedate_to_datetime
+
+from osm_polygon_website_tag.contracts.timestamps import utc_now
 
 DEFAULT_HOST_CONCURRENCY = 2
 DEFAULT_HOST_DELAY_SECONDS = 0.2
@@ -111,7 +113,7 @@ def retry_after_seconds(value: str | None, *, now: datetime | None = None) -> fl
     moment = _http_date(text)
     if moment is None:
         return None
-    return max(0.0, (moment - (now or datetime.now(UTC))).total_seconds())
+    return max(0.0, (moment - (now or utc_now())).total_seconds())
 
 
 def _http_date(text: str) -> datetime | None:

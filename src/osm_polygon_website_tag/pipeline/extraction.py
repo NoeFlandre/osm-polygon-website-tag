@@ -23,6 +23,7 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from osm_polygon_website_tag.contracts.timestamps import utc_iso_seconds, utc_now
 from osm_polygon_website_tag.domain.region import region_from_pbf_filename
 from osm_polygon_website_tag.pipeline import extraction_handler as _extraction_handler
 from osm_polygon_website_tag.pipeline import extraction_records as _extraction_records
@@ -99,7 +100,7 @@ class ExtractionResult:
 
 
 def _now_iso() -> str:
-    return dt.datetime.now(tz=dt.UTC).replace(microsecond=0).isoformat()
+    return utc_iso_seconds()
 
 
 def extract_pbf(
@@ -134,7 +135,7 @@ def extract_pbf(
     _validate_pbf_path(pbf_path)
     _validate_area_settings(area_workers, max_in_flight_areas)
 
-    started = dt.datetime.now(tz=dt.UTC)
+    started = utc_now()
     source_before = snapshot_source_fingerprint(pbf_path)
     stem = pbf_path.name.removesuffix(".osm.pbf")
     region = region_from_pbf_filename(pbf_path.name)
@@ -182,9 +183,9 @@ def _finish_extraction(
     started: dt.datetime,
 ) -> ExtractionResult:
     """Record the finished extraction in the run state and summarize it."""
-    finished = dt.datetime.now(tz=dt.UTC)
-    started_iso = started.replace(microsecond=0).isoformat()
-    finished_iso = finished.replace(microsecond=0).isoformat()
+    finished = utc_now()
+    started_iso = utc_iso_seconds(started)
+    finished_iso = utc_iso_seconds(finished)
     duration = (finished - started).total_seconds()
     region = region_from_pbf_filename(pbf_path.name)
     public_count, obs_count, rej_count = counts
