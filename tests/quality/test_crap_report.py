@@ -233,19 +233,57 @@ def test_crap_report_counts_class_methods_once_not_as_classes(tmp_path: Path) ->
     assert result.stdout.count("__call__") == 1
 
 
-def test_production_function_complexity_is_shallow() -> None:
-    from radon.complexity import cc_visit
+# mutmut writes each mutated function as ``<name>__mutmut_<n>``. A mutation run also
+# executes this test inside its ``mutants/`` copy, where those generated functions can
+# exceed production limits; they are not production code, so they are not measured.
+_MUTMUT_MARKER = "__mutmut_"
 
-    source_root = Path(__file__).parents[2] / "src" / "osm_polygon_website_tag"
-    failures = []
+
+def _shallow_failures(source_root: Path) -> list[str]:
+    """Return each function under ``source_root`` above complexity 5, skipping mutants."""
+    failures: list[str] = []
     for path in sorted(source_root.rglob("*.py")):
         for block in cc_visit(path.read_text(encoding="utf-8")):
-            if block.__class__.__name__ == "Class":
+            if block.__class__.__name__ == "Class" or _MUTMUT_MARKER in block.name:
                 continue
             if block.complexity > 5:
                 failures.append(f"{path}:{block.lineno} {block.name}={block.complexity}")
+    return failures
 
-    assert failures == []
+
+def test_production_function_complexity_is_shallow() -> None:
+    source_root = Path(__file__).parents[2] / "src" / "osm_polygon_website_tag"
+
+    assert _shallow_failures(source_root) == []
+
+
+_DEEP_FUNCTION = """def deep(x):
+    if x == 1:
+        return 1
+    if x == 2:
+        return 2
+    if x == 3:
+        return 3
+    if x == 4:
+        return 4
+    if x == 5:
+        return 5
+    return 0
+"""
+
+
+def test_shallow_check_reports_a_deep_production_function(tmp_path: Path) -> None:
+    (tmp_path / "module.py").write_text(_DEEP_FUNCTION, encoding="utf-8")
+
+    assert _shallow_failures(tmp_path) == [f"{tmp_path / 'module.py'}:1 deep=6"]
+
+
+def test_shallow_check_ignores_mutmut_variants_in_a_mutant_copy(tmp_path: Path) -> None:
+    """A mutant copy holds deep ``__mutmut_N`` variants; they are generated, not production code."""
+    variant = _DEEP_FUNCTION.replace("def deep(", "def x_deep__mutmut_1(")
+    (tmp_path / "module.py").write_text(variant, encoding="utf-8")
+
+    assert _shallow_failures(tmp_path) == []
 
 
 _DECORATED_SOURCE = """import functools

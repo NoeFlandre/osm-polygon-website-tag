@@ -122,7 +122,7 @@ def _freeze(monkeypatch: pytest.MonkeyPatch, *moments: _REAL_DATETIME) -> None:
 
     class FrozenDatetime(_REAL_DATETIME):
         @classmethod
-        def now(cls, tz: dt.tzinfo | None = None) -> _REAL_DATETIME:
+        def now(cls, tz: dt.tzinfo | None = None) -> _REAL_DATETIME:  # ty: ignore[invalid-method-override]  # the double returns a plain datetime, not Self
             moment = queue.pop(0) if len(queue) > 1 else queue[0]
             return moment if tz is None else moment.astimezone(tz)
 
