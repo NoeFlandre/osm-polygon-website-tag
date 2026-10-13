@@ -122,12 +122,17 @@ jobs:
           fi
           exit "$status"
 
+      - name: Require all pipeline mutants to have verdicts
+        id: verify-pipeline
+        if: matrix.area == 'pipeline'
+        run: uv run --locked python scripts/quality/mutation_checkpoint.py verify
+
       - name: Mark the pipeline sweep checkpoint
         id: mark-checkpoint
         if: always() && matrix.area == 'pipeline'
         run: >-
           uv run --locked python scripts/quality/mutation_checkpoint.py mark
-          --outcome "${{ steps.sweep.outcome }}"
+          --outcome "${{ steps.verify-pipeline.outcome }}"
 
       - name: Collect the area's unverified mutants
         run: |

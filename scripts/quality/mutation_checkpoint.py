@@ -124,6 +124,29 @@ def mark_checkpoint(outcome: str, root: Path) -> None:
             shutil.copyfile(path, target)
 
 
+def verify_checkpoint(root: Path) -> None:
+    """Fail unless every pipeline mutant has a recorded verdict."""
+    metadata_paths = _metadata_paths(root)
+    if not metadata_paths:
+        raise RuntimeError("no pipeline mutants were generated")
+
+    mutant_count = 0
+    unchecked: list[str] = []
+    for path in metadata_paths:
+        if not _valid_metadata(path):
+            raise RuntimeError(f"invalid pipeline mutation metadata: {path}")
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        exit_codes = metadata["exit_code_by_key"]
+        mutant_count += len(exit_codes)
+        unchecked.extend(name for name, code in exit_codes.items() if code is None)
+
+    if mutant_count == 0:
+        raise RuntimeError("no pipeline mutants were generated")
+    if unchecked:
+        sample = ", ".join(sorted(unchecked)[:5])
+        raise RuntimeError(f"pipeline mutants were not checked ({len(unchecked)}): {sample}")
+
+
 def main() -> None:
     """Prepare a checkpoint or mark the outcome of one pipeline-area sweep."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -133,12 +156,19 @@ def main() -> None:
     mark = commands.add_parser("mark")
     mark.add_argument("--outcome", required=True)
     mark.add_argument("--root", type=Path, default=Path.cwd())
+    verify = commands.add_parser("verify")
+    verify.add_argument("--root", type=Path, default=Path.cwd())
     args = parser.parse_args()
 
     if args.command == "prepare":
         prepare_checkpoint(args.root)
-    else:
+    elif args.command == "mark":
         mark_checkpoint(args.outcome, args.root)
+    else:
+        try:
+            verify_checkpoint(args.root)
+        except RuntimeError as exc:
+            parser.exit(1, f"error: {exc}\n")
 
 
 if __name__ == "__main__":

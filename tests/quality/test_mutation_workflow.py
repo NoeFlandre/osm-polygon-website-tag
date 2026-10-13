@@ -112,6 +112,24 @@ def test_pipeline_resume_cache_is_isolated_to_the_exact_commit() -> None:
     assert "steps.mark-checkpoint.outcome == 'success'" in save["if"]
 
 
+def test_pipeline_checkpoint_requires_a_complete_mutant_verdict_set() -> None:
+    prepare = _step("area", "Prepare the pipeline sweep checkpoint")
+    verify = _step("area", "Require all pipeline mutants to have verdicts")
+    mark = _step("area", "Mark the pipeline sweep checkpoint")
+    run = _step("area", "Sweep the area")
+
+    assert prepare["if"] == "matrix.area == 'pipeline'"
+    assert verify["if"] == "matrix.area == 'pipeline'"
+    assert "mutation_checkpoint.py verify" in verify["run"]
+    assert mark["if"].startswith("always() && matrix.area == 'pipeline'")
+    assert mark["id"] == "mark-checkpoint"
+    assert "steps.verify-pipeline.outcome" in mark["run"]
+    assert run["env"]["MUTATION_SOURCE_SCOPE"] == (
+        "${{ matrix.area == 'pipeline' && 'osm_polygon_website_tag.pipeline.*' || '' }}"
+    )
+    assert '"${filters[@]}"' in run["run"]
+
+
 def test_nightly_publishes_the_baseline_diff_and_still_fails_on_growth() -> None:
     merge = _step("merge", "Merge the areas into a candidate baseline")["run"]
     upload = _step("merge", "Upload the baseline diff")

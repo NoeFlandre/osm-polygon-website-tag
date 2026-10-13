@@ -79,3 +79,37 @@ def test_mark_records_success_only_for_a_successful_sweep(tmp_path: Path) -> Non
     mutation_checkpoint.mark_checkpoint("cancelled", tmp_path)
     assert marker.read_text(encoding="utf-8") == "partial\n"
     assert (cache_dir / "mutants/src/osm_polygon_website_tag/pipeline/pipeline.py.meta").is_file()
+
+
+def test_verify_rejects_a_scope_without_mutant_metadata(tmp_path: Path) -> None:
+    import pytest
+
+    with pytest.raises(RuntimeError, match="no pipeline mutants"):
+        mutation_checkpoint.verify_checkpoint(tmp_path)
+
+
+def test_verify_rejects_unchecked_mutants(tmp_path: Path) -> None:
+    import pytest
+
+    _metadata(tmp_path, exit_code=None)
+
+    with pytest.raises(RuntimeError, match="not checked"):
+        mutation_checkpoint.verify_checkpoint(tmp_path)
+
+
+def test_verify_rejects_invalid_metadata_types(tmp_path: Path) -> None:
+    import pytest
+
+    metadata = _metadata(tmp_path)
+    contents = json.loads(metadata.read_text(encoding="utf-8"))
+    contents["exit_code_by_key"]["mutant"] = True
+    metadata.write_text(json.dumps(contents), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="invalid pipeline mutation metadata"):
+        mutation_checkpoint.verify_checkpoint(tmp_path)
+
+
+def test_verify_accepts_a_complete_pipeline_sweep(tmp_path: Path) -> None:
+    _metadata(tmp_path)
+
+    mutation_checkpoint.verify_checkpoint(tmp_path)
