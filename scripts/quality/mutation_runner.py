@@ -37,6 +37,7 @@ _MPLCONFIGDIR: Final = (
     Path(tempfile.gettempdir()) / f"osm-polygon-website-tag-mutmut-mplconfig-{os.getpid()}"
 )
 _TEST_SELECTION_ENV: Final = "MUTATION_TEST_PATHS"
+_SOURCE_SCOPE_ENV: Final = "MUTATION_SOURCE_SCOPE"
 _EMPTY_SHARD_EXIT_CODE: Final = 86
 
 
@@ -426,9 +427,18 @@ def _install_mutmut_hooks(mutmut_main: Any) -> None:
 
 
 def _run_mutmut_cli(mutmut_main: Any, arguments: Sequence[str]) -> None:
-    """Apply any requested source scope, then run mutmut with its usual CLI."""
+    """Apply a source scope independently of mutant filters, then run mutmut."""
     mutant_names = _mutant_names_from_cli(arguments)
-    if mutant_names:
+    source_scope = os.environ.get(_SOURCE_SCOPE_ENV, "").strip()
+    if source_scope and mutant_names:
+        raise ValueError(f"{_SOURCE_SCOPE_ENV} cannot be combined with explicit mutant filters")
+    if source_scope:
+        if not arguments or arguments[0] != "run":
+            raise ValueError(f"{_SOURCE_SCOPE_ENV} is only supported with mutmut run")
+        if not _configure_source_scope((source_scope,)):
+            print(f"No source files match mutation scope: {source_scope}")
+            raise SystemExit(_EMPTY_SHARD_EXIT_CODE)
+    elif mutant_names:
         _configure_source_scope(mutant_names)
     sys.argv[0] = "mutmut"
     try:

@@ -74,19 +74,60 @@ jobs:
       - name: Sync locked environment
         run: uv sync --locked
 
+      - name: Fingerprint the mutation environment
+        id: mutation-env
+        if: matrix.area == 'pipeline'
+        run: |
+          set -euo pipefail
+          fingerprint="$(
+            {
+              printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" "$(cat .python-version)"
+              uv --version
+              uv run --locked python --version
+            } | sha256sum | cut -c1-16
+          )"
+          printf 'fingerprint=%s\n' "$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Restore an interrupted pipeline sweep
+        if: matrix.area == 'pipeline'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mutation-checkpoint
+          key: mutation-pipeline-${{ runner.os }}-${{ github.sha }}-${{ hashFiles('uv.lock') }}-${{ steps.mutation-env.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            mutation-pipeline-${{ runner.os }}-${{ github.sha }}-${{ hashFiles('uv.lock') }}-${{ steps.mutation-env.outputs.fingerprint }}-
+
+      - name: Prepare the pipeline sweep checkpoint
+        if: matrix.area == 'pipeline'
+        run: uv run --locked python scripts/quality/mutation_checkpoint.py prepare
+
       - name: Sweep the area
+        id: sweep
         # Exit status 86 means the area's filter matched no mutable function, as
         # when an area mapped to a bare __init__.py. That is a mapping fault,
         # so name the area in the failure rather than leave a bare exit code.
+        env:
+          MUTATION_SOURCE_SCOPE: ${{ matrix.area == 'pipeline' && 'osm_polygon_website_tag.pipeline.*' || '' }}
         run: |
+          filters=()
+          if [[ "${{ matrix.area }}" != "pipeline" ]]; then
+            filters+=("osm_polygon_website_tag.${{ matrix.area }}.*")
+          fi
           status=0
           uv run --locked python scripts/quality/mutation_runner.py run \
             --max-children "${{ inputs.children || '4' }}" \
-            "osm_polygon_website_tag.${{ matrix.area }}.*" || status=$?
+            "${filters[@]}" || status=$?
           if [ "$status" -eq 86 ]; then
             echo "::error::mutation area ${{ matrix.area }} matched no mutable functions; check scripts/quality/mutation_scope.py and its package" >&2
           fi
           exit "$status"
+
+      - name: Mark the pipeline sweep checkpoint
+        id: mark-checkpoint
+        if: always() && matrix.area == 'pipeline'
+        run: >-
+          uv run --locked python scripts/quality/mutation_checkpoint.py mark
+          --outcome "${{ steps.sweep.outcome }}"
 
       - name: Collect the area's unverified mutants
         run: |
@@ -103,6 +144,15 @@ jobs:
         with:
           name: mutation-results-${{ matrix.area }}
           path: results-${{ matrix.area }}.txt
+
+      - name: Save the pipeline sweep checkpoint
+        if: >-
+          always() && matrix.area == 'pipeline'
+          && steps.mark-checkpoint.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mutation-checkpoint
+          key: mutation-pipeline-${{ runner.os }}-${{ github.sha }}-${{ hashFiles('uv.lock') }}-${{ steps.mutation-env.outputs.fingerprint }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   merge:
     needs: area
