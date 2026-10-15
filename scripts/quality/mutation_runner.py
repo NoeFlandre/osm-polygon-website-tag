@@ -39,6 +39,7 @@ _MPLCONFIGDIR: Final = (
 _TEST_SELECTION_ENV: Final = "MUTATION_TEST_PATHS"
 _SOURCE_SCOPE_ENV: Final = "MUTATION_SOURCE_SCOPE"
 _EMPTY_SHARD_EXIT_CODE: Final = 86
+_MUTMUT_INTERRUPTED_EXIT_CODE: Final = 2
 
 
 def _validate_mutant_package(mutant_name: str) -> None:
@@ -455,8 +456,12 @@ def _install_mutation_checkpoint_hooks(mutmut_main: Any) -> None:
         if os.environ.get("MUTATION_RESUME_COMPLETED") != "1":
             return mutants, mutation_data_by_path
         # Explicit mutmut filters normally force completed mutants to rerun. During
-        # an exact-commit checkpoint resume, only unfinished selected mutants run.
-        return [mutant for mutant in mutants if mutant[2] is None], mutation_data_by_path
+        # an exact-commit checkpoint resume, retry unfinished or interrupted mutants.
+        return [
+            mutant
+            for mutant in mutants
+            if mutant[2] is None or mutant[2] == _MUTMUT_INTERRUPTED_EXIT_CODE
+        ], mutation_data_by_path
 
     mutmut_main.collect_source_file_mutation_data = cast(Any, collect_source_file_mutation_data)
 

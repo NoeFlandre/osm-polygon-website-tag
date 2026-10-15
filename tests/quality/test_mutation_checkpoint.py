@@ -479,7 +479,7 @@ def test_mutation_runner_atomic_save_writes_mutmut_metadata(
     assert not list(data.meta_path.parent.glob("*.tmp"))
 
 
-def test_resume_hook_skips_only_selected_completed_mutants(
+def test_resume_hook_skips_completed_and_retries_interrupted_or_unchecked_mutants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mutmut.mutation.data import SourceFileMutationData
@@ -488,10 +488,11 @@ def test_resume_hook_skips_only_selected_completed_mutants(
     monkeypatch.setattr(SourceFileMutationData, "save", original_save)
     completed = (object(), _MUTANT, 0)
     unfinished = (object(), _MUTANT + "_2", None)
+    interrupted = (object(), _MUTANT + "_3", 2)
     data_by_path = {"src/example.py": object()}
     fake_main = SimpleNamespace(
         collect_source_file_mutation_data=lambda *, mutant_names: (
-            [completed, unfinished],
+            [completed, unfinished, interrupted],
             data_by_path,
         )
     )
@@ -500,11 +501,11 @@ def test_resume_hook_skips_only_selected_completed_mutants(
     monkeypatch.setenv("MUTATION_RESUME_COMPLETED", "1")
     selected, returned_data = fake_main.collect_source_file_mutation_data(mutant_names=_FILTERS)
 
-    assert selected == [unfinished]
+    assert selected == [unfinished, interrupted]
     assert returned_data is data_by_path
     monkeypatch.delenv("MUTATION_RESUME_COMPLETED")
     selected, _ = fake_main.collect_source_file_mutation_data(mutant_names=_FILTERS)
-    assert selected == [completed, unfinished]
+    assert selected == [completed, unfinished, interrupted]
 
 
 @pytest.mark.parametrize(
