@@ -1397,6 +1397,7 @@ def test_checkpoint_artifact_map_uses_attempt_then_sequence_for_equal_timestamps
         attempt_one_sequence_two,
         attempt_one_sequence_one,
         attempt_two_sequence_one,
+        attempt_two_sequence_one,
     ]
 
     for candidates in (artifacts, list(reversed(artifacts))):
