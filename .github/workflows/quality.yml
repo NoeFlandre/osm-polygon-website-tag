@@ -24,6 +24,7 @@ jobs:
     outputs:
       mutation_filters: ${{ steps.mutation-scope.outputs.filters }}
       source_changed: ${{ steps.mutation-scope.outputs.source_changed }}
+      checkpoint_changed: ${{ steps.mutation-scope.outputs.checkpoint_changed }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -69,6 +70,18 @@ jobs:
             source_changed=true
           fi
           printf 'source_changed=%s\n' "$source_changed" >> "$GITHUB_OUTPUT"
+          if git diff --quiet "${base_ref}...HEAD" -- \
+            scripts/quality/mutation_checkpoint.py \
+            tests/quality/test_mutation_checkpoint.py; then
+            checkpoint_changed=false
+          else
+            diff_status=$?
+            if [[ "$diff_status" -ne 1 ]]; then
+              exit "$diff_status"
+            fi
+            checkpoint_changed=true
+          fi
+          printf 'checkpoint_changed=%s\n' "$checkpoint_changed" >> "$GITHUB_OUTPUT"
 
   quality:
     runs-on: ubuntu-latest
@@ -141,6 +154,68 @@ jobs:
           git checkout --force "${{ github.event.pull_request.head.sha }}"
           uv sync --locked
           just bench-compare
+
+  # This runner lives under scripts/, outside the package mutation filter.
+  # Keep its mutation assessment to one hosted job when its code or tests change.
+  checkpoint-mutation:
+    name: Checkpoint mutation
+    needs: scope
+    if: >-
+      github.event_name == 'pull_request'
+      && needs.scope.outputs.checkpoint_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HYPOTHESIS_PROFILE: mutation
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync locked environment
+        run: uv sync --locked
+
+      - name: Limit mutation to the checkpoint module and tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("pyproject.toml")
+          text = path.read_text(encoding="utf-8")
+          old_scope = 'source_paths = [\n    "src/osm_polygon_website_tag",\n]'
+          new_scope = (
+              'source_paths = [\n    "scripts/quality/mutation_checkpoint.py",\n]\n'
+              'only_mutate = ["scripts/quality/mutation_checkpoint.py"]'
+          )
+          old_tests = 'pytest_add_cli_args = ["-q", "--ignore=tests/architecture"]'
+          new_tests = (
+              old_tests
+              + '\npytest_add_cli_args_test_selection = '
+              + '["tests/quality/test_mutation_checkpoint.py"]'
+          )
+          if text.count(old_scope) != 1 or text.count(old_tests) != 1:
+              raise SystemExit("could not isolate checkpoint mutation scope")
+          path.write_text(
+              text.replace(old_scope, new_scope, 1).replace(old_tests, new_tests, 1),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Run checkpoint mutation gate
+        run: |
+          uv run --locked mutmut run --max-children 2
+          results="$RUNNER_TEMP/checkpoint-mutation-results.txt"
+          uv run --locked mutmut results --all true > "$results"
+          uv run --locked python scripts/quality/mutation_gate.py \
+            --results "$results" \
+            --baseline docs/quality/mutation-baseline.txt \
+            --strict-baseline \
+            --scope "scripts.quality.mutation_checkpoint."
 
   # A broken docs page used to surface only after the merge, on the Pages build.
   docs:
@@ -237,7 +312,7 @@ jobs:
   # (no mutation scope, or a push to main) is fine; a failed or cancelled one is not.
   ci-ok:
     if: always()
-    needs: [scope, quality, docs, docker, mutation, benchmarks]
+    needs: [scope, quality, docs, docker, mutation, benchmarks, checkpoint-mutation]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -246,6 +321,7 @@ jobs:
           RESULTS: >-
             ${{ needs.scope.result }} ${{ needs.quality.result }} ${{ needs.docs.result }}
             ${{ needs.docker.result }} ${{ needs.mutation.result }}
+            ${{ needs.checkpoint-mutation.result }}
         run: |
           for result in $RESULTS; do
             case "$result" in
