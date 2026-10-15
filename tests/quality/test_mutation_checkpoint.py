@@ -1376,32 +1376,82 @@ def test_select_checkpoint_artifact_returns_empty_for_a_missing_shard() -> None:
     )
 
 
-def test_checkpoint_artifact_map_uses_sequence_and_stable_tie_breaking() -> None:
+def test_checkpoint_artifact_map_uses_attempt_then_sequence_for_equal_timestamps() -> None:
     created_at = "2026-10-14T11:00:00Z"
+
+    def artifact(attempt: int, sequence: int) -> dict[str, Any]:
+        return {
+            "name": (
+                f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-"
+                f"run12-attempt{attempt}-seq{sequence}"
+            ),
+            "created_at": created_at,
+            "expired": False,
+        }
+
+    attempt_one_sequence_two = artifact(1, 2)
+    attempt_one_sequence_one = artifact(1, 1)
+    attempt_two_sequence_one = artifact(2, 1)
+    attempt_two_sequence_two = artifact(2, 2)
     artifacts = [
-        {
-            "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt1-seq2",
-            "created_at": created_at,
-            "expired": False,
-        },
-        {
-            "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt1-seq1",
-            "created_at": created_at,
-            "expired": False,
-        },
-        {
-            "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt2-seq2",
-            "created_at": created_at,
-            "expired": False,
-        },
+        attempt_one_sequence_two,
+        attempt_one_sequence_one,
+        attempt_two_sequence_one,
     ]
 
+    for candidates in (artifacts, list(reversed(artifacts))):
+        mapped = mutation_checkpoint.checkpoint_artifact_map(
+            candidates, head_sha=_HEAD_SHA, shard_ids={_SHARD_ID}, run_id=12
+        )
+
+        assert mapped[_SHARD_ID] == [
+            {
+                "fingerprint": _FINGERPRINT,
+                "name": attempt_two_sequence_one["name"],
+                "sequence": "1",
+            }
+        ]
+
     mapped = mutation_checkpoint.checkpoint_artifact_map(
-        artifacts, head_sha=_HEAD_SHA, shard_ids={_SHARD_ID}, run_id=12
+        [attempt_two_sequence_one, attempt_two_sequence_two],
+        head_sha=_HEAD_SHA,
+        shard_ids={_SHARD_ID},
+        run_id=12,
     )
 
-    assert mapped[_SHARD_ID][0]["sequence"] == "2"
-    assert mapped[_SHARD_ID][0]["name"] == artifacts[0]["name"]
+    assert mapped[_SHARD_ID] == [
+        {
+            "fingerprint": _FINGERPRINT,
+            "name": attempt_two_sequence_two["name"],
+            "sequence": "2",
+        }
+    ]
+
+
+def test_checkpoint_artifact_map_prefers_creation_time_before_attempt_and_sequence() -> None:
+    def artifact(attempt: int, sequence: int, created_at: str) -> dict[str, Any]:
+        return {
+            "name": (
+                f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-"
+                f"run12-attempt{attempt}-seq{sequence}"
+            ),
+            "created_at": created_at,
+            "expired": False,
+        }
+
+    older = artifact(9, 9, "2026-10-14T10:00:00Z")
+    newer = artifact(1, 1, "2026-10-14T11:00:00Z")
+    mapped = mutation_checkpoint.checkpoint_artifact_map(
+        [newer, older], head_sha=_HEAD_SHA, shard_ids={_SHARD_ID}, run_id=12
+    )
+
+    assert mapped[_SHARD_ID] == [
+        {
+            "fingerprint": _FINGERPRINT,
+            "name": newer["name"],
+            "sequence": "1",
+        }
+    ]
 
 
 def test_checkpoint_artifact_map_continues_after_a_nonmatching_artifact() -> None:
