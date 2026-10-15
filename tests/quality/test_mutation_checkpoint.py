@@ -830,6 +830,8 @@ def test_list_run_artifacts_preserves_api_url_path_suffix(
     requested: list[str] = []
 
     def api_json(url: str, _token: str) -> dict[str, Any]:
+        if requested:
+            raise AssertionError("empty artifact pages should stop pagination")
         requested.append(url)
         return {"artifacts": [], "total_count": 0}
 
@@ -852,7 +854,15 @@ def test_list_run_artifacts_preserves_api_url_path_suffix(
 def test_list_run_artifacts_uses_default_count_and_rejects_bad_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"artifacts": []})
+    requested: list[str] = []
+
+    def api_json(url: str, _token: str) -> dict[str, Any]:
+        if requested:
+            raise AssertionError("empty artifact pages should stop pagination")
+        requested.append(url)
+        return {"artifacts": []}
+
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", api_json)
     assert (
         mutation_checkpoint._list_run_artifacts(
             api_url="https://api.github.test",
@@ -862,6 +872,9 @@ def test_list_run_artifacts_uses_default_count_and_rejects_bad_page(
         )
         == []
     )
+    assert requested == [
+        "https://api.github.test/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=1"
+    ]
     monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"artifacts": "bad"})
     with pytest.raises(
         RuntimeError,
