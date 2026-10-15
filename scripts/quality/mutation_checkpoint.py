@@ -311,16 +311,6 @@ def _matching_checkpoint_artifact(
     )
 
 
-def _checkpoint_artifact_is_newer(
-    created_at: str,
-    attempt: int,
-    sequence: int,
-    name: str,
-    previous: tuple[str, int, int, str] | None,
-) -> bool:
-    return previous is None or (created_at, attempt, sequence, name) > previous
-
-
 def checkpoint_artifact_map(
     artifacts: Iterable[Mapping[str, Any]], *, head_sha: str, shard_ids: set[str], run_id: int
 ) -> dict[str, list[dict[str, str]]]:
@@ -333,9 +323,9 @@ def checkpoint_artifact_map(
             continue
         shard_id, fingerprint, created_at, attempt, name, sequence = match
         key = (shard_id, fingerprint)
+        candidate = (created_at, attempt, sequence, name)
         previous = selected.get(key)
-        if _checkpoint_artifact_is_newer(created_at, attempt, sequence, name, previous):
-            selected[key] = (created_at, attempt, sequence, name)
+        selected[key] = candidate if previous is None else max(previous, candidate)
 
     result: dict[str, list[dict[str, str]]] = {}
     for (shard_id, fingerprint), (_, _, sequence, name) in sorted(selected.items()):
