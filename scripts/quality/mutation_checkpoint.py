@@ -289,7 +289,7 @@ def _checkpoint_created_at(artifact: Mapping[str, Any]) -> str | None:
 
 def _matching_checkpoint_artifact(
     artifact: Mapping[str, Any], *, head_sha: str, shard_ids: set[str], run_id: int
-) -> tuple[str, str, str, str, int] | None:
+) -> tuple[str, str, str, int, str, int] | None:
     match = _checkpoint_name_match(artifact)
     if match is None:
         return None
@@ -305,35 +305,40 @@ def _matching_checkpoint_artifact(
         shard_id,
         match["fingerprint"],
         created_at,
+        int(match["attempt"]),
         str(artifact["name"]),
         int(match["sequence"]),
     )
 
 
 def _checkpoint_artifact_is_newer(
-    created_at: str, sequence: int, previous: tuple[str, str, int] | None
+    created_at: str,
+    attempt: int,
+    sequence: int,
+    name: str,
+    previous: tuple[str, int, int, str] | None,
 ) -> bool:
-    return previous is None or (created_at, sequence) > (previous[0], previous[2])
+    return previous is None or (created_at, attempt, sequence, name) > previous
 
 
 def checkpoint_artifact_map(
     artifacts: Iterable[Mapping[str, Any]], *, head_sha: str, shard_ids: set[str], run_id: int
 ) -> dict[str, list[dict[str, str]]]:
-    selected: dict[tuple[str, str], tuple[str, str, int]] = {}
+    selected: dict[tuple[str, str], tuple[str, int, int, str]] = {}
     for artifact in artifacts:
         match = _matching_checkpoint_artifact(
             artifact, head_sha=head_sha, shard_ids=shard_ids, run_id=run_id
         )
         if match is None:
             continue
-        shard_id, fingerprint, created_at, name, sequence = match
+        shard_id, fingerprint, created_at, attempt, name, sequence = match
         key = (shard_id, fingerprint)
         previous = selected.get(key)
-        if _checkpoint_artifact_is_newer(created_at, sequence, previous):
-            selected[key] = (created_at, name, sequence)
+        if _checkpoint_artifact_is_newer(created_at, attempt, sequence, name, previous):
+            selected[key] = (created_at, attempt, sequence, name)
 
     result: dict[str, list[dict[str, str]]] = {}
-    for (shard_id, fingerprint), (_, name, sequence) in sorted(selected.items()):
+    for (shard_id, fingerprint), (_, _, sequence, name) in sorted(selected.items()):
         result.setdefault(shard_id, []).append(
             {"fingerprint": fingerprint, "name": name, "sequence": str(sequence)}
         )
