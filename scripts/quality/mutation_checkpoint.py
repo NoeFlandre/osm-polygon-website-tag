@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Persist and restore exact, resumable checkpoints for mutation sweeps."""
+
 from __future__ import annotations
 
 import argparse
@@ -177,7 +179,7 @@ def snapshot_checkpoint(
     manifest_path = destination / "manifest.json"
     _atomic_write_bytes(
         manifest_path,
-        (json.dumps(manifest, sort_keys=True) + "\n").encode("utf-8"),
+        (json.dumps(manifest, sort_keys=True) + "\n").encode(),
     )
     included: list[Path] = [manifest_path]
     for source, relative in _meta_paths(root, filters):
@@ -203,7 +205,7 @@ def _checkpoint_manifest_matches(
 ) -> bool:
     manifest_path = checkpoint_dir / "manifest.json"
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_bytes().decode())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     expected = {
@@ -291,10 +293,13 @@ def _matching_checkpoint_artifact(
     shard_id = match["shard"]
     if shard_id not in shard_ids:
         return None
+    created_at = artifact.get("created_at")
+    if not isinstance(created_at, str) or not created_at:
+        return None
     return (
         shard_id,
         match["fingerprint"],
-        str(artifact.get("created_at", "")),
+        created_at,
         str(artifact["name"]),
         int(match["sequence"]),
     )
@@ -385,20 +390,24 @@ def _list_run_artifacts(
 ) -> list[dict[str, Any]]:
     base = f"{api_url.rstrip('/')}/repos/{repository}/actions/runs/{run_id}/artifacts"
     artifacts: list[dict[str, Any]] = []
-    total_count = 1
     page = 1
-    while len(artifacts) < total_count:
+    while True:
         response = _api_json(f"{base}?per_page=100&page={page}", token)
         artifacts.extend(_artifact_page_items(response))
         total_count = int(response.get("total_count", len(artifacts)))
+        if len(artifacts) >= total_count:
+            return artifacts
         page += 1
-    return artifacts
 
 
 def _is_resume_run(run: object, *, current_run_id: int, head_sha: str) -> bool:
+    if not isinstance(run, dict):
+        return False
+    run_id = run.get("id")
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        return False
     return (
-        isinstance(run, dict)
-        and int(run.get("id", 0)) != current_run_id
+        run_id != current_run_id
         and run.get("head_sha") == head_sha
         and run.get("status") == "completed"
     )
@@ -407,10 +416,15 @@ def _is_resume_run(run: object, *, current_run_id: int, head_sha: str) -> bool:
 def _latest_resume_candidate(
     runs: Sequence[Any], *, current_run_id: int, head_sha: str
 ) -> dict[str, Any] | None:
-    candidates = [
-        run for run in runs if _is_resume_run(run, current_run_id=current_run_id, head_sha=head_sha)
-    ]
-    return max(candidates, key=lambda run: int(run.get("run_number", 0))) if candidates else None
+    candidates = []
+    for run in runs:
+        if not _is_resume_run(run, current_run_id=current_run_id, head_sha=head_sha):
+            continue
+        run_number = run.get("run_number")
+        if not isinstance(run_number, int) or isinstance(run_number, bool):
+            continue
+        candidates.append(run)
+    return max(candidates, key=lambda run: run["run_number"]) if candidates else None
 
 
 def _find_resume_run(
@@ -443,8 +457,8 @@ def _write_output(name: str, value: str) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT")
     if not output_path:
         raise RuntimeError("GITHUB_OUTPUT is not set")
-    with Path(output_path).open("a", encoding="utf-8") as output:
-        output.write(f"{name}={value}\n")
+    with Path(output_path).open("ab") as output:
+        output.write(f"{name}={value}\n".encode())
 
 
 def _plan() -> None:
