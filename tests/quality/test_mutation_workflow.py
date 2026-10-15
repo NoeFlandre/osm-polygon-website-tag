@@ -112,6 +112,76 @@ def test_merge_requires_a_result_artifact_from_every_shard() -> None:
     )
 
 
+def test_scheduled_sweep_resumes_only_matching_checkpoints() -> None:
+    workflow = _workflow()
+    plan = workflow["jobs"]["plan"]
+    area = workflow["jobs"]["area"]
+
+    assert workflow["permissions"] == {"actions": "read", "contents": "read"}
+    assert plan["outputs"]["previous_run_id"] == "${{ steps.checkpoints.outputs.previous_run_id }}"
+    assert (
+        plan["outputs"]["checkpoint_artifacts"]
+        == "${{ steps.checkpoints.outputs.checkpoint_artifacts }}"
+    )
+    build = _step("plan", "Build checkpoint artifact uploader")
+    upload = _step("plan", "Upload checkpoint artifact uploader")
+    download_uploader = _step("area", "Download checkpoint artifact uploader")
+    plan_names = [step.get("name") for step in plan["steps"]]
+    area_names = [step.get("name") for step in area["steps"]]
+
+    assert build["working-directory"] == "scripts/quality/mutation-artifact-uploader"
+    assert build["run"] == "npm ci && npm run build"
+    assert plan_names.index(build["name"]) < plan_names.index(upload["name"])
+    assert plan_names.index(upload["name"]) < plan_names.index(
+        "Find resumable checkpoints for this commit"
+    )
+    assert upload["uses"] == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+    assert upload["with"] == {
+        "name": "mutation-artifact-uploader-${{ github.run_attempt }}",
+        "path": "scripts/quality/mutation-artifact-uploader/bundle/",
+        "if-no-files-found": "error",
+        "retention-days": 3,
+    }
+    assert download_uploader["uses"] == (
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+    )
+    assert download_uploader["with"] == {
+        "pattern": "mutation-artifact-uploader-*",
+        "path": "scripts/quality/mutation-artifact-uploader/bundle",
+        "merge-multiple": True,
+    }
+    assert area_names.index(download_uploader["name"]) < area_names.index("Sweep the shard")
+
+    assert (
+        "mutation_checkpoint.py plan"
+        in _step("plan", "Find resumable checkpoints for this commit")["run"]
+    )
+    assert _step("area", "Download the previous shard checkpoint")["with"]["github-token"] == (
+        "${{ github.token }}"
+    )
+    assert _step("area", "Download the previous shard checkpoint")["with"]["run-id"] == (
+        "${{ needs.plan.outputs.previous_run_id }}"
+    )
+    assert _step("area", "Restore exact-commit mutation results")["if"] == (
+        "steps.select-checkpoint.outputs.artifact != ''"
+    )
+    sweep = _step("area", "Sweep the shard")
+    assert "mutation_checkpoint.py run" in sweep["run"]
+    assert "--interval-minutes 15" in sweep["run"]
+    assert sweep["env"]["MUTATION_RUNNER_FINGERPRINT"] == ("${{ steps.fingerprint.outputs.value }}")
+
+    export_name = "Export artifact service variables to later steps"
+    export = _step("area", export_name)
+    step_names = [step.get("name") for step in area["steps"]]
+    assert step_names.index(export_name) + 1 == step_names.index("Sweep the shard")
+    assert export["uses"] == "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
+    script = export["with"]["script"]
+    for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL"):
+        assert f"if (!process.env.{name})" in script
+        assert f'throw new Error("{name} is not set")' in script
+        assert f'core.exportVariable("{name}", process.env.{name});' in script
+
+
 def test_mutation_jobs_are_bounded_and_do_not_cache_filtered_runs() -> None:
     area = _workflow()["jobs"]["area"]
 
