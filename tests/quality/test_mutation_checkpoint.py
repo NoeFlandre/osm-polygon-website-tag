@@ -429,7 +429,10 @@ def test_cancellation_fails_child_after_bounded_wait_and_keeps_checkpoint() -> N
     published: list[tuple[int, bool]] = []
     clock = [0.0]
 
+    sleep_calls: list[float] = []
+
     def sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
         clock[0] += seconds
         if clock[0] >= 1:
             handler = signal.getsignal(signal.SIGINT)
@@ -450,6 +453,7 @@ def test_cancellation_fails_child_after_bounded_wait_and_keeps_checkpoint() -> N
 
     assert result == 128 + signal.SIGINT
     assert published == [(1, True), (2, False)]
+    assert sleep_calls == [1.0]
     assert child.terminated
 
 
@@ -848,12 +852,19 @@ def test_publish_uploads_checkpoint_with_attempt_scoped_name(
     _set_publish_environment(monkeypatch)
     node = tmp_path / "node"
     node.write_text("stub", encoding="utf-8")
-    monkeypatch.setattr(mutation_checkpoint.shutil, "which", lambda _name: str(node))
+    node_lookups: list[str] = []
     monkeypatch.setattr(
-        mutation_checkpoint,
-        "snapshot_checkpoint",
-        lambda **_kwargs: (Path("manifest.json"), Path("mutants/source.meta")),
+        mutation_checkpoint.shutil,
+        "which",
+        lambda name: node_lookups.append(name) or str(node),
     )
+    snapshot_calls: list[dict[str, Any]] = []
+
+    def snapshot(**kwargs: Any) -> tuple[Path, ...]:
+        snapshot_calls.append(kwargs)
+        return (Path("manifest.json"), Path("mutants/source.meta"))
+
+    monkeypatch.setattr(mutation_checkpoint, "snapshot_checkpoint", snapshot)
     captured: list[tuple[list[str], Path]] = []
 
     class Uploaded:
@@ -861,6 +872,7 @@ def test_publish_uploads_checkpoint_with_attempt_scoped_name(
             return 0
 
     def start(command: list[str], root: Path) -> Uploaded:
+        assert Path(command[3]).is_dir()
         captured.append((command, root))
         return Uploaded()
 
@@ -869,11 +881,19 @@ def test_publish_uploads_checkpoint_with_attempt_scoped_name(
     assert mutation_checkpoint._publish(tmp_path, _FILTERS, 3) is True
     command, root = captured[0]
     assert root == tmp_path
-    assert command[0] == str(node.resolve())
-    assert (
-        command[2]
-        == f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt2-seq3"
-    )
+    assert node_lookups == ["node"]
+    assert snapshot_calls[0]["root"] == tmp_path
+    assert snapshot_calls[0]["head_sha"] == _HEAD_SHA
+    assert snapshot_calls[0]["runner_fingerprint"] == _FINGERPRINT
+    assert snapshot_calls[0]["shard_id"] == _SHARD_ID
+    assert snapshot_calls[0]["filters"] == _FILTERS
+    assert not snapshot_calls[0]["destination"].exists()
+    assert command == [
+        str(node.resolve()),
+        str(tmp_path / "scripts/quality/mutation-artifact-uploader/bundle/index.mjs"),
+        f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt2-seq3",
+        str(snapshot_calls[0]["destination"]),
+    ]
 
 
 def test_publish_reports_missing_node_and_failed_upload(
@@ -1017,6 +1037,15 @@ def test_run_builds_mutmut_command_and_enables_resume(
     assert captured["interval_seconds"] == 150
     assert captured["cwd"] == tmp_path
     assert captured["execution"].environment["MUTATION_RESUME_COMPLETED"] == "1"
+    published: list[tuple[Path, tuple[str, ...], int]] = []
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "_publish",
+        lambda root, filters, sequence: published.append((root, tuple(filters), sequence)) or True,
+    )
+    assert callable(captured["publish"])
+    assert captured["publish"](9) is True
+    assert published == [(tmp_path, _FILTERS, 9)]
 
 
 def test_stop_process_handles_lookup_race_and_escalates_to_kill() -> None:
@@ -1037,7 +1066,6 @@ def test_stop_process_handles_lookup_race_and_escalates_to_kill() -> None:
     mutation_checkpoint._stop_process(child)
     assert child.terminated
     assert child.killed
-
 
 
 def test_snapshot_skips_bad_metadata_and_reuses_nested_destination(tmp_path: Path) -> None:
@@ -1080,14 +1108,17 @@ def test_snapshot_skips_bad_metadata_and_reuses_nested_destination(tmp_path: Pat
         json.dumps(manifest, sort_keys=True) + "\n"
     ).encode("utf-8")
     assert (destination / relatives[1]).read_bytes() == payload
-    assert mutation_checkpoint.snapshot_checkpoint(
-        root=root,
-        destination=destination,
-        head_sha=_HEAD_SHA,
-        runner_fingerprint=_FINGERPRINT,
-        shard_id=_SHARD_ID,
-        filters=filters,
-    ) == included
+    assert (
+        mutation_checkpoint.snapshot_checkpoint(
+            root=root,
+            destination=destination,
+            head_sha=_HEAD_SHA,
+            runner_fingerprint=_FINGERPRINT,
+            shard_id=_SHARD_ID,
+            filters=filters,
+        )
+        == included
+    )
 
 
 def test_restore_rejects_valid_metadata_when_manifest_is_malformed(tmp_path: Path) -> None:
@@ -1095,7 +1126,9 @@ def test_restore_rejects_valid_metadata_when_manifest_is_malformed(tmp_path: Pat
     root.mkdir()
     target = _write_metadata(root, None)
     checkpoint_dir = tmp_path / "checkpoint"
-    relative = Path("mutants") / f"{mutation_runner._source_paths_for_mutant_names(_FILTERS)[0]}.meta"
+    relative = (
+        Path("mutants") / f"{mutation_runner._source_paths_for_mutant_names(_FILTERS)[0]}.meta"
+    )
     checkpoint_metadata = checkpoint_dir / relative
     checkpoint_metadata.parent.mkdir(parents=True)
     checkpoint_metadata.write_text(json.dumps(_metadata(0)), encoding="utf-8")
@@ -1202,8 +1235,24 @@ def test_checkpoint_artifact_map_uses_sequence_and_stable_tie_breaking() -> None
 
 def test_latest_resume_candidate_returns_none_when_no_run_matches() -> None:
     assert (
-        mutation_checkpoint._latest_resume_candidate(
-            [], current_run_id=99, head_sha=_HEAD_SHA
+        mutation_checkpoint._latest_resume_candidate([], current_run_id=99, head_sha=_HEAD_SHA)
+        is None
+    )
+
+
+def test_resume_run_treats_a_missing_workflow_run_list_as_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {})
+
+    assert (
+        mutation_checkpoint._find_resume_run(
+            api_url="https://api.github.test",
+            repository="owner/repo",
+            token="token",
+            current_run_id=99,
+            current_run_attempt=1,
+            head_sha=_HEAD_SHA,
         )
         is None
     )
@@ -1219,9 +1268,7 @@ def test_resume_run_does_not_select_the_current_first_attempt(
         "conclusion": "failure",
         "run_number": 10,
     }
-    monkeypatch.setattr(
-        mutation_checkpoint, "_api_json", lambda *_args: {"workflow_runs": [run]}
-    )
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"workflow_runs": [run]})
 
     assert (
         mutation_checkpoint._find_resume_run(
@@ -1236,7 +1283,9 @@ def test_resume_run_does_not_select_the_current_first_attempt(
     )
 
 
-def test_plan_passes_current_actions_identity_to_api_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_plan_passes_current_actions_identity_to_api_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     output_path = tmp_path / "output.txt"
     values = {
         "GITHUB_API_URL": "https://api.github.test",
@@ -1394,8 +1443,36 @@ def test_restore_cli_uses_default_checkpoint_directory(
 
     mutation_checkpoint.main()
 
-    assert captured["root"] == tmp_path
-    assert captured["checkpoint_dir"] == Path(".mutation-checkpoint")
+    assert captured == {
+        "root": tmp_path,
+        "checkpoint_dir": Path(".mutation-checkpoint"),
+        "head_sha": _HEAD_SHA,
+        "runner_fingerprint": _FINGERPRINT,
+        "shard_id": _SHARD_ID,
+        "filters": list(_FILTERS),
+    }
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [("--max-children", "many"), ("--interval-minutes", "soon")],
+)
+def test_run_cli_rejects_non_numeric_values(
+    option: str, value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["mutation_checkpoint.py", "run", option, value, *_FILTERS],
+    )
+    monkeypatch.setattr(
+        mutation_checkpoint, "_run", lambda *_args: pytest.fail("invalid values reached runner")
+    )
+
+    with pytest.raises(SystemExit) as error:
+        mutation_checkpoint.main()
+
+    assert error.value.code == 2
 
 
 def test_run_cli_uses_default_worker_and_checkpoint_interval(
