@@ -607,6 +607,29 @@ def test_full_sweep_shards_cover_every_pipeline_function_once() -> None:
     assert len({shard["id"] for shard in shards}) == len(shards)
 
 
+def test_full_sweep_skips_pipeline_modules_without_mutable_functions(tmp_path: Path) -> None:
+    pipeline = tmp_path / mutation_scope.PACKAGE_ROOT / "pipeline"
+    pipeline.mkdir(parents=True)
+    (pipeline / "empty.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (pipeline / "mutable.py").write_text("def run() -> int:\n    return 1\n", encoding="utf-8")
+
+    shards = mutation_scope.full_sweep_shards(root=tmp_path)
+    pipeline_shards = [shard for shard in shards if shard["pipeline"]]
+
+    assert [shard["module"] for shard in pipeline_shards] == [
+        f"{mutation_scope.PACKAGE_NAME}.pipeline.mutable"
+    ]
+
+
+def test_full_sweep_rejects_an_unreadable_pipeline_module(tmp_path: Path) -> None:
+    pipeline = tmp_path / mutation_scope.PACKAGE_ROOT / "pipeline"
+    pipeline.mkdir(parents=True)
+    (pipeline / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="cannot read pipeline source module"):
+        mutation_scope.full_sweep_shards(root=tmp_path)
+
+
 def test_full_sweep_keeps_non_pipeline_areas_as_single_jobs() -> None:
     shards = mutation_scope.full_sweep_shards(root=_ROOT)
     areas = [shard for shard in shards if not shard["pipeline"]]

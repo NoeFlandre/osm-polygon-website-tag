@@ -412,33 +412,44 @@ def shards(
 
 def full_sweep_shards(*, root: Path | None = None) -> list[NightlyShard]:
     base = root if root is not None else Path.cwd()
-    matrix: list[NightlyShard] = []
+    return _nightly_pipeline_shards(base) + _nightly_area_shards()
+
+
+def _nightly_pipeline_shards(base: Path) -> list[NightlyShard]:
     pipeline_root = base / PACKAGE_ROOT / "pipeline"
-    for source in sorted(pipeline_root.rglob("*.py")):
-        if source.name == "__init__.py":
-            continue
-        relative = source.relative_to(base / PACKAGE_ROOT).with_suffix("")
-        module = ".".join([PACKAGE_NAME, *relative.parts])
-        filters = module_function_filters(module, root=base)
-        if filters is None:
-            raise RuntimeError(f"cannot read pipeline source module {module!r}")
-        if not filters:
-            continue
-        area = module.removeprefix(f"{PACKAGE_NAME}.")
+    return [
+        shard
+        for source in sorted(pipeline_root.rglob("*.py"))
+        if source.name != "__init__.py"
+        for shard in _nightly_module_shards(source, base)
+    ]
+
+
+def _nightly_module_shards(source: Path, base: Path) -> list[NightlyShard]:
+    relative = source.relative_to(base / PACKAGE_ROOT).with_suffix("")
+    module = ".".join([PACKAGE_NAME, *relative.parts])
+    filters = module_function_filters(module, root=base)
+    if filters is None:
+        raise RuntimeError(f"cannot read pipeline source module {module!r}")
+    if not filters:
+        return []
+    area = module.removeprefix(f"{PACKAGE_NAME}.")
+    return [
+        {
+            "id": f"pipeline-{area.replace('.', '-')}-{index:02d}",
+            "name": shard["name"],
+            "module": module,
+            "filters": shard["filters"],
+            "pipeline": True,
+        }
         for index, shard in enumerate(
             shards({module: filters}, root=base, size=NIGHTLY_SHARD_FUNCTIONS), start=1
-        ):
-            matrix.append(
-                {
-                    "id": f"pipeline-{area.replace('.', '-')}-{index:02d}",
-                    "name": shard["name"],
-                    "module": module,
-                    "filters": shard["filters"],
-                    "pipeline": True,
-                }
-            )
+        )
+    ]
 
-    matrix.extend(
+
+def _nightly_area_shards() -> list[NightlyShard]:
+    return [
         {
             "id": area,
             "name": area,
@@ -447,8 +458,7 @@ def full_sweep_shards(*, root: Path | None = None) -> list[NightlyShard]:
             "pipeline": False,
         }
         for area in NIGHTLY_AREAS
-    )
-    return matrix
+    ]
 
 
 def _expanded_filters(module: str, filters: list[str], root: Path | None) -> list[str] | None:

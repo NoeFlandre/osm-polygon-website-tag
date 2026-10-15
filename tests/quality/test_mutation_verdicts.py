@@ -111,6 +111,11 @@ def test_verify_rejects_missing_metadata(tmp_path: Path) -> None:
         mutation_verdicts.verify_shard(tmp_path, _MODULE, [_FIRST_FILTER])
 
 
+def test_verify_rejects_an_empty_filter_group(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="filters must select"):
+        mutation_verdicts.verify_shard(tmp_path, _MODULE, [])
+
+
 def test_verify_rejects_a_filter_group_without_mutants(tmp_path: Path) -> None:
     _metadata(tmp_path, mutants={"other": 1})
 

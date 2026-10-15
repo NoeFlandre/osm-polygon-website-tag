@@ -118,13 +118,17 @@ def _selected_exit_codes(
     }
 
 
-def verify_shard(root: Path, module: str, filters: Sequence[str]) -> None:
+def _validate_filters(module: str, filters: Sequence[str]) -> None:
     if not filters or any(
         not pattern.startswith(f"{module}.") or not pattern.endswith("__mutmut_*")
         for pattern in filters
     ):
         raise ValueError(f"filters must select mutants inside {module!r}")
 
+
+def _selected_shard_exit_codes(
+    root: Path, module: str, filters: Sequence[str]
+) -> dict[str, int | None]:
     metadata_path = _module_metadata_path(root, module)
     if not metadata_path.is_file():
         raise RuntimeError(f"no pipeline mutants were generated for {module}")
@@ -132,7 +136,10 @@ def verify_shard(root: Path, module: str, filters: Sequence[str]) -> None:
     selected = _selected_exit_codes(_read_exit_codes(metadata_path), filters)
     if not selected:
         raise RuntimeError(f"no pipeline mutants were generated for {module}")
+    return selected
 
+
+def _reject_unfinished_mutants(module: str, selected: dict[str, int | None]) -> None:
     unfinished = [
         name for name, code in selected.items() if code is None or code == _INTERRUPTED_EXIT_CODE
     ]
@@ -142,6 +149,12 @@ def verify_shard(root: Path, module: str, filters: Sequence[str]) -> None:
             f"pipeline mutants were interrupted or not checked in {module} "
             f"({len(unfinished)}): {sample}"
         )
+
+
+def verify_shard(root: Path, module: str, filters: Sequence[str]) -> None:
+    _validate_filters(module, filters)
+    selected = _selected_shard_exit_codes(root, module, filters)
+    _reject_unfinished_mutants(module, selected)
 
 
 def _argument_parser() -> argparse.ArgumentParser:
