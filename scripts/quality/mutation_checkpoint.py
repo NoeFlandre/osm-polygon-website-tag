@@ -45,22 +45,23 @@ def _meta_paths(root: Path, filters: Iterable[str]) -> tuple[tuple[Path, Path], 
     return tuple(result)
 
 
-def _finite_duration_mapping(value: object) -> bool:
-    if not isinstance(value, dict):
+def _finite_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
         return False
-    for key, duration in value.items():
-        if (
-            not isinstance(key, str)
-            or not isinstance(duration, (int, float))
-            or isinstance(duration, bool)
-        ):
-            return False
-        try:
-            if not math.isfinite(duration):
-                return False
-        except OverflowError:
-            return False
-    return True
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _valid_duration_entry(key: object, value: object) -> bool:
+    return isinstance(key, str) and _finite_number(value)
+
+
+def _finite_duration_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        _valid_duration_entry(key, duration) for key, duration in value.items()
+    )
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
@@ -88,30 +89,51 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
         raise
 
 
+def _valid_exit_code_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and (code is None or type(code) is int) for key, code in value.items()
+    )
+
+
+def _valid_string_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    )
+
+
+def _valid_error_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and (error is None or isinstance(error, str))
+        for key, error in value.items()
+    )
+
+
+def _valid_metadata_keys(value: Mapping[str, Any]) -> bool:
+    keys = value.keys()
+    return keys >= _REQUIRED_META_FIELDS and not keys - _META_FIELDS
+
+
+def _valid_metadata_mappings(value: Mapping[str, Any]) -> bool:
+    return (
+        _valid_exit_code_mapping(value["exit_code_by_key"])
+        and _valid_string_mapping(value.get("hash_by_function_name", {}))
+        and _valid_error_mapping(value.get("type_check_error_by_key", {}))
+    )
+
+
+def _valid_metadata_durations(value: Mapping[str, Any]) -> bool:
+    return _finite_duration_mapping(value["durations_by_key"]) and _finite_duration_mapping(
+        value["estimated_durations_by_key"]
+    )
+
+
 def _valid_metadata(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    keys = value.keys()
-    if not keys >= _REQUIRED_META_FIELDS or keys - _META_FIELDS:
-        return False
-    exit_codes = value["exit_code_by_key"]
-    hashes = value.get("hash_by_function_name", {})
-    type_errors = value.get("type_check_error_by_key", {})
     return (
-        isinstance(exit_codes, dict)
-        and all(
-            isinstance(key, str) and (code is None or type(code) is int)
-            for key, code in exit_codes.items()
-        )
-        and isinstance(hashes, dict)
-        and all(isinstance(key, str) and isinstance(digest, str) for key, digest in hashes.items())
-        and isinstance(type_errors, dict)
-        and all(
-            isinstance(key, str) and (error is None or isinstance(error, str))
-            for key, error in type_errors.items()
-        )
-        and _finite_duration_mapping(value["durations_by_key"])
-        and _finite_duration_mapping(value["estimated_durations_by_key"])
+        _valid_metadata_keys(value)
+        and _valid_metadata_mappings(value)
+        and _valid_metadata_durations(value)
     )
 
 
@@ -171,6 +193,43 @@ def snapshot_checkpoint(
     return tuple(included)
 
 
+def _checkpoint_manifest_matches(
+    *,
+    checkpoint_dir: Path,
+    head_sha: str,
+    runner_fingerprint: str,
+    shard_id: str,
+    filters: Sequence[str],
+) -> bool:
+    manifest_path = checkpoint_dir / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    expected = {
+        "schema_version": _SCHEMA_VERSION,
+        "head_sha": head_sha,
+        "runner_fingerprint": runner_fingerprint,
+        "shard_id": shard_id,
+        "filters": list(filters),
+    }
+    return manifest == expected
+
+
+def _checkpoint_metadata_candidates(
+    *, root: Path, checkpoint_dir: Path, filters: Sequence[str]
+) -> list[tuple[Path, bytes]]:
+    candidates: list[tuple[Path, bytes]] = []
+    for _, relative in _meta_paths(root, filters):
+        loaded = _read_valid_metadata(checkpoint_dir / relative)
+        if loaded is None:
+            continue
+        payload, metadata = loaded
+        if _has_selected_result(metadata, filters):
+            candidates.append((root / relative, payload))
+    return candidates
+
+
 def restore_checkpoint(
     *,
     root: Path,
@@ -180,31 +239,18 @@ def restore_checkpoint(
     shard_id: str,
     filters: Sequence[str],
 ) -> int:
-    manifest_path = checkpoint_dir / "manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    if not _checkpoint_manifest_matches(
+        checkpoint_dir=checkpoint_dir,
+        head_sha=head_sha,
+        runner_fingerprint=runner_fingerprint,
+        shard_id=shard_id,
+        filters=filters,
+    ):
         return 0
-    expected = {
-        "schema_version": _SCHEMA_VERSION,
-        "head_sha": head_sha,
-        "runner_fingerprint": runner_fingerprint,
-        "shard_id": shard_id,
-        "filters": list(filters),
-    }
-    if manifest != expected:
-        return 0
-
-    candidates: list[tuple[Path, Path, bytes]] = []
-    for _, relative in _meta_paths(root, filters):
-        loaded = _read_valid_metadata(checkpoint_dir / relative)
-        if loaded is None:
-            continue
-        payload, metadata = loaded
-        if _has_selected_result(metadata, filters):
-            candidates.append((root / relative, relative, payload))
-
-    for target, _, payload in candidates:
+    candidates = _checkpoint_metadata_candidates(
+        root=root, checkpoint_dir=checkpoint_dir, filters=filters
+    )
+    for target, payload in candidates:
         _atomic_write_bytes(target, payload)
     return len(candidates)
 
@@ -221,30 +267,59 @@ def select_checkpoint_artifact(
     return ""
 
 
+def _checkpoint_name_match(artifact: Mapping[str, Any]) -> re.Match[str] | None:
+    if artifact.get("expired") is True:
+        return None
+    name = artifact.get("name")
+    if not isinstance(name, str):
+        return None
+    return _CHECKPOINT_NAME.fullmatch(name)
+
+
+def _checkpoint_run_matches(match: re.Match[str], *, head_sha: str, run_id: int) -> bool:
+    return match["sha"] == head_sha and int(match["run_id"]) == run_id
+
+
+def _matching_checkpoint_artifact(
+    artifact: Mapping[str, Any], *, head_sha: str, shard_ids: set[str], run_id: int
+) -> tuple[str, str, str, str, int] | None:
+    match = _checkpoint_name_match(artifact)
+    if match is None:
+        return None
+    if not _checkpoint_run_matches(match, head_sha=head_sha, run_id=run_id):
+        return None
+    shard_id = match["shard"]
+    if shard_id not in shard_ids:
+        return None
+    return (
+        shard_id,
+        match["fingerprint"],
+        str(artifact.get("created_at", "")),
+        str(artifact["name"]),
+        int(match["sequence"]),
+    )
+
+
+def _checkpoint_artifact_is_newer(
+    created_at: str, sequence: int, previous: tuple[str, str, int] | None
+) -> bool:
+    return previous is None or (created_at, sequence) > (previous[0], previous[2])
+
+
 def checkpoint_artifact_map(
     artifacts: Iterable[Mapping[str, Any]], *, head_sha: str, shard_ids: set[str], run_id: int
 ) -> dict[str, list[dict[str, str]]]:
     selected: dict[tuple[str, str], tuple[str, str, int]] = {}
     for artifact in artifacts:
-        if artifact.get("expired") is True:
-            continue
-        name = artifact.get("name")
-        if not isinstance(name, str):
-            continue
-        match = _CHECKPOINT_NAME.fullmatch(name)
+        match = _matching_checkpoint_artifact(
+            artifact, head_sha=head_sha, shard_ids=shard_ids, run_id=run_id
+        )
         if match is None:
             continue
-        if match["sha"] != head_sha or int(match["run_id"]) != run_id:
-            continue
-        shard_id = match["shard"]
-        if shard_id not in shard_ids:
-            continue
-        fingerprint = match["fingerprint"]
-        sequence = int(match["sequence"])
-        created_at = str(artifact.get("created_at", ""))
+        shard_id, fingerprint, created_at, name, sequence = match
         key = (shard_id, fingerprint)
         previous = selected.get(key)
-        if previous is None or (created_at, sequence) > (previous[0], previous[2]):
+        if _checkpoint_artifact_is_newer(created_at, sequence, previous):
             selected[key] = (created_at, name, sequence)
 
     result: dict[str, list[dict[str, str]]] = {}
@@ -255,33 +330,54 @@ def checkpoint_artifact_map(
     return result
 
 
-def _api_json(url: str, token: str) -> dict[str, Any]:
+def _api_request_target(url: str) -> tuple[str, str, int | None]:
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.hostname is None:
         raise ValueError("GitHub Actions API URL must use HTTPS")
-    request_target = parsed.path or "/"
+    target = parsed.path or "/"
     if parsed.query:
-        request_target = f"{request_target}?{parsed.query}"
-    connection = HTTPSConnection(parsed.hostname, parsed.port, timeout=30)
+        target = f"{target}?{parsed.query}"
+    return parsed.hostname, target, parsed.port
+
+
+def _read_api_response(connection: Any, target: str, token: str) -> bytes:
+    connection.request(
+        "GET",
+        target,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    response = connection.getresponse()
+    if response.status >= 400:
+        raise RuntimeError(f"GitHub Actions API returned HTTP {response.status}")
+    return response.read()
+
+
+def _decode_api_object(payload: bytes) -> dict[str, Any]:
+    value = json.loads(payload)
+    if not isinstance(value, dict):
+        raise RuntimeError("GitHub Actions API returned an unexpected response")
+    return value
+
+
+def _api_json(url: str, token: str) -> dict[str, Any]:
+    hostname, target, port = _api_request_target(url)
+    connection = HTTPSConnection(hostname, port, timeout=30)
     try:
-        connection.request(
-            "GET",
-            request_target,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-        )
-        response = connection.getresponse()
-        if response.status >= 400:
-            raise RuntimeError(f"GitHub Actions API returned HTTP {response.status}")
-        payload = json.loads(response.read())
+        payload = _read_api_response(connection, target, token)
     finally:
         connection.close()
-    if not isinstance(payload, dict):
-        raise RuntimeError("GitHub Actions API returned an unexpected response")
-    return payload
+    return _decode_api_object(payload)
+
+
+def _artifact_page_items(response: Mapping[str, Any]) -> list[dict[str, Any]]:
+    items = response.get("artifacts", [])
+    if not isinstance(items, list):
+        raise RuntimeError("GitHub Actions artifact list had an unexpected shape")
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _list_run_artifacts(
@@ -289,16 +385,32 @@ def _list_run_artifacts(
 ) -> list[dict[str, Any]]:
     base = f"{api_url.rstrip('/')}/repos/{repository}/actions/runs/{run_id}/artifacts"
     artifacts: list[dict[str, Any]] = []
+    total_count = 1
     page = 1
-    while True:
+    while len(artifacts) < total_count:
         response = _api_json(f"{base}?per_page=100&page={page}", token)
-        page_artifacts = response.get("artifacts", [])
-        if not isinstance(page_artifacts, list):
-            raise RuntimeError("GitHub Actions artifact list had an unexpected shape")
-        artifacts.extend(item for item in page_artifacts if isinstance(item, dict))
-        if len(artifacts) >= int(response.get("total_count", len(artifacts))):
-            return artifacts
+        artifacts.extend(_artifact_page_items(response))
+        total_count = int(response.get("total_count", len(artifacts)))
         page += 1
+    return artifacts
+
+
+def _is_resume_run(run: object, *, current_run_id: int, head_sha: str) -> bool:
+    return (
+        isinstance(run, dict)
+        and int(run.get("id", 0)) != current_run_id
+        and run.get("head_sha") == head_sha
+        and run.get("status") == "completed"
+    )
+
+
+def _latest_resume_candidate(
+    runs: Sequence[Any], *, current_run_id: int, head_sha: str
+) -> dict[str, Any] | None:
+    candidates = [
+        run for run in runs if _is_resume_run(run, current_run_id=current_run_id, head_sha=head_sha)
+    ]
+    return max(candidates, key=lambda run: int(run.get("run_number", 0))) if candidates else None
 
 
 def _find_resume_run(
@@ -321,18 +433,8 @@ def _find_resume_run(
     runs = response.get("workflow_runs", [])
     if not isinstance(runs, list):
         raise RuntimeError("GitHub Actions run list had an unexpected shape")
-    candidates = [
-        run
-        for run in runs
-        if isinstance(run, dict)
-        and int(run.get("id", 0)) != current_run_id
-        and run.get("head_sha") == head_sha
-        and run.get("status") == "completed"
-    ]
-    if not candidates:
-        return None
-    latest = max(candidates, key=lambda run: int(run.get("run_number", 0)))
-    if latest.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
+    latest = _latest_resume_candidate(runs, current_run_id=current_run_id, head_sha=head_sha)
+    if latest is None or latest.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
         return None
     return int(latest["id"])
 
@@ -411,6 +513,15 @@ def _capture_signals(state: _CheckpointState) -> Any:
             signal.signal(signum, previous)
 
 
+def _wait_or_escalate(child: Any, timeout: float, stop: Callable[[], None]) -> bool:
+    try:
+        child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop()
+        return False
+    return True
+
+
 def _stop_process(child: Any) -> None:
     if child.poll() is not None:
         return
@@ -418,19 +529,44 @@ def _stop_process(child: Any) -> None:
         child.send_signal(signal.SIGINT)
     except ProcessLookupError:
         return
-    for timeout, stop in ((2, child.terminate), (1, child.kill)):
-        try:
-            child.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            stop()
-        else:
-            return
+    if _wait_or_escalate(child, 2, child.terminate):
+        return
+    if _wait_or_escalate(child, 1, child.kill):
+        return
     child.wait()
 
 
 def _publish_next_checkpoint(publish: Callable[[int], bool], state: _CheckpointState) -> None:
     publish(state.sequence)
     state.sequence += 1
+
+
+def _execution_environment(execution: _CheckpointExecution) -> dict[str, str]:
+    if execution.environment is not None:
+        return dict(execution.environment)
+    return os.environ.copy()
+
+
+def _run_periodic_checkpoint_loop(
+    state: _CheckpointState,
+    *,
+    interval_seconds: float,
+    publish: Callable[[int], bool],
+    execution: _CheckpointExecution,
+) -> None:
+    process = state.process
+    if process is None:
+        raise RuntimeError("cannot checkpoint before the mutmut process starts")
+    next_checkpoint = execution.monotonic() + interval_seconds
+    while state.pending_signal is None:
+        if process.poll() is not None:
+            return
+        now = execution.monotonic()
+        if now >= next_checkpoint:
+            _publish_next_checkpoint(publish, state)
+            next_checkpoint = execution.monotonic() + interval_seconds
+        else:
+            execution.sleep(min(1.0, next_checkpoint - now))
 
 
 def _run_until_complete(
@@ -441,28 +577,24 @@ def _run_until_complete(
     execution: _CheckpointExecution,
     state: _CheckpointState,
 ) -> int:
-    environment = (
-        dict(execution.environment) if execution.environment is not None else os.environ.copy()
+    state.process = execution.process_factory(
+        command, cwd=cwd, env=_execution_environment(execution)
     )
-    state.process = execution.process_factory(command, cwd=cwd, env=environment)
-    next_checkpoint = execution.monotonic() + interval_seconds
-    while state.pending_signal is None:
-        return_code = state.process.poll()
-        if return_code is not None:
-            break
-        now = execution.monotonic()
-        if now >= next_checkpoint:
-            _publish_next_checkpoint(publish, state)
-            next_checkpoint = execution.monotonic() + interval_seconds
-        else:
-            execution.sleep(min(1.0, next_checkpoint - now))
+    _run_periodic_checkpoint_loop(
+        state,
+        interval_seconds=interval_seconds,
+        publish=publish,
+        execution=execution,
+    )
     if state.pending_signal is not None:
         raise _CheckpointSignal(state.pending_signal)
     return_code = int(state.process.wait())
     if state.pending_signal is not None:
         raise _CheckpointSignal(state.pending_signal)
     _publish_next_checkpoint(publish, state)
-    return 128 + state.pending_signal if state.pending_signal is not None else return_code
+    if state.pending_signal is not None:
+        return 128 + state.pending_signal
+    return return_code
 
 
 def _finish_interrupted_run(publish: Callable[[int], bool], state: _CheckpointState) -> None:
@@ -477,6 +609,27 @@ def _finish_interrupted_run(publish: Callable[[int], bool], state: _CheckpointSt
         _publish_next_checkpoint(publish, state)
 
 
+def _run_with_signal_capture(
+    command: Sequence[str],
+    *,
+    interval_seconds: float,
+    publish: Callable[[int], bool],
+    cwd: Path,
+    execution: _CheckpointExecution,
+    state: _CheckpointState,
+) -> int:
+    with _capture_signals(state):
+        try:
+            return _run_until_complete(command, interval_seconds, publish, cwd, execution, state)
+        except _CheckpointSignal as interrupted:
+            _finish_interrupted_run(publish, state)
+            return 128 + interrupted.signum
+        except BaseException:
+            if state.process is not None:
+                _stop_process(state.process)
+            raise
+
+
 def run_with_periodic_checkpoints(
     command: Sequence[str],
     *,
@@ -487,21 +640,17 @@ def run_with_periodic_checkpoints(
 ) -> int:
     if interval_seconds <= 0:
         raise ValueError("checkpoint interval must be positive")
-    dependencies = execution or _CheckpointExecution()
+    dependencies = execution if execution is not None else _CheckpointExecution()
     state = _CheckpointState()
     try:
-        with _capture_signals(state):
-            try:
-                return _run_until_complete(
-                    command, interval_seconds, publish, cwd, dependencies, state
-                )
-            except _CheckpointSignal as interrupted:
-                _finish_interrupted_run(publish, state)
-                return 128 + interrupted.signum
-            except BaseException:
-                if state.process is not None:
-                    _stop_process(state.process)
-                raise
+        return _run_with_signal_capture(
+            command,
+            interval_seconds=interval_seconds,
+            publish=publish,
+            cwd=cwd,
+            execution=dependencies,
+            state=state,
+        )
     finally:
         state.process = None
 
