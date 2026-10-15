@@ -5,9 +5,10 @@ import math
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
+from types import FrameType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from scripts.quality import mutation_checkpoint, mutation_runner
@@ -85,6 +86,16 @@ def test_snapshot_and_restore_require_exact_identity_and_valid_metadata(tmp_path
     )
     restored_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert restored_metadata["exit_code_by_key"][_MUTANT] is None
+
+
+def test_snapshot_requires_a_selected_mutant_to_have_a_verdict() -> None:
+    metadata = _metadata(None)
+
+    assert not mutation_checkpoint._has_selected_result(metadata, _FILTERS)
+
+    metadata["exit_code_by_key"][_MUTANT] = 0
+
+    assert mutation_checkpoint._has_selected_result(metadata, _FILTERS)
 
 
 def test_snapshot_rejects_symlinked_mutmut_metadata(tmp_path: Path) -> None:
@@ -313,15 +324,17 @@ class _FakeProcess:
 def test_periodic_checkpoint_publishes_while_mutmut_is_running() -> None:
     clock = [0.0]
     child = _FakeProcess()
-    published: list[tuple[int, bool]] = []
+    published: list[tuple[int, bool, float]] = []
+    sleep_calls: list[float] = []
 
     def sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
         clock[0] += seconds
         if clock[0] >= 3:
             child.returncode = 0
 
     def publish(sequence: int) -> bool:
-        published.append((sequence, child.poll() is None))
+        published.append((sequence, child.poll() is None, clock[0]))
         return True
 
     result = mutation_checkpoint.run_with_periodic_checkpoints(
@@ -337,7 +350,38 @@ def test_periodic_checkpoint_publishes_while_mutmut_is_running() -> None:
     )
 
     assert result == 0
-    assert published == [(1, True), (2, False)]
+    assert published == [(1, True, 2.0), (2, False, 3.0)]
+    assert sleep_calls == [1.0, 1.0, 1.0]
+
+
+def test_periodic_checkpoints_follow_the_clock_after_each_publication() -> None:
+    clock = [0.0]
+    child = _FakeProcess()
+    published: list[tuple[int, float]] = []
+    sleep_calls: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        clock[0] += seconds if seconds else 0.1
+
+    def publish(sequence: int) -> bool:
+        published.append((sequence, clock[0]))
+        if sequence == 2:
+            child.returncode = 0
+        return True
+
+    mutation_checkpoint._run_periodic_checkpoint_loop(
+        mutation_checkpoint._CheckpointState(process=child),
+        interval_seconds=0.5,
+        publish=publish,
+        execution=mutation_checkpoint._CheckpointExecution(
+            monotonic=lambda: clock[0],
+            sleep=sleep,
+        ),
+    )
+
+    assert published == [(1, 0.5), (2, 1.0)]
+    assert sleep_calls == [0.5, 0.5]
 
 
 def test_signal_during_final_publication_returns_cancelled_status() -> None:
@@ -347,8 +391,7 @@ def test_signal_during_final_publication_returns_cancelled_status() -> None:
 
     def publish(sequence: int) -> bool:
         published.append(sequence)
-        handler = signal.getsignal(signal.SIGTERM)
-        assert callable(handler)
+        handler = cast(Callable[[int, FrameType | None], Any], signal.getsignal(signal.SIGTERM))
         handler(signal.SIGTERM, None)
         return True
 
@@ -377,8 +420,7 @@ def test_signal_during_publication_finishes_upload_then_publishes_final_state() 
     def publish(sequence: int) -> bool:
         published.append(sequence)
         if sequence == 1:
-            handler = signal.getsignal(signal.SIGTERM)
-            assert callable(handler)
+            handler = cast(Callable[[int, FrameType | None], Any], signal.getsignal(signal.SIGTERM))
             handler(signal.SIGTERM, None)
         return True
 
@@ -435,8 +477,7 @@ def test_cancellation_fails_child_after_bounded_wait_and_keeps_checkpoint() -> N
         sleep_calls.append(seconds)
         clock[0] += seconds
         if clock[0] >= 1:
-            handler = signal.getsignal(signal.SIGINT)
-            assert callable(handler)
+            handler = cast(Callable[[int, FrameType | None], Any], signal.getsignal(signal.SIGINT))
             handler(signal.SIGINT, None)
 
     result = mutation_checkpoint.run_with_periodic_checkpoints(
@@ -558,6 +599,37 @@ def test_finite_duration_mapping_accepts_empty_and_finite_values() -> None:
     assert mutation_checkpoint._finite_duration_mapping({"one": 1, "two": 0.5})
 
 
+def test_restore_rejects_non_utf8_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    checkpoint_dir = tmp_path / "checkpoint"
+    checkpoint_dir.mkdir()
+    manifest = checkpoint_dir / "manifest.json"
+    manifest.write_bytes(
+        json.dumps(
+            {
+                "schema_version": mutation_checkpoint._SCHEMA_VERSION,
+                "head_sha": _HEAD_SHA,
+                "runner_fingerprint": _FINGERPRINT,
+                "shard_id": _SHARD_ID,
+                "filters": _FILTERS,
+            }
+        ).encode("utf-16")
+    )
+
+    assert (
+        mutation_checkpoint.restore_checkpoint(
+            root=root,
+            checkpoint_dir=checkpoint_dir,
+            head_sha=_HEAD_SHA,
+            runner_fingerprint=_FINGERPRINT,
+            shard_id=_SHARD_ID,
+            filters=_FILTERS,
+        )
+        == 0
+    )
+
+
 def test_restore_rejects_unreadable_or_malformed_manifest(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
@@ -649,10 +721,10 @@ def test_github_api_json_sends_request_and_decodes_object(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(mutation_checkpoint, "HTTPSConnection", connect)
 
-    response = mutation_checkpoint._api_json("https://api.github.test/repos?a=1", "token")
+    response = mutation_checkpoint._api_json("https://api.github.test:8443/repos?a=1", "token")
 
     assert response == {"artifacts": []}
-    assert created == [("api.github.test", None, 30)]
+    assert created == [("api.github.test", 8443, 30)]
     assert connection.request_args == (
         "GET",
         "/repos?a=1",
@@ -667,12 +739,20 @@ def test_github_api_json_sends_request_and_decodes_object(monkeypatch: pytest.Mo
     assert connection.closed
 
 
+def test_api_request_target_uses_root_path_and_preserves_query() -> None:
+    assert mutation_checkpoint._api_request_target("https://api.github.test?per_page=100") == (
+        "api.github.test",
+        "/?per_page=100",
+        None,
+    )
+
+
 @pytest.mark.parametrize(
     ("status", "payload", "message"),
     [
         (400, b"{}", "HTTP 400"),
         (403, b"{}", "HTTP 403"),
-        (200, b"[]", "unexpected response"),
+        (200, b"[]", "^GitHub Actions API returned an unexpected response$"),
     ],
 )
 def test_github_api_json_rejects_error_and_nonobject_responses(
@@ -714,10 +794,10 @@ def test_list_run_artifacts_paginates_and_filters_items(monkeypatch: pytest.Monk
         {"artifacts": [{"name": "first"}, "invalid"], "total_count": 2},
         {"artifacts": [{"name": "second"}], "total_count": 2},
     ]
-    requests: list[str] = []
+    requests: list[tuple[str, str | None]] = []
 
-    def api_json(url: str, _token: str) -> dict[str, Any]:
-        requests.append(url)
+    def api_json(url: str, token: str | None) -> dict[str, Any]:
+        requests.append((url, token))
         return responses.pop(0)
 
     monkeypatch.setattr(mutation_checkpoint, "_api_json", api_json)
@@ -731,8 +811,14 @@ def test_list_run_artifacts_paginates_and_filters_items(monkeypatch: pytest.Monk
 
     assert artifacts == [{"name": "first"}, {"name": "second"}]
     assert requests == [
-        "https://api.github.test/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=1",
-        "https://api.github.test/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=2",
+        (
+            "https://api.github.test/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=1",
+            "token",
+        ),
+        (
+            "https://api.github.test/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=2",
+            "token",
+        ),
     ]
 
 
@@ -750,7 +836,10 @@ def test_list_run_artifacts_uses_default_count_and_rejects_bad_page(
         == []
     )
     monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"artifacts": "bad"})
-    with pytest.raises(RuntimeError, match="unexpected shape"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"^GitHub Actions artifact list had an unexpected shape$",
+    ):
         mutation_checkpoint._list_run_artifacts(
             api_url="https://api.github.test",
             repository="owner/repo",
@@ -761,7 +850,7 @@ def test_list_run_artifacts_uses_default_count_and_rejects_bad_page(
 
 def test_resume_run_rejects_unexpected_workflow_response(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"workflow_runs": None})
-    with pytest.raises(RuntimeError, match="unexpected shape"):
+    with pytest.raises(RuntimeError, match=r"^GitHub Actions run list had an unexpected shape$"):
         mutation_checkpoint._find_resume_run(
             api_url="https://api.github.test",
             repository="owner/repo",
@@ -776,7 +865,7 @@ def test_write_output_requires_action_output_path_and_appends(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
-    with pytest.raises(RuntimeError, match="GITHUB_OUTPUT is not set"):
+    with pytest.raises(RuntimeError, match=r"^GITHUB_OUTPUT is not set$"):
         mutation_checkpoint._write_output("value", "first")
 
     output_path = tmp_path / "output.txt"
@@ -819,6 +908,7 @@ def test_plan_writes_resume_outputs(
     lines = output_path.read_text(encoding="utf-8").splitlines()
     assert lines[0] == f"previous_run_id={resume_run or ''}"
     checkpoint_map = json.loads(lines[1].removeprefix("checkpoint_artifacts="))
+    assert lines[1] == ("checkpoint_artifacts=" + json.dumps(checkpoint_map, separators=(",", ":")))
     assert listed == ([] if resume_run is None else [resume_run])
     assert (_SHARD_ID in checkpoint_map) is (resume_run is not None)
 
@@ -847,10 +937,15 @@ def test_publish_skips_empty_checkpoint(tmp_path: Path, monkeypatch: pytest.Monk
     assert mutation_checkpoint._publish(tmp_path, _FILTERS, 1) is False
 
 
+@pytest.mark.parametrize(("attempt", "expected_attempt"), [("2", "2"), (None, "1")])
 def test_publish_uploads_checkpoint_with_attempt_scoped_name(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attempt: str | None, expected_attempt: str
 ) -> None:
     _set_publish_environment(monkeypatch)
+    if attempt is None:
+        monkeypatch.delenv("GITHUB_RUN_ATTEMPT")
+    else:
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", attempt)
     node = tmp_path / "node"
     node.write_text("stub", encoding="utf-8")
     node_lookups: list[str] = []
@@ -859,6 +954,15 @@ def test_publish_uploads_checkpoint_with_attempt_scoped_name(
         "which",
         lambda name: node_lookups.append(name) or str(node),
     )
+    real_resolve = Path.resolve
+    resolved_strictly: list[bool] = []
+
+    def resolve(path: Path, *, strict: bool = False) -> Path:
+        if path == node:
+            resolved_strictly.append(strict)
+        return real_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
     snapshot_calls: list[dict[str, Any]] = []
 
     def snapshot(**kwargs: Any) -> tuple[Path, ...]:
@@ -889,10 +993,12 @@ def test_publish_uploads_checkpoint_with_attempt_scoped_name(
     assert snapshot_calls[0]["shard_id"] == _SHARD_ID
     assert snapshot_calls[0]["filters"] == _FILTERS
     assert not snapshot_calls[0]["destination"].exists()
+    assert snapshot_calls[0]["destination"].name.startswith("mutation-checkpoint-")
+    assert resolved_strictly == [True]
     assert command == [
-        str(node.resolve()),
+        str(real_resolve(node, strict=True)),
         str(tmp_path / "scripts/quality/mutation-artifact-uploader/bundle/index.mjs"),
-        f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt2-seq3",
+        f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt{expected_attempt}-seq3",
         str(snapshot_calls[0]["destination"]),
     ]
 
@@ -907,7 +1013,10 @@ def test_publish_reports_missing_node_and_failed_upload(
         lambda **_kwargs: (Path("manifest.json"), Path("mutants/source.meta")),
     )
     monkeypatch.setattr(mutation_checkpoint.shutil, "which", lambda _name: None)
-    with pytest.raises(RuntimeError, match=r"Node\.js is required"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"^Node\.js is required to upload mutation checkpoints$",
+    ):
         mutation_checkpoint._publish(tmp_path, _FILTERS, 1)
 
     node = tmp_path / "node"
@@ -923,7 +1032,7 @@ def test_publish_reports_missing_node_and_failed_upload(
         "_start_artifact_uploader",
         lambda *_args: FailedUpload(),
     )
-    with pytest.raises(RuntimeError, match="artifact upload failed"):
+    with pytest.raises(RuntimeError, match=r"^checkpoint artifact upload failed$"):
         mutation_checkpoint._publish(tmp_path, _FILTERS, 1)
 
 
@@ -1167,6 +1276,8 @@ def test_atomic_write_uses_sibling_temp_and_syncs_file_and_directory(
     mutation_checkpoint._atomic_write_bytes(target, b"complete metadata")
 
     assert temp_calls[0]["dir"] == target.parent
+    assert temp_calls[0]["prefix"] == f".{target.name}."
+    assert temp_calls[0]["suffix"] == ".tmp"
     assert len(sync_calls) == 2
     assert target.read_bytes() == b"complete metadata"
     assert not list(target.parent.glob("*.tmp"))
@@ -1189,12 +1300,20 @@ def test_atomic_write_keeps_original_error_when_temp_disappears_during_cleanup(
 
 
 def test_api_request_target_rejects_https_without_a_hostname() -> None:
-    with pytest.raises(ValueError, match="must use HTTPS"):
+    with pytest.raises(ValueError, match=r"^GitHub Actions API URL must use HTTPS$"):
         mutation_checkpoint._api_request_target("https:///actions/runs")
 
 
 def test_artifact_page_items_defaults_to_an_empty_page() -> None:
     assert mutation_checkpoint._artifact_page_items({}) == []
+
+
+def test_artifact_page_items_rejects_a_non_list_with_a_stable_error() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=r"^GitHub Actions artifact list had an unexpected shape$",
+    ):
+        mutation_checkpoint._artifact_page_items({"artifacts": "bad"})
 
 
 def test_select_checkpoint_artifact_returns_empty_for_a_missing_shard() -> None:
@@ -1234,11 +1353,90 @@ def test_checkpoint_artifact_map_uses_sequence_and_stable_tie_breaking() -> None
     assert mapped[_SHARD_ID][0]["name"] == artifacts[0]["name"]
 
 
+def test_checkpoint_artifact_map_continues_after_a_nonmatching_artifact() -> None:
+    matching = {
+        "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt1-seq1",
+        "created_at": "2026-10-14T11:00:00Z",
+        "expired": False,
+    }
+    expired = {**matching, "expired": True}
+
+    mapped = mutation_checkpoint.checkpoint_artifact_map(
+        [expired, matching], head_sha=_HEAD_SHA, shard_ids={_SHARD_ID}, run_id=12
+    )
+
+    assert mapped[_SHARD_ID][0]["name"] == matching["name"]
+
+
+@pytest.mark.parametrize("created_at", [None, "", 12])
+def test_checkpoint_artifact_map_ignores_artifacts_without_a_timestamp(
+    created_at: object,
+) -> None:
+    artifact = {
+        "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt1-seq1",
+        "created_at": created_at,
+        "expired": False,
+    }
+
+    assert (
+        mutation_checkpoint.checkpoint_artifact_map(
+            [artifact], head_sha=_HEAD_SHA, shard_ids={_SHARD_ID}, run_id=12
+        )
+        == {}
+    )
+
+
 def test_latest_resume_candidate_returns_none_when_no_run_matches() -> None:
     assert (
         mutation_checkpoint._latest_resume_candidate([], current_run_id=99, head_sha=_HEAD_SHA)
         is None
     )
+
+
+def test_latest_resume_candidate_ignores_runs_without_identity_or_order() -> None:
+    missing_id = {
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+        "run_number": 5,
+    }
+    missing_run_number = {
+        "id": 12,
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+    }
+
+    assert (
+        mutation_checkpoint._latest_resume_candidate(
+            [missing_id, missing_run_number], current_run_id=99, head_sha=_HEAD_SHA
+        )
+        is None
+    )
+
+
+def test_find_resume_run_builds_a_single_slash_api_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+
+    def api_json(url: str, _token: str) -> dict[str, Any]:
+        requested.append(url)
+        return {"workflow_runs": []}
+
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", api_json)
+
+    assert (
+        mutation_checkpoint._find_resume_run(
+            api_url="https://api.github.test/",
+            repository="owner/repo",
+            token="token",
+            current_run_id=99,
+            current_run_attempt=1,
+            head_sha=_HEAD_SHA,
+        )
+        is None
+    )
+    assert requested == [
+        "https://api.github.test/repos/owner/repo/actions/workflows/mutation-sweep.yml/runs"
+        f"?branch=main&head_sha={_HEAD_SHA}&per_page=100"
+    ]
 
 
 def test_resume_run_treats_a_missing_workflow_run_list_as_empty(
@@ -1454,6 +1652,53 @@ def test_restore_cli_uses_default_checkpoint_directory(
     }
 
 
+def test_restore_cli_parses_explicit_checkpoint_directory_as_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    checkpoint_dir = tmp_path / "saved-checkpoint"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "mutation_checkpoint.py",
+            "restore",
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--head-sha",
+            _HEAD_SHA,
+            "--runner-fingerprint",
+            _FINGERPRINT,
+            "--shard-id",
+            _SHARD_ID,
+            *_FILTERS,
+        ],
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "restore_checkpoint",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+
+    mutation_checkpoint.main()
+
+    assert captured["checkpoint_dir"] == checkpoint_dir
+    assert isinstance(captured["checkpoint_dir"], Path)
+
+
+def test_cli_help_describes_checkpoint_behavior(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["mutation_checkpoint.py", "--help"])
+
+    with pytest.raises(SystemExit) as error:
+        mutation_checkpoint.main()
+
+    assert error.value.code == 0
+    assert "Persist and restore exact, resumable checkpoints" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     ("option", "value"),
     [("--max-children", "many"), ("--interval-minutes", "soon")],
@@ -1525,6 +1770,26 @@ def test_stop_process_uses_bounded_escalation_waits() -> None:
     assert child.killed
 
 
+def test_stop_process_returns_after_a_successful_interrupt_wait() -> None:
+    class ExitsWhenWaited(_FakeProcess):
+        def __init__(self) -> None:
+            super().__init__()
+            self.waits: list[float | None] = []
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.waits.append(timeout)
+            self.returncode = 0
+            return 0
+
+    child = ExitsWhenWaited()
+
+    mutation_checkpoint._stop_process(child)
+
+    assert child.waits == [2]
+    assert not child.terminated
+    assert not child.killed
+
+
 def test_run_with_periodic_checkpoints_passes_command_directory_and_environment() -> None:
     child = _FakeProcess()
     child.returncode = 7
@@ -1553,7 +1818,38 @@ def test_run_with_periodic_checkpoints_passes_command_directory_and_environment(
 
 
 def test_run_with_periodic_checkpoints_rejects_zero_interval() -> None:
-    with pytest.raises(ValueError, match="checkpoint interval must be positive"):
+    with pytest.raises(ValueError, match=r"^checkpoint interval must be positive$"):
         mutation_checkpoint.run_with_periodic_checkpoints(
             ["mutmut"], interval_seconds=0, publish=lambda _sequence: True, cwd=Path.cwd()
         )
+
+
+def test_run_with_periodic_checkpoints_uses_defaults_and_clears_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def capture_signal_handlers(
+        *_args: Any,
+        execution: mutation_checkpoint._CheckpointExecution,
+        state: mutation_checkpoint._CheckpointState,
+        **_kwargs: Any,
+    ) -> int:
+        captured["execution"] = execution
+        captured["state"] = state
+        state.process = object()
+        return 0
+
+    monkeypatch.setattr(mutation_checkpoint, "_run_with_signal_capture", capture_signal_handlers)
+
+    assert (
+        mutation_checkpoint.run_with_periodic_checkpoints(
+            ["mutmut"],
+            interval_seconds=1,
+            publish=lambda _sequence: True,
+            cwd=Path.cwd(),
+        )
+        == 0
+    )
+    assert isinstance(captured["execution"], mutation_checkpoint._CheckpointExecution)
+    assert captured["state"].process is None
