@@ -282,6 +282,11 @@ def _checkpoint_run_matches(match: re.Match[str], *, head_sha: str, run_id: int)
     return match["sha"] == head_sha and int(match["run_id"]) == run_id
 
 
+def _checkpoint_created_at(artifact: Mapping[str, Any]) -> str | None:
+    created_at = artifact.get("created_at")
+    return created_at if isinstance(created_at, str) and created_at else None
+
+
 def _matching_checkpoint_artifact(
     artifact: Mapping[str, Any], *, head_sha: str, shard_ids: set[str], run_id: int
 ) -> tuple[str, str, str, str, int] | None:
@@ -293,8 +298,8 @@ def _matching_checkpoint_artifact(
     shard_id = match["shard"]
     if shard_id not in shard_ids:
         return None
-    created_at = artifact.get("created_at")
-    if not isinstance(created_at, str) or not created_at:
+    created_at = _checkpoint_created_at(artifact)
+    if created_at is None:
         return None
     return (
         shard_id,
@@ -400,31 +405,50 @@ def _list_run_artifacts(
         page += 1
 
 
-def _is_resume_run(run: object, *, current_run_id: int, head_sha: str) -> bool:
-    if not isinstance(run, dict):
-        return False
+def _resume_run_id(run: Mapping[str, Any]) -> int | None:
     run_id = run.get("id")
-    if not isinstance(run_id, int) or isinstance(run_id, bool):
-        return False
+    return run_id if type(run_id) is int else None
+
+
+def _is_resume_run(run: Mapping[str, Any], *, current_run_id: int, head_sha: str) -> bool:
+    run_id = _resume_run_id(run)
     return (
-        run_id != current_run_id
+        run_id is not None
+        and run_id != current_run_id
         and run.get("head_sha") == head_sha
         and run.get("status") == "completed"
     )
 
 
+def _resume_run_number(run: Mapping[str, Any]) -> int | None:
+    run_number = run.get("run_number")
+    return run_number if type(run_number) is int else None
+
+
+def _resume_candidate(
+    run: object, *, current_run_id: int, head_sha: str
+) -> tuple[int, dict[str, Any]] | None:
+    if not isinstance(run, dict) or not _is_resume_run(
+        run, current_run_id=current_run_id, head_sha=head_sha
+    ):
+        return None
+    run_number = _resume_run_number(run)
+    if run_number is None:
+        return None
+    return run_number, run
+
+
 def _latest_resume_candidate(
     runs: Sequence[Any], *, current_run_id: int, head_sha: str
 ) -> dict[str, Any] | None:
-    candidates = []
-    for run in runs:
-        if not _is_resume_run(run, current_run_id=current_run_id, head_sha=head_sha):
-            continue
-        run_number = run.get("run_number")
-        if not isinstance(run_number, int) or isinstance(run_number, bool):
-            continue
-        candidates.append(run)
-    return max(candidates, key=lambda run: run["run_number"]) if candidates else None
+    candidates = [
+        candidate
+        for run in runs
+        if (candidate := _resume_candidate(run, current_run_id=current_run_id, head_sha=head_sha))
+        is not None
+    ]
+    latest = max(candidates, key=lambda candidate: candidate[0], default=None)
+    return latest[1] if latest is not None else None
 
 
 def _find_resume_run(

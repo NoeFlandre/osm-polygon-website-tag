@@ -335,6 +335,8 @@ def test_periodic_checkpoint_publishes_while_mutmut_is_running() -> None:
 
     def publish(sequence: int) -> bool:
         published.append((sequence, child.poll() is None, clock[0]))
+        if len(published) == 2:
+            child.returncode = 0
         return True
 
     result = mutation_checkpoint.run_with_periodic_checkpoints(
@@ -366,7 +368,7 @@ def test_periodic_checkpoints_follow_the_clock_after_each_publication() -> None:
 
     def publish(sequence: int) -> bool:
         published.append((sequence, clock[0]))
-        if sequence == 2:
+        if len(published) == 2:
             child.returncode = 0
         return True
 
@@ -419,7 +421,7 @@ def test_signal_during_publication_finishes_upload_then_publishes_final_state() 
 
     def publish(sequence: int) -> bool:
         published.append(sequence)
-        if sequence == 1:
+        if len(published) == 1:
             handler = cast(Callable[[int, FrameType | None], Any], signal.getsignal(signal.SIGTERM))
             handler(signal.SIGTERM, None)
         return True
@@ -819,6 +821,31 @@ def test_list_run_artifacts_paginates_and_filters_items(monkeypatch: pytest.Monk
             "https://api.github.test/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=2",
             "token",
         ),
+    ]
+
+
+def test_list_run_artifacts_preserves_api_url_path_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    def api_json(url: str, _token: str) -> dict[str, Any]:
+        requested.append(url)
+        return {"artifacts": [], "total_count": 0}
+
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", api_json)
+
+    assert (
+        mutation_checkpoint._list_run_artifacts(
+            api_url="https://api.github.test/X",
+            repository="owner/repo",
+            token="token",
+            run_id=12,
+        )
+        == []
+    )
+    assert requested == [
+        "https://api.github.test/X/repos/owner/repo/actions/runs/12/artifacts?per_page=100&page=1"
     ]
 
 
@@ -1304,6 +1331,17 @@ def test_api_request_target_rejects_https_without_a_hostname() -> None:
         mutation_checkpoint._api_request_target("https:///actions/runs")
 
 
+def test_checkpoint_run_matches_requires_both_commit_and_run_identity() -> None:
+    match = mutation_checkpoint._CHECKPOINT_NAME.fullmatch(
+        f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt1-seq1"
+    )
+    assert match is not None
+
+    assert mutation_checkpoint._checkpoint_run_matches(match, head_sha=_HEAD_SHA, run_id=12)
+    assert not mutation_checkpoint._checkpoint_run_matches(match, head_sha="c" * 40, run_id=12)
+    assert not mutation_checkpoint._checkpoint_run_matches(match, head_sha=_HEAD_SHA, run_id=13)
+
+
 def test_artifact_page_items_defaults_to_an_empty_page() -> None:
     assert mutation_checkpoint._artifact_page_items({}) == []
 
@@ -1411,6 +1449,63 @@ def test_latest_resume_candidate_ignores_runs_without_identity_or_order() -> Non
         )
         is None
     )
+
+
+@pytest.mark.parametrize("run_id", [None, "12", True])
+def test_latest_resume_candidate_ignores_non_integer_run_ids(run_id: object) -> None:
+    run = {
+        "id": run_id,
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+        "run_number": 5,
+    }
+
+    assert (
+        mutation_checkpoint._latest_resume_candidate([run], current_run_id=99, head_sha=_HEAD_SHA)
+        is None
+    )
+
+
+def test_latest_resume_candidate_chooses_the_largest_run_number() -> None:
+    older = {
+        "id": 10,
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+        "run_number": 5,
+    }
+    newer = {**older, "id": 11, "run_number": 6}
+
+    assert (
+        mutation_checkpoint._latest_resume_candidate(
+            [older, newer], current_run_id=99, head_sha=_HEAD_SHA
+        )
+        is newer
+    )
+
+
+def test_find_resume_run_preserves_api_url_path_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "_api_json",
+        lambda url, _token: requested.append(url) or {"workflow_runs": []},
+    )
+
+    assert (
+        mutation_checkpoint._find_resume_run(
+            api_url="https://api.github.test/X",
+            repository="owner/repo",
+            token="token",
+            current_run_id=99,
+            current_run_attempt=1,
+            head_sha=_HEAD_SHA,
+        )
+        is None
+    )
+    assert requested == [
+        "https://api.github.test/X/repos/owner/repo/actions/workflows/mutation-sweep.yml/runs"
+        f"?branch=main&head_sha={_HEAD_SHA}&per_page=100"
+    ]
 
 
 def test_find_resume_run_builds_a_single_slash_api_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1788,6 +1883,19 @@ def test_stop_process_returns_after_a_successful_interrupt_wait() -> None:
     assert child.waits == [2]
     assert not child.terminated
     assert not child.killed
+
+
+def test_publish_next_checkpoint_publishes_and_increments_once() -> None:
+    state = mutation_checkpoint._CheckpointState(process=_FakeProcess())
+    state.sequence = 7
+    published: list[int] = []
+
+    mutation_checkpoint._publish_next_checkpoint(
+        lambda sequence: published.append(sequence) or True, state
+    )
+
+    assert published == [7]
+    assert state.sequence == 8
 
 
 def test_run_with_periodic_checkpoints_passes_command_directory_and_environment() -> None:
