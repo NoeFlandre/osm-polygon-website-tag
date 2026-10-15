@@ -1451,6 +1451,21 @@ def test_latest_resume_candidate_ignores_runs_without_identity_or_order() -> Non
     )
 
 
+@pytest.mark.parametrize("run_number", [None, "5", True])
+def test_latest_resume_candidate_ignores_non_integer_run_numbers(run_number: object) -> None:
+    run = {
+        "id": 12,
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+        "run_number": run_number,
+    }
+
+    assert (
+        mutation_checkpoint._latest_resume_candidate([run], current_run_id=99, head_sha=_HEAD_SHA)
+        is None
+    )
+
+
 @pytest.mark.parametrize("run_id", [None, "12", True])
 def test_latest_resume_candidate_ignores_non_integer_run_ids(run_id: object) -> None:
     run = {
@@ -1480,6 +1495,23 @@ def test_latest_resume_candidate_chooses_the_largest_run_number() -> None:
             [older, newer], current_run_id=99, head_sha=_HEAD_SHA
         )
         is newer
+    )
+
+
+def test_latest_resume_candidate_keeps_first_run_when_numbers_tie() -> None:
+    first = {
+        "id": 10,
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+        "run_number": 5,
+    }
+    second = {**first, "id": 11}
+
+    assert (
+        mutation_checkpoint._latest_resume_candidate(
+            [first, second], current_run_id=99, head_sha=_HEAD_SHA
+        )
+        is first
     )
 
 
