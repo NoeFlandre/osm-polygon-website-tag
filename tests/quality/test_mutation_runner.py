@@ -454,6 +454,51 @@ def test_mutant_cli_filter_parser_skips_option_values() -> None:
     assert mutation_runner._mutant_names_from_cli(["results", "package.module.*"]) == ()
 
 
+def test_source_scope_can_resume_without_explicit_mutant_filters(monkeypatch) -> None:
+    import mutmut.__main__ as mutmut_main
+
+    scope = "osm_polygon_website_tag.pipeline.*"
+    configured: list[tuple[str, ...]] = []
+    received: list[list[str]] = []
+    monkeypatch.setenv(mutation_runner._SOURCE_SCOPE_ENV, scope)
+    monkeypatch.setattr(
+        mutation_runner.sys,
+        "argv",
+        ["mutation_runner.py", "run", "--max-children", "4"],
+    )
+    monkeypatch.setattr(
+        mutation_runner,
+        "_configure_source_scope",
+        lambda names: configured.append(tuple(names)) or (Path("src/pipeline.py"),),
+    )
+    monkeypatch.setattr(mutmut_main, "cli", lambda: received.append(mutation_runner.sys.argv[1:]))
+
+    mutation_runner._run_mutmut_cli(mutmut_main, mutation_runner.sys.argv[1:])
+
+    assert configured == [(scope,)]
+    assert received == [["run", "--max-children", "4"]]
+
+
+def test_source_scope_without_source_files_fails_as_an_empty_shard(monkeypatch) -> None:
+    import mutmut.__main__ as mutmut_main
+
+    monkeypatch.setenv(mutation_runner._SOURCE_SCOPE_ENV, "osm_polygon_website_tag.pipeline.*")
+    monkeypatch.setattr(
+        mutation_runner.sys,
+        "argv",
+        ["mutation_runner.py", "run", "--max-children", "4"],
+    )
+    monkeypatch.setattr(mutation_runner, "_configure_source_scope", lambda names: ())
+    monkeypatch.setattr(
+        mutmut_main,
+        "cli",
+        lambda: pytest.fail("mutmut must not run when the source scope is empty"),
+    )
+
+    with pytest.raises(SystemExit, match="86"):
+        mutation_runner._run_mutmut_cli(mutmut_main, mutation_runner.sys.argv[1:])
+
+
 def test_stats_do_not_attribute_collection_imports_to_the_first_test(
     monkeypatch, tmp_path: Path
 ) -> None:

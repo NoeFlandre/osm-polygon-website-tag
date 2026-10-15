@@ -91,6 +91,45 @@ def test_area_results_come_from_mutmut_without_masking_its_failure() -> None:
     assert "mutmut results --all true >" in run
 
 
+def test_pipeline_resume_cache_is_isolated_to_the_exact_commit() -> None:
+    fingerprint = _step("area", "Fingerprint the mutation environment")
+    restore = _step("area", "Restore an interrupted pipeline sweep")
+    save = _step("area", "Save the pipeline sweep checkpoint")
+    key = restore["with"]["key"]
+
+    assert fingerprint["id"] == "mutation-env"
+    assert fingerprint["if"] == "matrix.area == 'pipeline'"
+    assert restore["if"] == "matrix.area == 'pipeline'"
+    assert restore["with"]["path"] == ".mutation-checkpoint"
+    assert "${{ github.sha }}" in key
+    assert "${{ hashFiles('uv.lock') }}" in key
+    assert "${{ steps.mutation-env.outputs.fingerprint }}" in key
+    assert "${{ github.run_id }}" in key
+    assert "${{ github.run_attempt }}" in key
+    assert "${{ steps.mutation-env.outputs.fingerprint }}" in restore["with"]["restore-keys"]
+    assert save["with"]["key"] == key
+    assert save["if"].startswith("always() && matrix.area == 'pipeline'")
+    assert "steps.mark-checkpoint.outcome == 'success'" in save["if"]
+
+
+def test_pipeline_checkpoint_requires_a_complete_mutant_verdict_set() -> None:
+    prepare = _step("area", "Prepare the pipeline sweep checkpoint")
+    verify = _step("area", "Require all pipeline mutants to have verdicts")
+    mark = _step("area", "Mark the pipeline sweep checkpoint")
+    run = _step("area", "Sweep the area")
+
+    assert prepare["if"] == "matrix.area == 'pipeline'"
+    assert verify["if"] == "matrix.area == 'pipeline'"
+    assert "mutation_checkpoint.py verify" in verify["run"]
+    assert mark["if"].startswith("always() && matrix.area == 'pipeline'")
+    assert mark["id"] == "mark-checkpoint"
+    assert "steps.verify-pipeline.outcome" in mark["run"]
+    assert run["env"]["MUTATION_SOURCE_SCOPE"] == (
+        "${{ matrix.area == 'pipeline' && 'osm_polygon_website_tag.pipeline.*' || '' }}"
+    )
+    assert '"${filters[@]}"' in run["run"]
+
+
 def test_nightly_publishes_the_baseline_diff_and_still_fails_on_growth() -> None:
     merge = _step("merge", "Merge the areas into a candidate baseline")["run"]
     upload = _step("merge", "Upload the baseline diff")

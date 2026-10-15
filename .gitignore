@@ -21,6 +21,7 @@ coverage.xml
 .mypy_cache/
 .ruff_cache/
 mutants/
+.mutation-checkpoint/
 
 # Virtual environments
 .venv/
