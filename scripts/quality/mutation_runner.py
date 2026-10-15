@@ -426,20 +426,37 @@ def _install_mutmut_hooks(mutmut_main: Any) -> None:
     mutmut_main.PytestRunner.run_stats = cast(Any, run_stats)
 
 
+def _configure_environment_scope(
+    arguments: Sequence[str], source_scope: str, mutant_names: tuple[str, ...]
+) -> None:
+    if mutant_names:
+        raise ValueError(f"{_SOURCE_SCOPE_ENV} cannot be combined with explicit mutant filters")
+    if not arguments or arguments[0] != "run":
+        raise ValueError(f"{_SOURCE_SCOPE_ENV} is only supported with mutmut run")
+    if not _configure_source_scope((source_scope,)):
+        print(f"No source files match mutation scope: {source_scope}")
+        raise SystemExit(_EMPTY_SHARD_EXIT_CODE)
+
+
+def _configure_explicit_scope(arguments: Sequence[str]) -> tuple[str, ...]:
+    mutant_names = _mutant_names_from_cli(arguments)
+    if mutant_names:
+        _configure_source_scope(mutant_names)
+    return mutant_names
+
+
+def _configure_cli_scope(arguments: Sequence[str]) -> tuple[str, ...]:
+    source_scope = os.environ.get(_SOURCE_SCOPE_ENV, "").strip()
+    if source_scope:
+        mutant_names = _mutant_names_from_cli(arguments)
+        _configure_environment_scope(arguments, source_scope, mutant_names)
+        return mutant_names
+    return _configure_explicit_scope(arguments)
+
+
 def _run_mutmut_cli(mutmut_main: Any, arguments: Sequence[str]) -> None:
     """Apply a source scope independently of mutant filters, then run mutmut."""
-    mutant_names = _mutant_names_from_cli(arguments)
-    source_scope = os.environ.get(_SOURCE_SCOPE_ENV, "").strip()
-    if source_scope and mutant_names:
-        raise ValueError(f"{_SOURCE_SCOPE_ENV} cannot be combined with explicit mutant filters")
-    if source_scope:
-        if not arguments or arguments[0] != "run":
-            raise ValueError(f"{_SOURCE_SCOPE_ENV} is only supported with mutmut run")
-        if not _configure_source_scope((source_scope,)):
-            print(f"No source files match mutation scope: {source_scope}")
-            raise SystemExit(_EMPTY_SHARD_EXIT_CODE)
-    elif mutant_names:
-        _configure_source_scope(mutant_names)
+    mutant_names = _configure_cli_scope(arguments)
     sys.argv[0] = "mutmut"
     try:
         mutmut_main.cli()

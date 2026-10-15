@@ -8,7 +8,7 @@ import json
 import math
 import shutil
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 _CHECKPOINT_DIR: Final = Path(".mutation-checkpoint")
 _CHECKPOINT_STATUS: Final = Path("status")
@@ -28,37 +28,64 @@ def _metadata_paths(root: Path) -> tuple[Path, ...]:
     return tuple(sorted(directory.rglob("*.py.meta")))
 
 
-def _valid_metadata(path: Path) -> bool:
-    """Check the mutmut 3.8 per-file state shape before reusing a checkpoint."""
+def _read_metadata(path: Path) -> object | None:
     try:
-        metadata = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return False
+        return None
 
+
+def _has_expected_fields(metadata: dict[object, object]) -> bool:
+    keys = metadata.keys()
+    return keys >= _REQUIRED_META_FIELDS and keys <= _META_FIELDS
+
+
+def _as_mapping(value: object) -> dict[object, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _valid_exit_codes(values: dict[object, object]) -> bool:
+    return all(
+        isinstance(key, str) and (type(code) is int or code is None) for key, code in values.items()
+    )
+
+
+def _valid_hashes(values: dict[object, object]) -> bool:
+    return all(isinstance(key, str) and isinstance(value, str) for key, value in values.items())
+
+
+def _valid_type_errors(values: dict[object, object]) -> bool:
+    return all(
+        isinstance(key, str) and (isinstance(value, str) or value is None)
+        for key, value in values.items()
+    )
+
+
+def _valid_metadata_document(metadata: object) -> bool:
     if not isinstance(metadata, dict):
         return False
-    if not metadata.keys() >= _REQUIRED_META_FIELDS or metadata.keys() - _META_FIELDS:
+    if not _has_expected_fields(metadata):
         return False
-    mappings = {name: metadata.get(name, {}) for name in _META_FIELDS}
-    if not all(isinstance(value, dict) for value in mappings.values()):
+    mappings = {name: _as_mapping(metadata.get(name, {})) for name in _META_FIELDS}
+    if None in mappings.values():
         return False
-
-    exit_codes = metadata["exit_code_by_key"]
-    hashes = mappings["hash_by_function_name"]
-    type_errors = mappings["type_check_error_by_key"]
-    durations = mappings["durations_by_key"]
-    estimates = mappings["estimated_durations_by_key"]
-    return (
-        all(isinstance(key, str) for key in exit_codes)
-        and all(type(code) is int or code is None for code in exit_codes.values())
-        and all(isinstance(key, str) and isinstance(value, str) for key, value in hashes.items())
-        and all(
-            isinstance(key, str) and (isinstance(value, str) or value is None)
-            for key, value in type_errors.items()
+    valid_mappings = cast(dict[str, dict[object, object]], mappings)
+    return all(
+        (
+            _valid_exit_codes(valid_mappings["exit_code_by_key"]),
+            _valid_hashes(valid_mappings["hash_by_function_name"]),
+            _valid_type_errors(valid_mappings["type_check_error_by_key"]),
+            _is_duration_mapping(valid_mappings["durations_by_key"]),
+            _is_duration_mapping(valid_mappings["estimated_durations_by_key"]),
         )
-        and _is_duration_mapping(durations)
-        and _is_duration_mapping(estimates)
     )
+
+
+def _valid_metadata(path: Path) -> bool:
+    """Check the mutmut 3.8 per-file state shape before reusing a checkpoint."""
+    return _valid_metadata_document(_read_metadata(path))
 
 
 def _is_duration_mapping(values: dict[object, object]) -> bool:
@@ -76,6 +103,28 @@ def _is_duration(value: object) -> bool:
         return False
 
 
+def _read_checkpoint_status(marker: Path) -> str:
+    try:
+        return marker.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+
+
+def _clear_pipeline_metadata(root: Path) -> None:
+    for path in _metadata_paths(root):
+        path.unlink(missing_ok=True)
+
+
+def _restore_valid_metadata(root: Path, checkpoint_dir: Path) -> None:
+    for path in _metadata_paths(checkpoint_dir):
+        if not _valid_metadata(path):
+            continue
+        relative_path = path.relative_to(checkpoint_dir)
+        target = root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+
+
 def prepare_checkpoint(root: Path) -> None:
     """Keep valid verdicts after a failed sweep; reset them after success or ambiguity.
 
@@ -84,23 +133,11 @@ def prepare_checkpoint(root: Path) -> None:
     mutants from the current checkout and keeps verdicts only for unchanged names.
     """
     checkpoint_dir = root / _CHECKPOINT_DIR
-    marker = checkpoint_dir / _CHECKPOINT_STATUS
-    try:
-        status = marker.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        status = ""
+    status = _read_checkpoint_status(checkpoint_dir / _CHECKPOINT_STATUS)
+    _clear_pipeline_metadata(root)
 
-    for path in _metadata_paths(root):
-        path.unlink(missing_ok=True)
-
-    metadata_paths = _metadata_paths(checkpoint_dir)
     if status == "partial":
-        for path in metadata_paths:
-            if _valid_metadata(path):
-                relative_path = path.relative_to(checkpoint_dir)
-                target = root / relative_path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(path, target)
+        _restore_valid_metadata(root, checkpoint_dir)
 
     shutil.rmtree(checkpoint_dir, ignore_errors=True)
 
@@ -124,22 +161,30 @@ def mark_checkpoint(outcome: str, root: Path) -> None:
             shutil.copyfile(path, target)
 
 
+def _read_valid_exit_codes(path: Path) -> dict[str, int | None]:
+    metadata = _read_metadata(path)
+    if not _valid_metadata_document(metadata):
+        raise RuntimeError(f"invalid pipeline mutation metadata: {path}")
+    return cast(dict[str, int | None], cast(dict[str, object], metadata)["exit_code_by_key"])
+
+
+def _verdict_summary(paths: tuple[Path, ...]) -> tuple[int, list[str]]:
+    mutant_count = 0
+    unchecked: list[str] = []
+    for path in paths:
+        exit_codes = _read_valid_exit_codes(path)
+        mutant_count += len(exit_codes)
+        unchecked.extend(name for name, code in exit_codes.items() if code is None)
+    return mutant_count, unchecked
+
+
 def verify_checkpoint(root: Path) -> None:
     """Fail unless every pipeline mutant has a recorded verdict."""
     metadata_paths = _metadata_paths(root)
     if not metadata_paths:
         raise RuntimeError("no pipeline mutants were generated")
 
-    mutant_count = 0
-    unchecked: list[str] = []
-    for path in metadata_paths:
-        if not _valid_metadata(path):
-            raise RuntimeError(f"invalid pipeline mutation metadata: {path}")
-        metadata = json.loads(path.read_text(encoding="utf-8"))
-        exit_codes = metadata["exit_code_by_key"]
-        mutant_count += len(exit_codes)
-        unchecked.extend(name for name, code in exit_codes.items() if code is None)
-
+    mutant_count, unchecked = _verdict_summary(metadata_paths)
     if mutant_count == 0:
         raise RuntimeError("no pipeline mutants were generated")
     if unchecked:
@@ -147,8 +192,8 @@ def verify_checkpoint(root: Path) -> None:
         raise RuntimeError(f"pipeline mutants were not checked ({len(unchecked)}): {sample}")
 
 
-def main() -> None:
-    """Prepare a checkpoint or mark the outcome of one pipeline-area sweep."""
+def _argument_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for checkpoint operations."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("prepare")
@@ -158,17 +203,29 @@ def main() -> None:
     mark.add_argument("--root", type=Path, default=Path.cwd())
     verify = commands.add_parser("verify")
     verify.add_argument("--root", type=Path, default=Path.cwd())
-    args = parser.parse_args()
+    return parser
 
+
+def _run_verify(root: Path, parser: argparse.ArgumentParser) -> None:
+    try:
+        verify_checkpoint(root)
+    except RuntimeError as exc:
+        parser.exit(1, f"error: {exc}\n")
+
+
+def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     if args.command == "prepare":
         prepare_checkpoint(args.root)
     elif args.command == "mark":
         mark_checkpoint(args.outcome, args.root)
     else:
-        try:
-            verify_checkpoint(args.root)
-        except RuntimeError as exc:
-            parser.exit(1, f"error: {exc}\n")
+        _run_verify(args.root, parser)
+
+
+def main() -> None:
+    """Prepare a checkpoint or mark the outcome of one pipeline-area sweep."""
+    parser = _argument_parser()
+    _dispatch_command(parser.parse_args(), parser)
 
 
 if __name__ == "__main__":
