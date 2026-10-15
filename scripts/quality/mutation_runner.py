@@ -455,7 +455,6 @@ def _configure_cli_scope(arguments: Sequence[str]) -> tuple[str, ...]:
 
 
 def _run_mutmut_cli(mutmut_main: Any, arguments: Sequence[str]) -> None:
-    """Apply a source scope independently of mutant filters, then run mutmut."""
     mutant_names = _configure_cli_scope(arguments)
     sys.argv[0] = "mutmut"
     try:

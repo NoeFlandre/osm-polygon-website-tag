@@ -373,7 +373,7 @@ _TRANSPARENT_DECORATORS = frozenset({"staticmethod", "classmethod"})
 # matrix was as slow as its worst module. Splitting a module's functions across
 # shards costs a little setup per job and buys back most of that wall clock.
 SHARD_FUNCTIONS = 8
-NIGHTLY_SHARD_FUNCTIONS = 32
+NIGHTLY_SHARD_FUNCTIONS = 2
 
 
 def module_function_filters(module: str, *, root: Path | None = None) -> list[str] | None:

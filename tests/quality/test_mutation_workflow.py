@@ -119,6 +119,14 @@ def test_mutation_jobs_are_bounded_and_do_not_cache_filtered_runs() -> None:
     assert all(not step.get("uses", "").startswith("actions/cache/") for step in area["steps"])
 
 
+def test_pipeline_checkpoints_are_frequent_and_matrix_stays_within_github_limit() -> None:
+    shards = _shards()
+    pipeline_shards = [shard for shard in shards if shard["pipeline"]]
+
+    assert max(len(shard["filters"].split()) for shard in pipeline_shards) <= 2
+    assert len(shards) <= 256
+
+
 def test_pipeline_verification_is_scoped_to_one_module_and_filter_group() -> None:
     verify = _step("area", "Require all shard mutants to have verdicts")
     run = _step("area", "Sweep the shard")

@@ -92,17 +92,11 @@ jobs:
         id: sweep
         env:
           MUTATION_FILTERS: ${{ matrix.shard.filters }}
-          MUTATION_SHARD_NAME: ${{ matrix.shard.name }}
         run: |
           read -r -a filters <<< "$MUTATION_FILTERS"
-          status=0
           uv run --locked python scripts/quality/mutation_runner.py run \
             --max-children "${{ inputs.children || '4' }}" \
-            "${filters[@]}" || status=$?
-          if [ "$status" -eq 86 ]; then
-            echo "::error::mutation shard ${MUTATION_SHARD_NAME} matched no mutable functions; check scripts/quality/mutation_scope.py and its package" >&2
-          fi
-          exit "$status"
+            "${filters[@]}"
 
       - name: Require all shard mutants to have verdicts
         id: verify-pipeline
