@@ -39,6 +39,7 @@ _MPLCONFIGDIR: Final = (
 _TEST_SELECTION_ENV: Final = "MUTATION_TEST_PATHS"
 _SOURCE_SCOPE_ENV: Final = "MUTATION_SOURCE_SCOPE"
 _EMPTY_SHARD_EXIT_CODE: Final = 86
+_MUTMUT_INTERRUPTED_EXIT_CODE: Final = 2
 
 
 def _validate_mutant_package(mutant_name: str) -> None:
@@ -409,6 +410,62 @@ def _validated_test_list(tests: Any) -> list[str]:
     raise ValueError("stats child tests must be a JSON array of strings")
 
 
+def _atomic_mutation_data_save(mutation_data: Any) -> None:
+    target = Path(mutation_data.meta_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "exit_code_by_key": mutation_data.exit_code_by_key,
+        "hash_by_function_name": mutation_data.hash_by_function_name,
+        "type_check_error_by_key": mutation_data.type_check_error_by_key,
+        "durations_by_key": mutation_data.durations_by_key,
+        "estimated_durations_by_key": mutation_data.estimated_time_of_tests_by_mutant,
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(payload, output, indent=4)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(target)
+        try:
+            directory_fd = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            # Some filesystems do not support syncing directory descriptors.
+            pass
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _install_mutation_checkpoint_hooks(mutmut_main: Any) -> None:
+    from mutmut.mutation.data import SourceFileMutationData
+
+    SourceFileMutationData.save = cast(Any, _atomic_mutation_data_save)
+    original_collect = mutmut_main.collect_source_file_mutation_data
+
+    def collect_source_file_mutation_data(*, mutant_names: Any) -> Any:
+        mutants, mutation_data_by_path = original_collect(mutant_names=mutant_names)
+        if os.environ.get("MUTATION_RESUME_COMPLETED") != "1":
+            return mutants, mutation_data_by_path
+        # Explicit mutmut filters normally force completed mutants to rerun. During
+        # an exact-commit checkpoint resume, retry unfinished or interrupted mutants.
+        return [
+            mutant
+            for mutant in mutants
+            if mutant[2] is None or mutant[2] == _MUTMUT_INTERRUPTED_EXIT_CODE
+        ], mutation_data_by_path
+
+    mutmut_main.collect_source_file_mutation_data = cast(Any, collect_source_file_mutation_data)
+
+
 def _install_mutmut_hooks(mutmut_main: Any) -> None:
     """Install fresh-process coverage, mutant-test, and stats adapters."""
 
@@ -455,7 +512,6 @@ def _configure_cli_scope(arguments: Sequence[str]) -> tuple[str, ...]:
 
 
 def _run_mutmut_cli(mutmut_main: Any, arguments: Sequence[str]) -> None:
-    """Apply a source scope independently of mutant filters, then run mutmut."""
     mutant_names = _configure_cli_scope(arguments)
     sys.argv[0] = "mutmut"
     try:
@@ -477,6 +533,7 @@ def main() -> None:
     import mutmut.__main__ as mutmut_main
 
     _install_mutmut_hooks(mutmut_main)
+    _install_mutation_checkpoint_hooks(mutmut_main)
     _run_mutmut_cli(mutmut_main, sys.argv[1:])
 
 

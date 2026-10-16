@@ -28,12 +28,32 @@ import subprocess
 import sys
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
+from typing import TypedDict
 
 PACKAGE_ROOT = Path("src/osm_polygon_website_tag")
 PACKAGE_NAME = "osm_polygon_website_tag"
 TESTS_ROOT = Path("tests")
+_GIT_EXECUTABLE = "/usr/bin/git"
+NIGHTLY_AREAS = (
+    "reporting",
+    "application",
+    "publishing",
+    "domain",
+    "contracts",
+    "runtime",
+    "web",
+    "storage",
+)
 _TEST_PREFIX = "test_"
 _HUNK = re.compile(r"^@@ -\d+(?:,(?P<old>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+
+
+class NightlyShard(TypedDict):
+    id: str
+    name: str
+    module: str
+    filters: str
+    pipeline: bool
 
 
 def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
@@ -42,7 +62,7 @@ def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
     Deletions are excluded: a removed module has no mutants left to check.
     """
     result = subprocess.run(  # noqa: S603
-        ["git", "diff", "--name-only", "--diff-filter=d", f"{base}...HEAD"],  # noqa: S607
+        [_GIT_EXECUTABLE, "diff", "--name-only", "--diff-filter=d", f"{base}...HEAD"],
         cwd=cwd,
         check=True,
         capture_output=True,
@@ -103,7 +123,7 @@ def _mirrored_source_parts(path: Path, root: Path) -> list[str] | None:
 def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, set[int]]:
     """Return the added or modified line numbers per changed repository path."""
     result = subprocess.run(  # noqa: S603
-        ["git", "diff", "-U0", "--diff-filter=d", f"{base}...HEAD"],  # noqa: S607
+        [_GIT_EXECUTABLE, "diff", "-U0", "--diff-filter=d", f"{base}...HEAD"],
         cwd=cwd,
         check=True,
         capture_output=True,
@@ -353,6 +373,7 @@ _TRANSPARENT_DECORATORS = frozenset({"staticmethod", "classmethod"})
 # matrix was as slow as its worst module. Splitting a module's functions across
 # shards costs a little setup per job and buys back most of that wall clock.
 SHARD_FUNCTIONS = 8
+NIGHTLY_SHARD_FUNCTIONS = 2
 
 
 def module_function_filters(module: str, *, root: Path | None = None) -> list[str] | None:
@@ -387,6 +408,57 @@ def shards(
     for module in sorted(scoped):
         matrix.extend(_module_shards(module, scoped[module], root=root, size=size))
     return matrix
+
+
+def full_sweep_shards(*, root: Path | None = None) -> list[NightlyShard]:
+    base = root if root is not None else Path.cwd()
+    return _nightly_pipeline_shards(base) + _nightly_area_shards()
+
+
+def _nightly_pipeline_shards(base: Path) -> list[NightlyShard]:
+    pipeline_root = base / PACKAGE_ROOT / "pipeline"
+    return [
+        shard
+        for source in sorted(pipeline_root.rglob("*.py"))
+        if source.name != "__init__.py"
+        for shard in _nightly_module_shards(source, base)
+    ]
+
+
+def _nightly_module_shards(source: Path, base: Path) -> list[NightlyShard]:
+    relative = source.relative_to(base / PACKAGE_ROOT).with_suffix("")
+    module = ".".join([PACKAGE_NAME, *relative.parts])
+    filters = module_function_filters(module, root=base)
+    if filters is None:
+        raise RuntimeError(f"cannot read pipeline source module {module!r}")
+    if not filters:
+        return []
+    area = module.removeprefix(f"{PACKAGE_NAME}.")
+    return [
+        {
+            "id": f"pipeline-{area.replace('.', '-')}-{index:02d}",
+            "name": shard["name"],
+            "module": module,
+            "filters": shard["filters"],
+            "pipeline": True,
+        }
+        for index, shard in enumerate(
+            shards({module: filters}, root=base, size=NIGHTLY_SHARD_FUNCTIONS), start=1
+        )
+    ]
+
+
+def _nightly_area_shards() -> list[NightlyShard]:
+    return [
+        {
+            "id": area,
+            "name": area,
+            "module": "",
+            "filters": f"{PACKAGE_NAME}.{area}.*",
+            "pipeline": False,
+        }
+        for area in NIGHTLY_AREAS
+    ]
 
 
 def _expanded_filters(module: str, filters: list[str], root: Path | None) -> list[str] | None:
@@ -443,7 +515,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="emit one JSON object per module, each with its own filters, for a CI matrix",
     )
+    parser.add_argument(
+        "--full-sweep-json",
+        action="store_true",
+        help="emit the complete nightly mutation matrix",
+    )
     args = parser.parse_args(argv)
+    if args.full_sweep_json:
+        print(json.dumps(full_sweep_shards(), separators=(",", ":")))
+        return 0
     try:
         lines = changed_lines(args.base)
     except subprocess.CalledProcessError as exc:

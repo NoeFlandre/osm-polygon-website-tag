@@ -89,20 +89,27 @@ def test_mutation_shards_start_beside_the_quality_gate_and_skip_pushes() -> None
     assert "github.event_name == 'pull_request'" in mutation["if"]
 
 
-def test_nightly_mutation_merge_requires_every_area_artifact() -> None:
+def test_nightly_mutation_merge_requires_every_shard_artifact() -> None:
     jobs = _load("mutation-sweep.yml")["jobs"]
-    areas = jobs["area"]["strategy"]["matrix"]["area"]
+    plan = jobs["plan"]
+    resolve = next(step for step in plan["steps"] if step.get("id") == "resolve")
+    area = jobs["area"]
     merge_steps = jobs["merge"]["steps"]
     require_step = next(
         step
         for step in merge_steps
-        if step.get("name") == "Require a result artifact from every area"
+        if step.get("name") == "Require a result artifact from every shard"
     )
-    setup_uv = next(step for step in jobs["area"]["steps"] if "setup-uv" in step.get("uses", ""))
+    setup_uv = next(step for step in area["steps"] if "setup-uv" in step.get("uses", ""))
 
-    assert 'artifact="areas/results-${area}.txt"' in require_step["run"]
-    assert '[[ ! -f "$artifact" ]]' in require_step["run"]
-    assert all(area in require_step["run"] for area in areas)
+    assert plan["outputs"]["mutation_shards"] == "${{ steps.resolve.outputs.matrix }}"
+    assert "--full-sweep-json" in resolve["run"]
+    assert (
+        area["strategy"]["matrix"]["shard"] == "${{ fromJSON(needs.plan.outputs.mutation_shards) }}"
+    )
+    assert "MUTATION_SHARDS_JSON" in require_step["env"]
+    assert "shard['id']" in require_step["run"]
+    assert "is_file()" in require_step["run"]
     assert setup_uv["with"]["cache-dependency-glob"] == "uv.lock"
 
 

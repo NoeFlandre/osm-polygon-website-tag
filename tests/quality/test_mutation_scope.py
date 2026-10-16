@@ -10,6 +10,7 @@ import pytest
 from scripts.quality import mutation_scope
 
 _ROOT = Path(__file__).resolve().parents[2]
+_PACKAGE = _ROOT / mutation_scope.PACKAGE_ROOT
 
 
 def test_only_package_modules_become_filters() -> None:
@@ -99,7 +100,13 @@ def test_changed_paths_excludes_deletions(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert mutation_scope.changed_paths("origin/main") == ["a.py", "b.py"]
     assert recorded == [
-        ["git", "diff", "--name-only", "--diff-filter=d", "origin/main...HEAD"],
+        [
+            mutation_scope._GIT_EXECUTABLE,
+            "diff",
+            "--name-only",
+            "--diff-filter=d",
+            "origin/main...HEAD",
+        ],
     ]
 
 
@@ -572,3 +579,68 @@ def test_a_shard_of_only_decorated_functions_is_not_emitted(tmp_path: Path) -> N
     module = f"{mutation_scope.PACKAGE_NAME}.commands"
 
     assert mutation_scope.shards({module: [f"{module}.*"]}, root=tmp_path) == []
+
+
+def test_full_sweep_shards_cover_every_pipeline_function_once() -> None:
+    shards = mutation_scope.full_sweep_shards(root=_ROOT)
+    pipeline_shards = [shard for shard in shards if shard["pipeline"]]
+    grouped_filters: dict[str, list[str]] = {}
+
+    for shard in pipeline_shards:
+        filters = shard["filters"].split()
+        assert len(filters) <= mutation_scope.NIGHTLY_SHARD_FUNCTIONS
+        grouped_filters.setdefault(shard["module"], []).extend(filters)
+
+    expected_modules = {
+        ".".join(
+            [
+                mutation_scope.PACKAGE_NAME,
+                *path.relative_to(_PACKAGE).with_suffix("").parts,
+            ]
+        )
+        for path in sorted((_PACKAGE / "pipeline").rglob("*.py"))
+        if path.name != "__init__.py"
+    }
+    assert set(grouped_filters) == expected_modules
+    for module in expected_modules:
+        assert grouped_filters[module] == mutation_scope.module_function_filters(module, root=_ROOT)
+    assert len({shard["id"] for shard in shards}) == len(shards)
+
+
+def test_full_sweep_skips_pipeline_modules_without_mutable_functions(tmp_path: Path) -> None:
+    pipeline = tmp_path / mutation_scope.PACKAGE_ROOT / "pipeline"
+    pipeline.mkdir(parents=True)
+    (pipeline / "empty.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (pipeline / "mutable.py").write_text("def run() -> int:\n    return 1\n", encoding="utf-8")
+
+    shards = mutation_scope.full_sweep_shards(root=tmp_path)
+    pipeline_shards = [shard for shard in shards if shard["pipeline"]]
+
+    assert [shard["module"] for shard in pipeline_shards] == [
+        f"{mutation_scope.PACKAGE_NAME}.pipeline.mutable"
+    ]
+
+
+def test_full_sweep_rejects_an_unreadable_pipeline_module(tmp_path: Path) -> None:
+    pipeline = tmp_path / mutation_scope.PACKAGE_ROOT / "pipeline"
+    pipeline.mkdir(parents=True)
+    (pipeline / "broken.py").write_text("def broken(:\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="cannot read pipeline source module"):
+        mutation_scope.full_sweep_shards(root=tmp_path)
+
+
+def test_full_sweep_keeps_non_pipeline_areas_as_single_jobs() -> None:
+    shards = mutation_scope.full_sweep_shards(root=_ROOT)
+    areas = [shard for shard in shards if not shard["pipeline"]]
+
+    assert [shard["id"] for shard in areas] == list(mutation_scope.NIGHTLY_AREAS)
+    assert [shard["filters"] for shard in areas] == [
+        f"{mutation_scope.PACKAGE_NAME}.{area}.*" for area in mutation_scope.NIGHTLY_AREAS
+    ]
+
+
+def test_full_sweep_json_prints_the_matrix(capsys) -> None:
+    assert mutation_scope.main(["--full-sweep-json"]) == 0
+
+    assert json.loads(capsys.readouterr().out) == mutation_scope.full_sweep_shards()

@@ -22,6 +22,8 @@ coverage.xml
 .ruff_cache/
 mutants/
 .mutation-checkpoint/
+node_modules/
+/scripts/quality/mutation-artifact-uploader/bundle/
 
 # Virtual environments
 .venv/

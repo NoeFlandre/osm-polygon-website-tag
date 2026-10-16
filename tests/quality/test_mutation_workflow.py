@@ -1,11 +1,3 @@
-"""Contract tests for the nightly mutation sweep workflow and its area mapping.
-
-The nightly sweep runs for hours and cannot run in a pull request, so these
-tests check the workflow file itself: which areas it sweeps, how a missing or
-failed area is reported, and that the baseline diff is published. Each test
-reads repository files only; none runs mutmut.
-"""
-
 from __future__ import annotations
 
 import re
@@ -17,9 +9,8 @@ import yaml
 from scripts.quality import mutation_runner, mutation_scope
 
 _ROOT = Path(__file__).resolve().parents[2]
+_PACKAGE = _ROOT / mutation_scope.PACKAGE_ROOT
 _SWEEP = _ROOT / ".github" / "workflows" / "mutation-sweep.yml"
-_PACKAGE = _ROOT / "src" / "osm_polygon_website_tag"
-_AREA_LIST = re.compile(r"^\s*areas=\(([^)]*)\)", re.MULTILINE)
 
 
 def _workflow() -> dict[str, Any]:
@@ -36,12 +27,11 @@ def _step(job: str, name: str) -> dict[str, Any]:
     return matches[0]
 
 
-def _matrix_areas() -> list[str]:
-    return list(_workflow()["jobs"]["area"]["strategy"]["matrix"]["area"])
+def _shards() -> list[mutation_scope.NightlyShard]:
+    return mutation_scope.full_sweep_shards(root=_ROOT)
 
 
 def _area_source_modules(area: str) -> list[str]:
-    """Return the dotted module names of an area's non-__init__ source files."""
     package = _PACKAGE / area
     modules = []
     for path in sorted(package.rglob("*.py")):
@@ -53,85 +43,185 @@ def _area_source_modules(area: str) -> list[str]:
 
 
 def test_sweep_never_runs_on_pull_requests() -> None:
-    triggers = _workflow().get("on", _workflow().get(True))
+    workflow = _workflow()
+    triggers = workflow.get("on", workflow.get(True))
 
     assert set(triggers) == {"schedule", "workflow_dispatch"}
 
 
-@pytest.mark.parametrize("area", _matrix_areas())
-def test_every_sweep_area_maps_to_source_with_mutable_functions(area: str) -> None:
-    """An area whose filter reaches only an __init__.py has no mutants to sweep.
+@pytest.mark.parametrize("shard", _shards(), ids=lambda shard: shard["id"])
+def test_every_nightly_shard_maps_to_mutable_source(shard: mutation_scope.NightlyShard) -> None:
+    filters = shard["filters"].split()
+    if shard["pipeline"]:
+        expected = mutation_scope.module_function_filters(shard["module"], root=_ROOT)
+        assert expected is not None
+        assert filters
+        assert all(value in expected for value in filters)
+        assert len(filters) <= mutation_scope.NIGHTLY_SHARD_FUNCTIONS
+        return
 
-    That is the nightly failure this guards: mutmut reports "nothing matches",
-    the runner exits 86, and the area job fails after the coverage run.
-    """
-    scope = mutation_runner._source_paths_for_mutant_names([f"osm_polygon_website_tag.{area}.*"])
+    area = shard["id"]
+    scope = mutation_runner._source_paths_for_mutant_names(filters)
     assert any(path.name != "__init__.py" for path in scope), area
-
-    filters = [
+    expected_filters = [
         mutant_filter
         for module in _area_source_modules(area)
         for mutant_filter in mutation_scope.module_function_filters(module, root=_ROOT) or []
     ]
-    assert filters, f"area {area!r} has no mutable function outside __init__.py"
+    assert expected_filters
 
 
-def test_merge_requires_a_result_artifact_from_every_matrix_area() -> None:
-    run = _step("merge", "Require a result artifact from every area")["run"]
-    match = _AREA_LIST.search(run)
+def test_full_sweep_plan_emits_a_dynamic_matrix() -> None:
+    plan = _workflow()["jobs"]["plan"]
+    output = plan["outputs"]["mutation_shards"]
 
-    assert match is not None
-    assert match.group(1).split() == _matrix_areas()
+    assert output == "${{ steps.resolve.outputs.matrix }}"
+    resolve = next(step for step in plan["steps"] if step.get("id") == "resolve")
+    assert "--full-sweep-json" in resolve["run"]
+
+    matrix = _workflow()["jobs"]["area"]["strategy"]["matrix"]["shard"]
+    assert matrix == "${{ fromJSON(needs.plan.outputs.mutation_shards) }}"
 
 
-def test_area_results_come_from_mutmut_without_masking_its_failure() -> None:
-    run = _step("area", "Collect the area's unverified mutants")["run"]
+def test_every_pipeline_function_is_covered_by_one_matrix_shard() -> None:
+    actual: dict[str, list[str]] = {}
+    for shard in _shards():
+        if shard["pipeline"]:
+            actual.setdefault(shard["module"], []).extend(shard["filters"].split())
+
+    expected = {
+        "osm_polygon_website_tag." + ".".join(path.relative_to(_PACKAGE).with_suffix("").parts)
+        for path in sorted((_PACKAGE / "pipeline").rglob("*.py"))
+        if path.name != "__init__.py"
+    }
+    assert set(actual) == expected
+    for module in expected:
+        assert actual[module] == mutation_scope.module_function_filters(module, root=_ROOT)
+
+
+def test_merge_requires_a_result_artifact_from_every_shard() -> None:
+    merge = _step("merge", "Require a result artifact from every shard")
+    passes = _step("merge", "Require every mutation shard to pass")
+
+    assert merge["env"]["MUTATION_SHARDS_JSON"] == "${{ needs.plan.outputs.mutation_shards }}"
+    assert passes["env"]["AREA_RESULT"] == "${{ needs.area.result }}"
+    assert "results-{shard['id']}.txt" in merge["run"]
+    assert (
+        "mutation-results-${{ matrix.shard.id }}"
+        in _step("area", "Upload the shard baseline")["with"]["name"]
+    )
+
+
+def test_scheduled_sweep_resumes_only_matching_checkpoints() -> None:
+    workflow = _workflow()
+    plan = workflow["jobs"]["plan"]
+    area = workflow["jobs"]["area"]
+
+    assert workflow["permissions"] == {"actions": "read", "contents": "read"}
+    assert "previous_run_id" not in plan["outputs"]
+    assert (
+        plan["outputs"]["checkpoint_artifacts"]
+        == "${{ steps.checkpoints.outputs.checkpoint_artifacts }}"
+    )
+    build = _step("plan", "Build checkpoint artifact uploader")
+    upload = _step("plan", "Upload checkpoint artifact uploader")
+    download_uploader = _step("area", "Download checkpoint artifact uploader")
+    plan_names = [step.get("name") for step in plan["steps"]]
+    area_names = [step.get("name") for step in area["steps"]]
+
+    assert build["working-directory"] == "scripts/quality/mutation-artifact-uploader"
+    assert build["run"] == "npm ci && npm run build"
+    assert plan_names.index(build["name"]) < plan_names.index(upload["name"])
+    assert plan_names.index(upload["name"]) < plan_names.index(
+        "Find resumable checkpoints for this commit"
+    )
+    assert upload["uses"] == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+    assert upload["with"] == {
+        "name": "mutation-artifact-uploader-${{ github.run_attempt }}",
+        "path": "scripts/quality/mutation-artifact-uploader/bundle/",
+        "if-no-files-found": "error",
+        "retention-days": 3,
+    }
+    assert download_uploader["uses"] == (
+        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+    )
+    assert download_uploader["with"] == {
+        "pattern": "mutation-artifact-uploader-*",
+        "path": "scripts/quality/mutation-artifact-uploader/bundle",
+        "merge-multiple": True,
+    }
+    assert area_names.index(download_uploader["name"]) < area_names.index("Sweep the shard")
+
+    assert (
+        "mutation_checkpoint.py plan"
+        in _step("plan", "Find resumable checkpoints for this commit")["run"]
+    )
+    assert _step("area", "Download the previous shard checkpoint")["with"]["github-token"] == (
+        "${{ github.token }}"
+    )
+    assert _step("area", "Download the previous shard checkpoint")["with"]["run-id"] == (
+        "${{ steps.select-checkpoint.outputs.run_id }}"
+    )
+    select = _step("area", "Select a checkpoint for this shard")
+    assert "IFS=$'\\t' read -r artifact run_id" in select["run"]
+    assert "run_id=%s\\n" in select["run"]
+    assert _step("area", "Restore exact-commit mutation results")["if"] == (
+        "steps.select-checkpoint.outputs.artifact != ''"
+    )
+    sweep = _step("area", "Sweep the shard")
+    assert "mutation_checkpoint.py run" in sweep["run"]
+    assert "--interval-minutes 15" in sweep["run"]
+    assert sweep["env"]["MUTATION_RUNNER_FINGERPRINT"] == ("${{ steps.fingerprint.outputs.value }}")
+
+    export_name = "Export artifact service variables to later steps"
+    export = _step("area", export_name)
+    step_names = [step.get("name") for step in area["steps"]]
+    assert step_names.index(export_name) + 1 == step_names.index("Sweep the shard")
+    assert export["uses"] == "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd"
+    script = export["with"]["script"]
+    for name in ("ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL"):
+        assert f"if (!process.env.{name})" in script
+        assert f'throw new Error("{name} is not set")' in script
+        assert f'core.exportVariable("{name}", process.env.{name});' in script
+
+
+def test_mutation_jobs_are_bounded_and_do_not_cache_filtered_runs() -> None:
+    area = _workflow()["jobs"]["area"]
+
+    assert area["timeout-minutes"] == 120
+    assert all(not step.get("uses", "").startswith("actions/cache/") for step in area["steps"])
+
+
+def test_pipeline_checkpoints_are_frequent_and_matrix_stays_within_github_limit() -> None:
+    shards = _shards()
+    pipeline_shards = [shard for shard in shards if shard["pipeline"]]
+
+    assert max(len(shard["filters"].split()) for shard in pipeline_shards) <= 2
+    assert len(shards) <= 256
+
+
+def test_pipeline_verification_is_scoped_to_one_module_and_filter_group() -> None:
+    verify = _step("area", "Require all shard mutants to have verdicts")
+    run = _step("area", "Sweep the shard")
+
+    assert verify["if"] == "matrix.shard.pipeline == true"
+    assert "--filters" in verify["run"]
+    assert "MUTATION_FILTERS" in verify["env"]
+    assert verify["env"]["MUTATION_MODULE"] == "${{ matrix.shard.module }}"
+    assert "mutation_verdicts.py verify" in verify["run"]
+    assert run["env"]["MUTATION_FILTERS"] == "${{ matrix.shard.filters }}"
+    assert '"${filters[@]}"' in run["run"]
+
+
+def test_shard_results_come_from_mutmut_without_masking_its_failure() -> None:
+    run = _step("area", "Collect the shard's unverified mutants")["run"]
 
     assert "|| true" not in run
     assert "mutmut results --all true >" in run
 
 
-def test_pipeline_resume_cache_is_isolated_to_the_exact_commit() -> None:
-    fingerprint = _step("area", "Fingerprint the mutation environment")
-    restore = _step("area", "Restore an interrupted pipeline sweep")
-    save = _step("area", "Save the pipeline sweep checkpoint")
-    key = restore["with"]["key"]
-
-    assert fingerprint["id"] == "mutation-env"
-    assert fingerprint["if"] == "matrix.area == 'pipeline'"
-    assert restore["if"] == "matrix.area == 'pipeline'"
-    assert restore["with"]["path"] == ".mutation-checkpoint"
-    assert "${{ github.sha }}" in key
-    assert "${{ hashFiles('uv.lock') }}" in key
-    assert "${{ steps.mutation-env.outputs.fingerprint }}" in key
-    assert "${{ github.run_id }}" in key
-    assert "${{ github.run_attempt }}" in key
-    assert "${{ steps.mutation-env.outputs.fingerprint }}" in restore["with"]["restore-keys"]
-    assert save["with"]["key"] == key
-    assert save["if"].startswith("always() && matrix.area == 'pipeline'")
-    assert "steps.mark-checkpoint.outcome == 'success'" in save["if"]
-
-
-def test_pipeline_checkpoint_requires_a_complete_mutant_verdict_set() -> None:
-    prepare = _step("area", "Prepare the pipeline sweep checkpoint")
-    verify = _step("area", "Require all pipeline mutants to have verdicts")
-    mark = _step("area", "Mark the pipeline sweep checkpoint")
-    run = _step("area", "Sweep the area")
-
-    assert prepare["if"] == "matrix.area == 'pipeline'"
-    assert verify["if"] == "matrix.area == 'pipeline'"
-    assert "mutation_checkpoint.py verify" in verify["run"]
-    assert mark["if"].startswith("always() && matrix.area == 'pipeline'")
-    assert mark["id"] == "mark-checkpoint"
-    assert "steps.verify-pipeline.outcome" in mark["run"]
-    assert run["env"]["MUTATION_SOURCE_SCOPE"] == (
-        "${{ matrix.area == 'pipeline' && 'osm_polygon_website_tag.pipeline.*' || '' }}"
-    )
-    assert '"${filters[@]}"' in run["run"]
-
-
 def test_nightly_publishes_the_baseline_diff_and_still_fails_on_growth() -> None:
-    merge = _step("merge", "Merge the areas into a candidate baseline")["run"]
+    merge = _step("merge", "Merge the shard results into a candidate baseline")["run"]
     upload = _step("merge", "Upload the baseline diff")
 
     assert "--fail-on-growth" in merge
