@@ -195,21 +195,16 @@ def test_checkpoint_artifact_map_selects_latest_unexpired_matching_shard() -> No
             "name": (
                 f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run12-attempt1-seq3"
             ),
+            "run_id": "12",
             "sequence": "3",
         }
     ]
-    assert (
-        mutation_checkpoint.select_checkpoint_artifact(
-            mapped, shard_id=_SHARD_ID, runner_fingerprint=_FINGERPRINT
-        )
-        == mapped[_SHARD_ID][0]["name"]
-    )
-    assert (
-        mutation_checkpoint.select_checkpoint_artifact(
-            mapped, shard_id=_SHARD_ID, runner_fingerprint="c" * 16
-        )
-        == ""
-    )
+    assert mutation_checkpoint.select_checkpoint_artifact(
+        mapped, shard_id=_SHARD_ID, runner_fingerprint=_FINGERPRINT
+    ) == (mapped[_SHARD_ID][0]["name"], "12")
+    assert mutation_checkpoint.select_checkpoint_artifact(
+        mapped, shard_id=_SHARD_ID, runner_fingerprint="c" * 16
+    ) == ("", "")
 
 
 @pytest.mark.parametrize(
@@ -333,7 +328,7 @@ def test_periodic_checkpoint_publishes_while_mutmut_is_running() -> None:
         if clock[0] >= 3:
             child.returncode = 0
 
-    def publish(sequence: int) -> bool:
+    def publish(sequence: int, _deadline: Callable[[], float | None]) -> bool:
         published.append((sequence, child.poll() is None, clock[0]))
         if len(published) == 2:
             child.returncode = 0
@@ -366,7 +361,7 @@ def test_periodic_checkpoints_follow_the_clock_after_each_publication() -> None:
         sleep_calls.append(seconds)
         clock[0] += seconds if seconds else 0.1
 
-    def publish(sequence: int) -> bool:
+    def publish(sequence: int, _deadline: Callable[[], float | None]) -> bool:
         published.append((sequence, clock[0]))
         if len(published) == 2:
             child.returncode = 0
@@ -391,7 +386,7 @@ def test_signal_during_final_publication_returns_cancelled_status() -> None:
     child.returncode = 0
     published: list[int] = []
 
-    def publish(sequence: int) -> bool:
+    def publish(sequence: int, _deadline: Callable[[], float | None]) -> bool:
         published.append(sequence)
         handler = cast(Callable[[int, FrameType | None], Any], signal.getsignal(signal.SIGTERM))
         handler(signal.SIGTERM, None)
@@ -419,7 +414,7 @@ def test_signal_during_publication_finishes_upload_then_publishes_final_state() 
     def sleep(seconds: float) -> None:
         elapsed[0] += seconds
 
-    def publish(sequence: int) -> bool:
+    def publish(sequence: int, _deadline: Callable[[], float | None]) -> bool:
         published.append(sequence)
         if len(published) == 1:
             handler = cast(Callable[[int, FrameType | None], Any], signal.getsignal(signal.SIGTERM))
@@ -454,7 +449,7 @@ def test_process_start_failure_restores_signal_handlers() -> None:
         mutation_checkpoint.run_with_periodic_checkpoints(
             ["mutmut"],
             interval_seconds=1,
-            publish=lambda _sequence: True,
+            publish=lambda _sequence, _deadline: True,
             cwd=Path.cwd(),
             execution=mutation_checkpoint._CheckpointExecution(process_factory=fail_start),
         )
@@ -485,7 +480,9 @@ def test_cancellation_fails_child_after_bounded_wait_and_keeps_checkpoint() -> N
     result = mutation_checkpoint.run_with_periodic_checkpoints(
         ["mutmut"],
         interval_seconds=2,
-        publish=lambda sequence: published.append((sequence, child.poll() is None)) or True,
+        publish=lambda sequence, _deadline: (
+            published.append((sequence, child.poll() is None)) or True
+        ),
         cwd=Path.cwd(),
         execution=mutation_checkpoint._CheckpointExecution(
             process_factory=lambda *_args, **_kwargs: child,
@@ -928,7 +925,11 @@ def test_plan_writes_resume_outputs(
     monkeypatch.setenv("GITHUB_SHA", _HEAD_SHA)
     monkeypatch.setenv("MUTATION_SHARDS_JSON", json.dumps([{"id": _SHARD_ID}]))
     monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
-    monkeypatch.setattr(mutation_checkpoint, "_find_resume_run", lambda **_kwargs: resume_run)
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "_find_resume_runs",
+        lambda **_kwargs: [] if resume_run is None else [resume_run],
+    )
     listed: list[int] = []
 
     def list_artifacts(**kwargs: Any) -> list[dict[str, Any]]:
@@ -946,11 +947,67 @@ def test_plan_writes_resume_outputs(
     mutation_checkpoint._plan()
 
     lines = output_path.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == f"previous_run_id={resume_run or ''}"
-    checkpoint_map = json.loads(lines[1].removeprefix("checkpoint_artifacts="))
-    assert lines[1] == ("checkpoint_artifacts=" + json.dumps(checkpoint_map, separators=(",", ":")))
+    checkpoint_map = json.loads(lines[0].removeprefix("checkpoint_artifacts="))
+    assert lines == ["checkpoint_artifacts=" + json.dumps(checkpoint_map, separators=(",", ":"))]
     assert listed == ([] if resume_run is None else [resume_run])
     assert (_SHARD_ID in checkpoint_map) is (resume_run is not None)
+
+
+def test_plan_falls_back_to_older_run_with_a_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_path = tmp_path / "output.txt"
+    second_shard_id = "pipeline-mapping"
+    for name, value in {
+        "GITHUB_API_URL": "https://api.github.test",
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GH_TOKEN": "token",
+        "GITHUB_RUN_ID": "99",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_SHA": _HEAD_SHA,
+        "MUTATION_SHARDS_JSON": json.dumps([{"id": _SHARD_ID}, {"id": second_shard_id}]),
+        "GITHUB_OUTPUT": str(output_path),
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(mutation_checkpoint, "_find_resume_runs", lambda **_kwargs: [13, 12])
+    listed: list[int] = []
+
+    def list_artifacts(**kwargs: Any) -> list[dict[str, Any]]:
+        run_id = kwargs["run_id"]
+        listed.append(run_id)
+        shard_ids = [_SHARD_ID] if run_id == 13 else [_SHARD_ID, second_shard_id]
+        return [
+            {
+                "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{shard_id}-run{run_id}-attempt1-seq3",
+                "created_at": "2026-10-15T12:00:00Z",
+            }
+            for shard_id in shard_ids
+        ]
+
+    monkeypatch.setattr(mutation_checkpoint, "_list_run_artifacts", list_artifacts)
+
+    mutation_checkpoint._plan()
+
+    lines = output_path.read_text(encoding="utf-8").splitlines()
+    checkpoint_map = json.loads(lines[0].removeprefix("checkpoint_artifacts="))
+    assert lines == ["checkpoint_artifacts=" + json.dumps(checkpoint_map, separators=(",", ":"))]
+    assert listed == [13, 12]
+    assert checkpoint_map[_SHARD_ID] == [
+        {
+            "fingerprint": _FINGERPRINT,
+            "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{_SHARD_ID}-run13-attempt1-seq3",
+            "run_id": "13",
+            "sequence": "3",
+        }
+    ]
+    assert checkpoint_map[second_shard_id] == [
+        {
+            "fingerprint": _FINGERPRINT,
+            "name": f"mutation-checkpoint-{_HEAD_SHA}-{_FINGERPRINT}-{second_shard_id}-run12-attempt1-seq3",
+            "run_id": "12",
+            "sequence": "3",
+        }
+    ]
 
 
 def _set_publish_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1013,7 +1070,8 @@ def test_publish_uploads_checkpoint_with_attempt_scoped_name(
     captured: list[tuple[list[str], Path]] = []
 
     class Uploaded:
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
             return 0
 
     def start(command: list[str], root: Path) -> Uploaded:
@@ -1064,7 +1122,8 @@ def test_publish_reports_missing_node_and_failed_upload(
     monkeypatch.setattr(mutation_checkpoint.shutil, "which", lambda _name: str(node))
 
     class FailedUpload:
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
             return 1
 
     monkeypatch.setattr(
@@ -1074,6 +1133,68 @@ def test_publish_reports_missing_node_and_failed_upload(
     )
     with pytest.raises(RuntimeError, match=r"^checkpoint artifact upload failed$"):
         mutation_checkpoint._publish(tmp_path, _FILTERS, 1)
+
+
+def test_artifact_upload_timeout_stops_uploader_and_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(mutation_checkpoint, "_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(mutation_checkpoint.time, "monotonic", lambda: clock[0])
+
+    class StalledUploader(_FakeProcess):
+        waits: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.waits = []
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.waits.append(timeout)
+            if timeout is None:
+                return super().wait(timeout)
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired("uploader", timeout)
+
+    uploader = StalledUploader()
+
+    with pytest.raises(RuntimeError, match=r"^checkpoint artifact upload timed out$"):
+        mutation_checkpoint._wait_for_artifact_uploader(uploader, lambda: None)
+
+    assert uploader.waits[:2] == [1.0, 1.0]
+    assert uploader.signals == [signal.SIGINT]
+    assert uploader.killed
+
+
+def test_artifact_upload_cancellation_stops_waiting_within_grace_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(mutation_checkpoint, "_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(mutation_checkpoint.time, "monotonic", lambda: clock[0])
+
+    class StalledUploader(_FakeProcess):
+        waits: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.waits = []
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.waits.append(timeout)
+            if timeout is None:
+                return super().wait(timeout)
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired("uploader", timeout)
+
+    uploader = StalledUploader()
+
+    result = mutation_checkpoint._wait_for_artifact_uploader(uploader, lambda: 1.5)
+
+    assert result is None
+    assert uploader.waits[:2] == [1.0, 0.5]
+    assert uploader.signals == [signal.SIGINT]
+    assert uploader.killed
 
 
 def test_plan_command_calls_planner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1117,7 +1238,9 @@ def test_select_artifact_command_prints_selected_artifact(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     artifact_name = "mutation-checkpoint-selected"
-    checkpoint_map = {_SHARD_ID: [{"fingerprint": _FINGERPRINT, "name": artifact_name}]}
+    checkpoint_map = {
+        _SHARD_ID: [{"fingerprint": _FINGERPRINT, "name": artifact_name, "run_id": "12"}]
+    }
     monkeypatch.setattr(
         sys,
         "argv",
@@ -1135,7 +1258,7 @@ def test_select_artifact_command_prints_selected_artifact(
 
     mutation_checkpoint.main()
 
-    assert capsys.readouterr().out == f"{artifact_name}\n"
+    assert capsys.readouterr().out == f"{artifact_name}\t12\n"
 
 
 def test_run_command_exits_with_runner_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1191,10 +1314,12 @@ def test_run_builds_mutmut_command_and_enables_resume(
     monkeypatch.setattr(
         mutation_checkpoint,
         "_publish",
-        lambda root, filters, sequence: published.append((root, tuple(filters), sequence)) or True,
+        lambda root, filters, sequence, _deadline: (
+            published.append((root, tuple(filters), sequence)) or True
+        ),
     )
     assert callable(captured["publish"])
-    assert captured["publish"](9) is True
+    assert captured["publish"](9, lambda: None) is True
     assert published == [(tmp_path, _FILTERS, 9)]
 
 
@@ -1368,12 +1493,9 @@ def test_artifact_page_items_rejects_a_non_list_with_a_stable_error() -> None:
 
 
 def test_select_checkpoint_artifact_returns_empty_for_a_missing_shard() -> None:
-    assert (
-        mutation_checkpoint.select_checkpoint_artifact(
-            {}, shard_id=_SHARD_ID, runner_fingerprint=_FINGERPRINT
-        )
-        == ""
-    )
+    assert mutation_checkpoint.select_checkpoint_artifact(
+        {}, shard_id=_SHARD_ID, runner_fingerprint=_FINGERPRINT
+    ) == ("", "")
 
 
 def test_checkpoint_artifact_map_uses_attempt_then_sequence_for_equal_timestamps() -> None:
@@ -1409,6 +1531,7 @@ def test_checkpoint_artifact_map_uses_attempt_then_sequence_for_equal_timestamps
             {
                 "fingerprint": _FINGERPRINT,
                 "name": attempt_two_sequence_one["name"],
+                "run_id": "12",
                 "sequence": "1",
             }
         ]
@@ -1424,6 +1547,7 @@ def test_checkpoint_artifact_map_uses_attempt_then_sequence_for_equal_timestamps
         {
             "fingerprint": _FINGERPRINT,
             "name": attempt_two_sequence_two["name"],
+            "run_id": "12",
             "sequence": "2",
         }
     ]
@@ -1450,6 +1574,7 @@ def test_checkpoint_artifact_map_prefers_creation_time_before_attempt_and_sequen
         {
             "fingerprint": _FINGERPRINT,
             "name": newer["name"],
+            "run_id": "12",
             "sequence": "1",
         }
     ]
@@ -1692,15 +1817,15 @@ def test_plan_passes_current_actions_identity_to_api_calls(
     resume_calls: list[dict[str, Any]] = []
     artifact_calls: list[dict[str, Any]] = []
 
-    def find_resume(**kwargs: Any) -> int:
+    def find_resume(**kwargs: Any) -> list[int]:
         resume_calls.append(kwargs)
-        return 12
+        return [12]
 
     def list_artifacts(**kwargs: Any) -> list[dict[str, Any]]:
         artifact_calls.append(kwargs)
         return []
 
-    monkeypatch.setattr(mutation_checkpoint, "_find_resume_run", find_resume)
+    monkeypatch.setattr(mutation_checkpoint, "_find_resume_runs", find_resume)
     monkeypatch.setattr(mutation_checkpoint, "_list_run_artifacts", list_artifacts)
 
     mutation_checkpoint._plan()
@@ -1956,7 +2081,7 @@ def test_stop_process_uses_bounded_escalation_waits() -> None:
 
     mutation_checkpoint._stop_process(child)
 
-    assert child.waits == [2, 1, None]
+    assert child.waits == [2, 1, 1]
     assert child.terminated
     assert child.killed
 
@@ -1987,7 +2112,7 @@ def test_publish_next_checkpoint_publishes_and_increments_once() -> None:
     published: list[int] = []
 
     mutation_checkpoint._publish_next_checkpoint(
-        lambda sequence: published.append(sequence) or True, state
+        lambda sequence, _deadline: published.append(sequence) or True, state
     )
 
     assert published == [7]
@@ -2006,7 +2131,7 @@ def test_run_with_periodic_checkpoints_passes_command_directory_and_environment(
     result = mutation_checkpoint.run_with_periodic_checkpoints(
         ["mutmut", "run", "module.*"],
         interval_seconds=1,
-        publish=lambda _sequence: True,
+        publish=lambda _sequence, _deadline: True,
         cwd=Path("/tmp/checkpoint-test"),
         execution=mutation_checkpoint._CheckpointExecution(
             environment={"GITHUB_SHA": _HEAD_SHA}, process_factory=process_factory
@@ -2024,7 +2149,10 @@ def test_run_with_periodic_checkpoints_passes_command_directory_and_environment(
 def test_run_with_periodic_checkpoints_rejects_zero_interval() -> None:
     with pytest.raises(ValueError, match=r"^checkpoint interval must be positive$"):
         mutation_checkpoint.run_with_periodic_checkpoints(
-            ["mutmut"], interval_seconds=0, publish=lambda _sequence: True, cwd=Path.cwd()
+            ["mutmut"],
+            interval_seconds=0,
+            publish=lambda _sequence, _deadline: True,
+            cwd=Path.cwd(),
         )
 
 
@@ -2050,7 +2178,7 @@ def test_run_with_periodic_checkpoints_uses_defaults_and_clears_process(
         mutation_checkpoint.run_with_periodic_checkpoints(
             ["mutmut"],
             interval_seconds=1,
-            publish=lambda _sequence: True,
+            publish=lambda _sequence, _deadline: True,
             cwd=Path.cwd(),
         )
         == 0

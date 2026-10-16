@@ -118,7 +118,7 @@ def test_scheduled_sweep_resumes_only_matching_checkpoints() -> None:
     area = workflow["jobs"]["area"]
 
     assert workflow["permissions"] == {"actions": "read", "contents": "read"}
-    assert plan["outputs"]["previous_run_id"] == "${{ steps.checkpoints.outputs.previous_run_id }}"
+    assert "previous_run_id" not in plan["outputs"]
     assert (
         plan["outputs"]["checkpoint_artifacts"]
         == "${{ steps.checkpoints.outputs.checkpoint_artifacts }}"
@@ -160,8 +160,11 @@ def test_scheduled_sweep_resumes_only_matching_checkpoints() -> None:
         "${{ github.token }}"
     )
     assert _step("area", "Download the previous shard checkpoint")["with"]["run-id"] == (
-        "${{ needs.plan.outputs.previous_run_id }}"
+        "${{ steps.select-checkpoint.outputs.run_id }}"
     )
+    select = _step("area", "Select a checkpoint for this shard")
+    assert "IFS=$'\\t' read -r artifact run_id" in select["run"]
+    assert "run_id=%s\\n" in select["run"]
     assert _step("area", "Restore exact-commit mutation results")["if"] == (
         "steps.select-checkpoint.outputs.artifact != ''"
     )

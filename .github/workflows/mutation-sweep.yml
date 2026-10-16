@@ -47,7 +47,6 @@ jobs:
     timeout-minutes: 15
     outputs:
       mutation_shards: ${{ steps.resolve.outputs.matrix }}
-      previous_run_id: ${{ steps.checkpoints.outputs.previous_run_id }}
       checkpoint_artifacts: ${{ steps.checkpoints.outputs.checkpoint_artifacts }}
     steps:
       - name: Check out repository
@@ -152,11 +151,13 @@ jobs:
           MUTATION_RUNNER_FINGERPRINT: ${{ steps.fingerprint.outputs.value }}
         run: |
           set -euo pipefail
-          artifact="$(uv run --locked python scripts/quality/mutation_checkpoint.py select-artifact \
+          selection="$(uv run --locked python scripts/quality/mutation_checkpoint.py select-artifact \
             --artifacts-json "$CHECKPOINT_ARTIFACTS_JSON" \
             --shard-id "$MUTATION_SHARD_ID" \
             --runner-fingerprint "$MUTATION_RUNNER_FINGERPRINT")"
+          IFS=$'\t' read -r artifact run_id <<< "$selection"
           printf 'artifact=%s\n' "$artifact" >> "$GITHUB_OUTPUT"
+          printf 'run_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
 
       - name: Download the previous shard checkpoint
         if: steps.select-checkpoint.outputs.artifact != ''
@@ -164,7 +165,7 @@ jobs:
         with:
           name: ${{ steps.select-checkpoint.outputs.artifact }}
           path: .mutation-checkpoint
-          run-id: ${{ needs.plan.outputs.previous_run_id }}
+          run-id: ${{ steps.select-checkpoint.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Restore exact-commit mutation results

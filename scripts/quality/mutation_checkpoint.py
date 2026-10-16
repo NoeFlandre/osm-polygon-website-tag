@@ -37,6 +37,8 @@ _CHECKPOINT_NAME = re.compile(
     r"^mutation-checkpoint-(?P<sha>[0-9a-f]{40})-(?P<fingerprint>[0-9a-f]{16})-"
     r"(?P<shard>.+)-run(?P<run_id>\d+)-attempt(?P<attempt>\d+)-seq(?P<sequence>\d+)$"
 )
+_ARTIFACT_UPLOAD_TIMEOUT_SECONDS = 300.0
+_CANCELLATION_UPLOAD_GRACE_SECONDS = 5.0
 
 
 def _meta_paths(root: Path, filters: Iterable[str]) -> tuple[tuple[Path, Path], ...]:
@@ -262,11 +264,11 @@ def select_checkpoint_artifact(
     *,
     shard_id: str,
     runner_fingerprint: str,
-) -> str:
+) -> tuple[str, str]:
     for candidate in checkpoint_map.get(shard_id, ()):
         if candidate.get("fingerprint") == runner_fingerprint:
-            return candidate["name"]
-    return ""
+            return candidate["name"], candidate["run_id"]
+    return "", ""
 
 
 def _checkpoint_name_match(artifact: Mapping[str, Any]) -> re.Match[str] | None:
@@ -330,7 +332,12 @@ def checkpoint_artifact_map(
     result: dict[str, list[dict[str, str]]] = {}
     for (shard_id, fingerprint), (_, _, sequence, name) in sorted(selected.items()):
         result.setdefault(shard_id, []).append(
-            {"fingerprint": fingerprint, "name": name, "sequence": str(sequence)}
+            {
+                "fingerprint": fingerprint,
+                "name": name,
+                "run_id": str(run_id),
+                "sequence": str(sequence),
+            }
         )
     return result
 
@@ -455,8 +462,28 @@ def _find_resume_run(
     current_run_attempt: int,
     head_sha: str,
 ) -> int | None:
+    candidates = _find_resume_runs(
+        api_url=api_url,
+        repository=repository,
+        token=token,
+        current_run_id=current_run_id,
+        current_run_attempt=current_run_attempt,
+        head_sha=head_sha,
+    )
+    return candidates[0] if candidates else None
+
+
+def _find_resume_runs(
+    *,
+    api_url: str,
+    repository: str,
+    token: str,
+    current_run_id: int,
+    current_run_attempt: int,
+    head_sha: str,
+) -> list[int]:
     if current_run_attempt > 1:
-        return current_run_id
+        return [current_run_id]
 
     url = (
         f"{api_url.rstrip('/')}/repos/{repository}/actions/workflows/mutation-sweep.yml/runs"
@@ -466,10 +493,26 @@ def _find_resume_run(
     runs = response.get("workflow_runs", [])
     if not isinstance(runs, list):
         raise RuntimeError("GitHub Actions run list had an unexpected shape")
-    latest = _latest_resume_candidate(runs, current_run_id=current_run_id, head_sha=head_sha)
-    if latest is None or latest.get("conclusion") not in {"failure", "cancelled", "timed_out"}:
-        return None
-    return int(latest["id"])
+    candidates = [
+        candidate
+        for run in runs
+        if (candidate := _resume_candidate(run, current_run_id=current_run_id, head_sha=head_sha))
+        is not None
+    ]
+    latest = max(candidates, key=lambda candidate: candidate[0], default=None)
+    if latest is None or latest[1].get("conclusion") not in {
+        "failure",
+        "cancelled",
+        "timed_out",
+    }:
+        return []
+    retryable = [
+        candidate
+        for candidate in candidates
+        if candidate[1].get("conclusion") in {"failure", "cancelled", "timed_out"}
+    ]
+    retryable.sort(key=lambda candidate: candidate[0], reverse=True)
+    return [int(candidate[1]["id"]) for candidate in retryable]
 
 
 def _write_output(name: str, value: str) -> None:
@@ -489,7 +532,7 @@ def _plan() -> None:
     head_sha = os.environ["GITHUB_SHA"]
     shards = json.loads(os.environ["MUTATION_SHARDS_JSON"])
     shard_ids = {shard["id"] for shard in shards}
-    resume_run = _find_resume_run(
+    resume_runs = _find_resume_runs(
         api_url=api_url,
         repository=repository,
         token=token,
@@ -498,14 +541,21 @@ def _plan() -> None:
         head_sha=head_sha,
     )
     checkpoint_map: dict[str, list[dict[str, str]]] = {}
-    if resume_run is not None:
+    selected_fingerprints: set[tuple[str, str]] = set()
+    for candidate_run in resume_runs:
         artifacts = _list_run_artifacts(
-            api_url=api_url, repository=repository, token=token, run_id=resume_run
+            api_url=api_url, repository=repository, token=token, run_id=candidate_run
         )
-        checkpoint_map = checkpoint_artifact_map(
-            artifacts, head_sha=head_sha, shard_ids=shard_ids, run_id=resume_run
+        candidate_map = checkpoint_artifact_map(
+            artifacts, head_sha=head_sha, shard_ids=shard_ids, run_id=candidate_run
         )
-    _write_output("previous_run_id", str(resume_run or ""))
+        for shard_id, candidates in candidate_map.items():
+            for candidate in candidates:
+                key = (shard_id, candidate["fingerprint"])
+                if key in selected_fingerprints:
+                    continue
+                selected_fingerprints.add(key)
+                checkpoint_map.setdefault(shard_id, []).append(candidate)
     _write_output("checkpoint_artifacts", json.dumps(checkpoint_map, separators=(",", ":")))
 
 
@@ -526,7 +576,9 @@ class _CheckpointExecution:
 class _CheckpointState:
     process: Any | None = None
     pending_signal: int | None = None
+    signal_received_at: float | None = None
     sequence: int = 1
+    monotonic: Callable[[], float] = time.monotonic
 
 
 @contextmanager
@@ -536,6 +588,7 @@ def _capture_signals(state: _CheckpointState) -> Any:
     def handle_signal(signum: int, _frame: Any) -> None:
         if state.pending_signal is None:
             state.pending_signal = signum
+            state.signal_received_at = state.monotonic()
 
     try:
         for signum in (signal.SIGINT, signal.SIGTERM):
@@ -566,11 +619,22 @@ def _stop_process(child: Any) -> None:
         return
     if _wait_or_escalate(child, 1, child.kill):
         return
-    child.wait()
+    try:
+        child.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        return
 
 
-def _publish_next_checkpoint(publish: Callable[[int], bool], state: _CheckpointState) -> None:
-    publish(state.sequence)
+def _cancellation_deadline(state: _CheckpointState) -> float | None:
+    if state.signal_received_at is None:
+        return None
+    return state.signal_received_at + _CANCELLATION_UPLOAD_GRACE_SECONDS
+
+
+def _publish_next_checkpoint(
+    publish: Callable[[int, Callable[[], float | None]], bool], state: _CheckpointState
+) -> None:
+    publish(state.sequence, lambda: _cancellation_deadline(state))
     state.sequence += 1
 
 
@@ -584,7 +648,7 @@ def _run_periodic_checkpoint_loop(
     state: _CheckpointState,
     *,
     interval_seconds: float,
-    publish: Callable[[int], bool],
+    publish: Callable[[int, Callable[[], float | None]], bool],
     execution: _CheckpointExecution,
 ) -> None:
     process = state.process
@@ -605,7 +669,7 @@ def _run_periodic_checkpoint_loop(
 def _run_until_complete(
     command: Sequence[str],
     interval_seconds: float,
-    publish: Callable[[int], bool],
+    publish: Callable[[int, Callable[[], float | None]], bool],
     cwd: Path,
     execution: _CheckpointExecution,
     state: _CheckpointState,
@@ -630,7 +694,9 @@ def _run_until_complete(
     return return_code
 
 
-def _finish_interrupted_run(publish: Callable[[int], bool], state: _CheckpointState) -> None:
+def _finish_interrupted_run(
+    publish: Callable[[int, Callable[[], float | None]], bool], state: _CheckpointState
+) -> None:
     try:
         # Actions gives cancelled processes a short signal grace period, so publish the
         # last-known-good snapshot before child shutdown begins.
@@ -646,7 +712,7 @@ def _run_with_signal_capture(
     command: Sequence[str],
     *,
     interval_seconds: float,
-    publish: Callable[[int], bool],
+    publish: Callable[[int, Callable[[], float | None]], bool],
     cwd: Path,
     execution: _CheckpointExecution,
     state: _CheckpointState,
@@ -667,14 +733,14 @@ def run_with_periodic_checkpoints(
     command: Sequence[str],
     *,
     interval_seconds: float,
-    publish: Callable[[int], bool],
+    publish: Callable[[int, Callable[[], float | None]], bool],
     cwd: Path,
     execution: _CheckpointExecution | None = None,
 ) -> int:
     if interval_seconds <= 0:
         raise ValueError("checkpoint interval must be positive")
     dependencies = execution if execution is not None else _CheckpointExecution()
-    state = _CheckpointState()
+    state = _CheckpointState(monotonic=dependencies.monotonic)
     try:
         return _run_with_signal_capture(
             command,
@@ -696,7 +762,34 @@ def _start_artifact_uploader(
     return process_factory(command, cwd=root, start_new_session=True)
 
 
-def _publish(root: Path, filters: Sequence[str], sequence: int) -> bool:
+def _wait_for_artifact_uploader(
+    process: Any, cancellation_deadline: Callable[[], float | None]
+) -> int | None:
+    upload_deadline = time.monotonic() + _ARTIFACT_UPLOAD_TIMEOUT_SECONDS
+    while True:
+        now = time.monotonic()
+        cancelled_at = cancellation_deadline()
+        deadline = (
+            min(upload_deadline, cancelled_at) if cancelled_at is not None else upload_deadline
+        )
+        remaining = deadline - now
+        if remaining <= 0:
+            _stop_process(process)
+            if cancelled_at is not None and cancelled_at <= upload_deadline:
+                return None
+            raise RuntimeError("checkpoint artifact upload timed out")
+        try:
+            return int(process.wait(timeout=min(remaining, 1.0)))
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _publish(
+    root: Path,
+    filters: Sequence[str],
+    sequence: int,
+    cancellation_deadline: Callable[[], float | None] = lambda: None,
+) -> bool:
     head_sha = os.environ["GITHUB_SHA"]
     fingerprint = os.environ["MUTATION_RUNNER_FINGERPRINT"]
     shard_id = os.environ["MUTATION_SHARD_ID"]
@@ -714,6 +807,9 @@ def _publish(root: Path, filters: Sequence[str], sequence: int) -> bool:
         )
         if len(included) == 1:
             return False
+        deadline = cancellation_deadline()
+        if deadline is not None and deadline <= time.monotonic():
+            return False
         name = (
             f"{_CHECKPOINT_PREFIX}{head_sha}-{fingerprint}-{shard_id}-"
             f"run{run_id}-attempt{attempt}-seq{sequence}"
@@ -724,7 +820,10 @@ def _publish(root: Path, filters: Sequence[str], sequence: int) -> bool:
         uploader = root / "scripts/quality/mutation-artifact-uploader/bundle/index.mjs"
         command = [str(Path(node).resolve(strict=True)), str(uploader), name, str(snapshot)]
         process = _start_artifact_uploader(command, root)
-        if process.wait() != 0:
+        return_code = _wait_for_artifact_uploader(process, cancellation_deadline)
+        if return_code is None:
+            return False
+        if return_code != 0:
             raise RuntimeError("checkpoint artifact upload failed")
         return True
 
@@ -745,7 +844,7 @@ def _run(max_children: int, interval_minutes: float, filters: Sequence[str]) -> 
     return run_with_periodic_checkpoints(
         command,
         interval_seconds=interval_minutes * 60,
-        publish=lambda sequence: _publish(root, filters, sequence),
+        publish=lambda sequence, deadline: _publish(root, filters, sequence, deadline),
         cwd=root,
         execution=_CheckpointExecution(environment=environment),
     )
@@ -788,13 +887,12 @@ def main() -> None:
         print(f"Restored {restored} mutation metadata files")
     elif args.command == "select-artifact":
         artifacts = json.loads(args.artifacts_json)
-        print(
-            select_checkpoint_artifact(
-                artifacts,
-                shard_id=args.shard_id,
-                runner_fingerprint=args.runner_fingerprint,
-            )
+        artifact, run_id = select_checkpoint_artifact(
+            artifacts,
+            shard_id=args.shard_id,
+            runner_fingerprint=args.runner_fingerprint,
         )
+        print(f"{artifact}\t{run_id}")
     else:
         raise SystemExit(_run(args.max_children, args.interval_minutes, args.filters))
 
