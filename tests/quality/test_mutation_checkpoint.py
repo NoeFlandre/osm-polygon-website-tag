@@ -1010,6 +1010,23 @@ def test_plan_falls_back_to_older_run_with_a_checkpoint(
     ]
 
 
+def test_merge_checkpoint_candidates_continues_after_duplicate_fingerprint() -> None:
+    existing = {"fingerprint": "a" * 16, "name": "newer"}
+    duplicate = {"fingerprint": "a" * 16, "name": "older-duplicate"}
+    fallback = {"fingerprint": "b" * 16, "name": "older-fallback"}
+    checkpoint_map = {_SHARD_ID: [existing]}
+    selected = {(_SHARD_ID, existing["fingerprint"])}
+
+    mutation_checkpoint._merge_checkpoint_candidates(
+        checkpoint_map,
+        selected,
+        {_SHARD_ID: [duplicate, fallback]},
+    )
+
+    assert checkpoint_map == {_SHARD_ID: [existing, fallback]}
+    assert selected == {(_SHARD_ID, "a" * 16), (_SHARD_ID, "b" * 16)}
+
+
 def _set_publish_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_SHA", _HEAD_SHA)
     monkeypatch.setenv("MUTATION_RUNNER_FINGERPRINT", _FINGERPRINT)
@@ -1032,6 +1049,25 @@ def test_publish_skips_empty_checkpoint(tmp_path: Path, monkeypatch: pytest.Monk
     )
 
     assert mutation_checkpoint._publish(tmp_path, _FILTERS, 1) is False
+
+
+def test_publish_skips_checkpoint_when_cancellation_deadline_is_reached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_publish_environment(monkeypatch)
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "snapshot_checkpoint",
+        lambda **_kwargs: (Path("manifest.json"), Path("mutants/source.meta")),
+    )
+    monkeypatch.setattr(mutation_checkpoint.time, "monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "_start_artifact_uploader",
+        lambda *_args: pytest.fail("an expired cancellation deadline must skip upload"),
+    )
+
+    assert mutation_checkpoint._publish(tmp_path, _FILTERS, 1, lambda: 10.0) is False
 
 
 @pytest.mark.parametrize(("attempt", "expected_attempt"), [("2", "2"), (None, "1")])
@@ -1197,6 +1233,51 @@ def test_artifact_upload_cancellation_stops_waiting_within_grace_period(
     assert uploader.killed
 
 
+@pytest.mark.parametrize(
+    ("cancelled_at", "expected_error"),
+    [(2.0, None), (3.0, "checkpoint artifact upload timed out")],
+)
+def test_artifact_upload_deadline_takes_precedence_over_later_cancellation(
+    monkeypatch: pytest.MonkeyPatch, cancelled_at: float, expected_error: str | None
+) -> None:
+    clock = [0.0]
+    monkeypatch.setattr(mutation_checkpoint, "_ARTIFACT_UPLOAD_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(mutation_checkpoint.time, "monotonic", lambda: clock[0])
+
+    class StalledUploader(_FakeProcess):
+        waits: list[float | None]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.waits = []
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.waits.append(timeout)
+            if timeout == 0:
+                pytest.fail("the uploader must be stopped at the deadline")
+            if timeout is not None:
+                clock[0] += timeout
+                raise subprocess.TimeoutExpired("uploader", timeout)
+            return super().wait(timeout)
+
+    uploader = StalledUploader()
+    if expected_error is None:
+        result = mutation_checkpoint._wait_for_artifact_uploader(uploader, lambda: cancelled_at)
+        assert result is None
+    else:
+        with pytest.raises(RuntimeError, match=f"^{expected_error}$"):
+            mutation_checkpoint._wait_for_artifact_uploader(uploader, lambda: cancelled_at)
+
+    assert uploader.waits[:2] == [1.0, 1.0]
+    assert uploader.signals == [signal.SIGINT]
+    assert uploader.killed
+
+
+def test_upload_wait_remaining_uses_the_earliest_deadline() -> None:
+    assert mutation_checkpoint._upload_wait_remaining(12.0, 8.0, 3.0) == 5.0
+    assert mutation_checkpoint._upload_wait_remaining(12.0, None, 3.0) == 9.0
+
+
 def test_plan_command_calls_planner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["mutation_checkpoint.py", "plan"])
     called: list[bool] = []
@@ -1296,6 +1377,7 @@ def test_run_builds_mutmut_command_and_enables_resume(
 
     monkeypatch.setattr(mutation_checkpoint, "run_with_periodic_checkpoints", run_with_checkpoints)
 
+    received_deadlines: list[Callable[[], float | None] | None] = []
     result = mutation_checkpoint._run(3, 2.5, _FILTERS)
 
     assert result == 7
@@ -1311,16 +1393,29 @@ def test_run_builds_mutmut_command_and_enables_resume(
     assert captured["cwd"] == tmp_path
     assert captured["execution"].environment["MUTATION_RESUME_COMPLETED"] == "1"
     published: list[tuple[Path, tuple[str, ...], int]] = []
+
+    def publish(
+        root: Path,
+        filters: tuple[str, ...],
+        sequence: int,
+        deadline: Callable[[], float | None] | None,
+    ) -> bool:
+        received_deadlines.append(deadline)
+        published.append((root, filters, sequence))
+        return True
+
     monkeypatch.setattr(
         mutation_checkpoint,
         "_publish",
-        lambda root, filters, sequence, _deadline: (
-            published.append((root, tuple(filters), sequence)) or True
-        ),
+        publish,
     )
-    assert callable(captured["publish"])
-    assert captured["publish"](9, lambda: None) is True
+
+    def deadline() -> float | None:
+        return 12.5
+
+    assert captured["publish"](9, deadline) is True
     assert published == [(tmp_path, _FILTERS, 9)]
+    assert received_deadlines == [deadline]
 
 
 def test_stop_process_handles_lookup_race_and_escalates_to_kill() -> None:
@@ -1420,6 +1515,41 @@ def test_restore_rejects_valid_metadata_when_manifest_is_malformed(tmp_path: Pat
 
     assert restored == 0
     assert json.loads(target.read_text(encoding="utf-8"))["exit_code_by_key"][_MUTANT] is None
+
+
+def test_checkpoint_manifest_matches_the_lowercase_manifest_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint_dir = tmp_path / "checkpoint"
+    checkpoint_dir.mkdir()
+    manifest = {
+        "schema_version": mutation_checkpoint._SCHEMA_VERSION,
+        "head_sha": _HEAD_SHA,
+        "runner_fingerprint": _FINGERPRINT,
+        "shard_id": _SHARD_ID,
+        "filters": list(_FILTERS),
+    }
+    (checkpoint_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+    read_paths: list[str] = []
+
+    def read_bytes(path: Path) -> bytes:
+        read_paths.append(path.name)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    assert (
+        mutation_checkpoint._checkpoint_manifest_matches(
+            checkpoint_dir=checkpoint_dir,
+            head_sha=_HEAD_SHA,
+            runner_fingerprint=_FINGERPRINT,
+            shard_id=_SHARD_ID,
+            filters=_FILTERS,
+        )
+        is True
+    )
+    assert read_paths == ["manifest.json"]
 
 
 def test_atomic_write_uses_sibling_temp_and_syncs_file_and_directory(
@@ -1704,6 +1834,39 @@ def test_latest_resume_candidate_keeps_first_run_when_numbers_tie() -> None:
     )
 
 
+def test_latest_resume_candidate_excludes_the_current_run() -> None:
+    current = {
+        "id": 99,
+        "head_sha": _HEAD_SHA,
+        "status": "completed",
+        "run_number": 5,
+    }
+
+    assert (
+        mutation_checkpoint._latest_resume_candidate(
+            [current], current_run_id=99, head_sha=_HEAD_SHA
+        )
+        is None
+    )
+
+
+def test_retryable_resume_run_ids_keeps_input_order_for_tied_run_numbers() -> None:
+    first = {"id": 10, "conclusion": "failure"}
+    second = {"id": 11, "conclusion": "cancelled"}
+
+    assert mutation_checkpoint._retryable_resume_run_ids([(5, first), (5, second)]) == [10, 11]
+
+
+def test_latest_retryable_resume_candidate_keeps_first_run_when_numbers_tie() -> None:
+    first = {"id": 10, "conclusion": "failure"}
+    second = {"id": 11, "conclusion": "timed_out"}
+
+    assert mutation_checkpoint._latest_retryable_resume_candidate([(5, first), (5, second)]) == (
+        5,
+        first,
+    )
+
+
 def test_find_resume_run_preserves_api_url_path_suffix(monkeypatch: pytest.MonkeyPatch) -> None:
     requested: list[str] = []
     monkeypatch.setattr(
@@ -1796,6 +1959,106 @@ def test_resume_run_does_not_select_the_current_first_attempt(
         )
         is None
     )
+
+
+def test_find_resume_runs_orders_failed_runs_and_skips_successes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = [
+        {
+            "id": 10,
+            "head_sha": _HEAD_SHA,
+            "status": "completed",
+            "conclusion": "success",
+            "run_number": 5,
+        },
+        {
+            "id": 11,
+            "head_sha": _HEAD_SHA,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_number": 6,
+        },
+        {
+            "id": 12,
+            "head_sha": _HEAD_SHA,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "run_number": 7,
+        },
+        {
+            "id": 13,
+            "head_sha": _HEAD_SHA,
+            "status": "completed",
+            "conclusion": "timed_out",
+            "run_number": 8,
+        },
+    ]
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"workflow_runs": runs})
+
+    resume_runs = mutation_checkpoint._find_resume_runs(
+        api_url="https://api.github.test",
+        repository="owner/repo",
+        token="token",
+        current_run_id=99,
+        current_run_attempt=1,
+        head_sha=_HEAD_SHA,
+    )
+
+    assert resume_runs == [13, 12, 11]
+
+
+def test_find_resume_runs_does_not_resume_after_the_latest_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = [
+        {
+            "id": 10,
+            "head_sha": _HEAD_SHA,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_number": 5,
+        },
+        {
+            "id": 11,
+            "head_sha": _HEAD_SHA,
+            "status": "completed",
+            "conclusion": "success",
+            "run_number": 6,
+        },
+    ]
+    monkeypatch.setattr(mutation_checkpoint, "_api_json", lambda *_args: {"workflow_runs": runs})
+
+    assert (
+        mutation_checkpoint._find_resume_runs(
+            api_url="https://api.github.test",
+            repository="owner/repo",
+            token="token",
+            current_run_id=99,
+            current_run_attempt=1,
+            head_sha=_HEAD_SHA,
+        )
+        == []
+    )
+
+
+def test_find_resume_runs_uses_current_run_on_retry_without_api_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mutation_checkpoint,
+        "_api_json",
+        lambda *_args: pytest.fail("same-run retries must not query other runs"),
+    )
+
+    assert mutation_checkpoint._find_resume_runs(
+        api_url="https://api.github.test",
+        repository="owner/repo",
+        token="token",
+        current_run_id=99,
+        current_run_attempt=2,
+        head_sha=_HEAD_SHA,
+    ) == [99]
 
 
 def test_plan_passes_current_actions_identity_to_api_calls(
@@ -2106,16 +2369,31 @@ def test_stop_process_returns_after_a_successful_interrupt_wait() -> None:
     assert not child.killed
 
 
+def test_cancellation_deadline_is_based_on_the_first_signal_time() -> None:
+    state = mutation_checkpoint._CheckpointState()
+
+    assert mutation_checkpoint._cancellation_deadline(state) is None
+
+    state.signal_received_at = 12.5
+    assert mutation_checkpoint._cancellation_deadline(state) == 17.5
+
+
 def test_publish_next_checkpoint_publishes_and_increments_once() -> None:
     state = mutation_checkpoint._CheckpointState(process=_FakeProcess())
     state.sequence = 7
+    state.signal_received_at = 3.25
     published: list[int] = []
+    deadlines: list[float | None] = []
 
-    mutation_checkpoint._publish_next_checkpoint(
-        lambda sequence, _deadline: published.append(sequence) or True, state
-    )
+    def publish(sequence: int, deadline: Callable[[], float | None]) -> bool:
+        published.append(sequence)
+        deadlines.append(deadline())
+        return False
+
+    mutation_checkpoint._publish_next_checkpoint(publish, state)
 
     assert published == [7]
+    assert deadlines == [8.25]
     assert state.sequence == 8
 
 

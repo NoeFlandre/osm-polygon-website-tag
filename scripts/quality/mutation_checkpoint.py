@@ -39,6 +39,7 @@ _CHECKPOINT_NAME = re.compile(
 )
 _ARTIFACT_UPLOAD_TIMEOUT_SECONDS = 300.0
 _CANCELLATION_UPLOAD_GRACE_SECONDS = 5.0
+_RETRYABLE_RESUME_CONCLUSIONS = frozenset({"failure", "cancelled", "timed_out"})
 
 
 def _meta_paths(root: Path, filters: Iterable[str]) -> tuple[tuple[Path, Path], ...]:
@@ -473,6 +474,44 @@ def _find_resume_run(
     return candidates[0] if candidates else None
 
 
+def _resume_candidates(
+    runs: Sequence[Any], *, current_run_id: int, head_sha: str
+) -> list[tuple[int, dict[str, Any]]]:
+    return [
+        candidate
+        for run in runs
+        if (candidate := _resume_candidate(run, current_run_id=current_run_id, head_sha=head_sha))
+        is not None
+    ]
+
+
+def _retryable_resume_run_ids(candidates: Sequence[tuple[int, dict[str, Any]]]) -> list[int]:
+    latest = _latest_retryable_resume_candidate(candidates)
+    if latest is None:
+        return []
+    retryable = sorted(
+        (
+            candidate
+            for candidate in candidates
+            if candidate[1].get("conclusion") in _RETRYABLE_RESUME_CONCLUSIONS
+        ),
+        key=lambda candidate: candidate[0],
+        reverse=True,
+    )
+    return [int(candidate[1]["id"]) for candidate in retryable]
+
+
+def _latest_retryable_resume_candidate(
+    candidates: Sequence[tuple[int, dict[str, Any]]],
+) -> tuple[int, dict[str, Any]] | None:
+    latest = max(candidates, key=lambda candidate: candidate[0], default=None)
+    if latest is None:
+        return None
+    if latest[1].get("conclusion") not in _RETRYABLE_RESUME_CONCLUSIONS:
+        return None
+    return latest
+
+
 def _find_resume_runs(
     *,
     api_url: str,
@@ -493,26 +532,8 @@ def _find_resume_runs(
     runs = response.get("workflow_runs", [])
     if not isinstance(runs, list):
         raise RuntimeError("GitHub Actions run list had an unexpected shape")
-    candidates = [
-        candidate
-        for run in runs
-        if (candidate := _resume_candidate(run, current_run_id=current_run_id, head_sha=head_sha))
-        is not None
-    ]
-    latest = max(candidates, key=lambda candidate: candidate[0], default=None)
-    if latest is None or latest[1].get("conclusion") not in {
-        "failure",
-        "cancelled",
-        "timed_out",
-    }:
-        return []
-    retryable = [
-        candidate
-        for candidate in candidates
-        if candidate[1].get("conclusion") in {"failure", "cancelled", "timed_out"}
-    ]
-    retryable.sort(key=lambda candidate: candidate[0], reverse=True)
-    return [int(candidate[1]["id"]) for candidate in retryable]
+    candidates = _resume_candidates(runs, current_run_id=current_run_id, head_sha=head_sha)
+    return _retryable_resume_run_ids(candidates)
 
 
 def _write_output(name: str, value: str) -> None:
@@ -521,6 +542,20 @@ def _write_output(name: str, value: str) -> None:
         raise RuntimeError("GITHUB_OUTPUT is not set")
     with Path(output_path).open("ab") as output:
         output.write(f"{name}={value}\n".encode())
+
+
+def _merge_checkpoint_candidates(
+    checkpoint_map: dict[str, list[dict[str, str]]],
+    selected_fingerprints: set[tuple[str, str]],
+    candidates_by_shard: Mapping[str, Sequence[dict[str, str]]],
+) -> None:
+    for shard_id, candidates in candidates_by_shard.items():
+        for candidate in candidates:
+            key = (shard_id, candidate["fingerprint"])
+            if key in selected_fingerprints:
+                continue
+            selected_fingerprints.add(key)
+            checkpoint_map.setdefault(shard_id, []).append(candidate)
 
 
 def _plan() -> None:
@@ -549,13 +584,7 @@ def _plan() -> None:
         candidate_map = checkpoint_artifact_map(
             artifacts, head_sha=head_sha, shard_ids=shard_ids, run_id=candidate_run
         )
-        for shard_id, candidates in candidate_map.items():
-            for candidate in candidates:
-                key = (shard_id, candidate["fingerprint"])
-                if key in selected_fingerprints:
-                    continue
-                selected_fingerprints.add(key)
-                checkpoint_map.setdefault(shard_id, []).append(candidate)
+        _merge_checkpoint_candidates(checkpoint_map, selected_fingerprints, candidate_map)
     _write_output("checkpoint_artifacts", json.dumps(checkpoint_map, separators=(",", ":")))
 
 
@@ -599,11 +628,12 @@ def _capture_signals(state: _CheckpointState) -> Any:
             signal.signal(signum, previous)
 
 
-def _wait_or_escalate(child: Any, timeout: float, stop: Callable[[], None]) -> bool:
+def _wait_or_escalate(child: Any, timeout: float, stop: Callable[[], None] | None) -> bool:
     try:
         child.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        stop()
+        if stop is not None:
+            stop()
         return False
     return True
 
@@ -615,14 +645,10 @@ def _stop_process(child: Any) -> None:
         child.send_signal(signal.SIGINT)
     except ProcessLookupError:
         return
-    if _wait_or_escalate(child, 2, child.terminate):
-        return
-    if _wait_or_escalate(child, 1, child.kill):
-        return
-    try:
-        child.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        return
+    escalation = ((2, child.terminate), (1, child.kill), (1, None))
+    for timeout, stop in escalation:
+        if _wait_or_escalate(child, timeout, stop):
+            return
 
 
 def _cancellation_deadline(state: _CheckpointState) -> float | None:
@@ -762,6 +788,20 @@ def _start_artifact_uploader(
     return process_factory(command, cwd=root, start_new_session=True)
 
 
+def _upload_wait_remaining(upload_deadline: float, cancelled_at: float | None, now: float) -> float:
+    deadline = upload_deadline if cancelled_at is None else min(upload_deadline, cancelled_at)
+    return deadline - now
+
+
+def _stop_expired_upload(
+    process: Any, *, cancelled_at: float | None, upload_deadline: float
+) -> None:
+    _stop_process(process)
+    if cancelled_at is not None and cancelled_at <= upload_deadline:
+        return
+    raise RuntimeError("checkpoint artifact upload timed out")
+
+
 def _wait_for_artifact_uploader(
     process: Any, cancellation_deadline: Callable[[], float | None]
 ) -> int | None:
@@ -769,19 +809,54 @@ def _wait_for_artifact_uploader(
     while True:
         now = time.monotonic()
         cancelled_at = cancellation_deadline()
-        deadline = (
-            min(upload_deadline, cancelled_at) if cancelled_at is not None else upload_deadline
-        )
-        remaining = deadline - now
+        remaining = _upload_wait_remaining(upload_deadline, cancelled_at, now)
         if remaining <= 0:
-            _stop_process(process)
-            if cancelled_at is not None and cancelled_at <= upload_deadline:
-                return None
-            raise RuntimeError("checkpoint artifact upload timed out")
+            return _stop_expired_upload(
+                process, cancelled_at=cancelled_at, upload_deadline=upload_deadline
+            )
         try:
             return int(process.wait(timeout=min(remaining, 1.0)))
         except subprocess.TimeoutExpired:
             continue
+
+
+def _checkpoint_artifact_name(
+    *,
+    head_sha: str,
+    fingerprint: str,
+    shard_id: str,
+    run_id: str,
+    attempt: str,
+    sequence: int,
+) -> str:
+    return (
+        f"{_CHECKPOINT_PREFIX}{head_sha}-{fingerprint}-{shard_id}-"
+        f"run{run_id}-attempt{attempt}-seq{sequence}"
+    )
+
+
+def _artifact_upload_command(root: Path, snapshot: Path, name: str) -> list[str]:
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("Node.js is required to upload mutation checkpoints")
+    uploader = root / "scripts/quality/mutation-artifact-uploader/bundle/index.mjs"
+    return [str(Path(node).resolve(strict=True)), str(uploader), name, str(snapshot)]
+
+
+def _upload_checkpoint(
+    root: Path,
+    snapshot: Path,
+    name: str,
+    cancellation_deadline: Callable[[], float | None],
+) -> bool:
+    command = _artifact_upload_command(root, snapshot, name)
+    process = _start_artifact_uploader(command, root)
+    return_code = _wait_for_artifact_uploader(process, cancellation_deadline)
+    if return_code is None:
+        return False
+    if return_code != 0:
+        raise RuntimeError("checkpoint artifact upload failed")
+    return True
 
 
 def _publish(
@@ -810,22 +885,15 @@ def _publish(
         deadline = cancellation_deadline()
         if deadline is not None and deadline <= time.monotonic():
             return False
-        name = (
-            f"{_CHECKPOINT_PREFIX}{head_sha}-{fingerprint}-{shard_id}-"
-            f"run{run_id}-attempt{attempt}-seq{sequence}"
+        name = _checkpoint_artifact_name(
+            head_sha=head_sha,
+            fingerprint=fingerprint,
+            shard_id=shard_id,
+            run_id=run_id,
+            attempt=attempt,
+            sequence=sequence,
         )
-        node = shutil.which("node")
-        if node is None:
-            raise RuntimeError("Node.js is required to upload mutation checkpoints")
-        uploader = root / "scripts/quality/mutation-artifact-uploader/bundle/index.mjs"
-        command = [str(Path(node).resolve(strict=True)), str(uploader), name, str(snapshot)]
-        process = _start_artifact_uploader(command, root)
-        return_code = _wait_for_artifact_uploader(process, cancellation_deadline)
-        if return_code is None:
-            return False
-        if return_code != 0:
-            raise RuntimeError("checkpoint artifact upload failed")
-        return True
+        return _upload_checkpoint(root, snapshot, name, cancellation_deadline)
 
 
 def _run(max_children: int, interval_minutes: float, filters: Sequence[str]) -> int:
