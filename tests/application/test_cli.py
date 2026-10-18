@@ -630,7 +630,7 @@ def test_cli_init_rejects_output_inside_source_root(tmp_path: Path, capsys) -> N
         ]
     )
 
-    assert rc == 3  # invalid input
+    assert rc == 3
     assert not (source_root / "runs").exists()
     assert capsys.readouterr().err.startswith("error: ")
 
@@ -730,7 +730,7 @@ def test_cli_detect_languages_rejects_a_run_outside_the_data_root_before_model_l
         raising=False,
     )
 
-    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 3  # invalid input
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 3
 
 
 def test_cli_detect_languages_loads_one_model_and_updates_run(
@@ -856,7 +856,7 @@ def test_cli_detect_languages_rejects_frozen_snapshot_before_model_loading(
         lambda *_args, **_kwargs: pytest.fail("frozen snapshot must not load GlotLID"),
     )
 
-    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 3  # invalid input
+    assert main(["detect-languages", "--run-dir", str(run_dir)]) == 3
 
 
 def test_cli_frozen_snapshot_error_message_is_stable() -> None:
@@ -980,7 +980,7 @@ def test_cli_release_stats_refuses_noncanonical_repository(tmp_path: Path, capsy
         ]
     )
 
-    assert rc == 3  # invalid input
+    assert rc == 3
     assert "canonical" in capsys.readouterr().err
 
 

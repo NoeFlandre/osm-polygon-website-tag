@@ -26,7 +26,11 @@ import json
 import re
 import subprocess
 import sys
+import tokenize
+from bisect import bisect_right
+from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
+from io import StringIO
 from pathlib import Path
 
 PACKAGE_ROOT = Path("src/osm_polygon_website_tag")
@@ -34,6 +38,11 @@ PACKAGE_NAME = "osm_polygon_website_tag"
 TESTS_ROOT = Path("tests")
 _TEST_PREFIX = "test_"
 _HUNK = re.compile(r"^@@ -\d+(?:,(?P<old>\d+))? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+_PROTECTED_COMMENT = re.compile(
+    r"(?i)(?:^#!|coding:|©|\b(?:all\s+rights\s+reserved|bandit|copyright|coverage|"
+    r"flake8|fmt|isort|licen[cs](?:e|ed)?|mypy|noqa|nosec|pylint|pragma|pyre|"
+    r"pyright|pytype|ruff|spdx-license-identifier|ty)\b|type\s*:)"
+)
 
 
 def changed_paths(base: str, *, cwd: Path | None = None) -> list[str]:
@@ -109,7 +118,129 @@ def changed_lines(base: str, *, cwd: Path | None = None) -> dict[str, set[int]]:
         capture_output=True,
         text=True,
     )
-    return parse_diff(result.stdout)
+    lines_by_path = parse_diff(result.stdout)
+    _discard_nonbehavioral_python_edits(lines_by_path, base, cwd)
+    return lines_by_path
+
+
+def _discard_nonbehavioral_python_edits(
+    lines_by_path: dict[str, set[int]], base: str, cwd: Path | None
+) -> None:
+    """Remove Python paths whose diff changes comments but not parsed code."""
+    merge_base = _git_merge_base(base, cwd)
+    if merge_base is None:
+        return
+    for raw_path in tuple(lines_by_path):
+        if Path(raw_path).suffix != ".py":
+            continue
+        if _is_nonbehavioral_python_change(merge_base, raw_path, cwd):
+            del lines_by_path[raw_path]
+
+
+def _is_nonbehavioral_python_change(merge_base: str, path: str, cwd: Path | None) -> bool:
+    """Compare both versions and fail closed when Git cannot read either one."""
+    before = _git_source(merge_base, path, cwd)
+    after = _git_source("HEAD", path, cwd)
+    return before is not None and after is not None and _non_behavioral_python_edit(before, after)
+
+
+def _git_merge_base(base: str, cwd: Path | None) -> str | None:
+    """Resolve the same comparison point used by ``git diff base...HEAD``."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "merge-base", base, "HEAD"],  # noqa: S607
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        )
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _git_source(ref: str, path: str, cwd: Path | None) -> str | None:
+    """Read a Python source version, failing closed when either ref is unavailable."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "show", f"{ref}:{path}"],  # noqa: S607
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        )
+    except OSError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _non_behavioral_python_edit(before: str, after: str) -> bool:
+    """Recognize Python edits that change neither AST nor protected comments."""
+    try:
+        before_ast = ast.parse(before, type_comments=True)
+        after_ast = ast.parse(after, type_comments=True)
+        before_tokens = list(tokenize.generate_tokens(StringIO(before).readline))
+        after_tokens = list(tokenize.generate_tokens(StringIO(after).readline))
+    except (IndentationError, SyntaxError, tokenize.TokenError):
+        return False
+    before_code_lines = _code_lines(before_tokens)
+    after_code_lines = _code_lines(after_tokens)
+    before_comments = _comment_strings(before_tokens)
+    after_comments = _comment_strings(after_tokens)
+    before_dump = ast.dump(
+        _normalize_type_ignore_lines(before_ast, before_code_lines), include_attributes=False
+    )
+    after_dump = ast.dump(
+        _normalize_type_ignore_lines(after_ast, after_code_lines), include_attributes=False
+    )
+    if before_dump != after_dump:
+        return False
+    if _protected_comment_positions(before_tokens, before_code_lines) != (
+        _protected_comment_positions(after_tokens, after_code_lines)
+    ):
+        return False
+
+    removed = Counter(before_comments) - Counter(after_comments)
+    added = Counter(after_comments) - Counter(before_comments)
+    changed_comments = (*removed.elements(), *added.elements())
+    return not any(_PROTECTED_COMMENT.search(comment) for comment in changed_comments)
+
+
+def _code_lines(tokens: Sequence[tokenize.TokenInfo]) -> list[int]:
+    """List physical lines containing Python code, excluding comments and blanks."""
+    ignored = {
+        tokenize.COMMENT,
+        tokenize.DEDENT,
+        tokenize.ENDMARKER,
+        tokenize.INDENT,
+        tokenize.NEWLINE,
+        tokenize.NL,
+        tokenize.ENCODING,
+    }
+    return sorted({token.start[0] for token in tokens if token.type not in ignored})
+
+
+def _comment_strings(tokens: Sequence[tokenize.TokenInfo]) -> list[str]:
+    """Return the source text for each Python comment token."""
+    return [token.string for token in tokens if token.type == tokenize.COMMENT]
+
+
+def _normalize_type_ignore_lines(tree: ast.Module, code_lines: Sequence[int]) -> ast.Module:
+    """Keep type-ignore placement stable when unrelated comment lines are removed."""
+    for type_ignore in tree.type_ignores:
+        type_ignore.lineno = bisect_right(code_lines, type_ignore.lineno)
+    return tree
+
+
+def _protected_comment_positions(
+    tokens: Sequence[tokenize.TokenInfo], code_lines: Sequence[int]
+) -> list[tuple[int, str]]:
+    """Keep protected comments anchored to the same logical code line."""
+    return [
+        (bisect_right(code_lines, token.start[0]), token.string)
+        for token in tokens
+        if token.type == tokenize.COMMENT and _PROTECTED_COMMENT.search(token.string)
+    ]
 
 
 def parse_diff(diff: str) -> dict[str, set[int]]:

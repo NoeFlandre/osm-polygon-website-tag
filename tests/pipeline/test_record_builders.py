@@ -128,7 +128,6 @@ def test_derive_tags_flags_match_domain_functions(
     assert derived.has_website is has_website(tags)
     assert derived.has_contact_website is has_contact_website(tags)
     assert derived.has_any_website is has_any_website(tags)
-    # Normalized values must equal the current ``normalize_value(...) or None``.
     assert derived.website == _expected_normalized(tags, WEBSITE_KEY)
     assert derived.contact_website == _expected_normalized(tags, CONTACT_WEBSITE_KEY)
 
@@ -192,5 +191,4 @@ def test_derive_wikidata_normalized_value_and_flag(
 def test_derive_wikidata_flag_matches_domain_function(tags: dict[str, str]) -> None:
     _value, has = derive_wikidata(tags)
     assert has is has_wikidata(tags)
-    # The normalized value must equal the canonical projection.
     assert _value == _expected_normalized(tags, WIKIDATA_KEY)

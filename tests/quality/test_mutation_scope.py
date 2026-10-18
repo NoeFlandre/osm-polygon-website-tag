@@ -269,6 +269,90 @@ def test_pure_additions_ignore_blank_and_comment_lines() -> None:
     assert mutation_scope.parse_diff(diff) == {"src/pkg/mod.py": {9, 10}}
 
 
+def test_changed_lines_ignores_ast_equivalent_comment_edits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = "src/osm_polygon_website_tag/reporting/sample.py"
+    diff = (
+        f"+++ b/{path}\n@@ -1 +0,0 @@\n-# section\n"
+        "@@ -3 +2 @@\n-VALUE = 1  # the value\n+VALUE = 1\n"
+    )
+    sources = {
+        f"BASE:{path}": "# section\n\nVALUE = 1  # the value\n",
+        f"HEAD:{path}": "\nVALUE = 1\n",
+    }
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1] == "diff":
+            return subprocess.CompletedProcess(command, 0, stdout=diff, stderr="")
+        if command[1] == "merge-base":
+            return subprocess.CompletedProcess(command, 0, stdout="BASE\n", stderr="")
+        if command[1] == "show":
+            return subprocess.CompletedProcess(command, 0, stdout=sources[command[2]], stderr="")
+        raise AssertionError(f"unexpected git command: {command}")
+
+    monkeypatch.setattr(mutation_scope.subprocess, "run", fake_run)
+
+    assert mutation_scope.changed_lines("origin/main") == {}
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "# noqa: F401",
+        "# Copyright 2026 Example",
+        "# SPDX-License-Identifier: MIT",
+        "# Licensed under the MIT License",
+        "# pyre-ignore[unused-local]",
+        "# pytype: disable=wrong-arg-types",
+        "# type: int",
+    ],
+)
+def test_protected_comment_edits_still_scope_mutations(
+    monkeypatch: pytest.MonkeyPatch, comment: str
+) -> None:
+    path = "src/osm_polygon_website_tag/reporting/sample.py"
+    diff = f"+++ b/{path}\n@@ -1 +0,0 @@\n-{comment}\n"
+    sources = {
+        f"BASE:{path}": f"{comment}\nVALUE = 1\n",
+        f"HEAD:{path}": "VALUE = 1\n",
+    }
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1] == "diff":
+            return subprocess.CompletedProcess(command, 0, stdout=diff, stderr="")
+        if command[1] == "merge-base":
+            return subprocess.CompletedProcess(command, 0, stdout="BASE\n", stderr="")
+        if command[1] == "show":
+            return subprocess.CompletedProcess(command, 0, stdout=sources[command[2]], stderr="")
+        raise AssertionError(f"unexpected git command: {command}")
+
+    monkeypatch.setattr(mutation_scope.subprocess, "run", fake_run)
+
+    assert mutation_scope.changed_lines("origin/main") == {path: {0}}
+
+
+def test_docstring_edits_are_not_treated_as_comments() -> None:
+    assert not mutation_scope._non_behavioral_python_edit(
+        '"""Old module description."""\nVALUE = 1\n',
+        '"""New module description."""\nVALUE = 1\n',
+    )
+
+
+def test_comment_removal_keeps_type_ignore_scope_stable() -> None:
+    before = "# Section\ndef update() -> None:\n    value = []  # type: ignore[assignment]\n"
+    after = "def update() -> None:\n    value = []  # type: ignore[assignment]\n"
+
+    assert mutation_scope._non_behavioral_python_edit(before, after)
+
+
+def test_moving_type_ignore_keeps_mutation_scope() -> None:
+    before = "first = 1  # type: ignore[assignment]\nsecond = 2\n"
+    after = "first = 1\nsecond = 2  # type: ignore[assignment]\n"
+
+    assert not mutation_scope._non_behavioral_python_edit(before, after)
+
+
 def test_a_comment_replacing_code_still_counts() -> None:
     diff = "+++ b/src/pkg/mod.py\n@@ -3 +3 @@\n-LIMIT = 3\n+# LIMIT removed\n"
 

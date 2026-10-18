@@ -79,7 +79,6 @@ def _setup(tmp_path: Path) -> tuple[Path, object]:
         observation_shard_sha256=_sha(obs),
         rejection_shard_sha256=_sha(rej),
     )
-    # Walk through the state machine.
     transition_status(state, STATUS_EXTRACTING)
     transition_status(state, STATUS_EXTRACTED)
     transition_status(state, STATUS_ENRICHING)
@@ -355,14 +354,12 @@ def test_finalize_run_transitions_to_complete(tmp_path: Path) -> None:
 def test_finalize_run_receipt_digest_is_stable(tmp_path: Path) -> None:
     run_dir, _ = _setup(tmp_path)
     r1 = finalize_run(run_dir)
-    # Re-finalize -- receipt is rewritten deterministically.
     r2 = finalize_run(run_dir)
     assert r1.receipt["manifest_digest"] == r2.receipt["manifest_digest"]
 
 
 def test_finalize_run_fails_on_verification_error(tmp_path: Path) -> None:
     run_dir, _ = _setup(tmp_path)
-    # Corrupt the shard.
     shard = run_dir / "polygons" / "monaco-latest.parquet"
     shard.write_bytes(b"not parquet")
     report = finalize_run(run_dir)

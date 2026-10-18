@@ -549,11 +549,6 @@ def test_incremental_publish_changed_shard_persists_deterministic_checkpoint(
     assert set(parsed) == {"schema_version", "global_bundle", "sources"}
 
 
-# ---------------------------------------------------------------------------
-# Strict typed-checkpoint contract corrections
-# ---------------------------------------------------------------------------
-
-
 def test_load_upload_checkpoint_wraps_invalid_json_syntax(tmp_path: Path) -> None:
     """Malformed JSON syntax raises the documented ``invalid uploaded polygon
     checkpoint`` :class:`ValueError`; the underlying
