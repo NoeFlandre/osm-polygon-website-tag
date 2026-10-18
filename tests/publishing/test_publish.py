@@ -43,7 +43,7 @@ def _setup_run(tmp_path: Path) -> Path:
     fp = snapshot_source_fingerprint(p)
     pub = run_dir / "polygons" / "monaco-latest.parquet"
     pub.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(
+    shard = pq.write_table(  # noqa: F841
         pa.Table.from_pylist([_row()], schema=POLYGON_PUBLIC_SCHEMA), pub, compression="snappy"
     )
     obs = run_dir / "analysis_observations" / "monaco-latest.parquet"
