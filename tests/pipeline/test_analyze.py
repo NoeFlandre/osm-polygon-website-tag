@@ -956,11 +956,6 @@ def test_analyze_results_keyboard_interrupt_during_staging_allows_retry(
     assert _staging_dir_entries(run_dir / "staging") == []
 
 
-# ---------------------------------------------------------------------------
-# Focused review evidence: ordinary failure cleanup and successful determinism
-# ---------------------------------------------------------------------------
-
-
 def test_analyze_results_ordinary_failure_cleanup_and_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

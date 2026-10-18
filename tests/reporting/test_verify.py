@@ -328,7 +328,6 @@ def test_verify_results_rejects_extra_shard(tmp_path: Path) -> None:
     _make_shard(run_dir, stem="monaco-latest", rows=rows, kind="public")
     _make_shard(run_dir, stem="monaco-latest", rows=[], kind="comparison")
     _make_shard(run_dir, stem="monaco-latest", rows=[], kind="rejection")
-    # Add rogue shard:
     _make_shard(run_dir, stem="rogue", rows=rows, kind="public")
     _make_shard(run_dir, stem="rogue", rows=[], kind="comparison")
     _make_shard(run_dir, stem="rogue", rows=[], kind="rejection")

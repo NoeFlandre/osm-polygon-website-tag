@@ -59,7 +59,6 @@ from typing import Any, Required, TypedDict, cast
 from osm_polygon_website_tag.contracts.timestamps import utc_iso, utc_run_id
 from osm_polygon_website_tag.storage.digest import sha256_file
 
-# Run state names. Transitions are documented in the module docstring.
 STATUS_INITIALIZED = "initialized"
 STATUS_EXTRACTING = "extracting"
 STATUS_EXTRACTED = "extracted"

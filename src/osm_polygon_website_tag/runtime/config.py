@@ -31,6 +31,5 @@ class Settings(BaseSettings):
     # Local data root; runtime.paths.resolve_data_root applies the default.
     osm_poly_data_dir: str = Field(default="", description="Local data root override.")
 
-    # Remote destinations.
     github_repo: str = Field(default=DEFAULT_GITHUB_REPO, description="GitHub repo URL.")
     hf_dataset_repo: str = Field(default=DEFAULT_HF_DATASET, description="HF dataset slug.")

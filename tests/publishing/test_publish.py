@@ -43,7 +43,7 @@ def _setup_run(tmp_path: Path) -> Path:
     fp = snapshot_source_fingerprint(p)
     pub = run_dir / "polygons" / "monaco-latest.parquet"
     pub.parent.mkdir(parents=True, exist_ok=True)
-    shard = pq.write_table(  # noqa: F841
+    pq.write_table(
         pa.Table.from_pylist([_row()], schema=POLYGON_PUBLIC_SCHEMA), pub, compression="snappy"
     )
     obs = run_dir / "analysis_observations" / "monaco-latest.parquet"
@@ -120,7 +120,6 @@ def test_publish_to_hf_dry_run_skips_network(tmp_path: Path) -> None:
 
 def test_publish_to_hf_refuses_on_verification_failure(tmp_path: Path) -> None:
     run_dir = _setup_run(tmp_path)
-    # Corrupt the shard.
     (run_dir / "polygons" / "monaco-latest.parquet").write_bytes(b"junk")
 
     with pytest.raises(ValueError, match="verification failed"):
