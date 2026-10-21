@@ -1,100 +1,56 @@
 #!/usr/bin/env python3
-"""Prepare the pipeline area's mutmut metadata for a safe same-commit resume."""
+"""Persist and restore exact, resumable checkpoints for mutation sweeps."""
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import math
+import os
+import re
 import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from http.client import HTTPSConnection
 from pathlib import Path
-from typing import Final, cast
+from typing import Any
+from urllib.parse import urlsplit
 
-_CHECKPOINT_DIR: Final = Path(".mutation-checkpoint")
-_CHECKPOINT_STATUS: Final = Path("status")
-_PIPELINE_MUTANTS: Final = Path("mutants/src/osm_polygon_website_tag/pipeline")
-_REQUIRED_META_FIELDS: Final = frozenset(
+from scripts.quality import mutation_runner
+
+_SCHEMA_VERSION = 1
+_CHECKPOINT_PREFIX = "mutation-checkpoint-"
+_REQUIRED_META_FIELDS = frozenset(
     {"exit_code_by_key", "durations_by_key", "estimated_durations_by_key"}
 )
-_OPTIONAL_META_FIELDS: Final = frozenset({"hash_by_function_name", "type_check_error_by_key"})
-_META_FIELDS: Final = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
+_OPTIONAL_META_FIELDS = frozenset({"hash_by_function_name", "type_check_error_by_key"})
+_META_FIELDS = _REQUIRED_META_FIELDS | _OPTIONAL_META_FIELDS
+_CHECKPOINT_NAME = re.compile(
+    r"^mutation-checkpoint-(?P<sha>[0-9a-f]{40})-(?P<fingerprint>[0-9a-f]{16})-"
+    r"(?P<shard>.+)-run(?P<run_id>\d+)-attempt(?P<attempt>\d+)-seq(?P<sequence>\d+)$"
+)
+_ARTIFACT_UPLOAD_TIMEOUT_SECONDS = 300.0
+_CANCELLATION_UPLOAD_GRACE_SECONDS = 5.0
+_RETRYABLE_RESUME_CONCLUSIONS = frozenset({"failure", "cancelled", "timed_out"})
 
 
-def _metadata_paths(root: Path) -> tuple[Path, ...]:
-    """Return only per-file mutant verdicts for the pipeline area."""
-    directory = root / _PIPELINE_MUTANTS
-    if not directory.is_dir():
-        return ()
-    return tuple(sorted(directory.rglob("*.py.meta")))
+def _meta_paths(root: Path, filters: Iterable[str]) -> tuple[tuple[Path, Path], ...]:
+    result = []
+    for source in mutation_runner._source_paths_for_mutant_names(filters):
+        relative = Path("mutants") / f"{source}.meta"
+        result.append((root / relative, relative))
+    return tuple(result)
 
 
-def _read_metadata(path: Path) -> object | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-
-
-def _has_expected_fields(metadata: dict[object, object]) -> bool:
-    keys = metadata.keys()
-    return keys >= _REQUIRED_META_FIELDS and keys <= _META_FIELDS
-
-
-def _as_mapping(value: object) -> dict[object, object] | None:
-    if isinstance(value, dict):
-        return value
-    return None
-
-
-def _valid_exit_codes(values: dict[object, object]) -> bool:
-    return all(
-        isinstance(key, str) and (type(code) is int or code is None) for key, code in values.items()
-    )
-
-
-def _valid_hashes(values: dict[object, object]) -> bool:
-    return all(isinstance(key, str) and isinstance(value, str) for key, value in values.items())
-
-
-def _valid_type_errors(values: dict[object, object]) -> bool:
-    return all(
-        isinstance(key, str) and (isinstance(value, str) or value is None)
-        for key, value in values.items()
-    )
-
-
-def _valid_metadata_document(metadata: object) -> bool:
-    if not isinstance(metadata, dict):
-        return False
-    if not _has_expected_fields(metadata):
-        return False
-    mappings = {name: _as_mapping(metadata.get(name, {})) for name in _META_FIELDS}
-    if None in mappings.values():
-        return False
-    valid_mappings = cast(dict[str, dict[object, object]], mappings)
-    return all(
-        (
-            _valid_exit_codes(valid_mappings["exit_code_by_key"]),
-            _valid_hashes(valid_mappings["hash_by_function_name"]),
-            _valid_type_errors(valid_mappings["type_check_error_by_key"]),
-            _is_duration_mapping(valid_mappings["durations_by_key"]),
-            _is_duration_mapping(valid_mappings["estimated_durations_by_key"]),
-        )
-    )
-
-
-def _valid_metadata(path: Path) -> bool:
-    """Check the mutmut 3.8 per-file state shape before reusing a checkpoint."""
-    return _valid_metadata_document(_read_metadata(path))
-
-
-def _is_duration_mapping(values: dict[object, object]) -> bool:
-    """Require finite numeric durations and string mutant keys."""
-    return all(isinstance(key, str) and _is_duration(value) for key, value in values.items())
-
-
-def _is_duration(value: object) -> bool:
-    """Return whether a JSON value is a finite numeric duration."""
+def _finite_number(value: object) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return False
     try:
@@ -103,129 +59,910 @@ def _is_duration(value: object) -> bool:
         return False
 
 
-def _read_checkpoint_status(marker: Path) -> str:
+def _valid_duration_entry(key: object, value: object) -> bool:
+    return isinstance(key, str) and _finite_number(value)
+
+
+def _finite_duration_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        _valid_duration_entry(key, duration) for key, duration in value.items()
+    )
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
     try:
-        return marker.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return ""
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
-def _clear_pipeline_metadata(root: Path) -> None:
-    for path in _metadata_paths(root):
-        path.unlink(missing_ok=True)
+def _valid_exit_code_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and (code is None or type(code) is int) for key, code in value.items()
+    )
 
 
-def _restore_valid_metadata(root: Path, checkpoint_dir: Path) -> None:
-    for path in _metadata_paths(checkpoint_dir):
-        if not _valid_metadata(path):
+def _valid_string_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    )
+
+
+def _valid_error_mapping(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and (error is None or isinstance(error, str))
+        for key, error in value.items()
+    )
+
+
+def _valid_metadata_keys(value: Mapping[str, Any]) -> bool:
+    keys = value.keys()
+    return keys >= _REQUIRED_META_FIELDS and not keys - _META_FIELDS
+
+
+def _valid_metadata_mappings(value: Mapping[str, Any]) -> bool:
+    return (
+        _valid_exit_code_mapping(value["exit_code_by_key"])
+        and _valid_string_mapping(value.get("hash_by_function_name", {}))
+        and _valid_error_mapping(value.get("type_check_error_by_key", {}))
+    )
+
+
+def _valid_metadata_durations(value: Mapping[str, Any]) -> bool:
+    return _finite_duration_mapping(value["durations_by_key"]) and _finite_duration_mapping(
+        value["estimated_durations_by_key"]
+    )
+
+
+def _valid_metadata(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    return (
+        _valid_metadata_keys(value)
+        and _valid_metadata_mappings(value)
+        and _valid_metadata_durations(value)
+    )
+
+
+def _read_valid_metadata(path: Path) -> tuple[bytes, dict[str, Any]] | None:
+    try:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return None
+        payload = path.read_bytes()
+        value = json.loads(payload)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not _valid_metadata(value):
+        return None
+    return payload, value
+
+
+def _has_selected_result(metadata: Mapping[str, Any], filters: Sequence[str]) -> bool:
+    return any(
+        code is not None and any(fnmatch.fnmatchcase(name, pattern) for pattern in filters)
+        for name, code in metadata["exit_code_by_key"].items()
+    )
+
+
+def snapshot_checkpoint(
+    *,
+    root: Path,
+    destination: Path,
+    head_sha: str,
+    runner_fingerprint: str,
+    shard_id: str,
+    filters: Sequence[str],
+) -> tuple[Path, ...]:
+    destination.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": _SCHEMA_VERSION,
+        "head_sha": head_sha,
+        "runner_fingerprint": runner_fingerprint,
+        "shard_id": shard_id,
+        "filters": list(filters),
+    }
+    manifest_path = destination / "manifest.json"
+    _atomic_write_bytes(
+        manifest_path,
+        (json.dumps(manifest, sort_keys=True) + "\n").encode(),
+    )
+    included: list[Path] = [manifest_path]
+    for source, relative in _meta_paths(root, filters):
+        loaded = _read_valid_metadata(source)
+        if loaded is None:
             continue
-        relative_path = path.relative_to(checkpoint_dir)
-        target = root / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
+        payload, metadata = loaded
+        if not _has_selected_result(metadata, filters):
+            continue
+        target = destination / relative
+        _atomic_write_bytes(target, payload)
+        included.append(target)
+    return tuple(included)
 
 
-def prepare_checkpoint(root: Path) -> None:
-    """Keep valid verdicts after a failed sweep; reset them after success or ambiguity.
-
-    The workflow caches this staging directory only. It never restores generated
-    source, bytecode, tests, or mutmut's test-association cache. Mutmut regenerates
-    mutants from the current checkout and keeps verdicts only for unchanged names.
-    """
-    checkpoint_dir = root / _CHECKPOINT_DIR
-    status = _read_checkpoint_status(checkpoint_dir / _CHECKPOINT_STATUS)
-    _clear_pipeline_metadata(root)
-
-    if status == "partial":
-        _restore_valid_metadata(root, checkpoint_dir)
-
-    shutil.rmtree(checkpoint_dir, ignore_errors=True)
-
-
-def mark_checkpoint(outcome: str, root: Path) -> None:
-    """Snapshot pipeline verdicts with a status for the next same-commit run."""
-    status = "complete" if outcome == "success" else "partial"
-    checkpoint_dir = root / _CHECKPOINT_DIR
-    shutil.rmtree(checkpoint_dir, ignore_errors=True)
-    marker = checkpoint_dir / _CHECKPOINT_STATUS
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(f"{status}\n", encoding="utf-8")
-
-    if status == "partial":
-        for path in _metadata_paths(root):
-            if not _valid_metadata(path):
-                continue
-            relative_path = path.relative_to(root)
-            target = checkpoint_dir / relative_path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
-
-
-def _read_valid_exit_codes(path: Path) -> dict[str, int | None]:
-    metadata = _read_metadata(path)
-    if not _valid_metadata_document(metadata):
-        raise RuntimeError(f"invalid pipeline mutation metadata: {path}")
-    return cast(dict[str, int | None], cast(dict[str, object], metadata)["exit_code_by_key"])
-
-
-def _verdict_summary(paths: tuple[Path, ...]) -> tuple[int, list[str]]:
-    mutant_count = 0
-    unchecked: list[str] = []
-    for path in paths:
-        exit_codes = _read_valid_exit_codes(path)
-        mutant_count += len(exit_codes)
-        unchecked.extend(name for name, code in exit_codes.items() if code is None)
-    return mutant_count, unchecked
-
-
-def verify_checkpoint(root: Path) -> None:
-    """Fail unless every pipeline mutant has a recorded verdict."""
-    metadata_paths = _metadata_paths(root)
-    if not metadata_paths:
-        raise RuntimeError("no pipeline mutants were generated")
-
-    mutant_count, unchecked = _verdict_summary(metadata_paths)
-    if mutant_count == 0:
-        raise RuntimeError("no pipeline mutants were generated")
-    if unchecked:
-        sample = ", ".join(sorted(unchecked)[:5])
-        raise RuntimeError(f"pipeline mutants were not checked ({len(unchecked)}): {sample}")
-
-
-def _argument_parser() -> argparse.ArgumentParser:
-    """Build the command-line parser for checkpoint operations."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    prepare = commands.add_parser("prepare")
-    prepare.add_argument("--root", type=Path, default=Path.cwd())
-    mark = commands.add_parser("mark")
-    mark.add_argument("--outcome", required=True)
-    mark.add_argument("--root", type=Path, default=Path.cwd())
-    verify = commands.add_parser("verify")
-    verify.add_argument("--root", type=Path, default=Path.cwd())
-    return parser
-
-
-def _run_verify(root: Path, parser: argparse.ArgumentParser) -> None:
+def _checkpoint_manifest_matches(
+    *,
+    checkpoint_dir: Path,
+    head_sha: str,
+    runner_fingerprint: str,
+    shard_id: str,
+    filters: Sequence[str],
+) -> bool:
+    manifest_path = checkpoint_dir / "manifest.json"
     try:
-        verify_checkpoint(root)
-    except RuntimeError as exc:
-        parser.exit(1, f"error: {exc}\n")
+        manifest = json.loads(manifest_path.read_bytes().decode())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    expected = {
+        "schema_version": _SCHEMA_VERSION,
+        "head_sha": head_sha,
+        "runner_fingerprint": runner_fingerprint,
+        "shard_id": shard_id,
+        "filters": list(filters),
+    }
+    return manifest == expected
 
 
-def _dispatch_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
-    if args.command == "prepare":
-        prepare_checkpoint(args.root)
-    elif args.command == "mark":
-        mark_checkpoint(args.outcome, args.root)
-    else:
-        _run_verify(args.root, parser)
+def _checkpoint_metadata_candidates(
+    *, root: Path, checkpoint_dir: Path, filters: Sequence[str]
+) -> list[tuple[Path, bytes]]:
+    candidates: list[tuple[Path, bytes]] = []
+    for _, relative in _meta_paths(root, filters):
+        loaded = _read_valid_metadata(checkpoint_dir / relative)
+        if loaded is None:
+            continue
+        payload, metadata = loaded
+        if _has_selected_result(metadata, filters):
+            candidates.append((root / relative, payload))
+    return candidates
+
+
+def restore_checkpoint(
+    *,
+    root: Path,
+    checkpoint_dir: Path,
+    head_sha: str,
+    runner_fingerprint: str,
+    shard_id: str,
+    filters: Sequence[str],
+) -> int:
+    if not _checkpoint_manifest_matches(
+        checkpoint_dir=checkpoint_dir,
+        head_sha=head_sha,
+        runner_fingerprint=runner_fingerprint,
+        shard_id=shard_id,
+        filters=filters,
+    ):
+        return 0
+    candidates = _checkpoint_metadata_candidates(
+        root=root, checkpoint_dir=checkpoint_dir, filters=filters
+    )
+    for target, payload in candidates:
+        _atomic_write_bytes(target, payload)
+    return len(candidates)
+
+
+def select_checkpoint_artifact(
+    checkpoint_map: Mapping[str, Sequence[Mapping[str, str]]],
+    *,
+    shard_id: str,
+    runner_fingerprint: str,
+) -> tuple[str, str]:
+    for candidate in checkpoint_map.get(shard_id, ()):
+        if candidate.get("fingerprint") == runner_fingerprint:
+            return candidate["name"], candidate["run_id"]
+    return "", ""
+
+
+def _checkpoint_name_match(artifact: Mapping[str, Any]) -> re.Match[str] | None:
+    if artifact.get("expired") is True:
+        return None
+    name = artifact.get("name")
+    if not isinstance(name, str):
+        return None
+    return _CHECKPOINT_NAME.fullmatch(name)
+
+
+def _checkpoint_run_matches(match: re.Match[str], *, head_sha: str, run_id: int) -> bool:
+    return match["sha"] == head_sha and int(match["run_id"]) == run_id
+
+
+def _checkpoint_created_at(artifact: Mapping[str, Any]) -> str | None:
+    created_at = artifact.get("created_at")
+    return created_at if isinstance(created_at, str) and created_at else None
+
+
+def _matching_checkpoint_artifact(
+    artifact: Mapping[str, Any], *, head_sha: str, shard_ids: set[str], run_id: int
+) -> tuple[str, str, str, int, str, int] | None:
+    match = _checkpoint_name_match(artifact)
+    if match is None:
+        return None
+    if not _checkpoint_run_matches(match, head_sha=head_sha, run_id=run_id):
+        return None
+    shard_id = match["shard"]
+    if shard_id not in shard_ids:
+        return None
+    created_at = _checkpoint_created_at(artifact)
+    if created_at is None:
+        return None
+    return (
+        shard_id,
+        match["fingerprint"],
+        created_at,
+        int(match["attempt"]),
+        str(artifact["name"]),
+        int(match["sequence"]),
+    )
+
+
+def checkpoint_artifact_map(
+    artifacts: Iterable[Mapping[str, Any]], *, head_sha: str, shard_ids: set[str], run_id: int
+) -> dict[str, list[dict[str, str]]]:
+    selected: dict[tuple[str, str], tuple[str, int, int, str]] = {}
+    for artifact in artifacts:
+        match = _matching_checkpoint_artifact(
+            artifact, head_sha=head_sha, shard_ids=shard_ids, run_id=run_id
+        )
+        if match is None:
+            continue
+        shard_id, fingerprint, created_at, attempt, name, sequence = match
+        key = (shard_id, fingerprint)
+        candidate = (created_at, attempt, sequence, name)
+        previous = selected.get(key)
+        selected[key] = candidate if previous is None else max(previous, candidate)
+
+    result: dict[str, list[dict[str, str]]] = {}
+    for (shard_id, fingerprint), (_, _, sequence, name) in sorted(selected.items()):
+        result.setdefault(shard_id, []).append(
+            {
+                "fingerprint": fingerprint,
+                "name": name,
+                "run_id": str(run_id),
+                "sequence": str(sequence),
+            }
+        )
+    return result
+
+
+def _api_request_target(url: str) -> tuple[str, str, int | None]:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname is None:
+        raise ValueError("GitHub Actions API URL must use HTTPS")
+    target = parsed.path or "/"
+    if parsed.query:
+        target = f"{target}?{parsed.query}"
+    return parsed.hostname, target, parsed.port
+
+
+def _read_api_response(connection: Any, target: str, token: str) -> bytes:
+    connection.request(
+        "GET",
+        target,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    response = connection.getresponse()
+    if response.status >= 400:
+        raise RuntimeError(f"GitHub Actions API returned HTTP {response.status}")
+    return response.read()
+
+
+def _decode_api_object(payload: bytes) -> dict[str, Any]:
+    value = json.loads(payload)
+    if not isinstance(value, dict):
+        raise RuntimeError("GitHub Actions API returned an unexpected response")
+    return value
+
+
+def _api_json(url: str, token: str) -> dict[str, Any]:
+    hostname, target, port = _api_request_target(url)
+    connection = HTTPSConnection(hostname, port, timeout=30)
+    try:
+        payload = _read_api_response(connection, target, token)
+    finally:
+        connection.close()
+    return _decode_api_object(payload)
+
+
+def _artifact_page_items(response: Mapping[str, Any]) -> list[dict[str, Any]]:
+    items = response.get("artifacts", [])
+    if not isinstance(items, list):
+        raise RuntimeError("GitHub Actions artifact list had an unexpected shape")
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _list_run_artifacts(
+    *, api_url: str, repository: str, token: str, run_id: int
+) -> list[dict[str, Any]]:
+    base = f"{api_url.rstrip('/')}/repos/{repository}/actions/runs/{run_id}/artifacts"
+    artifacts: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        response = _api_json(f"{base}?per_page=100&page={page}", token)
+        artifacts.extend(_artifact_page_items(response))
+        total_count = int(response.get("total_count", len(artifacts)))
+        if len(artifacts) >= total_count:
+            return artifacts
+        page += 1
+
+
+def _resume_run_id(run: Mapping[str, Any]) -> int | None:
+    run_id = run.get("id")
+    return run_id if type(run_id) is int else None
+
+
+def _is_resume_run(run: Mapping[str, Any], *, current_run_id: int, head_sha: str) -> bool:
+    run_id = _resume_run_id(run)
+    return (
+        run_id is not None
+        and run_id != current_run_id
+        and run.get("head_sha") == head_sha
+        and run.get("status") == "completed"
+    )
+
+
+def _resume_run_number(run: Mapping[str, Any]) -> int | None:
+    run_number = run.get("run_number")
+    return run_number if type(run_number) is int else None
+
+
+def _resume_candidate(
+    run: object, *, current_run_id: int, head_sha: str
+) -> tuple[int, dict[str, Any]] | None:
+    if not isinstance(run, dict) or not _is_resume_run(
+        run, current_run_id=current_run_id, head_sha=head_sha
+    ):
+        return None
+    run_number = _resume_run_number(run)
+    if run_number is None:
+        return None
+    return run_number, run
+
+
+def _latest_resume_candidate(
+    runs: Sequence[Any], *, current_run_id: int, head_sha: str
+) -> dict[str, Any] | None:
+    candidates = [
+        candidate
+        for run in runs
+        if (candidate := _resume_candidate(run, current_run_id=current_run_id, head_sha=head_sha))
+        is not None
+    ]
+    latest = max(candidates, key=lambda candidate: candidate[0], default=None)
+    return latest[1] if latest is not None else None
+
+
+def _find_resume_run(
+    *,
+    api_url: str,
+    repository: str,
+    token: str,
+    current_run_id: int,
+    current_run_attempt: int,
+    head_sha: str,
+) -> int | None:
+    candidates = _find_resume_runs(
+        api_url=api_url,
+        repository=repository,
+        token=token,
+        current_run_id=current_run_id,
+        current_run_attempt=current_run_attempt,
+        head_sha=head_sha,
+    )
+    return candidates[0] if candidates else None
+
+
+def _resume_candidates(
+    runs: Sequence[Any], *, current_run_id: int, head_sha: str
+) -> list[tuple[int, dict[str, Any]]]:
+    return [
+        candidate
+        for run in runs
+        if (candidate := _resume_candidate(run, current_run_id=current_run_id, head_sha=head_sha))
+        is not None
+    ]
+
+
+def _retryable_resume_run_ids(candidates: Sequence[tuple[int, dict[str, Any]]]) -> list[int]:
+    latest = _latest_retryable_resume_candidate(candidates)
+    if latest is None:
+        return []
+    retryable = sorted(
+        (
+            candidate
+            for candidate in candidates
+            if candidate[1].get("conclusion") in _RETRYABLE_RESUME_CONCLUSIONS
+        ),
+        key=lambda candidate: candidate[0],
+        reverse=True,
+    )
+    return [int(candidate[1]["id"]) for candidate in retryable]
+
+
+def _latest_retryable_resume_candidate(
+    candidates: Sequence[tuple[int, dict[str, Any]]],
+) -> tuple[int, dict[str, Any]] | None:
+    latest = max(candidates, key=lambda candidate: candidate[0], default=None)
+    if latest is None:
+        return None
+    if latest[1].get("conclusion") not in _RETRYABLE_RESUME_CONCLUSIONS:
+        return None
+    return latest
+
+
+def _find_resume_runs(
+    *,
+    api_url: str,
+    repository: str,
+    token: str,
+    current_run_id: int,
+    current_run_attempt: int,
+    head_sha: str,
+) -> list[int]:
+    if current_run_attempt > 1:
+        return [current_run_id]
+
+    url = (
+        f"{api_url.rstrip('/')}/repos/{repository}/actions/workflows/mutation-sweep.yml/runs"
+        f"?branch=main&head_sha={head_sha}&per_page=100"
+    )
+    response = _api_json(url, token)
+    runs = response.get("workflow_runs", [])
+    if not isinstance(runs, list):
+        raise RuntimeError("GitHub Actions run list had an unexpected shape")
+    candidates = _resume_candidates(runs, current_run_id=current_run_id, head_sha=head_sha)
+    return _retryable_resume_run_ids(candidates)
+
+
+def _write_output(name: str, value: str) -> None:
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if not output_path:
+        raise RuntimeError("GITHUB_OUTPUT is not set")
+    with Path(output_path).open("ab") as output:
+        output.write(f"{name}={value}\n".encode())
+
+
+def _merge_checkpoint_candidates(
+    checkpoint_map: dict[str, list[dict[str, str]]],
+    selected_fingerprints: set[tuple[str, str]],
+    candidates_by_shard: Mapping[str, Sequence[dict[str, str]]],
+) -> None:
+    for shard_id, candidates in candidates_by_shard.items():
+        for candidate in candidates:
+            key = (shard_id, candidate["fingerprint"])
+            if key in selected_fingerprints:
+                continue
+            selected_fingerprints.add(key)
+            checkpoint_map.setdefault(shard_id, []).append(candidate)
+
+
+def _plan() -> None:
+    api_url = os.environ["GITHUB_API_URL"]
+    repository = os.environ["GITHUB_REPOSITORY"]
+    token = os.environ["GH_TOKEN"]
+    current_run_id = int(os.environ["GITHUB_RUN_ID"])
+    current_run_attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
+    head_sha = os.environ["GITHUB_SHA"]
+    shards = json.loads(os.environ["MUTATION_SHARDS_JSON"])
+    shard_ids = {shard["id"] for shard in shards}
+    resume_runs = _find_resume_runs(
+        api_url=api_url,
+        repository=repository,
+        token=token,
+        current_run_id=current_run_id,
+        current_run_attempt=current_run_attempt,
+        head_sha=head_sha,
+    )
+    checkpoint_map: dict[str, list[dict[str, str]]] = {}
+    selected_fingerprints: set[tuple[str, str]] = set()
+    for candidate_run in resume_runs:
+        artifacts = _list_run_artifacts(
+            api_url=api_url, repository=repository, token=token, run_id=candidate_run
+        )
+        candidate_map = checkpoint_artifact_map(
+            artifacts, head_sha=head_sha, shard_ids=shard_ids, run_id=candidate_run
+        )
+        _merge_checkpoint_candidates(checkpoint_map, selected_fingerprints, candidate_map)
+    _write_output("checkpoint_artifacts", json.dumps(checkpoint_map, separators=(",", ":")))
+
+
+class _CheckpointSignal(BaseException):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+
+
+@dataclass(frozen=True)
+class _CheckpointExecution:
+    environment: Mapping[str, str] | None = None
+    process_factory: Callable[..., Any] = subprocess.Popen
+    monotonic: Callable[[], float] = time.monotonic
+    sleep: Callable[[float], None] = time.sleep
+
+
+@dataclass
+class _CheckpointState:
+    process: Any | None = None
+    pending_signal: int | None = None
+    signal_received_at: float | None = None
+    sequence: int = 1
+    monotonic: Callable[[], float] = time.monotonic
+
+
+@contextmanager
+def _capture_signals(state: _CheckpointState) -> Any:
+    previous_handlers: dict[int, Any] = {}
+
+    def handle_signal(signum: int, _frame: Any) -> None:
+        if state.pending_signal is None:
+            state.pending_signal = signum
+            state.signal_received_at = state.monotonic()
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[signum] = signal.signal(signum, handle_signal)
+        yield
+    finally:
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+
+
+def _wait_or_escalate(child: Any, timeout: float, stop: Callable[[], None] | None) -> bool:
+    try:
+        child.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if stop is not None:
+            stop()
+        return False
+    return True
+
+
+def _stop_process(child: Any) -> None:
+    if child.poll() is not None:
+        return
+    try:
+        child.send_signal(signal.SIGINT)
+    except ProcessLookupError:
+        return
+    escalation = ((2, child.terminate), (1, child.kill), (1, None))
+    for timeout, stop in escalation:
+        if _wait_or_escalate(child, timeout, stop):
+            return
+
+
+def _cancellation_deadline(state: _CheckpointState) -> float | None:
+    if state.signal_received_at is None:
+        return None
+    return state.signal_received_at + _CANCELLATION_UPLOAD_GRACE_SECONDS
+
+
+def _publish_next_checkpoint(
+    publish: Callable[[int, Callable[[], float | None]], bool], state: _CheckpointState
+) -> None:
+    publish(state.sequence, lambda: _cancellation_deadline(state))
+    state.sequence += 1
+
+
+def _execution_environment(execution: _CheckpointExecution) -> dict[str, str]:
+    if execution.environment is not None:
+        return dict(execution.environment)
+    return os.environ.copy()
+
+
+def _run_periodic_checkpoint_loop(
+    state: _CheckpointState,
+    *,
+    interval_seconds: float,
+    publish: Callable[[int, Callable[[], float | None]], bool],
+    execution: _CheckpointExecution,
+) -> None:
+    process = state.process
+    if process is None:
+        raise RuntimeError("cannot checkpoint before the mutmut process starts")
+    next_checkpoint = execution.monotonic() + interval_seconds
+    while state.pending_signal is None:
+        if process.poll() is not None:
+            return
+        now = execution.monotonic()
+        if now >= next_checkpoint:
+            _publish_next_checkpoint(publish, state)
+            next_checkpoint = execution.monotonic() + interval_seconds
+        else:
+            execution.sleep(min(1.0, next_checkpoint - now))
+
+
+def _run_until_complete(
+    command: Sequence[str],
+    interval_seconds: float,
+    publish: Callable[[int, Callable[[], float | None]], bool],
+    cwd: Path,
+    execution: _CheckpointExecution,
+    state: _CheckpointState,
+) -> int:
+    state.process = execution.process_factory(
+        command, cwd=cwd, env=_execution_environment(execution)
+    )
+    _run_periodic_checkpoint_loop(
+        state,
+        interval_seconds=interval_seconds,
+        publish=publish,
+        execution=execution,
+    )
+    if state.pending_signal is not None:
+        raise _CheckpointSignal(state.pending_signal)
+    return_code = int(state.process.wait())
+    if state.pending_signal is not None:
+        raise _CheckpointSignal(state.pending_signal)
+    _publish_next_checkpoint(publish, state)
+    if state.pending_signal is not None:
+        return 128 + state.pending_signal
+    return return_code
+
+
+def _finish_interrupted_run(
+    publish: Callable[[int, Callable[[], float | None]], bool], state: _CheckpointState
+) -> None:
+    try:
+        # Actions gives cancelled processes a short signal grace period, so publish the
+        # last-known-good snapshot before child shutdown begins.
+        _publish_next_checkpoint(publish, state)
+    finally:
+        if state.process is not None:
+            _stop_process(state.process)
+    if state.process is not None:
+        _publish_next_checkpoint(publish, state)
+
+
+def _run_with_signal_capture(
+    command: Sequence[str],
+    *,
+    interval_seconds: float,
+    publish: Callable[[int, Callable[[], float | None]], bool],
+    cwd: Path,
+    execution: _CheckpointExecution,
+    state: _CheckpointState,
+) -> int:
+    with _capture_signals(state):
+        try:
+            return _run_until_complete(command, interval_seconds, publish, cwd, execution, state)
+        except _CheckpointSignal as interrupted:
+            _finish_interrupted_run(publish, state)
+            return 128 + interrupted.signum
+        except BaseException:
+            if state.process is not None:
+                _stop_process(state.process)
+            raise
+
+
+def run_with_periodic_checkpoints(
+    command: Sequence[str],
+    *,
+    interval_seconds: float,
+    publish: Callable[[int, Callable[[], float | None]], bool],
+    cwd: Path,
+    execution: _CheckpointExecution | None = None,
+) -> int:
+    if interval_seconds <= 0:
+        raise ValueError("checkpoint interval must be positive")
+    dependencies = execution if execution is not None else _CheckpointExecution()
+    state = _CheckpointState(monotonic=dependencies.monotonic)
+    try:
+        return _run_with_signal_capture(
+            command,
+            interval_seconds=interval_seconds,
+            publish=publish,
+            cwd=cwd,
+            execution=dependencies,
+            state=state,
+        )
+    finally:
+        state.process = None
+
+
+def _start_artifact_uploader(
+    command: Sequence[str],
+    root: Path,
+    process_factory: Callable[..., Any] = subprocess.Popen,
+) -> Any:
+    return process_factory(command, cwd=root, start_new_session=True)
+
+
+def _upload_wait_remaining(upload_deadline: float, cancelled_at: float | None, now: float) -> float:
+    deadline = upload_deadline if cancelled_at is None else min(upload_deadline, cancelled_at)
+    return deadline - now
+
+
+def _stop_expired_upload(
+    process: Any, *, cancelled_at: float | None, upload_deadline: float
+) -> None:
+    _stop_process(process)
+    if cancelled_at is not None and cancelled_at <= upload_deadline:
+        return
+    raise RuntimeError("checkpoint artifact upload timed out")
+
+
+def _wait_for_artifact_uploader(
+    process: Any, cancellation_deadline: Callable[[], float | None]
+) -> int | None:
+    upload_deadline = time.monotonic() + _ARTIFACT_UPLOAD_TIMEOUT_SECONDS
+    while True:
+        now = time.monotonic()
+        cancelled_at = cancellation_deadline()
+        remaining = _upload_wait_remaining(upload_deadline, cancelled_at, now)
+        if remaining <= 0:
+            return _stop_expired_upload(
+                process, cancelled_at=cancelled_at, upload_deadline=upload_deadline
+            )
+        try:
+            return int(process.wait(timeout=min(remaining, 1.0)))
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _checkpoint_artifact_name(
+    *,
+    head_sha: str,
+    fingerprint: str,
+    shard_id: str,
+    run_id: str,
+    attempt: str,
+    sequence: int,
+) -> str:
+    return (
+        f"{_CHECKPOINT_PREFIX}{head_sha}-{fingerprint}-{shard_id}-"
+        f"run{run_id}-attempt{attempt}-seq{sequence}"
+    )
+
+
+def _artifact_upload_command(root: Path, snapshot: Path, name: str) -> list[str]:
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("Node.js is required to upload mutation checkpoints")
+    uploader = root / "scripts/quality/mutation-artifact-uploader/bundle/index.mjs"
+    return [str(Path(node).resolve(strict=True)), str(uploader), name, str(snapshot)]
+
+
+def _upload_checkpoint(
+    root: Path,
+    snapshot: Path,
+    name: str,
+    cancellation_deadline: Callable[[], float | None],
+) -> bool:
+    command = _artifact_upload_command(root, snapshot, name)
+    process = _start_artifact_uploader(command, root)
+    return_code = _wait_for_artifact_uploader(process, cancellation_deadline)
+    if return_code is None:
+        return False
+    if return_code != 0:
+        raise RuntimeError("checkpoint artifact upload failed")
+    return True
+
+
+def _publish(
+    root: Path,
+    filters: Sequence[str],
+    sequence: int,
+    cancellation_deadline: Callable[[], float | None] = lambda: None,
+) -> bool:
+    head_sha = os.environ["GITHUB_SHA"]
+    fingerprint = os.environ["MUTATION_RUNNER_FINGERPRINT"]
+    shard_id = os.environ["MUTATION_SHARD_ID"]
+    run_id = os.environ["GITHUB_RUN_ID"]
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+    with tempfile.TemporaryDirectory(prefix="mutation-checkpoint-") as temporary:
+        snapshot = Path(temporary)
+        included = snapshot_checkpoint(
+            root=root,
+            destination=snapshot,
+            head_sha=head_sha,
+            runner_fingerprint=fingerprint,
+            shard_id=shard_id,
+            filters=filters,
+        )
+        if len(included) == 1:
+            return False
+        deadline = cancellation_deadline()
+        if deadline is not None and deadline <= time.monotonic():
+            return False
+        name = _checkpoint_artifact_name(
+            head_sha=head_sha,
+            fingerprint=fingerprint,
+            shard_id=shard_id,
+            run_id=run_id,
+            attempt=attempt,
+            sequence=sequence,
+        )
+        return _upload_checkpoint(root, snapshot, name, cancellation_deadline)
+
+
+def _run(max_children: int, interval_minutes: float, filters: Sequence[str]) -> int:
+    root = Path.cwd().resolve()
+    runner = root / "scripts/quality/mutation_runner.py"
+    command = [
+        sys.executable,
+        str(runner),
+        "run",
+        "--max-children",
+        str(max_children),
+        *filters,
+    ]
+    environment = os.environ.copy()
+    environment["MUTATION_RESUME_COMPLETED"] = "1"
+    return run_with_periodic_checkpoints(
+        command,
+        interval_seconds=interval_minutes * 60,
+        publish=lambda sequence, deadline: _publish(root, filters, sequence, deadline),
+        cwd=root,
+        execution=_CheckpointExecution(environment=environment),
+    )
 
 
 def main() -> None:
-    """Prepare a checkpoint or mark the outcome of one pipeline-area sweep."""
-    parser = _argument_parser()
-    _dispatch_command(parser.parse_args(), parser)
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("plan")
+
+    restore = commands.add_parser("restore")
+    restore.add_argument("--checkpoint-dir", type=Path, default=Path(".mutation-checkpoint"))
+    restore.add_argument("--head-sha", required=True)
+    restore.add_argument("--runner-fingerprint", required=True)
+    restore.add_argument("--shard-id", required=True)
+    restore.add_argument("filters", nargs="+")
+
+    choose = commands.add_parser("select-artifact")
+    choose.add_argument("--artifacts-json", required=True)
+    choose.add_argument("--shard-id", required=True)
+    choose.add_argument("--runner-fingerprint", required=True)
+
+    run = commands.add_parser("run")
+    run.add_argument("--max-children", type=int, default=4)
+    run.add_argument("--interval-minutes", type=float, default=15)
+    run.add_argument("filters", nargs="+")
+
+    args = parser.parse_args()
+    if args.command == "plan":
+        _plan()
+    elif args.command == "restore":
+        restored = restore_checkpoint(
+            root=Path.cwd(),
+            checkpoint_dir=args.checkpoint_dir,
+            head_sha=args.head_sha,
+            runner_fingerprint=args.runner_fingerprint,
+            shard_id=args.shard_id,
+            filters=args.filters,
+        )
+        print(f"Restored {restored} mutation metadata files")
+    elif args.command == "select-artifact":
+        artifacts = json.loads(args.artifacts_json)
+        artifact, run_id = select_checkpoint_artifact(
+            artifacts,
+            shard_id=args.shard_id,
+            runner_fingerprint=args.runner_fingerprint,
+        )
+        print(f"{artifact}\t{run_id}")
+    else:
+        raise SystemExit(_run(args.max_children, args.interval_minutes, args.filters))
 
 
 if __name__ == "__main__":
